@@ -235,6 +235,15 @@ export function MenuBar() {
           }
         }},
         { type: "separator" },
+        { label: "Trace Image...", action: () => {
+          const s = useStore.getState();
+          const selected = s.objects.filter(o => s.selectedIds.includes(o.id));
+          if (selected.length === 1 && selected[0].type === "image") {
+            dialogState.openImageTrace();
+          } else {
+            s.addConsoleLine("Select an image object to trace", "error");
+          }
+        }},
         { label: "QR Code Generator...", action: () => dialogState.openQrCode() },
         { type: "separator" },
         { label: "Machine Settings...", action: () => dialogState.openGrblSettings() },

@@ -1,5 +1,5 @@
 import { useStore, generateId } from "../app/store";
-import type { DesignObject, KerfProject } from "../app/types";
+import type { DesignObject, KerfProject, PathPoint } from "../app/types";
 
 // We use Tauri's dialog and fs plugins when available, fallback to web APIs
 let dialogModule: typeof import("@tauri-apps/plugin-dialog") | null = null;
@@ -935,14 +935,7 @@ function parseSvgElement(
 
 // ===================== PATH PARSING =====================
 
-interface PathPoint {
-  x: number;
-  y: number;
-  handleIn?: { x: number; y: number };
-  handleOut?: { x: number; y: number };
-}
-
-function parsePathD(d: string): PathPoint[] {
+export function parsePathD(d: string): PathPoint[] {
   const points: PathPoint[] = [];
   const tokens = tokenizePath(d);
   let cx = 0, cy = 0; // current point

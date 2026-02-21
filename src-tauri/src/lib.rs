@@ -20,6 +20,7 @@ pub fn run() {
             commands::serial::serial_send_byte,
             commands::serial::serial_get_status,
             commands::serial::serial_is_connected,
+            commands::image_trace::trace_image_command,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
