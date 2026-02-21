@@ -1,0 +1,611 @@
+import { useEffect, useRef, useCallback } from "react";
+import { Application, Container, Graphics, Text, TextStyle, Sprite, Texture } from "pixi.js";
+import { useStore } from "../../app/store";
+import type { DesignObject } from "../../app/types";
+import { handleViewportPointerDown, handleViewportPointerMove, handleViewportPointerUp, getMarqueeState, getSelectionBBox } from "../../lib/tools/toolHandler";
+
+const PX_PER_MM = 3.78; // ~96dpi -> mm conversion for screen display
+
+export function Viewport() {
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const appRef = useRef<Application | null>(null);
+  const worldRef = useRef<Container | null>(null);
+  const gridRef = useRef<Graphics | null>(null);
+  const workspaceRef = useRef<Graphics | null>(null);
+  const objectsContainerRef = useRef<Container | null>(null);
+  const drawingLayerRef = useRef<Graphics | null>(null);
+  const selectionOverlayRef = useRef<Graphics | null>(null);
+  const isPanning = useRef(false);
+  const lastPan = useRef({ x: 0, y: 0 });
+  const spaceHeld = useRef(false);
+
+  const camera = useStore((s) => s.camera);
+  const setCamera = useStore((s) => s.setCamera);
+  const objects = useStore((s) => s.objects);
+  const drawingObject = useStore((s) => s.drawingObject);
+  const selectedIds = useStore((s) => s.selectedIds);
+  const gridVisible = useStore((s) => s.gridVisible);
+  const gridSize = useStore((s) => s.gridSize);
+  const workspaceWidth = useStore((s) => s.workspaceWidth);
+  const workspaceHeight = useStore((s) => s.workspaceHeight);
+  const setCursorPosition = useStore((s) => s.setCursorPosition);
+  const activeTool = useStore((s) => s.activeTool);
+  const guides = useStore((s) => s.guides);
+
+  // Initialize Pixi.js
+  useEffect(() => {
+    if (!canvasRef.current || appRef.current) return;
+
+    const app = new Application();
+    const initPromise = app.init({
+      resizeTo: canvasRef.current,
+      background: 0x1a1a1a,
+      antialias: true,
+      resolution: window.devicePixelRatio || 1,
+      autoDensity: true,
+    }).then(() => {
+      if (!canvasRef.current) return;
+      canvasRef.current.appendChild(app.canvas as HTMLCanvasElement);
+      appRef.current = app;
+
+      const world = new Container();
+      worldRef.current = world;
+      app.stage.addChild(world);
+
+      const workspace = new Graphics();
+      workspaceRef.current = workspace;
+      world.addChild(workspace);
+
+      const grid = new Graphics();
+      gridRef.current = grid;
+      world.addChild(grid);
+
+      const objectsContainer = new Container();
+      objectsContainerRef.current = objectsContainer;
+      world.addChild(objectsContainer);
+
+      const drawingLayer = new Graphics();
+      drawingLayerRef.current = drawingLayer;
+      world.addChild(drawingLayer);
+
+      const selectionOverlay = new Graphics();
+      selectionOverlayRef.current = selectionOverlay;
+      world.addChild(selectionOverlay);
+
+      // Center workspace
+      const cx = app.screen.width / 2;
+      const cy = app.screen.height / 2;
+      useStore.getState().setCamera({
+        x: cx - (workspaceWidth * PX_PER_MM) / 2,
+        y: cy - (workspaceHeight * PX_PER_MM) / 2,
+        zoom: 1,
+      });
+    });
+
+    return () => {
+      initPromise.then(() => {
+        app.destroy(true);
+        appRef.current = null;
+      });
+    };
+  }, []);
+
+  // Update world transform when camera changes
+  useEffect(() => {
+    if (!worldRef.current) return;
+    worldRef.current.x = camera.x;
+    worldRef.current.y = camera.y;
+    worldRef.current.scale.set(camera.zoom);
+  }, [camera]);
+
+  // Draw grid
+  useEffect(() => {
+    if (!gridRef.current) return;
+    const g = gridRef.current;
+    g.clear();
+    if (!gridVisible) return;
+
+    const w = workspaceWidth * PX_PER_MM;
+    const h = workspaceHeight * PX_PER_MM;
+    const step = gridSize * PX_PER_MM;
+
+    // Minor grid
+    g.setStrokeStyle({ width: 0.5, color: 0xffffff, alpha: 0.06 });
+    for (let x = 0; x <= w; x += step) {
+      g.moveTo(x, 0).lineTo(x, h).stroke();
+    }
+    for (let y = 0; y <= h; y += step) {
+      g.moveTo(0, y).lineTo(w, y).stroke();
+    }
+
+    // Major grid (every 10)
+    const majorStep = step * 10;
+    g.setStrokeStyle({ width: 1, color: 0xffffff, alpha: 0.12 });
+    for (let x = 0; x <= w; x += majorStep) {
+      g.moveTo(x, 0).lineTo(x, h).stroke();
+    }
+    for (let y = 0; y <= h; y += majorStep) {
+      g.moveTo(0, y).lineTo(w, y).stroke();
+    }
+  }, [gridVisible, gridSize, workspaceWidth, workspaceHeight]);
+
+  // Draw workspace boundary
+  useEffect(() => {
+    if (!workspaceRef.current) return;
+    const g = workspaceRef.current;
+    g.clear();
+    const w = workspaceWidth * PX_PER_MM;
+    const h = workspaceHeight * PX_PER_MM;
+
+    // Workspace background
+    g.rect(0, 0, w, h).fill({ color: 0x222222, alpha: 1 });
+    // Workspace border
+    g.setStrokeStyle({ width: 1, color: 0xffffff, alpha: 0.15 });
+    g.rect(0, 0, w, h).stroke();
+  }, [workspaceWidth, workspaceHeight]);
+
+  // Draw objects
+  useEffect(() => {
+    if (!objectsContainerRef.current) return;
+    const container = objectsContainerRef.current;
+
+    // Clear and redraw
+    container.removeChildren();
+
+    for (const obj of objects) {
+      if (!obj.visible) continue;
+      if (obj.type === "group" && obj.children) {
+        // Render group children with group offset
+        for (const child of obj.children) {
+          const offsetChild = {
+            ...child,
+            transform: {
+              ...child.transform,
+              x: child.transform.x + obj.transform.x,
+              y: child.transform.y + obj.transform.y,
+            },
+          };
+          if (child.type === "text") {
+            const el = renderTextObject(offsetChild);
+            if (el) container.addChild(el);
+          } else if (child.type === "image") {
+            const el = renderImageObject(offsetChild);
+            if (el) container.addChild(el);
+          } else {
+            const g = new Graphics();
+            renderObject(g, offsetChild);
+            container.addChild(g);
+          }
+        }
+      } else if (obj.type === "text") {
+        const child = renderTextObject(obj);
+        if (child) container.addChild(child);
+      } else if (obj.type === "image") {
+        const child = renderImageObject(obj);
+        if (child) container.addChild(child);
+      } else {
+        const g = new Graphics();
+        renderObject(g, obj);
+        container.addChild(g);
+      }
+    }
+  }, [objects]);
+
+  // Draw temporary drawing object
+  useEffect(() => {
+    if (!drawingLayerRef.current) return;
+    const g = drawingLayerRef.current;
+    g.clear();
+    if (drawingObject) {
+      renderObject(g, drawingObject);
+    }
+  }, [drawingObject]);
+
+  // Draw selection indicators + handles + marquee
+  useEffect(() => {
+    if (!selectionOverlayRef.current) return;
+    const g = selectionOverlayRef.current;
+    g.clear();
+
+    // Per-object selection outlines
+    for (const id of selectedIds) {
+      const obj = objects.find((o) => o.id === id);
+      if (!obj) continue;
+      const t = obj.transform;
+      const px = t.x * PX_PER_MM;
+      const py = t.y * PX_PER_MM;
+      const pw = t.width * PX_PER_MM;
+      const ph = t.height * PX_PER_MM;
+
+      g.setStrokeStyle({ width: 1 / camera.zoom, color: 0x4a90e2, alpha: 0.8 });
+      g.rect(px, py, pw, ph).stroke();
+
+      // Lock indicator
+      if (obj.locked) {
+        const lockSize = 10 / camera.zoom;
+        const lx = px + pw - lockSize - 2 / camera.zoom;
+        const ly = py + 2 / camera.zoom;
+        g.rect(lx, ly, lockSize, lockSize).fill({ color: 0xff8000, alpha: 0.6 });
+      }
+    }
+
+    // Group bounding box with handles (when anything is selected)
+    if (selectedIds.length > 0) {
+      const bbox = getSelectionBBox();
+      if (bbox) {
+        const bx = bbox.x * PX_PER_MM;
+        const by = bbox.y * PX_PER_MM;
+        const bw = bbox.w * PX_PER_MM;
+        const bh = bbox.h * PX_PER_MM;
+
+        // Multi-selection bounding box
+        if (selectedIds.length > 1) {
+          g.setStrokeStyle({ width: 1 / camera.zoom, color: 0x4a90e2, alpha: 0.4 });
+          g.rect(bx, by, bw, bh).stroke();
+        }
+
+        const handleSize = 6 / camera.zoom;
+        const hs = handleSize / 2;
+
+        // Corner handles
+        const corners = [
+          [bx, by], [bx + bw, by],
+          [bx, by + bh], [bx + bw, by + bh],
+        ];
+        for (const [cx, cy] of corners) {
+          g.rect(cx - hs, cy - hs, handleSize, handleSize).fill({ color: 0xffffff });
+          g.setStrokeStyle({ width: 1 / camera.zoom, color: 0x4a90e2, alpha: 1 });
+          g.rect(cx - hs, cy - hs, handleSize, handleSize).stroke();
+        }
+
+        // Edge midpoint handles (smaller)
+        const edgeSize = 4 / camera.zoom;
+        const ehs = edgeSize / 2;
+        const edges = [
+          [bx + bw / 2, by], [bx + bw / 2, by + bh], // N, S
+          [bx, by + bh / 2], [bx + bw, by + bh / 2],  // W, E
+        ];
+        for (const [cx, cy] of edges) {
+          g.rect(cx - ehs, cy - ehs, edgeSize, edgeSize).fill({ color: 0xffffff });
+          g.setStrokeStyle({ width: 0.5 / camera.zoom, color: 0x4a90e2, alpha: 1 });
+          g.rect(cx - ehs, cy - ehs, edgeSize, edgeSize).stroke();
+        }
+
+        // Rotation handle (circle above top-center)
+        const rotY = by - 20 / camera.zoom;
+        const rotR = 4 / camera.zoom;
+        // Stem line
+        g.setStrokeStyle({ width: 0.5 / camera.zoom, color: 0x4a90e2, alpha: 0.6 });
+        g.moveTo(bx + bw / 2, by).lineTo(bx + bw / 2, rotY + rotR).stroke();
+        // Circle
+        g.circle(bx + bw / 2, rotY, rotR).fill({ color: 0xffffff });
+        g.setStrokeStyle({ width: 1 / camera.zoom, color: 0x4a90e2, alpha: 1 });
+        g.circle(bx + bw / 2, rotY, rotR).stroke();
+      }
+    }
+  }, [selectedIds, objects, camera.zoom]);
+
+  // Track marquee box for HTML overlay rendering
+  const marqueeRef = useRef<{ x: number; y: number; w: number; h: number; dir: "ltr" | "rtl" } | null>(null);
+
+  // Space key for pan mode
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === "Space" && !e.repeat) {
+        spaceHeld.current = true;
+        if (canvasRef.current) canvasRef.current.style.cursor = "grab";
+      }
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === "Space") {
+        spaceHeld.current = false;
+        if (canvasRef.current) canvasRef.current.style.cursor = getCursor(activeTool);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
+  }, [activeTool]);
+
+  // Zoom with scroll wheel
+  const handleWheel = useCallback(
+    (e: React.WheelEvent) => {
+      e.preventDefault();
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
+      const newZoom = Math.max(0.05, Math.min(50, camera.zoom * zoomFactor));
+
+      // Zoom toward cursor
+      const worldX = (mouseX - camera.x) / camera.zoom;
+      const worldY = (mouseY - camera.y) / camera.zoom;
+
+      setCamera({
+        zoom: newZoom,
+        x: mouseX - worldX * newZoom,
+        y: mouseY - worldY * newZoom,
+      });
+    },
+    [camera, setCamera]
+  );
+
+  // Mouse handlers for pan + tools
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.button === 1 || (e.button === 0 && spaceHeld.current)) {
+        isPanning.current = true;
+        lastPan.current = { x: e.clientX, y: e.clientY };
+        if (canvasRef.current) canvasRef.current.style.cursor = "grabbing";
+        return;
+      }
+
+      if (e.button === 0) {
+        const rect = canvasRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        const worldX = (e.clientX - rect.left - camera.x) / camera.zoom / PX_PER_MM;
+        const worldY = (e.clientY - rect.top - camera.y) / camera.zoom / PX_PER_MM;
+        handleViewportPointerDown(worldX, worldY, e);
+      }
+    },
+    [camera]
+  );
+
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      if (isPanning.current) {
+        const dx = e.clientX - lastPan.current.x;
+        const dy = e.clientY - lastPan.current.y;
+        lastPan.current = { x: e.clientX, y: e.clientY };
+        setCamera({ x: camera.x + dx, y: camera.y + dy });
+        return;
+      }
+
+      const worldX = (e.clientX - rect.left - camera.x) / camera.zoom / PX_PER_MM;
+      const worldY = (e.clientY - rect.top - camera.y) / camera.zoom / PX_PER_MM;
+      setCursorPosition({ x: Math.round(worldX * 100) / 100, y: Math.round(worldY * 100) / 100 });
+      handleViewportPointerMove(worldX, worldY, e);
+
+      // Update marquee overlay
+      const marquee = getMarqueeState();
+      if (marquee) {
+        const sx = Math.min(marquee.startX, worldX);
+        const sy = Math.min(marquee.startY, worldY);
+        const sw = Math.abs(worldX - marquee.startX);
+        const sh = Math.abs(worldY - marquee.startY);
+        marqueeRef.current = { x: sx, y: sy, w: sw, h: sh, dir: marquee.direction };
+      } else {
+        marqueeRef.current = null;
+      }
+    },
+    [camera, setCamera, setCursorPosition]
+  );
+
+  const handlePointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      if (isPanning.current) {
+        isPanning.current = false;
+        if (canvasRef.current) {
+          canvasRef.current.style.cursor = spaceHeld.current ? "grab" : getCursor(activeTool);
+        }
+        return;
+      }
+
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const worldX = (e.clientX - rect.left - camera.x) / camera.zoom / PX_PER_MM;
+      const worldY = (e.clientY - rect.top - camera.y) / camera.zoom / PX_PER_MM;
+      handleViewportPointerUp(worldX, worldY, e);
+      marqueeRef.current = null;
+    },
+    [camera, activeTool]
+  );
+
+  // Compute marquee screen rect for overlay
+  const mq = marqueeRef.current;
+  const marqueeStyle: React.CSSProperties | null = mq ? {
+    position: "absolute",
+    left: camera.x + mq.x * PX_PER_MM * camera.zoom,
+    top: camera.y + mq.y * PX_PER_MM * camera.zoom,
+    width: mq.w * PX_PER_MM * camera.zoom,
+    height: mq.h * PX_PER_MM * camera.zoom,
+    border: `1px solid ${mq.dir === "ltr" ? "rgba(74,144,226,0.8)" : "rgba(78,226,74,0.8)"}`,
+    background: mq.dir === "ltr" ? "rgba(74,144,226,0.1)" : "rgba(78,226,74,0.1)",
+    pointerEvents: "none",
+    zIndex: 5,
+  } : null;
+
+  return (
+    <div style={{ width: "100%", height: "100%", position: "relative" }}>
+      <div
+        ref={canvasRef}
+        style={{
+          width: "100%",
+          height: "100%",
+          cursor: getCursor(activeTool),
+        }}
+        onWheel={handleWheel}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onContextMenu={(e) => e.preventDefault()}
+      />
+      {marqueeStyle && <div style={marqueeStyle} />}
+      {/* Smart alignment guides */}
+      {guides.map((g, i) =>
+        g.type === "v" ? (
+          <div key={`guide-${i}`} style={{
+            position: "absolute",
+            left: camera.x + g.pos * PX_PER_MM * camera.zoom,
+            top: 0, width: "1px", height: "100%",
+            background: "rgba(255, 100, 100, 0.6)",
+            pointerEvents: "none", zIndex: 6,
+          }} />
+        ) : (
+          <div key={`guide-${i}`} style={{
+            position: "absolute",
+            left: 0, width: "100%",
+            top: camera.y + g.pos * PX_PER_MM * camera.zoom,
+            height: "1px",
+            background: "rgba(255, 100, 100, 0.6)",
+            pointerEvents: "none", zIndex: 6,
+          }} />
+        )
+      )}
+    </div>
+  );
+}
+
+function getCursor(tool: string): string {
+  switch (tool) {
+    case "select": return "default";
+    case "pen": return "crosshair";
+    case "text": return "text";
+    default: return "crosshair";
+  }
+}
+
+function renderObject(g: Graphics, obj: DesignObject) {
+  const t = obj.transform;
+  const px = t.x * PX_PER_MM;
+  const py = t.y * PX_PER_MM;
+  const pw = t.width * PX_PER_MM;
+  const ph = t.height * PX_PER_MM;
+
+  const strokeColor = parseInt(obj.stroke.replace("#", ""), 16);
+  const strokeWidth = obj.strokeWidth;
+
+  g.setStrokeStyle({ width: strokeWidth, color: strokeColor, alpha: obj.opacity });
+
+  if (obj.fill) {
+    // Pre-set fill for shapes that use it below
+  }
+
+  switch (obj.type) {
+    case "rectangle": {
+      const r = obj.cornerRadius || 0;
+      if (r > 0) {
+        g.roundRect(px, py, pw, ph, r * PX_PER_MM);
+      } else {
+        g.rect(px, py, pw, ph);
+      }
+      if (obj.fill) {
+        g.fill({ color: parseInt(obj.fill.replace("#", ""), 16), alpha: obj.opacity * 0.3 });
+      }
+      g.stroke();
+      break;
+    }
+    case "ellipse": {
+      g.ellipse(px + pw / 2, py + ph / 2, pw / 2, ph / 2);
+      if (obj.fill) {
+        g.fill({ color: parseInt(obj.fill.replace("#", ""), 16), alpha: obj.opacity * 0.3 });
+      }
+      g.stroke();
+      break;
+    }
+    case "line": {
+      if (obj.points && obj.points.length >= 2) {
+        g.moveTo(obj.points[0].x * PX_PER_MM, obj.points[0].y * PX_PER_MM);
+        g.lineTo(obj.points[1].x * PX_PER_MM, obj.points[1].y * PX_PER_MM);
+        g.stroke();
+      } else {
+        g.moveTo(px, py);
+        g.lineTo(px + pw, py + ph);
+        g.stroke();
+      }
+      break;
+    }
+    case "path": {
+      if (obj.points && obj.points.length >= 2) {
+        g.moveTo(obj.points[0].x * PX_PER_MM, obj.points[0].y * PX_PER_MM);
+        for (let i = 1; i < obj.points.length; i++) {
+          const pt = obj.points[i];
+          const prev = obj.points[i - 1];
+          if (prev.handleOut && pt.handleIn) {
+            g.bezierCurveTo(
+              prev.handleOut.x * PX_PER_MM,
+              prev.handleOut.y * PX_PER_MM,
+              pt.handleIn.x * PX_PER_MM,
+              pt.handleIn.y * PX_PER_MM,
+              pt.x * PX_PER_MM,
+              pt.y * PX_PER_MM
+            );
+          } else {
+            g.lineTo(pt.x * PX_PER_MM, pt.y * PX_PER_MM);
+          }
+        }
+        if (obj.closed) {
+          g.closePath();
+        }
+        if (obj.fill) {
+          g.fill({ color: parseInt(obj.fill.replace("#", ""), 16), alpha: obj.opacity * 0.3 });
+        }
+        g.stroke();
+      }
+      break;
+    }
+  }
+}
+
+function renderTextObject(obj: DesignObject): Container | null {
+  if (!obj.text) return null;
+  const t = obj.transform;
+  const px = t.x * PX_PER_MM;
+  const py = t.y * PX_PER_MM;
+
+  const style = new TextStyle({
+    fontFamily: obj.fontFamily || "-apple-system, BlinkMacSystemFont, sans-serif",
+    fontSize: (obj.fontSize || 16) * PX_PER_MM,
+    fill: obj.fill || obj.stroke || "#e8e8e8",
+    wordWrap: t.width > 0,
+    wordWrapWidth: t.width > 0 ? t.width * PX_PER_MM : undefined,
+  });
+
+  const text = new Text({ text: obj.text, style });
+  text.x = px;
+  text.y = py;
+  text.alpha = obj.opacity;
+  return text;
+}
+
+function renderImageObject(obj: DesignObject): Container | null {
+  if (!obj.imageData) return null;
+  const t = obj.transform;
+  const px = t.x * PX_PER_MM;
+  const py = t.y * PX_PER_MM;
+  const pw = t.width * PX_PER_MM;
+  const ph = t.height * PX_PER_MM;
+
+  try {
+    const img = new Image();
+    img.src = obj.imageData;
+    const texture = Texture.from(img);
+    const sprite = new Sprite(texture);
+    sprite.x = px;
+    sprite.y = py;
+    sprite.width = pw;
+    sprite.height = ph;
+    sprite.alpha = obj.opacity;
+    return sprite;
+  } catch {
+    // Fallback: draw a placeholder box
+    const g = new Graphics();
+    g.setStrokeStyle({ width: 1, color: 0x999999, alpha: 0.5 });
+    g.rect(px, py, pw, ph).stroke();
+    // X through the box
+    g.moveTo(px, py).lineTo(px + pw, py + ph).stroke();
+    g.moveTo(px + pw, py).lineTo(px, py + ph).stroke();
+    return g;
+  }
+}
+
+export { PX_PER_MM };

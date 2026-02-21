@@ -1,0 +1,166 @@
+import { useState } from "react";
+import { useStore } from "../../app/store";
+import type { MaterialPreset } from "../../app/types";
+
+export function MaterialLibrary() {
+  const materials = useStore((s) => s.materials);
+  const layers = useStore((s) => s.layers);
+  const activeLayerIndex = useStore((s) => s.activeLayerIndex);
+  const updateLayer = useStore((s) => s.updateLayer);
+  const [filter, setFilter] = useState("");
+  const [expanded, setExpanded] = useState(false);
+
+  const grouped = materials.reduce<Record<string, MaterialPreset[]>>((acc, m) => {
+    const key = `${m.material} ${m.thickness}`;
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(m);
+    return acc;
+  }, {});
+
+  const filteredGroups = Object.entries(grouped).filter(
+    ([key]) => !filter || key.toLowerCase().includes(filter.toLowerCase())
+  );
+
+  function applyPreset(preset: MaterialPreset) {
+    updateLayer(activeLayerIndex, {
+      mode: preset.mode,
+      power: preset.power,
+      powerMin: preset.powerMin,
+      speed: preset.speed,
+      passes: preset.passes,
+      airAssist: preset.airAssist,
+      interval: preset.interval,
+    });
+  }
+
+  function saveCurrentAsPreset() {
+    const layer = layers[activeLayerIndex];
+    if (!layer) return;
+    const name = prompt("Preset name (e.g. 'Birch Plywood 3mm Cut'):");
+    if (!name) return;
+    const material = prompt("Material type (e.g. 'Plywood'):");
+    if (!material) return;
+    const thickness = prompt("Thickness (e.g. '3mm'):");
+    if (!thickness) return;
+
+    const preset: MaterialPreset = {
+      id: `custom_${Date.now()}`,
+      name,
+      material,
+      thickness,
+      mode: layer.mode,
+      power: layer.power,
+      powerMin: layer.powerMin,
+      speed: layer.speed,
+      passes: layer.passes,
+      airAssist: layer.airAssist,
+      interval: layer.interval,
+    };
+    useStore.getState().addMaterial(preset);
+  }
+
+  return (
+    <div style={{ borderBottom: "1px solid var(--border)" }}>
+      <div
+        onClick={() => setExpanded(!expanded)}
+        style={{
+          padding: "8px 12px",
+          fontSize: "11px",
+          fontWeight: 600,
+          color: "var(--text-secondary)",
+          textTransform: "uppercase",
+          letterSpacing: "0.5px",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          gap: "6px",
+        }}
+      >
+        <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>
+          {expanded ? "\u25BC" : "\u25B6"}
+        </span>
+        Material Library
+      </div>
+
+      {expanded && (
+        <div style={{ padding: "0 8px 8px" }}>
+          {/* Search */}
+          <div style={{ display: "flex", gap: "4px", marginBottom: "6px" }}>
+            <input
+              placeholder="Search materials..."
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              style={{
+                flex: 1,
+                background: "var(--bg-input)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)",
+                color: "var(--text-primary)",
+                padding: "4px 8px",
+                fontSize: "11px",
+                outline: "none",
+              }}
+            />
+            <button
+              onClick={saveCurrentAsPreset}
+              title="Save current layer settings as preset"
+              style={{
+                background: "var(--bg-input)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)",
+                color: "var(--text-secondary)",
+                padding: "4px 8px",
+                fontSize: "11px",
+                cursor: "pointer",
+              }}
+            >
+              + Save
+            </button>
+          </div>
+
+          {/* Material groups */}
+          <div style={{ maxHeight: "200px", overflow: "auto" }}>
+            {filteredGroups.map(([group, presets]) => (
+              <div key={group} style={{ marginBottom: "4px" }}>
+                <div style={{
+                  fontSize: "10px", color: "var(--text-muted)",
+                  padding: "3px 4px", fontWeight: 600,
+                  textTransform: "uppercase", letterSpacing: "0.3px",
+                }}>
+                  {group}
+                </div>
+                {presets.map((preset) => (
+                  <button
+                    key={preset.id}
+                    onClick={() => applyPreset(preset)}
+                    style={{
+                      display: "flex",
+                      width: "100%",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      background: "none",
+                      border: "none",
+                      color: "var(--text-primary)",
+                      padding: "3px 8px",
+                      fontSize: "11px",
+                      cursor: "pointer",
+                      borderRadius: "var(--radius-sm)",
+                      textAlign: "left",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+                  >
+                    <span>{preset.mode === "fill" ? "Engrave" : "Cut"}</span>
+                    <span style={{ fontSize: "9px", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                      {preset.power}% {preset.speed}mm/s x{preset.passes}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
