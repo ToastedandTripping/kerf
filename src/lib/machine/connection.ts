@@ -83,7 +83,7 @@ export const machineConnection = {
     } catch (e) {
       const msg = String(e);
       store.addConsoleLine(`Send failed: ${msg}`, "error");
-      return [];
+      return ["error:disconnected"];
     }
   },
 

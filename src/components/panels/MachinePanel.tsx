@@ -78,9 +78,12 @@ export function MachinePanel() {
       .split("\n")
       .filter((l) => l.trim() && !l.startsWith(";"));
 
+    let jobError = false;
+
     for (let i = 0; i < lines.length; i++) {
       if (!useStore.getState().jobRunning) {
         addConsoleLine("Job cancelled", "error");
+        jobError = true;
         break;
       }
       // Wait while paused
@@ -93,13 +96,27 @@ export function MachinePanel() {
       // Check for errors
       if (responses.some((r) => r.startsWith("error:"))) {
         addConsoleLine("Job stopped due to error", "error");
+        jobError = true;
+        // Detect disconnect
+        if (responses.some((r) => r === "error:disconnected")) {
+          useStore.getState().setMachineConnected(false);
+          useStore.getState().setMachineState("disconnected");
+        }
         break;
       }
     }
 
+    // Safety: ensure laser is off on abort/error
+    if (jobError) {
+      try { await machineConnection.send("M5"); } catch { /* port may be gone */ }
+      try { await machineConnection.softReset(); } catch { /* port may be gone */ }
+      addConsoleLine("Job aborted", "error");
+    } else {
+      addConsoleLine("Job complete", "info");
+    }
+
     setJobRunning(false);
     setJobProgress(0);
-    addConsoleLine("Job complete", "info");
   }
 
   async function handlePauseResume() {
