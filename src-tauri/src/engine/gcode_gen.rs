@@ -15,7 +15,7 @@ pub struct PathSegment {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CutLayer {
-    pub mode: String,        // "line", "fill", "offsetFill"
+    pub mode: String,        // "line", "fill"
     pub power: f64,          // 0-100
     pub power_min: f64,      // 0-100
     pub speed: f64,          // mm/s
@@ -84,6 +84,23 @@ struct ScanLineParams {
     s_max: f64,
     power_cmd: String,
     workspace_height: f64,
+    rotation_rad: f64,
+    center_x: f64,
+    center_y: f64,
+}
+
+/// Transform a design-space point through optional rotation and Y-flip to GRBL coordinates
+fn transform_to_grbl(x: f64, y: f64, params: &ScanLineParams) -> (f64, f64) {
+    let (rx, ry) = if params.rotation_rad.abs() > 0.001 {
+        let dx = x - params.center_x;
+        let dy = y - params.center_y;
+        let cos = params.rotation_rad.cos();
+        let sin = params.rotation_rad.sin();
+        (params.center_x + dx * cos - dy * sin, params.center_y + dx * sin + dy * cos)
+    } else {
+        (x, y)
+    };
+    (rx, params.workspace_height - ry)
 }
 
 /// Generate scan lines for fill mode (horizontal or vertical)
@@ -118,9 +135,9 @@ fn generate_scan_lines(
         let overscan_end = if forward { end + params.overscan } else { end - params.overscan };
 
         let (rsx, rsy) = if vertical {
-            (params.workspace_height - pos, overscan_start)
+            transform_to_grbl(pos, overscan_start, params)
         } else {
-            (overscan_start, params.workspace_height - pos)
+            transform_to_grbl(overscan_start, pos, params)
         };
 
         // Rapid to overscan start
@@ -133,9 +150,9 @@ fn generate_scan_lines(
         // Accelerate to boundary at engrave speed with laser off
         if params.overscan > 0.0 {
             let (bsx, bsy) = if vertical {
-                (params.workspace_height - pos, start)
+                transform_to_grbl(pos, start, params)
             } else {
-                (start, params.workspace_height - pos)
+                transform_to_grbl(start, pos, params)
             };
             let d = params.overscan;
             *travel_distance += d;
@@ -147,9 +164,9 @@ fn generate_scan_lines(
         // Engrave scan line
         lines.push(format!("{} S{}", params.power_cmd, params.s_max));
         let (esx, esy) = if vertical {
-            (params.workspace_height - pos, end)
+            transform_to_grbl(pos, end, params)
         } else {
-            (end, params.workspace_height - pos)
+            transform_to_grbl(end, pos, params)
         };
         let scan_dist = (end - start).abs();
         *cut_distance += scan_dist;
@@ -161,9 +178,9 @@ fn generate_scan_lines(
         // Deceleration overscan zone
         if params.overscan > 0.0 {
             let (oex, oey) = if vertical {
-                (params.workspace_height - pos, overscan_end)
+                transform_to_grbl(pos, overscan_end, params)
             } else {
-                (overscan_end, params.workspace_height - pos)
+                transform_to_grbl(overscan_end, pos, params)
             };
             let d = params.overscan;
             *travel_distance += d;
@@ -208,7 +225,6 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
         let layer = &obj.layer;
         let speed_mm_min = layer.speed * 60.0; // Convert mm/s to mm/min
         let s_max = (layer.power / 100.0 * s_value_max).round();
-        let _s_min = (layer.power_min / 100.0 * s_value_max).round();
 
         // Power mode command
         let power_cmd = if layer.power_mode == "variable" { "M4" } else { "M3" };
@@ -469,7 +485,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                         lines.push("M5".to_string());
                     }
                 }
-                "fill" | "offsetFill" => {
+                "fill" => {
                     // Raster engrave mode
                     lines.push(format!("; Engrave: {} ({}% @ {}mm/s, interval {}mm)",
                         obj.id, layer.power, layer.speed, layer.interval));
@@ -478,26 +494,12 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                     let overscan = layer.overscan.max(0.0);
                     let scanning_offset = layer.scanning_offset;
 
-                    // TODO: rotate scan lines to match object rotation -- current approach overscans outside rotated boundary
-                    let (x_min, x_max, y_min, y_max) = if obj.rotation.abs() > 0.001 {
-                        let cx = obj.x + obj.width / 2.0;
-                        let cy = obj.y + obj.height / 2.0;
-                        let rad = obj.rotation.to_radians();
-                        let corners = [
-                            rotate_point(obj.x, obj.y, cx, cy, rad),
-                            rotate_point(obj.x + obj.width, obj.y, cx, cy, rad),
-                            rotate_point(obj.x + obj.width, obj.y + obj.height, cx, cy, rad),
-                            rotate_point(obj.x, obj.y + obj.height, cx, cy, rad),
-                        ];
-                        (
-                            corners.iter().map(|c| c.x).fold(f64::MAX, f64::min),
-                            corners.iter().map(|c| c.x).fold(f64::MIN, f64::max),
-                            corners.iter().map(|c| c.y).fold(f64::MAX, f64::min),
-                            corners.iter().map(|c| c.y).fold(f64::MIN, f64::max),
-                        )
-                    } else {
-                        (obj.x, obj.x + obj.width, obj.y, obj.y + obj.height)
-                    };
+                    // Scan lines are generated in the object's local (unrotated) space.
+                    // The transform_to_grbl helper applies rotation + Y-flip per coordinate.
+                    let (x_min, x_max, y_min, y_max) = (obj.x, obj.x + obj.width, obj.y, obj.y + obj.height);
+                    let rotation_rad = if obj.rotation.abs() > 0.001 { obj.rotation.to_radians() } else { 0.0 };
+                    let center_x = obj.x + obj.width / 2.0;
+                    let center_y = obj.y + obj.height / 2.0;
 
                     let scan_params = ScanLineParams {
                         overscan,
@@ -508,6 +510,9 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                         s_max,
                         power_cmd: power_cmd.to_string(),
                         workspace_height,
+                        rotation_rad,
+                        center_x,
+                        center_y,
                     };
 
                     // Horizontal scan lines

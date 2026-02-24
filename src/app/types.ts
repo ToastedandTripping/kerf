@@ -6,7 +6,6 @@ export type ToolType =
   | "pen"
   | "text"
   | "node"
-  | "measure"
   | "positionLaser";
 
 export type ObjectType = "rectangle" | "ellipse" | "line" | "path" | "text" | "group" | "image";
@@ -61,7 +60,7 @@ export interface DesignObject {
   children?: DesignObject[]; // group
 }
 
-export type CutMode = "line" | "fill" | "offsetFill";
+export type CutMode = "line" | "fill";
 export type PowerMode = "constant" | "variable"; // M3 vs M4
 
 export interface Layer {

@@ -48,7 +48,6 @@ function getCommands(): Command[] {
     { id: "tool-pen", label: "Pen Tool", shortcut: "P", category: "Tools", action: () => s().setActiveTool("pen") },
     { id: "tool-text", label: "Text Tool", shortcut: "T", category: "Tools", action: () => s().setActiveTool("text") },
     { id: "tool-node", label: "Node Edit Tool", shortcut: "N", category: "Tools", action: () => s().setActiveTool("node") },
-    { id: "tool-measure", label: "Measure Tool", shortcut: "M", category: "Tools", action: () => s().setActiveTool("measure") },
 
     // View
     { id: "view-grid", label: "Toggle Grid", shortcut: "G", category: "View", action: () => s().setGridVisible(!s().gridVisible) },

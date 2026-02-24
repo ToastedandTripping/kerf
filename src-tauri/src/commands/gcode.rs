@@ -14,7 +14,7 @@ pub fn generate_gcode(objects: Vec<CutObject>, workspace_height: f64, s_value_ma
     let mut fill_objects: Vec<CutObject> = Vec::new();
 
     for obj in sorted.drain(..) {
-        if obj.layer.mode == "fill" || obj.layer.mode == "offsetFill" {
+        if obj.layer.mode == "fill" {
             fill_objects.push(obj);
         } else {
             line_objects.push(obj);

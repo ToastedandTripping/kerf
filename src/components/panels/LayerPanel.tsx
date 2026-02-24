@@ -150,15 +150,11 @@ function LayerRow({
         ) : (
           <span style={{
             fontSize: "9px", padding: "1px 4px", borderRadius: "3px",
-            background: layer.mode === "fill" ? "rgba(226,74,74,0.2)" :
-                        layer.mode === "offsetFill" ? "rgba(226,165,74,0.2)" :
-                        "rgba(74,144,226,0.2)",
-            color: layer.mode === "fill" ? "#e28a8a" :
-                   layer.mode === "offsetFill" ? "#e2c08a" :
-                   "#8ab4e2",
+            background: layer.mode === "fill" ? "rgba(226,74,74,0.2)" : "rgba(74,144,226,0.2)",
+            color: layer.mode === "fill" ? "#e28a8a" : "#8ab4e2",
             textTransform: "uppercase", fontWeight: 600,
           }}>
-            {layer.mode === "offsetFill" ? "offset" : layer.mode}
+            {layer.mode}
           </span>
         )}
 
@@ -219,7 +215,6 @@ function LayerRow({
                 >
                   <option value="line">Line (Vector Cut)</option>
                   <option value="fill">Fill (Raster Engrave)</option>
-                  <option value="offsetFill">Offset Fill</option>
                 </select>
               </SettingRow>
 
@@ -296,7 +291,7 @@ function LayerRow({
               </SettingRow>
 
               {/* Fill-specific settings */}
-              {(layer.mode === "fill" || layer.mode === "offsetFill") && (
+              {layer.mode === "fill" && (
                 <>
                   <SettingRow label="Interval">
                     <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
@@ -331,7 +326,7 @@ function LayerRow({
                 <ToggleChip label="Air Assist" active={layer.airAssist} onClick={() => onUpdate({ airAssist: !layer.airAssist })} />
                 <ToggleChip label="Inner First" active={layer.cutInnerFirst} onClick={() => onUpdate({ cutInnerFirst: !layer.cutInnerFirst })} />
                 <ToggleChip label="Lock" active={layer.locked} onClick={() => onUpdate({ locked: !layer.locked })} />
-                {(layer.mode === "fill" || layer.mode === "offsetFill") && (
+                {layer.mode === "fill" && (
                   <>
                     <ToggleChip label="Bidir" active={layer.bidirectional} onClick={() => onUpdate({ bidirectional: !layer.bidirectional })} />
                     <ToggleChip label="Cross" active={layer.crossHatch} onClick={() => onUpdate({ crossHatch: !layer.crossHatch })} />
@@ -441,15 +436,11 @@ function SubLayerRow({
         </span>
         <span style={{
           fontSize: "9px", padding: "1px 4px", borderRadius: "3px",
-          background: sub.mode === "fill" ? "rgba(226,74,74,0.2)" :
-                      sub.mode === "offsetFill" ? "rgba(226,165,74,0.2)" :
-                      "rgba(74,144,226,0.2)",
-          color: sub.mode === "fill" ? "#e28a8a" :
-                 sub.mode === "offsetFill" ? "#e2c08a" :
-                 "#8ab4e2",
+          background: sub.mode === "fill" ? "rgba(226,74,74,0.2)" : "rgba(74,144,226,0.2)",
+          color: sub.mode === "fill" ? "#e28a8a" : "#8ab4e2",
           textTransform: "uppercase", fontWeight: 600,
         }}>
-          {sub.mode === "offsetFill" ? "offset" : sub.mode}
+          {sub.mode}
         </span>
         <span style={{ flex: 1 }} />
         <button
@@ -474,7 +465,6 @@ function SubLayerRow({
         >
           <option value="line">Line (Vector Cut)</option>
           <option value="fill">Fill (Raster Engrave)</option>
-          <option value="offsetFill">Offset Fill</option>
         </select>
       </SettingRow>
 
@@ -605,7 +595,7 @@ function AdvancedSettings({ layer, onUpdate }: { layer: Layer; onUpdate: (partia
               </SettingRow>
             </>
           )}
-          {(layer.mode === "fill" || layer.mode === "offsetFill") && (
+          {layer.mode === "fill" && (
             <>
               <SettingRow label="Overscan">
                 <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>

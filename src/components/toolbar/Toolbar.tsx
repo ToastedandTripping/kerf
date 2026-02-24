@@ -9,7 +9,6 @@ const tools: { type: ToolType; label: string; shortcut: string; icon: string }[]
   { type: "pen", label: "Pen", shortcut: "P", icon: "" },
   { type: "text", label: "Text", shortcut: "T", icon: "" },
   { type: "node", label: "Node Edit", shortcut: "N", icon: "" },
-  { type: "measure", label: "Measure", shortcut: "M", icon: "" },
 ];
 
 export function Toolbar() {
@@ -131,17 +130,6 @@ function ToolIcon({ type }: { type: ToolType }) {
           <rect x="1" y="12" width="4" height="4" fill="currentColor" />
           <rect x="13" y="12" width="4" height="4" fill="currentColor" />
           <circle cx="9" cy="5" r="2" fill="none" stroke="currentColor" />
-        </svg>
-      );
-    case "measure":
-      return (
-        <svg {...s} viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5">
-          <line x1="3" y1="9" x2="15" y2="9" />
-          <line x1="3" y1="6" x2="3" y2="12" />
-          <line x1="15" y1="6" x2="15" y2="12" />
-          <line x1="6" y1="8" x2="6" y2="10" />
-          <line x1="9" y1="7" x2="9" y2="11" />
-          <line x1="12" y1="8" x2="12" y2="10" />
         </svg>
       );
   }

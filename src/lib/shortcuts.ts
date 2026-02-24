@@ -12,7 +12,6 @@ const toolShortcuts: Record<string, ToolType> = {
   p: "pen",
   t: "text",
   n: "node",
-  m: "measure",
 };
 
 export function useKeyboardShortcuts() {
