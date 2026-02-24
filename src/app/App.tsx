@@ -16,6 +16,7 @@ import { SettingsDialog } from "../components/panels/SettingsDialog";
 import { ProjectNotesDialog } from "../components/panels/ProjectNotesDialog";
 import { QrCodeDialog } from "../components/panels/QrCodeDialog";
 import { ImageTraceDialog } from "../components/panels/ImageTraceDialog";
+import { MaterialTestDialog } from "../components/panels/MaterialTestDialog";
 import { useKeyboardShortcuts } from "../lib/shortcuts";
 
 // Expose dialog openers globally so menus/commands can trigger them
@@ -25,6 +26,7 @@ export const dialogState = {
   openProjectNotes: () => {},
   openQrCode: () => {},
   openImageTrace: () => {},
+  openMaterialTest: () => {},
 };
 
 export default function App() {
@@ -35,6 +37,7 @@ export default function App() {
   const [notesOpen, setNotesOpen] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
   const [traceOpen, setTraceOpen] = useState(false);
+  const [materialTestOpen, setMaterialTestOpen] = useState(false);
 
   // Wire up global dialog openers
   dialogState.openGrblSettings = () => setGrblOpen(true);
@@ -42,6 +45,7 @@ export default function App() {
   dialogState.openProjectNotes = () => setNotesOpen(true);
   dialogState.openQrCode = () => setQrOpen(true);
   dialogState.openImageTrace = () => setTraceOpen(true);
+  dialogState.openMaterialTest = () => setMaterialTestOpen(true);
 
   return (
     <div
@@ -87,6 +91,7 @@ export default function App() {
       <ProjectNotesDialog open={notesOpen} onClose={() => setNotesOpen(false)} />
       <QrCodeDialog open={qrOpen} onClose={() => setQrOpen(false)} />
       <ImageTraceDialog open={traceOpen} onClose={() => setTraceOpen(false)} />
+      <MaterialTestDialog open={materialTestOpen} onClose={() => setMaterialTestOpen(false)} />
     </div>
   );
 }

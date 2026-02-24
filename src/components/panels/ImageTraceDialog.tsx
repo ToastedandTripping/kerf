@@ -153,10 +153,11 @@ export function ImageTraceDialog({ open, onClose }: Props) {
 
       const store = useStore.getState();
       const layerColor = store.layers[store.activeLayerIndex]?.color || "#4a90e2";
-      const newIds: string[] = [];
 
       const imgT = selectedImage.transform;
 
+      // Prepare path objects before mutating store
+      const prepared: DesignObject[] = [];
       for (const pathEl of pathElements) {
         const d = pathEl.getAttribute("d");
         if (!d) continue;
@@ -195,7 +196,7 @@ export function ImageTraceDialog({ open, onClose }: Props) {
 
         const closed = /[Zz]\s*$/.test(d.trim());
 
-        const obj: DesignObject = {
+        prepared.push({
           id: generateId(),
           type: "path",
           name: "Traced path",
@@ -217,16 +218,21 @@ export function ImageTraceDialog({ open, onClose }: Props) {
           opacity: 1,
           points: scaledPoints,
           closed,
-        };
-
-        store.addObject(obj);
-        newIds.push(obj.id);
+        });
       }
 
-      if (newIds.length > 0) {
-        store.setSelectedIds(newIds);
-        store.addConsoleLine(`Traced image: ${newIds.length} paths added`, "info");
-      }
+      // Wrap all mutations in a single undo entry
+      store.withUndo("trace", () => {
+        const newIds: string[] = [];
+        for (const obj of prepared) {
+          store.addObject(obj);
+          newIds.push(obj.id);
+        }
+        if (newIds.length > 0) {
+          store.setSelectedIds(newIds);
+          store.addConsoleLine(`Traced image: ${newIds.length} paths added`, "info");
+        }
+      });
 
       onClose();
     } catch (e) {

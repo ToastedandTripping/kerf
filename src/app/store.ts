@@ -5,6 +5,7 @@ import type {
   ToolType,
   DesignObject,
   Layer,
+  SubLayer,
   CameraState,
   KerfProject,
   MaterialPreset,
@@ -44,6 +45,9 @@ interface AppState {
   activeLayerIndex: number;
   setActiveLayerIndex: (index: number) => void;
   updateLayer: (index: number, partial: Partial<Layer>) => void;
+  addSubLayer: (layerIndex: number) => void;
+  removeSubLayer: (layerIndex: number, subLayerId: string) => void;
+  updateSubLayer: (layerIndex: number, subLayerId: string, changes: Partial<SubLayer>) => void;
 
   // Camera
   camera: CameraState;
@@ -66,6 +70,10 @@ interface AppState {
   pushCommand: (cmd: Command) => void;
   undo: () => void;
   redo: () => void;
+  withUndo: (type: string, fn: () => void) => void;
+  _propertyEditSnapshot: { objects: DesignObject[]; selectedIds: string[] } | null;
+  beginPropertyEdit: () => void;
+  commitPropertyEdit: () => void;
 
   // Drawing state (temp state while drawing a shape)
   drawingObject: DesignObject | null;
@@ -183,6 +191,10 @@ interface AppState {
   setShowConsole: (v: boolean) => void;
   cursorPosition: { x: number; y: number };
   setCursorPosition: (pos: { x: number; y: number }) => void;
+
+  // Node editing
+  nodeEditState: { pathId: string | null; selectedNodeIndex: number | null };
+  setNodeEditState: (state: { pathId: string | null; selectedNodeIndex: number | null }) => void;
 }
 
 let idCounter = 0;
@@ -242,6 +254,43 @@ export const useStore = create<AppState>((set, get) => ({
         l.index === index ? { ...l, ...partial } : l
       ),
     })),
+  addSubLayer: (layerIndex) =>
+    set((state) => ({
+      layers: state.layers.map((l) => {
+        if (l.index !== layerIndex) return l;
+        const newSub: SubLayer = {
+          id: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          mode: "line",
+          power: 100,
+          powerMin: 0,
+          speed: 20,
+          passes: 1,
+          powerMode: "constant",
+          interval: 0.1,
+        };
+        return { ...l, subLayers: [...(l.subLayers || []), newSub] };
+      }),
+    })),
+  removeSubLayer: (layerIndex, subLayerId) =>
+    set((state) => ({
+      layers: state.layers.map((l) => {
+        if (l.index !== layerIndex) return l;
+        const filtered = (l.subLayers || []).filter((s) => s.id !== subLayerId);
+        return { ...l, subLayers: filtered.length > 0 ? filtered : undefined };
+      }),
+    })),
+  updateSubLayer: (layerIndex, subLayerId, changes) =>
+    set((state) => ({
+      layers: state.layers.map((l) => {
+        if (l.index !== layerIndex) return l;
+        return {
+          ...l,
+          subLayers: (l.subLayers || []).map((s) =>
+            s.id === subLayerId ? { ...s, ...changes } : s
+          ),
+        };
+      }),
+    })),
 
   // Camera
   camera: { x: 0, y: 0, zoom: 1 },
@@ -288,6 +337,36 @@ export const useStore = create<AppState>((set, get) => ({
       undoStack: [...undoStack, cmd],
     });
   },
+  withUndo: (type, fn) => {
+    const before = { objects: get().objects, selectedIds: get().selectedIds };
+    fn();
+    const after = { objects: get().objects, selectedIds: get().selectedIds };
+    if (before.objects !== after.objects) {
+      get().pushCommand({
+        type,
+        undo: () => set({ objects: before.objects, selectedIds: before.selectedIds, isDirty: true }),
+        redo: () => set({ objects: after.objects, selectedIds: after.selectedIds, isDirty: true }),
+      });
+    }
+  },
+  _propertyEditSnapshot: null,
+  beginPropertyEdit: () => {
+    if (!get()._propertyEditSnapshot) {
+      set({ _propertyEditSnapshot: { objects: get().objects, selectedIds: get().selectedIds } });
+    }
+  },
+  commitPropertyEdit: () => {
+    const snapshot = get()._propertyEditSnapshot;
+    if (snapshot && snapshot.objects !== get().objects) {
+      const after = { objects: get().objects, selectedIds: get().selectedIds };
+      get().pushCommand({
+        type: "property-edit",
+        undo: () => set({ objects: snapshot.objects, selectedIds: snapshot.selectedIds, isDirty: true }),
+        redo: () => set({ objects: after.objects, selectedIds: after.selectedIds, isDirty: true }),
+      });
+    }
+    set({ _propertyEditSnapshot: null });
+  },
 
   // Drawing
   drawingObject: null,
@@ -309,6 +388,7 @@ export const useStore = create<AppState>((set, get) => ({
       workspaceHeight: project.workspaceHeight,
       projectName: project.name,
       projectNotes: project.notes || "",
+      materials: project.materials || DEFAULT_MATERIALS,
       isDirty: false,
       selectedIds: [],
     }),
@@ -323,6 +403,7 @@ export const useStore = create<AppState>((set, get) => ({
       workspaceWidth: state.workspaceWidth,
       workspaceHeight: state.workspaceHeight,
       notes: state.projectNotes,
+      materials: state.materials,
     };
   },
 
@@ -366,263 +447,287 @@ export const useStore = create<AppState>((set, get) => ({
   setJobProgress: (p) => set({ jobProgress: p }),
 
   // Z-Order
-  moveObjectForward: (id) =>
-    set((state) => {
-      const idx = state.objects.findIndex((o) => o.id === id);
-      if (idx < 0 || idx >= state.objects.length - 1) return state;
-      const objs = [...state.objects];
-      [objs[idx], objs[idx + 1]] = [objs[idx + 1], objs[idx]];
-      return { objects: objs, isDirty: true };
-    }),
-  moveObjectBackward: (id) =>
-    set((state) => {
-      const idx = state.objects.findIndex((o) => o.id === id);
-      if (idx <= 0) return state;
-      const objs = [...state.objects];
-      [objs[idx - 1], objs[idx]] = [objs[idx], objs[idx - 1]];
-      return { objects: objs, isDirty: true };
-    }),
-  moveObjectToFront: (id) =>
-    set((state) => {
-      const idx = state.objects.findIndex((o) => o.id === id);
-      if (idx < 0) return state;
-      const objs = [...state.objects];
-      const [obj] = objs.splice(idx, 1);
-      objs.push(obj);
-      return { objects: objs, isDirty: true };
-    }),
-  moveObjectToBack: (id) =>
-    set((state) => {
-      const idx = state.objects.findIndex((o) => o.id === id);
-      if (idx < 0) return state;
-      const objs = [...state.objects];
-      const [obj] = objs.splice(idx, 1);
-      objs.unshift(obj);
-      return { objects: objs, isDirty: true };
-    }),
+  moveObjectForward: (id) => {
+    get().withUndo("z-order", () => {
+      set((state) => {
+        const idx = state.objects.findIndex((o) => o.id === id);
+        if (idx < 0 || idx >= state.objects.length - 1) return state;
+        const objs = [...state.objects];
+        [objs[idx], objs[idx + 1]] = [objs[idx + 1], objs[idx]];
+        return { objects: objs, isDirty: true };
+      });
+    });
+  },
+  moveObjectBackward: (id) => {
+    get().withUndo("z-order", () => {
+      set((state) => {
+        const idx = state.objects.findIndex((o) => o.id === id);
+        if (idx <= 0) return state;
+        const objs = [...state.objects];
+        [objs[idx - 1], objs[idx]] = [objs[idx], objs[idx - 1]];
+        return { objects: objs, isDirty: true };
+      });
+    });
+  },
+  moveObjectToFront: (id) => {
+    get().withUndo("z-order", () => {
+      set((state) => {
+        const idx = state.objects.findIndex((o) => o.id === id);
+        if (idx < 0) return state;
+        const objs = [...state.objects];
+        const [obj] = objs.splice(idx, 1);
+        objs.push(obj);
+        return { objects: objs, isDirty: true };
+      });
+    });
+  },
+  moveObjectToBack: (id) => {
+    get().withUndo("z-order", () => {
+      set((state) => {
+        const idx = state.objects.findIndex((o) => o.id === id);
+        if (idx < 0) return state;
+        const objs = [...state.objects];
+        const [obj] = objs.splice(idx, 1);
+        objs.unshift(obj);
+        return { objects: objs, isDirty: true };
+      });
+    });
+  },
 
   // Alignment
   alignObjects: (alignment) => {
-    const { selectedIds, objects, updateObject } = get();
-    if (selectedIds.length < 2) return;
-    const selected = objects.filter((o) => selectedIds.includes(o.id));
-    const bounds = selected.map((o) => ({
-      id: o.id,
-      left: o.transform.x,
-      right: o.transform.x + o.transform.width,
-      top: o.transform.y,
-      bottom: o.transform.y + o.transform.height,
-      cx: o.transform.x + o.transform.width / 2,
-      cy: o.transform.y + o.transform.height / 2,
-    }));
+    if (get().selectedIds.length < 2) return;
+    get().withUndo("align", () => {
+      const { selectedIds, objects, updateObject } = get();
+      const selected = objects.filter((o) => selectedIds.includes(o.id));
+      const bounds = selected.map((o) => ({
+        id: o.id,
+        left: o.transform.x,
+        right: o.transform.x + o.transform.width,
+        top: o.transform.y,
+        bottom: o.transform.y + o.transform.height,
+        cx: o.transform.x + o.transform.width / 2,
+        cy: o.transform.y + o.transform.height / 2,
+      }));
 
-    let target: number;
-    switch (alignment) {
-      case "left":
-        target = Math.min(...bounds.map((b) => b.left));
-        for (const b of bounds) {
-          const obj = objects.find((o) => o.id === b.id)!;
-          updateObject(b.id, { transform: { ...obj.transform, x: target } });
+      let target: number;
+      switch (alignment) {
+        case "left":
+          target = Math.min(...bounds.map((b) => b.left));
+          for (const b of bounds) {
+            const obj = objects.find((o) => o.id === b.id)!;
+            updateObject(b.id, { transform: { ...obj.transform, x: target } });
+          }
+          break;
+        case "right":
+          target = Math.max(...bounds.map((b) => b.right));
+          for (const b of bounds) {
+            const obj = objects.find((o) => o.id === b.id)!;
+            updateObject(b.id, { transform: { ...obj.transform, x: target - obj.transform.width } });
+          }
+          break;
+        case "top":
+          target = Math.min(...bounds.map((b) => b.top));
+          for (const b of bounds) {
+            const obj = objects.find((o) => o.id === b.id)!;
+            updateObject(b.id, { transform: { ...obj.transform, y: target } });
+          }
+          break;
+        case "bottom":
+          target = Math.max(...bounds.map((b) => b.bottom));
+          for (const b of bounds) {
+            const obj = objects.find((o) => o.id === b.id)!;
+            updateObject(b.id, { transform: { ...obj.transform, y: target - obj.transform.height } });
+          }
+          break;
+        case "hcenter": {
+          const allLeft = Math.min(...bounds.map((b) => b.left));
+          const allRight = Math.max(...bounds.map((b) => b.right));
+          const center = (allLeft + allRight) / 2;
+          for (const b of bounds) {
+            const obj = objects.find((o) => o.id === b.id)!;
+            updateObject(b.id, { transform: { ...obj.transform, x: center - obj.transform.width / 2 } });
+          }
+          break;
         }
-        break;
-      case "right":
-        target = Math.max(...bounds.map((b) => b.right));
-        for (const b of bounds) {
-          const obj = objects.find((o) => o.id === b.id)!;
-          updateObject(b.id, { transform: { ...obj.transform, x: target - obj.transform.width } });
+        case "vcenter": {
+          const allTop = Math.min(...bounds.map((b) => b.top));
+          const allBottom = Math.max(...bounds.map((b) => b.bottom));
+          const center = (allTop + allBottom) / 2;
+          for (const b of bounds) {
+            const obj = objects.find((o) => o.id === b.id)!;
+            updateObject(b.id, { transform: { ...obj.transform, y: center - obj.transform.height / 2 } });
+          }
+          break;
         }
-        break;
-      case "top":
-        target = Math.min(...bounds.map((b) => b.top));
-        for (const b of bounds) {
-          const obj = objects.find((o) => o.id === b.id)!;
-          updateObject(b.id, { transform: { ...obj.transform, y: target } });
-        }
-        break;
-      case "bottom":
-        target = Math.max(...bounds.map((b) => b.bottom));
-        for (const b of bounds) {
-          const obj = objects.find((o) => o.id === b.id)!;
-          updateObject(b.id, { transform: { ...obj.transform, y: target - obj.transform.height } });
-        }
-        break;
-      case "hcenter": {
-        const allLeft = Math.min(...bounds.map((b) => b.left));
-        const allRight = Math.max(...bounds.map((b) => b.right));
-        const center = (allLeft + allRight) / 2;
-        for (const b of bounds) {
-          const obj = objects.find((o) => o.id === b.id)!;
-          updateObject(b.id, { transform: { ...obj.transform, x: center - obj.transform.width / 2 } });
-        }
-        break;
       }
-      case "vcenter": {
-        const allTop = Math.min(...bounds.map((b) => b.top));
-        const allBottom = Math.max(...bounds.map((b) => b.bottom));
-        const center = (allTop + allBottom) / 2;
-        for (const b of bounds) {
-          const obj = objects.find((o) => o.id === b.id)!;
-          updateObject(b.id, { transform: { ...obj.transform, y: center - obj.transform.height / 2 } });
-        }
-        break;
-      }
-    }
+    });
   },
   distributeObjects: (direction) => {
-    const { selectedIds, objects, updateObject } = get();
-    if (selectedIds.length < 3) return;
-    const selected = objects.filter((o) => selectedIds.includes(o.id));
+    if (get().selectedIds.length < 3) return;
+    get().withUndo("distribute", () => {
+      const { selectedIds, objects, updateObject } = get();
+      const selected = objects.filter((o) => selectedIds.includes(o.id));
 
-    if (direction === "horizontal") {
-      const sorted = [...selected].sort((a, b) => a.transform.x - b.transform.x);
-      const first = sorted[0].transform.x;
-      const last = sorted[sorted.length - 1].transform.x + sorted[sorted.length - 1].transform.width;
-      const totalWidth = sorted.reduce((s, o) => s + o.transform.width, 0);
-      const gap = (last - first - totalWidth) / (sorted.length - 1);
-      let x = first;
-      for (const obj of sorted) {
-        updateObject(obj.id, { transform: { ...obj.transform, x } });
-        x += obj.transform.width + gap;
+      if (direction === "horizontal") {
+        const sorted = [...selected].sort((a, b) => a.transform.x - b.transform.x);
+        const first = sorted[0].transform.x;
+        const last = sorted[sorted.length - 1].transform.x + sorted[sorted.length - 1].transform.width;
+        const totalWidth = sorted.reduce((s, o) => s + o.transform.width, 0);
+        const gap = (last - first - totalWidth) / (sorted.length - 1);
+        let x = first;
+        for (const obj of sorted) {
+          updateObject(obj.id, { transform: { ...obj.transform, x } });
+          x += obj.transform.width + gap;
+        }
+      } else {
+        const sorted = [...selected].sort((a, b) => a.transform.y - b.transform.y);
+        const first = sorted[0].transform.y;
+        const last = sorted[sorted.length - 1].transform.y + sorted[sorted.length - 1].transform.height;
+        const totalHeight = sorted.reduce((s, o) => s + o.transform.height, 0);
+        const gap = (last - first - totalHeight) / (sorted.length - 1);
+        let y = first;
+        for (const obj of sorted) {
+          updateObject(obj.id, { transform: { ...obj.transform, y } });
+          y += obj.transform.height + gap;
+        }
       }
-    } else {
-      const sorted = [...selected].sort((a, b) => a.transform.y - b.transform.y);
-      const first = sorted[0].transform.y;
-      const last = sorted[sorted.length - 1].transform.y + sorted[sorted.length - 1].transform.height;
-      const totalHeight = sorted.reduce((s, o) => s + o.transform.height, 0);
-      const gap = (last - first - totalHeight) / (sorted.length - 1);
-      let y = first;
-      for (const obj of sorted) {
-        updateObject(obj.id, { transform: { ...obj.transform, y } });
-        y += obj.transform.height + gap;
-      }
-    }
+    });
   },
 
   // Flip
   flipObjects: (axis) => {
-    const { selectedIds, objects, updateObject } = get();
-    if (selectedIds.length === 0) return;
-    const selected = objects.filter((o) => selectedIds.includes(o.id));
+    if (get().selectedIds.length === 0) return;
+    get().withUndo("flip", () => {
+      const { selectedIds, objects, updateObject } = get();
+      const selected = objects.filter((o) => selectedIds.includes(o.id));
 
-    if (selected.length === 1) {
-      const obj = selected[0];
-      if (axis === "horizontal") {
-        updateObject(obj.id, { transform: { ...obj.transform, scaleX: obj.transform.scaleX * -1 } });
-      } else {
-        updateObject(obj.id, { transform: { ...obj.transform, scaleY: obj.transform.scaleY * -1 } });
-      }
-    } else {
-      // Flip group around collective center
-      const allLeft = Math.min(...selected.map((o) => o.transform.x));
-      const allRight = Math.max(...selected.map((o) => o.transform.x + o.transform.width));
-      const allTop = Math.min(...selected.map((o) => o.transform.y));
-      const allBottom = Math.max(...selected.map((o) => o.transform.y + o.transform.height));
-
-      for (const obj of selected) {
+      if (selected.length === 1) {
+        const obj = selected[0];
         if (axis === "horizontal") {
-          const newX = allRight - (obj.transform.x - allLeft) - obj.transform.width;
-          updateObject(obj.id, { transform: { ...obj.transform, x: newX } });
+          updateObject(obj.id, { transform: { ...obj.transform, scaleX: obj.transform.scaleX * -1 } });
         } else {
-          const newY = allBottom - (obj.transform.y - allTop) - obj.transform.height;
-          updateObject(obj.id, { transform: { ...obj.transform, y: newY } });
+          updateObject(obj.id, { transform: { ...obj.transform, scaleY: obj.transform.scaleY * -1 } });
+        }
+      } else {
+        // Flip group around collective center
+        const allLeft = Math.min(...selected.map((o) => o.transform.x));
+        const allRight = Math.max(...selected.map((o) => o.transform.x + o.transform.width));
+        const allTop = Math.min(...selected.map((o) => o.transform.y));
+        const allBottom = Math.max(...selected.map((o) => o.transform.y + o.transform.height));
+
+        for (const obj of selected) {
+          if (axis === "horizontal") {
+            const newX = allRight - (obj.transform.x - allLeft) - obj.transform.width;
+            updateObject(obj.id, { transform: { ...obj.transform, x: newX } });
+          } else {
+            const newY = allBottom - (obj.transform.y - allTop) - obj.transform.height;
+            updateObject(obj.id, { transform: { ...obj.transform, y: newY } });
+          }
         }
       }
-    }
+    });
   },
 
   // Group
   groupSelected: () => {
-    const { selectedIds, objects } = get();
-    if (selectedIds.length < 2) return;
-    const selected = objects.filter((o) => selectedIds.includes(o.id));
-    const remaining = objects.filter((o) => !selectedIds.includes(o.id));
+    if (get().selectedIds.length < 2) return;
+    get().withUndo("group", () => {
+      const { selectedIds, objects } = get();
+      const selected = objects.filter((o) => selectedIds.includes(o.id));
+      const remaining = objects.filter((o) => !selectedIds.includes(o.id));
 
-    // Calculate group bounding box
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const obj of selected) {
-      minX = Math.min(minX, obj.transform.x);
-      minY = Math.min(minY, obj.transform.y);
-      maxX = Math.max(maxX, obj.transform.x + obj.transform.width);
-      maxY = Math.max(maxY, obj.transform.y + obj.transform.height);
-    }
+      // Calculate group bounding box
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const obj of selected) {
+        minX = Math.min(minX, obj.transform.x);
+        minY = Math.min(minY, obj.transform.y);
+        maxX = Math.max(maxX, obj.transform.x + obj.transform.width);
+        maxY = Math.max(maxY, obj.transform.y + obj.transform.height);
+      }
 
-    // Adjust children transforms to be relative to group origin
-    const children = selected.map((o) => ({
-      ...o,
-      transform: {
-        ...o.transform,
-        x: o.transform.x - minX,
-        y: o.transform.y - minY,
-      },
-    }));
+      // Adjust children transforms to be relative to group origin
+      const children = selected.map((o) => ({
+        ...o,
+        transform: {
+          ...o.transform,
+          x: o.transform.x - minX,
+          y: o.transform.y - minY,
+        },
+      }));
 
-    const groupId = `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const group: DesignObject = {
-      id: groupId,
-      type: "group",
-      name: `Group ${remaining.length + 1}`,
-      transform: {
-        x: minX,
-        y: minY,
-        width: maxX - minX,
-        height: maxY - minY,
-        rotation: 0,
-        scaleX: 1,
-        scaleY: 1,
-      },
-      layerIndex: selected[0].layerIndex,
-      visible: true,
-      locked: false,
-      fill: null,
-      stroke: "#ffffff",
-      strokeWidth: 0,
-      opacity: 1,
-      children,
-    };
+      const groupId = `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const group: DesignObject = {
+        id: groupId,
+        type: "group",
+        name: `Group ${remaining.length + 1}`,
+        transform: {
+          x: minX,
+          y: minY,
+          width: maxX - minX,
+          height: maxY - minY,
+          rotation: 0,
+          scaleX: 1,
+          scaleY: 1,
+        },
+        layerIndex: selected[0].layerIndex,
+        visible: true,
+        locked: false,
+        fill: null,
+        stroke: "#ffffff",
+        strokeWidth: 0,
+        opacity: 1,
+        children,
+      };
 
-    // Insert group at position of first selected object
-    const insertIdx = objects.findIndex((o) => o.id === selected[0].id);
-    const newObjects = [...remaining];
-    newObjects.splice(Math.min(insertIdx, newObjects.length), 0, group);
+      // Insert group at position of first selected object
+      const insertIdx = objects.findIndex((o) => o.id === selected[0].id);
+      const newObjects = [...remaining];
+      newObjects.splice(Math.min(insertIdx, newObjects.length), 0, group);
 
-    set({ objects: newObjects, selectedIds: [groupId], isDirty: true });
+      set({ objects: newObjects, selectedIds: [groupId], isDirty: true });
+    });
   },
   ungroupSelected: () => {
-    const { selectedIds, objects } = get();
-    const newObjects: DesignObject[] = [];
-    const newSelectedIds: string[] = [];
+    get().withUndo("ungroup", () => {
+      const { selectedIds, objects } = get();
+      const newObjects: DesignObject[] = [];
+      const newSelectedIds: string[] = [];
 
-    for (const obj of objects) {
-      if (selectedIds.includes(obj.id) && obj.type === "group" && obj.children) {
-        // Expand children back to absolute positions
-        for (const child of obj.children) {
-          const expanded = {
-            ...child,
-            transform: {
-              ...child.transform,
-              x: child.transform.x + obj.transform.x,
-              y: child.transform.y + obj.transform.y,
-            },
-          };
-          newObjects.push(expanded);
-          newSelectedIds.push(expanded.id);
-        }
-      } else {
-        newObjects.push(obj);
-        if (selectedIds.includes(obj.id)) {
-          newSelectedIds.push(obj.id);
+      for (const obj of objects) {
+        if (selectedIds.includes(obj.id) && obj.type === "group" && obj.children) {
+          // Expand children back to absolute positions
+          for (const child of obj.children) {
+            const expanded = {
+              ...child,
+              transform: {
+                ...child.transform,
+                x: child.transform.x + obj.transform.x,
+                y: child.transform.y + obj.transform.y,
+              },
+            };
+            newObjects.push(expanded);
+            newSelectedIds.push(expanded.id);
+          }
+        } else {
+          newObjects.push(obj);
+          if (selectedIds.includes(obj.id)) {
+            newSelectedIds.push(obj.id);
+          }
         }
       }
-    }
 
-    set({ objects: newObjects, selectedIds: newSelectedIds, isDirty: true });
+      set({ objects: newObjects, selectedIds: newSelectedIds, isDirty: true });
+    });
   },
 
   // Convert to Path
   convertToPath: (id) => {
-    const { objects, updateObject } = get();
+    const { objects } = get();
     const obj = objects.find((o) => o.id === id);
     if (!obj) return;
+    get().withUndo("convert-to-path", () => {
+    const { updateObject } = get();
 
     let points: Array<{ x: number; y: number; handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } }> = [];
     const t = obj.transform;
@@ -685,17 +790,22 @@ export const useStore = create<AppState>((set, get) => ({
       points: absolutePoints,
       closed: true,
     });
+    });
   },
 
   convertTextToPath: async (id) => {
-    const { objects, removeObjects, addObject, setSelectedIds } = get();
+    const { objects } = get();
     const obj = objects.find((o) => o.id === id);
     if (!obj || obj.type !== "text" || !obj.text) return;
 
     try {
-      // Load a default font - uses Google Fonts CDN for a standard sans-serif
-      const fontUrl = "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/opensans/OpenSans%5Bwdth%2Cwght%5D.ttf";
-      const font = await opentype.load(fontUrl);
+      // Load font locally first (works offline in Tauri), fall back to CDN
+      let font: opentype.Font;
+      try {
+        font = await opentype.load("/fonts/OpenSans-Regular.ttf");
+      } catch {
+        font = await opentype.load("https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/opensans/OpenSans%5Bwdth%2Cwght%5D.ttf");
+      }
 
       const fontSize = obj.fontSize || 12;
       // Convert mm font size to font units (opentype uses unitsPerEm)
@@ -704,7 +814,7 @@ export const useStore = create<AppState>((set, get) => ({
 
       const glyphs = font.stringToGlyphs(obj.text);
       let xOffset = 0;
-      const newIds: string[] = [];
+      const prepared: DesignObject[] = [];
 
       for (const glyph of glyphs) {
         const path = glyph.getPath(0, 0, font.unitsPerEm);
@@ -795,10 +905,9 @@ export const useStore = create<AppState>((set, get) => ({
           const maxX = Math.max(...xs);
           const maxY = Math.max(...ys);
 
-          const newId = generateId();
-          addObject({
+          prepared.push({
             ...obj,
-            id: newId,
+            id: generateId(),
             type: "path",
             text: undefined,
             fontSize: undefined,
@@ -813,114 +922,129 @@ export const useStore = create<AppState>((set, get) => ({
               height: maxY - minY,
             },
           });
-          newIds.push(newId);
         }
 
         xOffset += (glyph.advanceWidth || 0) * scale;
       }
 
-      // Remove original text object and select new paths
-      removeObjects([id]);
-      setSelectedIds(newIds);
+      // Wrap all mutations in a single undo entry
+      get().withUndo("convert-to-path", () => {
+        const { removeObjects, addObject, setSelectedIds } = get();
+        const newIds: string[] = [];
+        for (const newObj of prepared) {
+          addObject(newObj);
+          newIds.push(newObj.id);
+        }
+        removeObjects([id]);
+        setSelectedIds(newIds);
+      });
     } catch (e) {
       console.error("Text to path conversion failed:", e);
       // Fallback: just convert the bounding box to a rectangle path
-      get().updateObject(id, {
-        type: "path",
-        points: [
-          { x: obj.transform.x, y: obj.transform.y },
-          { x: obj.transform.x + obj.transform.width, y: obj.transform.y },
-          { x: obj.transform.x + obj.transform.width, y: obj.transform.y + obj.transform.height },
-          { x: obj.transform.x, y: obj.transform.y + obj.transform.height },
-        ],
-        closed: true,
+      get().withUndo("convert-to-path", () => {
+        get().updateObject(id, {
+          type: "path",
+          points: [
+            { x: obj.transform.x, y: obj.transform.y },
+            { x: obj.transform.x + obj.transform.width, y: obj.transform.y },
+            { x: obj.transform.x + obj.transform.width, y: obj.transform.y + obj.transform.height },
+            { x: obj.transform.x, y: obj.transform.y + obj.transform.height },
+          ],
+          closed: true,
+        });
       });
     }
   },
 
   // Rotate 90
   rotate90: (direction) => {
-    const { selectedIds, objects, updateObject } = get();
-    if (selectedIds.length === 0) return;
-    const angle = direction === "cw" ? 90 : -90;
+    if (get().selectedIds.length === 0) return;
+    get().withUndo("rotate", () => {
+      const { selectedIds, objects, updateObject } = get();
+      const angle = direction === "cw" ? 90 : -90;
 
-    for (const id of selectedIds) {
-      const obj = objects.find((o) => o.id === id);
-      if (!obj) continue;
-      updateObject(id, {
-        transform: {
-          ...obj.transform,
-          rotation: (obj.transform.rotation + angle) % 360,
-        },
-      });
-    }
+      for (const id of selectedIds) {
+        const obj = objects.find((o) => o.id === id);
+        if (!obj) continue;
+        updateObject(id, {
+          transform: {
+            ...obj.transform,
+            rotation: (obj.transform.rotation + angle) % 360,
+          },
+        });
+      }
+    });
   },
 
   // Array tools
   gridArray: (rows, cols, spacingX, spacingY) => {
-    const { selectedIds, objects, addObject, setSelectedIds } = get();
-    if (selectedIds.length === 0) return;
-    const selected = objects.filter((o) => selectedIds.includes(o.id));
-    const newIds: string[] = [...selectedIds];
+    if (get().selectedIds.length === 0) return;
+    get().withUndo("grid-array", () => {
+      const { selectedIds, objects, addObject, setSelectedIds } = get();
+      const selected = objects.filter((o) => selectedIds.includes(o.id));
+      const newIds: string[] = [...selectedIds];
 
-    for (const obj of selected) {
-      for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-          if (r === 0 && c === 0) continue; // skip original
-          const newId = `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      for (const obj of selected) {
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            if (r === 0 && c === 0) continue; // skip original
+            const newId = `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            addObject({
+              ...obj,
+              id: newId,
+              name: obj.name + ` [${r},${c}]`,
+              transform: {
+                ...obj.transform,
+                x: obj.transform.x + c * (obj.transform.width + spacingX),
+                y: obj.transform.y + r * (obj.transform.height + spacingY),
+              },
+            });
+            newIds.push(newId);
+          }
+        }
+      }
+      setSelectedIds(newIds);
+    });
+  },
+  circularArray: (count, radius, startAngle) => {
+    if (get().selectedIds.length === 0) return;
+    get().withUndo("circular-array", () => {
+      const { selectedIds, objects, addObject, setSelectedIds } = get();
+      const selected = objects.filter((o) => selectedIds.includes(o.id));
+      const newIds: string[] = [...selectedIds];
+
+      // Calculate center of selection
+      let cx = 0, cy = 0;
+      for (const obj of selected) {
+        cx += obj.transform.x + obj.transform.width / 2;
+        cy += obj.transform.y + obj.transform.height / 2;
+      }
+      cx /= selected.length;
+      cy /= selected.length;
+
+      const angleStep = 360 / count;
+      for (const obj of selected) {
+        for (let i = 1; i < count; i++) {
+          const angle = (startAngle + angleStep * i) * (Math.PI / 180);
+          const newCx = cx + radius * Math.cos(angle);
+          const newCy = cy + radius * Math.sin(angle);
+          const newId = `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${i}`;
           addObject({
             ...obj,
             id: newId,
-            name: obj.name + ` [${r},${c}]`,
+            name: obj.name + ` [${i}]`,
             transform: {
               ...obj.transform,
-              x: obj.transform.x + c * (obj.transform.width + spacingX),
-              y: obj.transform.y + r * (obj.transform.height + spacingY),
+              x: newCx - obj.transform.width / 2,
+              y: newCy - obj.transform.height / 2,
+              rotation: (obj.transform.rotation + angleStep * i) % 360,
             },
           });
           newIds.push(newId);
         }
       }
-    }
-    setSelectedIds(newIds);
-  },
-  circularArray: (count, radius, startAngle) => {
-    const { selectedIds, objects, addObject, setSelectedIds } = get();
-    if (selectedIds.length === 0) return;
-    const selected = objects.filter((o) => selectedIds.includes(o.id));
-    const newIds: string[] = [...selectedIds];
-
-    // Calculate center of selection
-    let cx = 0, cy = 0;
-    for (const obj of selected) {
-      cx += obj.transform.x + obj.transform.width / 2;
-      cy += obj.transform.y + obj.transform.height / 2;
-    }
-    cx /= selected.length;
-    cy /= selected.length;
-
-    const angleStep = 360 / count;
-    for (const obj of selected) {
-      for (let i = 1; i < count; i++) {
-        const angle = (startAngle + angleStep * i) * (Math.PI / 180);
-        const newCx = cx + radius * Math.cos(angle);
-        const newCy = cy + radius * Math.sin(angle);
-        const newId = `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${i}`;
-        addObject({
-          ...obj,
-          id: newId,
-          name: obj.name + ` [${i}]`,
-          transform: {
-            ...obj.transform,
-            x: newCx - obj.transform.width / 2,
-            y: newCy - obj.transform.height / 2,
-            rotation: (obj.transform.rotation + angleStep * i) % 360,
-          },
-        });
-        newIds.push(newId);
-      }
-    }
-    setSelectedIds(newIds);
+      setSelectedIds(newIds);
+    });
   },
 
   // Selection helpers
@@ -957,16 +1081,18 @@ export const useStore = create<AppState>((set, get) => ({
     set({ selectedIds: [visible[prevIdx].id] });
   },
   duplicateInPlace: () => {
-    const { selectedIds, objects, addObject } = get();
-    if (selectedIds.length === 0) return;
-    const selected = objects.filter((o) => selectedIds.includes(o.id));
-    const newIds: string[] = [];
-    for (const obj of selected) {
-      const newId = `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      addObject({ ...obj, id: newId, name: obj.name + " copy" });
-      newIds.push(newId);
-    }
-    set({ selectedIds: newIds });
+    if (get().selectedIds.length === 0) return;
+    get().withUndo("duplicate", () => {
+      const { selectedIds, objects, addObject } = get();
+      const selected = objects.filter((o) => selectedIds.includes(o.id));
+      const newIds: string[] = [];
+      for (const obj of selected) {
+        const newId = `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        addObject({ ...obj, id: newId, name: obj.name + " copy" });
+        newIds.push(newId);
+      }
+      set({ selectedIds: newIds });
+    });
   },
 
   // Zoom helpers
@@ -1042,92 +1168,102 @@ export const useStore = create<AppState>((set, get) => ({
 
   // Boolean operations
   booleanUnion: () => {
-    const { selectedIds, objects, removeObjects, addObject, setSelectedIds } = get();
-    if (selectedIds.length < 2) return;
-    const selected = objects.filter((o) => selectedIds.includes(o.id));
-    const polys = selected.map(objectToPolygon).filter(Boolean) as polygonClipping.Polygon[];
-    if (polys.length < 2) return;
-    const result = polygonClipping.union(polys[0], ...polys.slice(1));
-    removeObjects(selectedIds);
-    const newIds = multiPolygonToObjects(result, selected[0]).map((obj) => {
-      addObject(obj);
-      return obj.id;
+    if (get().selectedIds.length < 2) return;
+    get().withUndo("boolean", () => {
+      const { selectedIds, objects, removeObjects, addObject, setSelectedIds } = get();
+      const selected = objects.filter((o) => selectedIds.includes(o.id));
+      const polys = selected.map(objectToPolygon).filter(Boolean) as polygonClipping.Polygon[];
+      if (polys.length < 2) return;
+      const result = polygonClipping.union(polys[0], ...polys.slice(1));
+      removeObjects(selectedIds);
+      const newIds = multiPolygonToObjects(result, selected[0]).map((obj) => {
+        addObject(obj);
+        return obj.id;
+      });
+      setSelectedIds(newIds);
     });
-    setSelectedIds(newIds);
   },
 
   booleanDifference: () => {
-    const { selectedIds, objects, removeObjects, addObject, setSelectedIds } = get();
-    if (selectedIds.length < 2) return;
-    const selected = objects.filter((o) => selectedIds.includes(o.id));
-    const polys = selected.map(objectToPolygon).filter(Boolean) as polygonClipping.Polygon[];
-    if (polys.length < 2) return;
-    const result = polygonClipping.difference(polys[0], ...polys.slice(1));
-    removeObjects(selectedIds);
-    const newIds = multiPolygonToObjects(result, selected[0]).map((obj) => {
-      addObject(obj);
-      return obj.id;
+    if (get().selectedIds.length < 2) return;
+    get().withUndo("boolean", () => {
+      const { selectedIds, objects, removeObjects, addObject, setSelectedIds } = get();
+      const selected = objects.filter((o) => selectedIds.includes(o.id));
+      const polys = selected.map(objectToPolygon).filter(Boolean) as polygonClipping.Polygon[];
+      if (polys.length < 2) return;
+      const result = polygonClipping.difference(polys[0], ...polys.slice(1));
+      removeObjects(selectedIds);
+      const newIds = multiPolygonToObjects(result, selected[0]).map((obj) => {
+        addObject(obj);
+        return obj.id;
+      });
+      setSelectedIds(newIds);
     });
-    setSelectedIds(newIds);
   },
 
   booleanIntersection: () => {
-    const { selectedIds, objects, removeObjects, addObject, setSelectedIds } = get();
-    if (selectedIds.length < 2) return;
-    const selected = objects.filter((o) => selectedIds.includes(o.id));
-    const polys = selected.map(objectToPolygon).filter(Boolean) as polygonClipping.Polygon[];
-    if (polys.length < 2) return;
-    const result = polygonClipping.intersection(polys[0], ...polys.slice(1));
-    removeObjects(selectedIds);
-    const newIds = multiPolygonToObjects(result, selected[0]).map((obj) => {
-      addObject(obj);
-      return obj.id;
+    if (get().selectedIds.length < 2) return;
+    get().withUndo("boolean", () => {
+      const { selectedIds, objects, removeObjects, addObject, setSelectedIds } = get();
+      const selected = objects.filter((o) => selectedIds.includes(o.id));
+      const polys = selected.map(objectToPolygon).filter(Boolean) as polygonClipping.Polygon[];
+      if (polys.length < 2) return;
+      const result = polygonClipping.intersection(polys[0], ...polys.slice(1));
+      removeObjects(selectedIds);
+      const newIds = multiPolygonToObjects(result, selected[0]).map((obj) => {
+        addObject(obj);
+        return obj.id;
+      });
+      setSelectedIds(newIds);
     });
-    setSelectedIds(newIds);
   },
 
   booleanXor: () => {
-    const { selectedIds, objects, removeObjects, addObject, setSelectedIds } = get();
-    if (selectedIds.length < 2) return;
-    const selected = objects.filter((o) => selectedIds.includes(o.id));
-    const polys = selected.map(objectToPolygon).filter(Boolean) as polygonClipping.Polygon[];
-    if (polys.length < 2) return;
-    const result = polygonClipping.xor(polys[0], ...polys.slice(1));
-    removeObjects(selectedIds);
-    const newIds = multiPolygonToObjects(result, selected[0]).map((obj) => {
-      addObject(obj);
-      return obj.id;
+    if (get().selectedIds.length < 2) return;
+    get().withUndo("boolean", () => {
+      const { selectedIds, objects, removeObjects, addObject, setSelectedIds } = get();
+      const selected = objects.filter((o) => selectedIds.includes(o.id));
+      const polys = selected.map(objectToPolygon).filter(Boolean) as polygonClipping.Polygon[];
+      if (polys.length < 2) return;
+      const result = polygonClipping.xor(polys[0], ...polys.slice(1));
+      removeObjects(selectedIds);
+      const newIds = multiPolygonToObjects(result, selected[0]).map((obj) => {
+        addObject(obj);
+        return obj.id;
+      });
+      setSelectedIds(newIds);
     });
-    setSelectedIds(newIds);
   },
 
   offsetPaths: (distance) => {
-    const { selectedIds, objects, addObject, setSelectedIds } = get();
-    if (selectedIds.length === 0) return;
-    const selected = objects.filter((o) => selectedIds.includes(o.id));
-    const newIds: string[] = [];
-    for (const obj of selected) {
-      const poly = objectToPolygon(obj);
-      if (!poly) continue;
-      // Simple offset by expanding/contracting each point along its normal
-      const ring = poly[0];
-      const offsetRing = offsetRingByDistance(ring, distance);
-      const newId = `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const xs = offsetRing.map((p) => p[0]);
-      const ys = offsetRing.map((p) => p[1]);
-      const minX = Math.min(...xs), minY = Math.min(...ys);
-      const maxX = Math.max(...xs), maxY = Math.max(...ys);
-      addObject({
-        ...obj,
-        id: newId,
-        type: "path",
-        points: offsetRing.map((p) => ({ x: p[0], y: p[1] })),
-        closed: true,
-        transform: { ...obj.transform, x: minX, y: minY, width: maxX - minX, height: maxY - minY },
-      });
-      newIds.push(newId);
-    }
-    setSelectedIds(newIds);
+    if (get().selectedIds.length === 0) return;
+    get().withUndo("offset", () => {
+      const { selectedIds, objects, addObject, setSelectedIds } = get();
+      const selected = objects.filter((o) => selectedIds.includes(o.id));
+      const newIds: string[] = [];
+      for (const obj of selected) {
+        const poly = objectToPolygon(obj);
+        if (!poly) continue;
+        // Simple offset by expanding/contracting each point along its normal
+        const ring = poly[0];
+        const offsetRing = offsetRingByDistance(ring, distance);
+        const newId = `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const xs = offsetRing.map((p) => p[0]);
+        const ys = offsetRing.map((p) => p[1]);
+        const minX = Math.min(...xs), minY = Math.min(...ys);
+        const maxX = Math.max(...xs), maxY = Math.max(...ys);
+        addObject({
+          ...obj,
+          id: newId,
+          type: "path",
+          points: offsetRing.map((p) => ({ x: p[0], y: p[1] })),
+          closed: true,
+          transform: { ...obj.transform, x: minX, y: minY, width: maxX - minX, height: maxY - minY },
+        });
+        newIds.push(newId);
+      }
+      setSelectedIds(newIds);
+    });
   },
 
   // Project notes
@@ -1143,6 +1279,10 @@ export const useStore = create<AppState>((set, get) => ({
   setShowConsole: (v) => set({ showConsole: v }),
   cursorPosition: { x: 0, y: 0 },
   setCursorPosition: (pos) => set({ cursorPosition: pos }),
+
+  // Node editing
+  nodeEditState: { pathId: null, selectedNodeIndex: null },
+  setNodeEditState: (state) => set({ nodeEditState: state }),
 }));
 
 // --- Boolean operation helpers ---

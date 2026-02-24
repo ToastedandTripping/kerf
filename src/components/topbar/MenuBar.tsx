@@ -74,7 +74,9 @@ export function MenuBar() {
         { type: "separator" },
         { label: "Delete", shortcut: "Del", action: () => {
           const s = useStore.getState();
-          s.removeObjects(s.selectedIds);
+          s.withUndo("delete", () => {
+            s.removeObjects(s.selectedIds);
+          });
         }},
       ]} />
       <MenuButton label="View" items={[
@@ -147,14 +149,18 @@ export function MenuBar() {
         { type: "separator" },
         { label: "Lock Selected", action: () => {
           const s = useStore.getState();
-          for (const id of s.selectedIds) s.updateObject(id, { locked: true });
-          s.clearSelection();
+          s.withUndo("lock", () => {
+            for (const id of s.selectedIds) s.updateObject(id, { locked: true });
+            s.clearSelection();
+          });
         }},
         { label: "Unlock All", action: () => {
           const s = useStore.getState();
-          for (const obj of s.objects) {
-            if (obj.locked) s.updateObject(obj.id, { locked: false });
-          }
+          s.withUndo("unlock", () => {
+            for (const obj of s.objects) {
+              if (obj.locked) s.updateObject(obj.id, { locked: false });
+            }
+          });
         }},
       ]} />
       <MenuButton label="Tools" items={[
@@ -166,74 +172,7 @@ export function MenuBar() {
         { label: "Offset Outward (+1mm)", action: () => useStore.getState().offsetPaths(1) },
         { label: "Offset Inward (-1mm)", action: () => useStore.getState().offsetPaths(-1) },
         { type: "separator" },
-        { label: "Material Test Grid", action: () => {
-          // Generate a power/speed test grid
-          const s = useStore.getState();
-          const powers = [20, 40, 60, 80, 100];
-          const speeds = [100, 200, 300, 400, 500];
-          const size = 10; // 10mm squares
-          const gap = 2;
-          for (let pi = 0; pi < powers.length; pi++) {
-            for (let si = 0; si < speeds.length; si++) {
-              s.addObject({
-                id: `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-                type: "rectangle",
-                name: `Test P${powers[pi]} S${speeds[si]}`,
-                transform: {
-                  x: si * (size + gap) + 10,
-                  y: pi * (size + gap) + 10,
-                  width: size,
-                  height: size,
-                  rotation: 0,
-                  scaleX: 1,
-                  scaleY: 1,
-                },
-                layerIndex: 0,
-                visible: true,
-                locked: false,
-                fill: null,
-                stroke: s.layers[0].color,
-                strokeWidth: 0.1,
-                opacity: 1,
-              });
-            }
-          }
-          // Add labels
-          for (let pi = 0; pi < powers.length; pi++) {
-            s.addObject({
-              id: `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-              type: "text",
-              name: `Label P${powers[pi]}`,
-              text: `${powers[pi]}%`,
-              fontSize: 3,
-              fontFamily: "Arial",
-              transform: {
-                x: 1, y: pi * (size + gap) + 13,
-                width: 8, height: 4, rotation: 0, scaleX: 1, scaleY: 1,
-              },
-              layerIndex: 1,
-              visible: true, locked: false, fill: null,
-              stroke: s.layers[1].color, strokeWidth: 0.1, opacity: 1,
-            });
-          }
-          for (let si = 0; si < speeds.length; si++) {
-            s.addObject({
-              id: `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-              type: "text",
-              name: `Label S${speeds[si]}`,
-              text: `${speeds[si]}`,
-              fontSize: 3,
-              fontFamily: "Arial",
-              transform: {
-                x: si * (size + gap) + 12, y: 4,
-                width: 10, height: 4, rotation: 0, scaleX: 1, scaleY: 1,
-              },
-              layerIndex: 1,
-              visible: true, locked: false, fill: null,
-              stroke: s.layers[1].color, strokeWidth: 0.1, opacity: 1,
-            });
-          }
-        }},
+        { label: "Material Test Grid...", action: () => dialogState.openMaterialTest() },
         { type: "separator" },
         { label: "Trace Image...", action: () => {
           const s = useStore.getState();
@@ -265,18 +204,22 @@ function clipboardOp(op: "cut" | "copy" | "paste" | "pasteInPlace") {
     const selected = s.objects.filter((o) => s.selectedIds.includes(o.id));
     s.setClipboard(selected);
     if (op === "cut") {
-      s.removeObjects(s.selectedIds);
+      s.withUndo("cut", () => {
+        s.removeObjects(s.selectedIds);
+      });
     }
   } else if (op === "paste" || op === "pasteInPlace") {
-    const { clipboard, addObject } = s;
-    const offset = op === "pasteInPlace" ? 0 : 10;
-    const newObjects = clipboard.map((o) => ({
-      ...o,
-      id: `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      transform: { ...o.transform, x: o.transform.x + offset, y: o.transform.y + offset },
-    }));
-    newObjects.forEach(addObject);
-    s.setSelectedIds(newObjects.map((o) => o.id));
+    s.withUndo("paste", () => {
+      const { clipboard, addObject } = s;
+      const offset = op === "pasteInPlace" ? 0 : 10;
+      const newObjects = clipboard.map((o) => ({
+        ...o,
+        id: `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        transform: { ...o.transform, x: o.transform.x + offset, y: o.transform.y + offset },
+      }));
+      newObjects.forEach(addObject);
+      s.setSelectedIds(newObjects.map((o) => o.id));
+    });
   }
 }
 

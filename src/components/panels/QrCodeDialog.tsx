@@ -48,39 +48,41 @@ export function QrCodeDialog({ open, onClose }: Props) {
     const store = useStore.getState();
 
     // Create rectangle objects for each filled module run (run-length encoding for efficiency)
-    for (let row = 0; row < moduleCount; row++) {
-      let colStart = -1;
-      for (let col = 0; col <= moduleCount; col++) {
-        const filled = col < moduleCount && modules.get(row, col);
-        if (filled && colStart === -1) {
-          colStart = col;
-        } else if (!filled && colStart !== -1) {
-          // Create rect for this run
-          const x = colStart * moduleSize;
-          const y = row * moduleSize;
-          const w = (col - colStart) * moduleSize;
-          const h = moduleSize;
+    store.withUndo("qr-code", () => {
+      for (let row = 0; row < moduleCount; row++) {
+        let colStart = -1;
+        for (let col = 0; col <= moduleCount; col++) {
+          const filled = col < moduleCount && modules.get(row, col);
+          if (filled && colStart === -1) {
+            colStart = col;
+          } else if (!filled && colStart !== -1) {
+            // Create rect for this run
+            const x = colStart * moduleSize;
+            const y = row * moduleSize;
+            const w = (col - colStart) * moduleSize;
+            const h = moduleSize;
 
-          store.addObject({
-            id: generateId(),
-            type: "rectangle",
-            name: `QR module`,
-            transform: {
-              x: 10 + x, y: 10 + y,
-              width: w, height: h,
-              rotation: 0, scaleX: 1, scaleY: 1,
-            },
-            layerIndex: store.activeLayerIndex,
-            visible: true, locked: false,
-            fill: null,
-            stroke: store.layers[store.activeLayerIndex].color,
-            strokeWidth: 0.1,
-            opacity: 1,
-          });
-          colStart = -1;
+            store.addObject({
+              id: generateId(),
+              type: "rectangle",
+              name: `QR module`,
+              transform: {
+                x: 10 + x, y: 10 + y,
+                width: w, height: h,
+                rotation: 0, scaleX: 1, scaleY: 1,
+              },
+              layerIndex: store.activeLayerIndex,
+              visible: true, locked: false,
+              fill: null,
+              stroke: store.layers[store.activeLayerIndex].color,
+              strokeWidth: 0.1,
+              opacity: 1,
+            });
+            colStart = -1;
+          }
         }
       }
-    }
+    });
 
     onClose();
   }

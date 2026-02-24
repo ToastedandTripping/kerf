@@ -6,7 +6,8 @@ export type ToolType =
   | "pen"
   | "text"
   | "node"
-  | "measure";
+  | "measure"
+  | "positionLaser";
 
 export type ObjectType = "rectangle" | "ellipse" | "line" | "path" | "text" | "group" | "image";
 
@@ -25,6 +26,13 @@ export interface PathPoint {
   y: number;
   handleIn?: { x: number; y: number };
   handleOut?: { x: number; y: number };
+}
+
+export interface ImageAdjustments {
+  brightness: number;  // -100 to 100, default 0
+  contrast: number;    // -100 to 100, default 0
+  gamma: number;       // 0.1 to 5.0, default 1.0
+  invert: boolean;     // default false
 }
 
 export interface DesignObject {
@@ -48,6 +56,7 @@ export interface DesignObject {
   fontFamily?: string; // text
   // Image
   imageData?: string; // base64
+  imageAdjustments?: ImageAdjustments; // image
   // Group
   children?: DesignObject[]; // group
 }
@@ -84,6 +93,23 @@ export interface Layer {
   scanningOffset: number; // mm - laser response delay compensation
   tabSpacing: number; // mm - 0 = no tabs, >0 = spacing between tabs
   tabWidth: number; // mm - width of each tab
+  // Precision cutting
+  kerfOffset: number; // mm - positive = outward, negative = inward, 0 = none
+  perforationCut: number; // mm - length of each cut segment, 0 = disabled
+  perforationSkip: number; // mm - length of each skip segment
+  // Sub-layers (Fill+Line workflows)
+  subLayers?: SubLayer[];
+}
+
+export interface SubLayer {
+  id: string;
+  mode: CutMode;
+  power: number;
+  powerMin: number;
+  speed: number;
+  passes: number;
+  powerMode: PowerMode;
+  interval: number;
 }
 
 export interface MaterialPreset {
@@ -111,6 +137,7 @@ const layerDefaults = {
   interval: 0.1, airAssist: true, cutInnerFirst: true, dither: "floydSteinberg" as const,
   overcut: 0, leadIn: 0, leadOut: 0, overscan: 2.5, bidirectional: true,
   crossHatch: false, scanningOffset: 0, tabSpacing: 0, tabWidth: 2,
+  kerfOffset: 0, perforationCut: 0, perforationSkip: 0,
 };
 
 export const DEFAULT_LAYERS: Layer[] = [
@@ -131,4 +158,5 @@ export interface KerfProject {
   workspaceWidth: number;
   workspaceHeight: number;
   notes?: string;
+  materials?: MaterialPreset[];
 }

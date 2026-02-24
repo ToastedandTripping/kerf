@@ -13,6 +13,7 @@ pub fn run() {
             commands::file_io::read_file,
             commands::file_io::write_file,
             commands::gcode::generate_gcode,
+            commands::gcode::generate_image_gcode,
             commands::serial::list_serial_ports,
             commands::serial::serial_connect,
             commands::serial::serial_disconnect,

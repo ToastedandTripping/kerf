@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useStore } from "../../app/store";
-import type { Layer, CutMode } from "../../app/types";
+import type { Layer, CutMode, SubLayer } from "../../app/types";
 
 const inputStyle: React.CSSProperties = {
   background: "var(--bg-input)",
@@ -78,6 +78,11 @@ function LayerRow({
   onUpdate: (partial: Partial<Layer>) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const addSubLayer = useStore((s) => s.addSubLayer);
+  const removeSubLayer = useStore((s) => s.removeSubLayer);
+  const updateSubLayer = useStore((s) => s.updateSubLayer);
+
+  const hasSubLayers = (layer.subLayers?.length ?? 0) > 0;
 
   return (
     <div
@@ -132,19 +137,30 @@ function LayerRow({
           {layer.name}
         </span>
 
-        {/* Mode badge */}
-        <span style={{
-          fontSize: "9px", padding: "1px 4px", borderRadius: "3px",
-          background: layer.mode === "fill" ? "rgba(226,74,74,0.2)" :
-                      layer.mode === "offsetFill" ? "rgba(226,165,74,0.2)" :
-                      "rgba(74,144,226,0.2)",
-          color: layer.mode === "fill" ? "#e28a8a" :
-                 layer.mode === "offsetFill" ? "#e2c08a" :
-                 "#8ab4e2",
-          textTransform: "uppercase", fontWeight: 600,
-        }}>
-          {layer.mode === "offsetFill" ? "offset" : layer.mode}
-        </span>
+        {/* Mode badge -- show sub-layer count if present, otherwise current mode */}
+        {hasSubLayers ? (
+          <span style={{
+            fontSize: "9px", padding: "1px 4px", borderRadius: "3px",
+            background: "rgba(226,165,74,0.2)",
+            color: "#e2c08a",
+            textTransform: "uppercase", fontWeight: 600,
+          }}>
+            {layer.subLayers!.length} ops
+          </span>
+        ) : (
+          <span style={{
+            fontSize: "9px", padding: "1px 4px", borderRadius: "3px",
+            background: layer.mode === "fill" ? "rgba(226,74,74,0.2)" :
+                        layer.mode === "offsetFill" ? "rgba(226,165,74,0.2)" :
+                        "rgba(74,144,226,0.2)",
+            color: layer.mode === "fill" ? "#e28a8a" :
+                   layer.mode === "offsetFill" ? "#e2c08a" :
+                   "#8ab4e2",
+            textTransform: "uppercase", fontWeight: 600,
+          }}>
+            {layer.mode === "offsetFill" ? "offset" : layer.mode}
+          </span>
+        )}
 
         {/* Compact power/speed readout */}
         <span style={{ fontSize: "9px", color: "var(--text-muted)", fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>
@@ -178,139 +194,322 @@ function LayerRow({
           background: active ? "var(--bg-active)" : "rgba(0,0,0,0.15)",
           display: "flex", flexDirection: "column", gap: "6px",
         }}>
-          {/* Mode */}
-          <SettingRow label="Mode">
-            <select
-              value={layer.mode}
-              onChange={(e) => onUpdate({ mode: e.target.value as CutMode })}
-              style={selectStyle}
-            >
-              <option value="line">Line (Vector Cut)</option>
-              <option value="fill">Fill (Raster Engrave)</option>
-              <option value="offsetFill">Offset Fill</option>
-            </select>
-          </SettingRow>
-
-          {/* Power */}
-          <SettingRow label="Power">
-            <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
-              <input
-                type="range" min="0" max="100" value={layer.power}
-                onChange={(e) => onUpdate({ power: Number(e.target.value) })}
-                style={{ flex: 1, accentColor: "var(--accent-warm)" }}
-              />
-              <input
-                type="number" min="0" max="100" value={layer.power}
-                onChange={(e) => onUpdate({ power: Math.max(0, Math.min(100, Number(e.target.value))) })}
-                style={{ ...inputStyle, width: "42px", textAlign: "right" }}
-              />
-              <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>%</span>
+          {/* Sub-layers section -- replaces main cut controls when sub-layers exist */}
+          {hasSubLayers ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              {layer.subLayers!.map((sub, i) => (
+                <SubLayerRow
+                  key={sub.id}
+                  sub={sub}
+                  index={i}
+                  layerColor={layer.color}
+                  onUpdate={(changes) => updateSubLayer(layer.index, sub.id, changes)}
+                  onRemove={() => removeSubLayer(layer.index, sub.id)}
+                />
+              ))}
             </div>
-          </SettingRow>
-
-          {/* Min Power */}
-          <SettingRow label="Min Pwr">
-            <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
-              <input
-                type="range" min="0" max="100" value={layer.powerMin}
-                onChange={(e) => onUpdate({ powerMin: Number(e.target.value) })}
-                style={{ flex: 1, accentColor: "var(--accent-warm)" }}
-              />
-              <input
-                type="number" min="0" max="100" value={layer.powerMin}
-                onChange={(e) => onUpdate({ powerMin: Math.max(0, Math.min(100, Number(e.target.value))) })}
-                style={{ ...inputStyle, width: "42px", textAlign: "right" }}
-              />
-              <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>%</span>
-            </div>
-          </SettingRow>
-
-          {/* Speed */}
-          <SettingRow label="Speed">
-            <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
-              <input
-                type="range" min="1" max="1000" value={layer.speed}
-                onChange={(e) => onUpdate({ speed: Number(e.target.value) })}
-                style={{ flex: 1, accentColor: "var(--accent)" }}
-              />
-              <input
-                type="number" min="1" max="10000" value={layer.speed}
-                onChange={(e) => onUpdate({ speed: Math.max(1, Number(e.target.value)) })}
-                style={{ ...inputStyle, width: "50px", textAlign: "right" }}
-              />
-              <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>mm/s</span>
-            </div>
-          </SettingRow>
-
-          {/* Passes */}
-          <SettingRow label="Passes">
-            <input
-              type="number" min="1" max="100" value={layer.passes}
-              onChange={(e) => onUpdate({ passes: Math.max(1, Number(e.target.value)) })}
-              style={{ ...inputStyle, width: "50px", textAlign: "right" }}
-            />
-          </SettingRow>
-
-          {/* Power mode */}
-          <SettingRow label="Power Mode">
-            <select
-              value={layer.powerMode}
-              onChange={(e) => onUpdate({ powerMode: e.target.value as "constant" | "variable" })}
-              style={selectStyle}
-            >
-              <option value="constant">Constant (M3)</option>
-              <option value="variable">Variable (M4)</option>
-            </select>
-          </SettingRow>
-
-          {/* Fill-specific settings */}
-          {(layer.mode === "fill" || layer.mode === "offsetFill") && (
+          ) : (
             <>
-              <SettingRow label="Interval">
-                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+              {/* Mode */}
+              <SettingRow label="Mode">
+                <select
+                  value={layer.mode}
+                  onChange={(e) => onUpdate({ mode: e.target.value as CutMode })}
+                  style={selectStyle}
+                >
+                  <option value="line">Line (Vector Cut)</option>
+                  <option value="fill">Fill (Raster Engrave)</option>
+                  <option value="offsetFill">Offset Fill</option>
+                </select>
+              </SettingRow>
+
+              {/* Power */}
+              <SettingRow label="Power">
+                <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
                   <input
-                    type="number" min="0.01" max="5" step="0.01" value={layer.interval}
-                    onChange={(e) => onUpdate({ interval: Math.max(0.01, Number(e.target.value)) })}
-                    style={{ ...inputStyle, width: "60px", textAlign: "right" }}
+                    type="range" min="0" max="100" value={layer.power}
+                    onChange={(e) => onUpdate({ power: Number(e.target.value) })}
+                    style={{ flex: 1, accentColor: "var(--accent-warm)" }}
                   />
-                  <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>mm</span>
+                  <input
+                    type="number" min="0" max="100" value={layer.power}
+                    onChange={(e) => onUpdate({ power: Math.max(0, Math.min(100, Number(e.target.value))) })}
+                    style={{ ...inputStyle, width: "42px", textAlign: "right" }}
+                  />
+                  <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>%</span>
                 </div>
               </SettingRow>
 
-              <SettingRow label="Dither">
+              {/* Min Power */}
+              <SettingRow label="Min Pwr">
+                <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
+                  <input
+                    type="range" min="0" max="100" value={layer.powerMin}
+                    onChange={(e) => onUpdate({ powerMin: Number(e.target.value) })}
+                    style={{ flex: 1, accentColor: "var(--accent-warm)" }}
+                  />
+                  <input
+                    type="number" min="0" max="100" value={layer.powerMin}
+                    onChange={(e) => onUpdate({ powerMin: Math.max(0, Math.min(100, Number(e.target.value))) })}
+                    style={{ ...inputStyle, width: "42px", textAlign: "right" }}
+                  />
+                  <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>%</span>
+                </div>
+              </SettingRow>
+
+              {/* Speed */}
+              <SettingRow label="Speed">
+                <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
+                  <input
+                    type="range" min="1" max="1000" value={layer.speed}
+                    onChange={(e) => onUpdate({ speed: Number(e.target.value) })}
+                    style={{ flex: 1, accentColor: "var(--accent)" }}
+                  />
+                  <input
+                    type="number" min="1" max="10000" value={layer.speed}
+                    onChange={(e) => onUpdate({ speed: Math.max(1, Number(e.target.value)) })}
+                    style={{ ...inputStyle, width: "50px", textAlign: "right" }}
+                  />
+                  <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>mm/s</span>
+                </div>
+              </SettingRow>
+
+              {/* Passes */}
+              <SettingRow label="Passes">
+                <input
+                  type="number" min="1" max="100" value={layer.passes}
+                  onChange={(e) => onUpdate({ passes: Math.max(1, Number(e.target.value)) })}
+                  style={{ ...inputStyle, width: "50px", textAlign: "right" }}
+                />
+              </SettingRow>
+
+              {/* Power mode */}
+              <SettingRow label="Power Mode">
                 <select
-                  value={layer.dither}
-                  onChange={(e) => onUpdate({ dither: e.target.value as Layer["dither"] })}
+                  value={layer.powerMode}
+                  onChange={(e) => onUpdate({ powerMode: e.target.value as "constant" | "variable" })}
                   style={selectStyle}
                 >
-                  <option value="threshold">Threshold</option>
-                  <option value="ordered">Ordered</option>
-                  <option value="floydSteinberg">Floyd-Steinberg</option>
-                  <option value="jarvis">Jarvis</option>
-                  <option value="stucki">Stucki</option>
-                  <option value="grayscale">Grayscale</option>
+                  <option value="constant">Constant (M3)</option>
+                  <option value="variable">Variable (M4)</option>
                 </select>
               </SettingRow>
+
+              {/* Fill-specific settings */}
+              {(layer.mode === "fill" || layer.mode === "offsetFill") && (
+                <>
+                  <SettingRow label="Interval">
+                    <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                      <input
+                        type="number" min="0.01" max="5" step="0.01" value={layer.interval}
+                        onChange={(e) => onUpdate({ interval: Math.max(0.01, Number(e.target.value)) })}
+                        style={{ ...inputStyle, width: "60px", textAlign: "right" }}
+                      />
+                      <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>mm</span>
+                    </div>
+                  </SettingRow>
+
+                  <SettingRow label="Dither">
+                    <select
+                      value={layer.dither}
+                      onChange={(e) => onUpdate({ dither: e.target.value as Layer["dither"] })}
+                      style={selectStyle}
+                    >
+                      <option value="threshold">Threshold</option>
+                      <option value="ordered">Ordered</option>
+                      <option value="floydSteinberg">Floyd-Steinberg</option>
+                      <option value="jarvis">Jarvis</option>
+                      <option value="stucki">Stucki</option>
+                      <option value="grayscale">Grayscale</option>
+                    </select>
+                  </SettingRow>
+                </>
+              )}
+
+              {/* Toggles row */}
+              <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: "2px", flexWrap: "wrap" }}>
+                <ToggleChip label="Air Assist" active={layer.airAssist} onClick={() => onUpdate({ airAssist: !layer.airAssist })} />
+                <ToggleChip label="Inner First" active={layer.cutInnerFirst} onClick={() => onUpdate({ cutInnerFirst: !layer.cutInnerFirst })} />
+                <ToggleChip label="Lock" active={layer.locked} onClick={() => onUpdate({ locked: !layer.locked })} />
+                {(layer.mode === "fill" || layer.mode === "offsetFill") && (
+                  <>
+                    <ToggleChip label="Bidir" active={layer.bidirectional} onClick={() => onUpdate({ bidirectional: !layer.bidirectional })} />
+                    <ToggleChip label="Cross" active={layer.crossHatch} onClick={() => onUpdate({ crossHatch: !layer.crossHatch })} />
+                  </>
+                )}
+              </div>
+
+              {/* Advanced settings */}
+              <AdvancedSettings layer={layer} onUpdate={onUpdate} />
             </>
           )}
 
-          {/* Toggles row */}
-          <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: "2px", flexWrap: "wrap" }}>
-            <ToggleChip label="Air Assist" active={layer.airAssist} onClick={() => onUpdate({ airAssist: !layer.airAssist })} />
-            <ToggleChip label="Inner First" active={layer.cutInnerFirst} onClick={() => onUpdate({ cutInnerFirst: !layer.cutInnerFirst })} />
-            <ToggleChip label="Lock" active={layer.locked} onClick={() => onUpdate({ locked: !layer.locked })} />
-            {(layer.mode === "fill" || layer.mode === "offsetFill") && (
-              <>
-                <ToggleChip label="Bidir" active={layer.bidirectional} onClick={() => onUpdate({ bidirectional: !layer.bidirectional })} />
-                <ToggleChip label="Cross" active={layer.crossHatch} onClick={() => onUpdate({ crossHatch: !layer.crossHatch })} />
-              </>
+          {/* Add Sub-Layer button group */}
+          <div style={{ padding: "4px 0 0 0", display: "flex", gap: "4px" }}>
+            <button
+              onClick={() => addSubLayer(layer.index)}
+              style={{
+                flex: 1,
+                padding: "4px 8px",
+                fontSize: "11px",
+                background: "var(--bg-input)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)",
+                color: "var(--text-secondary)",
+                cursor: "pointer",
+              }}
+            >
+              Add Sub-Layer
+            </button>
+            {!hasSubLayers && (
+              <button
+                onClick={() => {
+                  // Fill+Line preset: add Fill sub-layer first, then Line
+                  addSubLayer(layer.index);
+                  setTimeout(() => {
+                    const s = useStore.getState();
+                    const l = s.layers.find((lyr) => lyr.index === layer.index);
+                    if (l?.subLayers?.length === 1) {
+                      addSubLayer(layer.index);
+                      setTimeout(() => {
+                        const s2 = useStore.getState();
+                        const l2 = s2.layers.find((lyr) => lyr.index === layer.index);
+                        if (l2?.subLayers && l2.subLayers.length >= 2) {
+                          // First sub-layer becomes Fill, second stays Line (default)
+                          updateSubLayer(layer.index, l2.subLayers[0].id, { mode: "fill", power: 50, speed: 100 });
+                        }
+                      }, 0);
+                    }
+                  }, 0);
+                }}
+                style={{
+                  flex: 1,
+                  padding: "4px 8px",
+                  fontSize: "11px",
+                  background: "var(--bg-input)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  color: "var(--text-secondary)",
+                  cursor: "pointer",
+                }}
+              >
+                Fill+Line
+              </button>
             )}
           </div>
-
-          {/* Advanced settings */}
-          <AdvancedSettings layer={layer} onUpdate={onUpdate} />
         </div>
       )}
+    </div>
+  );
+}
+
+function SubLayerRow({
+  sub,
+  index,
+  layerColor,
+  onUpdate,
+  onRemove,
+}: {
+  sub: SubLayer;
+  index: number;
+  layerColor: string;
+  onUpdate: (changes: Partial<SubLayer>) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div
+      style={{
+        borderLeft: `2px solid ${layerColor}`,
+        marginLeft: "4px",
+        paddingLeft: "8px",
+        paddingTop: "5px",
+        paddingBottom: "5px",
+        display: "flex",
+        flexDirection: "column",
+        gap: "5px",
+        background: "rgba(255,255,255,0.03)",
+        borderRadius: "0 var(--radius-sm) var(--radius-sm) 0",
+      }}
+    >
+      {/* Sub-layer header: number + mode badge + remove button */}
+      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+        <span style={{
+          fontSize: "9px", color: "var(--text-muted)", fontWeight: 600,
+          textTransform: "uppercase", letterSpacing: "0.3px", minWidth: "12px",
+        }}>
+          {index + 1}
+        </span>
+        <span style={{
+          fontSize: "9px", padding: "1px 4px", borderRadius: "3px",
+          background: sub.mode === "fill" ? "rgba(226,74,74,0.2)" :
+                      sub.mode === "offsetFill" ? "rgba(226,165,74,0.2)" :
+                      "rgba(74,144,226,0.2)",
+          color: sub.mode === "fill" ? "#e28a8a" :
+                 sub.mode === "offsetFill" ? "#e2c08a" :
+                 "#8ab4e2",
+          textTransform: "uppercase", fontWeight: 600,
+        }}>
+          {sub.mode === "offsetFill" ? "offset" : sub.mode}
+        </span>
+        <span style={{ flex: 1 }} />
+        <button
+          onClick={onRemove}
+          title="Remove sub-layer"
+          style={{
+            background: "none", border: "none",
+            color: "var(--text-muted)", cursor: "pointer",
+            fontSize: "12px", padding: "0 2px", lineHeight: 1,
+          }}
+        >
+          &times;
+        </button>
+      </div>
+
+      {/* Mode select */}
+      <SettingRow label="Mode">
+        <select
+          value={sub.mode}
+          onChange={(e) => onUpdate({ mode: e.target.value as CutMode })}
+          style={selectStyle}
+        >
+          <option value="line">Line (Vector Cut)</option>
+          <option value="fill">Fill (Raster Engrave)</option>
+          <option value="offsetFill">Offset Fill</option>
+        </select>
+      </SettingRow>
+
+      {/* Power */}
+      <SettingRow label="Power">
+        <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
+          <input
+            type="number" min="0" max="100" value={sub.power}
+            onChange={(e) => onUpdate({ power: Math.max(0, Math.min(100, Number(e.target.value))) })}
+            style={{ ...inputStyle, width: "42px", textAlign: "right" }}
+          />
+          <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>%</span>
+        </div>
+      </SettingRow>
+
+      {/* Speed */}
+      <SettingRow label="Speed">
+        <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
+          <input
+            type="number" min="1" max="10000" value={sub.speed}
+            onChange={(e) => onUpdate({ speed: Math.max(1, Number(e.target.value)) })}
+            style={{ ...inputStyle, width: "50px", textAlign: "right" }}
+          />
+          <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>mm/s</span>
+        </div>
+      </SettingRow>
+
+      {/* Passes */}
+      <SettingRow label="Passes">
+        <input
+          type="number" min="1" max="100" value={sub.passes}
+          onChange={(e) => onUpdate({ passes: Math.max(1, Number(e.target.value)) })}
+          style={{ ...inputStyle, width: "50px", textAlign: "right" }}
+        />
+      </SettingRow>
     </div>
   );
 }
@@ -332,6 +531,15 @@ function AdvancedSettings({ layer, onUpdate }: { layer: Layer; onUpdate: (partia
         <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }}>
           {layer.mode === "line" && (
             <>
+              <SettingRow label="Kerf">
+                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                  <input type="number" min="-2" max="2" step="0.01" value={layer.kerfOffset}
+                    onChange={(e) => onUpdate({ kerfOffset: Math.max(-2, Math.min(2, Number(e.target.value))) })}
+                    style={{ ...inputStyle, width: "50px", textAlign: "right" }}
+                  />
+                  <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>mm</span>
+                </div>
+              </SettingRow>
               <SettingRow label="Overcut">
                 <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                   <input type="number" min="0" max="10" step="0.1" value={layer.overcut}
@@ -371,6 +579,28 @@ function AdvancedSettings({ layer, onUpdate }: { layer: Layer; onUpdate: (partia
                     style={{ ...inputStyle, width: "35px", textAlign: "right" }}
                   />
                   <span style={{ fontSize: "9px", color: "var(--text-muted)" }}>w</span>
+                </div>
+              </SettingRow>
+              <SettingRow label="Perf">
+                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                  <input type="number" min="0" max="50" step="0.5" value={layer.perforationCut}
+                    onChange={(e) => onUpdate({ perforationCut: Math.max(0, Number(e.target.value)) })}
+                    style={{
+                      ...inputStyle, width: "40px", textAlign: "right",
+                      opacity: layer.tabSpacing > 0 ? 0.4 : 1,
+                    }}
+                    title={layer.tabSpacing > 0 ? "Perforation disabled when tabs are active" : "Cut length"}
+                  />
+                  <span style={{ fontSize: "9px", color: "var(--text-muted)" }}>cut</span>
+                  <input type="number" min="0" max="50" step="0.5" value={layer.perforationSkip}
+                    onChange={(e) => onUpdate({ perforationSkip: Math.max(0, Number(e.target.value)) })}
+                    style={{
+                      ...inputStyle, width: "35px", textAlign: "right",
+                      opacity: layer.tabSpacing > 0 ? 0.4 : 1,
+                    }}
+                    title={layer.tabSpacing > 0 ? "Perforation disabled when tabs are active" : "Skip length"}
+                  />
+                  <span style={{ fontSize: "9px", color: "var(--text-muted)" }}>skip</span>
                 </div>
               </SettingRow>
             </>

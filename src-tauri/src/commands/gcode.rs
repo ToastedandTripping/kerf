@@ -1,4 +1,5 @@
 use crate::engine::gcode_gen::{self, CutObject, GcodeResult};
+use crate::engine::image_gcode_gen::{self, ImageEngraveRequest};
 use crate::engine::optimizer;
 
 /// Generate G-code from design objects
@@ -37,4 +38,15 @@ pub fn generate_gcode(objects: Vec<CutObject>, workspace_height: f64) -> Result<
 
     let result = gcode_gen::generate_gcode(&final_objects, workspace_height);
     Ok(result)
+}
+
+/// Generate G-code from an image for engraving
+/// Runs in spawn_blocking since image processing is CPU-heavy
+#[tauri::command]
+pub async fn generate_image_gcode(request: ImageEngraveRequest) -> Result<GcodeResult, String> {
+    tokio::task::spawn_blocking(move || {
+        image_gcode_gen::generate(&request)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }

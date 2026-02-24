@@ -14,6 +14,8 @@ export function MachinePanel() {
   const jobRunning = useStore((s) => s.jobRunning);
   const setJobRunning = useStore((s) => s.setJobRunning);
   const setJobProgress = useStore((s) => s.setJobProgress);
+  const activeTool = useStore((s) => s.activeTool);
+  const setActiveTool = useStore((s) => s.setActiveTool);
 
   const [selectedPort, setSelectedPort] = useState("");
   const [ports, setPorts] = useState<Array<{ name: string; portType: string }>>([]);
@@ -279,6 +281,24 @@ export function MachinePanel() {
             <ActionButton label="Frame" color="var(--accent)" onClick={() => machineConnection.send("G1 X0 Y0 F1000\nG1 X100 Y0\nG1 X100 Y100\nG1 X0 Y100\nG1 X0 Y0")} />
             <ActionButton label="Fire" color="var(--accent-warm)" onClick={() => machineConnection.send("M3 S5\nG4 P0.5\nM5")} />
             <ActionButton label="Set Origin" color="var(--text-secondary)" onClick={() => machineConnection.setOrigin()} />
+            <button
+              onClick={() => setActiveTool(activeTool === "positionLaser" ? "select" : "positionLaser")}
+              disabled={!machineConnected || machineState !== "idle"}
+              style={{
+                padding: "4px 8px",
+                borderRadius: "var(--radius-sm)",
+                border: `1px solid ${activeTool === "positionLaser" ? "var(--accent)" : "var(--accent)33"}`,
+                background: activeTool === "positionLaser" ? "rgba(74,144,226,0.25)" : "rgba(74,144,226,0.08)",
+                color: !machineConnected || machineState !== "idle" ? "var(--text-muted)" : "var(--accent)",
+                fontSize: "10px",
+                fontWeight: 600,
+                cursor: machineConnected && machineState === "idle" ? "pointer" : "not-allowed",
+                textTransform: "uppercase",
+                opacity: !machineConnected || machineState !== "idle" ? 0.4 : 1,
+              }}
+            >
+              Position
+            </button>
           </div>
 
           {/* Generate + Preview buttons */}

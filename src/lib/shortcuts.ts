@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useStore } from "../app/store";
 import { fileOperations } from "./fileOps";
+import { handleViewportKeyDown, handleToolChange } from "./tools/toolHandler";
 import type { ToolType } from "../app/types";
 
 const toolShortcuts: Record<string, ToolType> = {
@@ -17,6 +18,9 @@ const toolShortcuts: Record<string, ToolType> = {
 export function useKeyboardShortcuts() {
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      // Tool-context key events (pen Enter/Escape, node Delete)
+      if (handleViewportKeyDown(e)) return;
+
       // Don't handle shortcuts when typing in inputs
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
@@ -76,19 +80,23 @@ export function useKeyboardShortcuts() {
         e.preventDefault();
         const s = useStore.getState();
         s.setClipboard(s.objects.filter((o) => s.selectedIds.includes(o.id)));
-        s.removeObjects(s.selectedIds);
+        s.withUndo("cut", () => {
+          s.removeObjects(s.selectedIds);
+        });
         return;
       }
       if (ctrl && key === "v") {
         e.preventDefault();
         const s = useStore.getState();
-        const newObjects = s.clipboard.map((o) => ({
-          ...o,
-          id: `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-          transform: { ...o.transform, x: o.transform.x + 10, y: o.transform.y + 10 },
-        }));
-        newObjects.forEach(s.addObject);
-        s.setSelectedIds(newObjects.map((o) => o.id));
+        s.withUndo("paste", () => {
+          const newObjects = s.clipboard.map((o) => ({
+            ...o,
+            id: `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            transform: { ...o.transform, x: o.transform.x + 10, y: o.transform.y + 10 },
+          }));
+          newObjects.forEach(s.addObject);
+          s.setSelectedIds(newObjects.map((o) => o.id));
+        });
         return;
       }
 
@@ -96,12 +104,14 @@ export function useKeyboardShortcuts() {
       if (alt && key === "v") {
         e.preventDefault();
         const s = useStore.getState();
-        const newObjects = s.clipboard.map((o) => ({
-          ...o,
-          id: `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        }));
-        newObjects.forEach(s.addObject);
-        s.setSelectedIds(newObjects.map((o) => o.id));
+        s.withUndo("paste", () => {
+          const newObjects = s.clipboard.map((o) => ({
+            ...o,
+            id: `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          }));
+          newObjects.forEach(s.addObject);
+          s.setSelectedIds(newObjects.map((o) => o.id));
+        });
         return;
       }
 
@@ -245,34 +255,42 @@ export function useKeyboardShortcuts() {
         if (key === "arrowup") dy = -step;
         if (key === "arrowdown") dy = step;
 
-        for (const id of s.selectedIds) {
-          const obj = s.objects.find((o) => o.id === id);
-          if (obj) {
-            s.updateObject(id, {
-              transform: {
-                ...obj.transform,
-                x: obj.transform.x + dx,
-                y: obj.transform.y + dy,
-              },
-            });
+        s.withUndo("nudge", () => {
+          for (const id of s.selectedIds) {
+            const obj = s.objects.find((o) => o.id === id);
+            if (obj) {
+              s.updateObject(id, {
+                transform: {
+                  ...obj.transform,
+                  x: obj.transform.x + dx,
+                  y: obj.transform.y + dy,
+                },
+              });
+            }
           }
-        }
+        });
         return;
       }
 
       // Escape - deselect / switch to select tool
       if (key === "escape") {
         const s = useStore.getState();
+        const previousTool = s.activeTool;
         if (s.selectedIds.length > 0) {
           s.clearSelection();
         }
         s.setActiveTool("select");
+        handleToolChange("select", previousTool);
         return;
       }
 
       // Tool shortcuts (single key, no modifier)
       if (!ctrl && !shift && !alt && toolShortcuts[key]) {
-        useStore.getState().setActiveTool(toolShortcuts[key]);
+        const s = useStore.getState();
+        const previousTool = s.activeTool;
+        const newTool = toolShortcuts[key];
+        s.setActiveTool(newTool);
+        handleToolChange(newTool, previousTool);
         return;
       }
 

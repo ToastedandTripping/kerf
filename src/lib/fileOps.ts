@@ -1,5 +1,7 @@
 import { useStore, generateId } from "../app/store";
 import type { DesignObject, KerfProject, PathPoint } from "../app/types";
+import { DEFAULT_LAYERS } from "../app/types";
+import { DEFAULT_MATERIALS } from "./materials";
 
 // We use Tauri's dialog and fs plugins when available, fallback to web APIs
 let dialogModule: typeof import("@tauri-apps/plugin-dialog") | null = null;
@@ -16,20 +18,61 @@ async function ensureTauri() {
   }
 }
 
+/**
+ * Checks if there are unsaved changes and prompts the user to save.
+ * Returns true if it's safe to proceed (not dirty, user saved, or user discarded).
+ * Returns false if the user cancelled (abort the operation).
+ */
+async function checkUnsavedChanges(): Promise<boolean> {
+  const store = useStore.getState();
+  if (!store.isDirty) return true;
+
+  const hasTauri = await ensureTauri();
+  if (!hasTauri || !dialogModule) return true;
+
+  const result = await dialogModule.message(
+    `Save changes to "${store.projectName}"?`,
+    {
+      title: "Unsaved Changes",
+      kind: "warning",
+      buttons: { yes: "Save", no: "Don't Save", cancel: "Cancel" },
+    }
+  );
+
+  if (result === "Cancel") return false;
+
+  if (result === "Yes" || result === "Save") {
+    await fileOperations.saveProject();
+  }
+  // "No" / "Don't Save" -- proceed without saving
+
+  return true;
+}
+
 export const fileOperations = {
   async newProject() {
+    const canProceed = await checkUnsavedChanges();
+    if (!canProceed) return;
+
     const store = useStore.getState();
-    if (store.isDirty) {
-      // In future: prompt to save
-    }
-    store.setObjects([]);
-    store.setSelectedIds([]);
-    store.setProjectName("Untitled");
+    store.loadProject({
+      version: "0.1.0",
+      name: "Untitled",
+      objects: [],
+      layers: DEFAULT_LAYERS,
+      camera: { x: 0, y: 0, zoom: 1 },
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+      notes: "",
+      materials: DEFAULT_MATERIALS,
+    });
     store.setProjectPath(null);
-    store.setDirty(false);
   },
 
   async openProject() {
+    const canProceed = await checkUnsavedChanges();
+    if (!canProceed) return;
+
     const hasTauri = await ensureTauri();
     if (hasTauri && dialogModule && fsModule) {
       const path = await dialogModule.open({

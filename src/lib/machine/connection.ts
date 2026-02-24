@@ -7,6 +7,8 @@ interface PortInfo {
 }
 
 let statusPollInterval: ReturnType<typeof setInterval> | null = null;
+let jobPollingSuspended = false;
+let unsubscribeJobRunning: (() => void) | null = null;
 
 export const machineConnection = {
   async listPorts(): Promise<PortInfo[]> {
@@ -32,6 +34,13 @@ export const machineConnection = {
       // Start status polling
       statusPollInterval = setInterval(() => this.pollStatus(), 250);
 
+      // Suspend polling automatically when a job is running to prevent
+      // the status '?' query from interleaving with G-code commands on
+      // the shared serial port mutex, which causes garbled responses.
+      unsubscribeJobRunning = useStore.subscribe((state) => {
+        jobPollingSuspended = state.jobRunning;
+      });
+
       return response;
     } catch (e) {
       const msg = String(e);
@@ -47,6 +56,11 @@ export const machineConnection = {
         clearInterval(statusPollInterval);
         statusPollInterval = null;
       }
+      if (unsubscribeJobRunning) {
+        unsubscribeJobRunning();
+        unsubscribeJobRunning = null;
+      }
+      jobPollingSuspended = false;
       await invoke("serial_disconnect");
       store.setMachineConnected(false);
       store.setMachineState("disconnected");
@@ -84,6 +98,7 @@ export const machineConnection = {
   async pollStatus(): Promise<void> {
     const store = useStore.getState();
     if (!store.machineConnected) return;
+    if (jobPollingSuspended) return;
 
     try {
       const status = await invoke<string>("serial_get_status");
@@ -105,6 +120,10 @@ export const machineConnection = {
 
   async jog(axis: string, distance: number, feedRate: number = 1000): Promise<void> {
     await this.send(`$J=G91 ${axis}${distance} F${feedRate}`);
+  },
+
+  async jogTo(x: number, y: number, feedRate: number = 3000): Promise<void> {
+    await this.send(`$J=G90 X${x.toFixed(3)} Y${y.toFixed(3)} F${feedRate}`);
   },
 
   async home(): Promise<void> {

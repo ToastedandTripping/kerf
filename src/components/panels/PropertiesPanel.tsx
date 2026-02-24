@@ -1,9 +1,12 @@
 import { useStore } from "../../app/store";
+import type { ImageAdjustments } from "../../app/types";
 
 export function PropertiesPanel() {
   const selectedIds = useStore((s) => s.selectedIds);
   const objects = useStore((s) => s.objects);
   const updateObject = useStore((s) => s.updateObject);
+  const beginEdit = useStore((s) => s.beginPropertyEdit);
+  const commitEdit = useStore((s) => s.commitPropertyEdit);
 
   const selected = objects.filter((o) => selectedIds.includes(o.id));
 
@@ -65,6 +68,8 @@ export function PropertiesPanel() {
             <input
               value={obj.name}
               onChange={(e) => updateObject(obj.id, { name: e.target.value })}
+              onFocus={beginEdit}
+              onBlur={commitEdit}
               style={inputStyle}
             />
           </PropertyRow>
@@ -80,6 +85,8 @@ export function PropertiesPanel() {
                 })
               }
               unit="mm"
+              onFocus={beginEdit}
+              onBlur={commitEdit}
             />
             <NumberField
               label="Y"
@@ -90,6 +97,8 @@ export function PropertiesPanel() {
                 })
               }
               unit="mm"
+              onFocus={beginEdit}
+              onBlur={commitEdit}
             />
           </PropertyGroup>
 
@@ -104,6 +113,8 @@ export function PropertiesPanel() {
                 })
               }
               unit="mm"
+              onFocus={beginEdit}
+              onBlur={commitEdit}
             />
             <NumberField
               label="H"
@@ -114,6 +125,8 @@ export function PropertiesPanel() {
                 })
               }
               unit="mm"
+              onFocus={beginEdit}
+              onBlur={commitEdit}
             />
           </PropertyGroup>
 
@@ -128,6 +141,8 @@ export function PropertiesPanel() {
                 })
               }
               unit="deg"
+              onFocus={beginEdit}
+              onBlur={commitEdit}
             />
           </PropertyGroup>
 
@@ -138,6 +153,8 @@ export function PropertiesPanel() {
                 type="color"
                 value={obj.stroke}
                 onChange={(e) => updateObject(obj.id, { stroke: e.target.value })}
+                onFocus={beginEdit}
+                onBlur={commitEdit}
                 style={{
                   width: "28px",
                   height: "22px",
@@ -155,6 +172,8 @@ export function PropertiesPanel() {
               onChange={(v) => updateObject(obj.id, { strokeWidth: Math.max(0, v) })}
               unit="px"
               step={0.5}
+              onFocus={beginEdit}
+              onBlur={commitEdit}
             />
           </PropertyGroup>
 
@@ -166,6 +185,8 @@ export function PropertiesPanel() {
                 value={obj.cornerRadius || 0}
                 onChange={(v) => updateObject(obj.id, { cornerRadius: Math.max(0, v) })}
                 unit="mm"
+                onFocus={beginEdit}
+                onBlur={commitEdit}
               />
             </PropertyGroup>
           )}
@@ -178,8 +199,89 @@ export function PropertiesPanel() {
               onChange={(v) => updateObject(obj.id, { opacity: Math.max(0, Math.min(100, v)) / 100 })}
               unit="%"
               step={1}
+              onFocus={beginEdit}
+              onBlur={commitEdit}
             />
           </PropertyGroup>
+
+          {/* Image adjustments */}
+          {obj.type === "image" && (
+            <PropertyGroup label="Image">
+              <NumberField
+                label="Brightness"
+                value={obj.imageAdjustments?.brightness ?? 0}
+                onChange={(v) =>
+                  updateObject(obj.id, {
+                    imageAdjustments: {
+                      brightness: v,
+                      contrast: obj.imageAdjustments?.contrast ?? 0,
+                      gamma: obj.imageAdjustments?.gamma ?? 1,
+                      invert: obj.imageAdjustments?.invert ?? false,
+                    } satisfies ImageAdjustments,
+                  })
+                }
+                unit=""
+                step={1}
+                onFocus={beginEdit}
+                onBlur={commitEdit}
+              />
+              <NumberField
+                label="Contrast"
+                value={obj.imageAdjustments?.contrast ?? 0}
+                onChange={(v) =>
+                  updateObject(obj.id, {
+                    imageAdjustments: {
+                      brightness: obj.imageAdjustments?.brightness ?? 0,
+                      contrast: v,
+                      gamma: obj.imageAdjustments?.gamma ?? 1,
+                      invert: obj.imageAdjustments?.invert ?? false,
+                    } satisfies ImageAdjustments,
+                  })
+                }
+                unit=""
+                step={1}
+                onFocus={beginEdit}
+                onBlur={commitEdit}
+              />
+              <NumberField
+                label="Gamma"
+                value={obj.imageAdjustments?.gamma ?? 1}
+                onChange={(v) =>
+                  updateObject(obj.id, {
+                    imageAdjustments: {
+                      brightness: obj.imageAdjustments?.brightness ?? 0,
+                      contrast: obj.imageAdjustments?.contrast ?? 0,
+                      gamma: v,
+                      invert: obj.imageAdjustments?.invert ?? false,
+                    } satisfies ImageAdjustments,
+                  })
+                }
+                unit=""
+                step={0.1}
+                onFocus={beginEdit}
+                onBlur={commitEdit}
+              />
+              <PropertyRow label="Invert">
+                <input
+                  type="checkbox"
+                  checked={obj.imageAdjustments?.invert ?? false}
+                  onChange={(e) =>
+                    updateObject(obj.id, {
+                      imageAdjustments: {
+                        brightness: obj.imageAdjustments?.brightness ?? 0,
+                        contrast: obj.imageAdjustments?.contrast ?? 0,
+                        gamma: obj.imageAdjustments?.gamma ?? 1,
+                        invert: e.target.checked,
+                      } satisfies ImageAdjustments,
+                    })
+                  }
+                  onFocus={beginEdit}
+                  onBlur={commitEdit}
+                  style={inputStyle}
+                />
+              </PropertyRow>
+            </PropertyGroup>
+          )}
         </div>
       )}
     </div>
@@ -249,12 +351,16 @@ function NumberField({
   onChange,
   unit,
   step = 1,
+  onFocus,
+  onBlur,
 }: {
   label: string;
   value: number;
   onChange: (v: number) => void;
   unit: string;
   step?: number;
+  onFocus?: () => void;
+  onBlur?: () => void;
 }) {
   return (
     <div
@@ -281,6 +387,8 @@ function NumberField({
           const v = parseFloat(e.target.value);
           if (!isNaN(v)) onChange(v);
         }}
+        onFocus={onFocus}
+        onBlur={onBlur}
         style={inputStyle}
       />
       <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>{unit}</span>

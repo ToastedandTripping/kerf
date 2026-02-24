@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback } from "react";
 import { Application, Container, Graphics, Text, TextStyle, Sprite, Texture } from "pixi.js";
 import { useStore } from "../../app/store";
 import type { DesignObject } from "../../app/types";
-import { handleViewportPointerDown, handleViewportPointerMove, handleViewportPointerUp, getMarqueeState, getSelectionBBox } from "../../lib/tools/toolHandler";
+import { handleViewportPointerDown, handleViewportPointerMove, handleViewportPointerUp, getMarqueeState, getSelectionBBox, handleViewportDoubleClick } from "../../lib/tools/toolHandler";
 
 const PX_PER_MM = 3.78; // ~96dpi -> mm conversion for screen display
 
@@ -30,6 +30,8 @@ export function Viewport() {
   const workspaceHeight = useStore((s) => s.workspaceHeight);
   const setCursorPosition = useStore((s) => s.setCursorPosition);
   const activeTool = useStore((s) => s.activeTool);
+  const nodeEditState = useStore((s) => s.nodeEditState);
+  const setNodeEditState = useStore((s) => s.setNodeEditState);
   const guides = useStore((s) => s.guides);
 
   // Initialize Pixi.js
@@ -167,25 +169,27 @@ export function Viewport() {
           };
           if (child.type === "text") {
             const el = renderTextObject(offsetChild);
-            if (el) container.addChild(el);
+            if (el) { applyObjectRotation(el, offsetChild.transform); container.addChild(el); }
           } else if (child.type === "image") {
             const el = renderImageObject(offsetChild);
-            if (el) container.addChild(el);
+            if (el) { applyObjectRotation(el, offsetChild.transform); container.addChild(el); }
           } else {
             const g = new Graphics();
             renderObject(g, offsetChild);
+            applyObjectRotation(g, offsetChild.transform);
             container.addChild(g);
           }
         }
       } else if (obj.type === "text") {
         const child = renderTextObject(obj);
-        if (child) container.addChild(child);
+        if (child) { applyObjectRotation(child, obj.transform); container.addChild(child); }
       } else if (obj.type === "image") {
         const child = renderImageObject(obj);
-        if (child) container.addChild(child);
+        if (child) { applyObjectRotation(child, obj.transform); container.addChild(child); }
       } else {
         const g = new Graphics();
         renderObject(g, obj);
+        applyObjectRotation(g, obj.transform);
         container.addChild(g);
       }
     }
@@ -216,9 +220,24 @@ export function Viewport() {
       const py = t.y * PX_PER_MM;
       const pw = t.width * PX_PER_MM;
       const ph = t.height * PX_PER_MM;
+      const rot = (t.rotation || 0) * Math.PI / 180;
 
       g.setStrokeStyle({ width: 1 / camera.zoom, color: 0x4a90e2, alpha: 0.8 });
-      g.rect(px, py, pw, ph).stroke();
+      if (rot !== 0) {
+        // Draw rotated bounding box
+        const cx = px + pw / 2;
+        const cy = py + ph / 2;
+        const cos = Math.cos(rot);
+        const sin = Math.sin(rot);
+        const corners = [
+          [-pw / 2, -ph / 2], [pw / 2, -ph / 2], [pw / 2, ph / 2], [-pw / 2, ph / 2],
+        ].map(([dx, dy]) => [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos] as [number, number]);
+        g.moveTo(corners[0][0], corners[0][1]);
+        for (let i = 1; i < 4; i++) g.lineTo(corners[i][0], corners[i][1]);
+        g.closePath().stroke();
+      } else {
+        g.rect(px, py, pw, ph).stroke();
+      }
 
       // Lock indicator
       if (obj.locked) {
@@ -283,7 +302,52 @@ export function Viewport() {
         g.circle(bx + bw / 2, rotY, rotR).stroke();
       }
     }
-  }, [selectedIds, objects, camera.zoom]);
+    // --- Node editing overlay ---
+    if (activeTool === "node" && nodeEditState.pathId) {
+      const pathObj = objects.find((o) => o.id === nodeEditState.pathId);
+      if (!pathObj || !pathObj.points) {
+        // Stale state -- path was deleted
+        setNodeEditState({ pathId: null, selectedNodeIndex: null });
+      } else {
+        const pts = pathObj.points;
+        const handleRadius = 4 / camera.zoom;
+        const anchorSize = 6 / camera.zoom;
+        const ahs = anchorSize / 2;
+
+        for (let i = 0; i < pts.length; i++) {
+          const pt = pts[i];
+          const px = pt.x * PX_PER_MM;
+          const py = pt.y * PX_PER_MM;
+
+          // Draw handle lines and circles
+          if (pt.handleIn) {
+            const hx = pt.handleIn.x * PX_PER_MM;
+            const hy = pt.handleIn.y * PX_PER_MM;
+            g.setStrokeStyle({ width: 0.5 / camera.zoom, color: 0x888888, alpha: 0.8 });
+            g.moveTo(px, py).lineTo(hx, hy).stroke();
+            g.circle(hx, hy, handleRadius).fill({ color: 0x4a90e2, alpha: 1 });
+          }
+          if (pt.handleOut) {
+            const hx = pt.handleOut.x * PX_PER_MM;
+            const hy = pt.handleOut.y * PX_PER_MM;
+            g.setStrokeStyle({ width: 0.5 / camera.zoom, color: 0x888888, alpha: 0.8 });
+            g.moveTo(px, py).lineTo(hx, hy).stroke();
+            g.circle(hx, hy, handleRadius).fill({ color: 0x4a90e2, alpha: 1 });
+          }
+
+          // Draw anchor square
+          const isSelected = nodeEditState.selectedNodeIndex === i;
+          if (isSelected) {
+            g.rect(px - ahs, py - ahs, anchorSize, anchorSize).fill({ color: 0x4a90e2, alpha: 1 });
+          } else {
+            g.rect(px - ahs, py - ahs, anchorSize, anchorSize).fill({ color: 0xffffff, alpha: 1 });
+            g.setStrokeStyle({ width: 1 / camera.zoom, color: 0x4a90e2, alpha: 1 });
+            g.rect(px - ahs, py - ahs, anchorSize, anchorSize).stroke();
+          }
+        }
+      }
+    }
+  }, [selectedIds, objects, camera.zoom, activeTool, nodeEditState]);
 
   // Track marquee box for HTML overlay rendering
   const marqueeRef = useRef<{ x: number; y: number; w: number; h: number; dir: "ltr" | "rtl" } | null>(null);
@@ -437,6 +501,13 @@ export function Viewport() {
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
+        onDoubleClick={(e) => {
+          const rect = canvasRef.current?.getBoundingClientRect();
+          if (!rect) return;
+          const worldX = (e.clientX - rect.left - camera.x) / camera.zoom / PX_PER_MM;
+          const worldY = (e.clientY - rect.top - camera.y) / camera.zoom / PX_PER_MM;
+          handleViewportDoubleClick(worldX, worldY);
+        }}
         onContextMenu={(e) => e.preventDefault()}
       />
       {marqueeStyle && <div style={marqueeStyle} />}
@@ -465,10 +536,22 @@ export function Viewport() {
   );
 }
 
+/** Apply rotation transform to a Pixi display object around its bounding box center */
+function applyObjectRotation(displayObj: Container, t: DesignObject["transform"]) {
+  const rot = (t.rotation || 0) * Math.PI / 180;
+  if (rot === 0) return;
+  const cx = t.x * PX_PER_MM + (t.width * PX_PER_MM) / 2;
+  const cy = t.y * PX_PER_MM + (t.height * PX_PER_MM) / 2;
+  displayObj.pivot.set(cx, cy);
+  displayObj.position.set(cx, cy);
+  displayObj.rotation = rot;
+}
+
 function getCursor(tool: string): string {
   switch (tool) {
     case "select": return "default";
     case "pen": return "crosshair";
+    case "node": return "default";
     case "text": return "text";
     default: return "crosshair";
   }
@@ -543,7 +626,16 @@ function renderObject(g: Graphics, obj: DesignObject) {
             g.lineTo(pt.x * PX_PER_MM, pt.y * PX_PER_MM);
           }
         }
-        if (obj.closed) {
+        if (obj.closed && obj.points.length >= 2) {
+          const lastPt = obj.points[obj.points.length - 1];
+          const firstPt = obj.points[0];
+          if (lastPt.handleOut && firstPt.handleIn) {
+            g.bezierCurveTo(
+              lastPt.handleOut.x * PX_PER_MM, lastPt.handleOut.y * PX_PER_MM,
+              firstPt.handleIn.x * PX_PER_MM, firstPt.handleIn.y * PX_PER_MM,
+              firstPt.x * PX_PER_MM, firstPt.y * PX_PER_MM
+            );
+          }
           g.closePath();
         }
         if (obj.fill) {

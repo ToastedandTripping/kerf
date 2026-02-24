@@ -1,5 +1,6 @@
 import { useStore, generateId } from "../../app/store";
-import type { DesignObject } from "../../app/types";
+import type { DesignObject, PathPoint, ToolType } from "../../app/types";
+import { machineConnection } from "../machine/connection";
 
 // Handle types for resize/rotate
 export type HandleType =
@@ -16,7 +17,7 @@ interface DragState {
   dragTarget: string | null;
   dragOffsetX: number;
   dragOffsetY: number;
-  originalTransforms: Map<string, { x: number; y: number; width: number; height: number }>;
+  originalTransforms: Map<string, { x: number; y: number; width: number; height: number; rotation: number }>;
   // Marquee selection
   isMarquee: boolean;
   marqueeDirection: "ltr" | "rtl";
@@ -37,6 +38,28 @@ const drag: DragState = {
   marqueeDirection: "ltr",
   activeHandle: null,
   handleOriginal: null,
+};
+
+// --- PEN TOOL STATE ---
+const PEN_CLOSE_RADIUS = 8; // screen pixels
+const NODE_HIT_RADIUS = 6; // screen pixels
+
+const penState = {
+  isDrawing: false,
+  points: [] as PathPoint[],
+  currentMouse: null as { x: number; y: number } | null,
+  isDraggingHandle: false,
+  objectId: "",
+};
+
+// --- NODE EDITOR STATE ---
+const nodeDrag = {
+  isDragging: false,
+  nodeIndex: -1,
+  target: null as "node" | "handleIn" | "handleOut" | null,
+  startX: 0,
+  startY: 0,
+  originalPoints: [] as PathPoint[],
 };
 
 // Expose marquee state for Viewport rendering
@@ -77,6 +100,15 @@ export function handleViewportPointerDown(
     case "line":
       handleShapeDown(worldX, worldY, tool);
       break;
+    case "pen":
+      handlePenDown(worldX, worldY, e);
+      break;
+    case "node":
+      handleNodeDown(worldX, worldY, e);
+      break;
+    case "positionLaser":
+      handlePositionLaserDown(worldX, worldY);
+      break;
   }
 }
 
@@ -85,10 +117,24 @@ export function handleViewportPointerMove(
   worldY: number,
   _e: React.PointerEvent
 ) {
-  if (!drag.isDragging) return;
-
   const store = useStore.getState();
   const tool = store.activeTool;
+
+  // Pen tool tracks mouse even without drag
+  if (tool === "pen") {
+    handlePenMove(worldX, worldY);
+    return;
+  }
+
+  // Node tool tracks drag independently
+  if (tool === "node") {
+    if (nodeDrag.isDragging) {
+      handleNodeMove(worldX, worldY);
+    }
+    return;
+  }
+
+  if (!drag.isDragging) return;
 
   switch (tool) {
     case "select":
@@ -121,6 +167,12 @@ export function handleViewportPointerUp(
     case "line":
       handleShapeUp();
       break;
+    case "pen":
+      handlePenUp();
+      break;
+    case "node":
+      handleNodeUp();
+      break;
   }
 
   drag.isDragging = false;
@@ -140,18 +192,44 @@ function hitTest(worldX: number, worldY: number): string | null {
     const obj = objects[i];
     if (!obj.visible || obj.locked) continue;
     const t = obj.transform;
+    const rot = (t.rotation || 0) * Math.PI / 180;
 
     if (obj.type === "line" && obj.points && obj.points.length >= 2) {
       const p1 = obj.points[0];
       const p2 = obj.points[1];
-      const dist = pointToSegmentDist(worldX, worldY, p1.x, p1.y, p2.x, p2.y);
-      if (dist < 3) return obj.id;
+      if (rot !== 0) {
+        // Rotate line endpoints, then test distance
+        const cx = t.x + t.width / 2;
+        const cy = t.y + t.height / 2;
+        const cos = Math.cos(rot);
+        const sin = Math.sin(rot);
+        const rp1 = { x: cx + (p1.x - cx) * cos - (p1.y - cy) * sin, y: cy + (p1.x - cx) * sin + (p1.y - cy) * cos };
+        const rp2 = { x: cx + (p2.x - cx) * cos - (p2.y - cy) * sin, y: cy + (p2.x - cx) * sin + (p2.y - cy) * cos };
+        const dist = pointToSegmentDist(worldX, worldY, rp1.x, rp1.y, rp2.x, rp2.y);
+        if (dist < 3) return obj.id;
+      } else {
+        const dist = pointToSegmentDist(worldX, worldY, p1.x, p1.y, p2.x, p2.y);
+        if (dist < 3) return obj.id;
+      }
     } else {
+      // Transform click point by inverse rotation before AABB test
+      let testX = worldX;
+      let testY = worldY;
+      if (rot !== 0) {
+        const cx = t.x + t.width / 2;
+        const cy = t.y + t.height / 2;
+        const cos = Math.cos(-rot);
+        const sin = Math.sin(-rot);
+        const dx = worldX - cx;
+        const dy = worldY - cy;
+        testX = cx + dx * cos - dy * sin;
+        testY = cy + dx * sin + dy * cos;
+      }
       if (
-        worldX >= t.x &&
-        worldX <= t.x + t.width &&
-        worldY >= t.y &&
-        worldY <= t.y + t.height
+        testX >= t.x &&
+        testX <= t.x + t.width &&
+        testY >= t.y &&
+        testY <= t.y + t.height
       ) {
         return obj.id;
       }
@@ -218,10 +296,29 @@ export function getSelectionBBox(): { x: number; y: number; w: number; h: number
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const obj of selected) {
     const t = obj.transform;
-    minX = Math.min(minX, t.x);
-    minY = Math.min(minY, t.y);
-    maxX = Math.max(maxX, t.x + t.width);
-    maxY = Math.max(maxY, t.y + t.height);
+    const rot = (t.rotation || 0) * Math.PI / 180;
+    if (rot !== 0) {
+      // Compute AABB of rotated rectangle corners
+      const cx = t.x + t.width / 2;
+      const cy = t.y + t.height / 2;
+      const cos = Math.cos(rot);
+      const sin = Math.sin(rot);
+      const hw = t.width / 2;
+      const hh = t.height / 2;
+      for (const [dx, dy] of [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]] as [number, number][]) {
+        const rx = cx + dx * cos - dy * sin;
+        const ry = cy + dx * sin + dy * cos;
+        minX = Math.min(minX, rx);
+        minY = Math.min(minY, ry);
+        maxX = Math.max(maxX, rx);
+        maxY = Math.max(maxY, ry);
+      }
+    } else {
+      minX = Math.min(minX, t.x);
+      minY = Math.min(minY, t.y);
+      maxX = Math.max(maxX, t.x + t.width);
+      maxY = Math.max(maxY, t.y + t.height);
+    }
   }
   return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 }
@@ -259,6 +356,7 @@ function handleSelectDown(worldX: number, worldY: number, e: React.PointerEvent)
             y: obj.transform.y,
             width: obj.transform.width,
             height: obj.transform.height,
+            rotation: obj.transform.rotation,
           });
         }
       }
@@ -294,6 +392,7 @@ function handleSelectDown(worldX: number, worldY: number, e: React.PointerEvent)
           y: obj.transform.y,
           width: obj.transform.width,
           height: obj.transform.height,
+          rotation: obj.transform.rotation,
         });
       }
     }
@@ -558,7 +657,7 @@ function handleSelectUp(_worldX: number, _worldY: number) {
     // Push undo command for resize/rotate
     const store = useStore.getState();
     const originalPositions = new Map(drag.originalTransforms);
-    const finalPositions = new Map<string, { x: number; y: number; width: number; height: number }>();
+    const finalPositions = new Map<string, { x: number; y: number; width: number; height: number; rotation: number }>();
 
     for (const id of store.selectedIds) {
       const obj = store.objects.find((o) => o.id === id);
@@ -566,6 +665,7 @@ function handleSelectUp(_worldX: number, _worldY: number) {
         finalPositions.set(id, {
           x: obj.transform.x, y: obj.transform.y,
           width: obj.transform.width, height: obj.transform.height,
+          rotation: obj.transform.rotation,
         });
       }
     }
@@ -574,7 +674,8 @@ function handleSelectUp(_worldX: number, _worldY: number) {
     for (const [id, orig] of originalPositions) {
       const final = finalPositions.get(id);
       if (final && (orig.x !== final.x || orig.y !== final.y ||
-          orig.width !== final.width || orig.height !== final.height)) {
+          orig.width !== final.width || orig.height !== final.height ||
+          orig.rotation !== final.rotation)) {
         changed = true;
         break;
       }
@@ -777,4 +878,515 @@ function handleShapeUp() {
     undo: () => useStore.getState().removeObjects([newObj.id]),
     redo: () => useStore.getState().addObject(newObj),
   });
+}
+
+// --- PEN TOOL ---
+
+function handlePenDown(worldX: number, worldY: number, _e: React.PointerEvent) {
+  const store = useStore.getState();
+  let x = worldX;
+  let y = worldY;
+  if (store.snapToGrid) {
+    x = Math.round(x / store.gridSize) * store.gridSize;
+    y = Math.round(y / store.gridSize) * store.gridSize;
+  }
+
+  if (!penState.isDrawing) {
+    // Start new path
+    penState.isDrawing = true;
+    penState.objectId = generateId();
+    penState.points = [{ x, y }];
+    penState.isDraggingHandle = true;
+    penState.currentMouse = { x, y };
+    updatePenPreview();
+    return;
+  }
+
+  // Check if clicking near first point to close
+  const firstPt = penState.points[0];
+  const zoom = store.camera.zoom;
+  const dist = Math.hypot(x - firstPt.x, y - firstPt.y);
+  if (penState.points.length >= 3 && dist < PEN_CLOSE_RADIUS / zoom) {
+    commitPen(true);
+    return;
+  }
+
+  // Add new anchor point
+  penState.points.push({ x, y });
+  penState.isDraggingHandle = true;
+  updatePenPreview();
+}
+
+function handlePenMove(worldX: number, worldY: number) {
+  penState.currentMouse = { x: worldX, y: worldY };
+
+  if (penState.isDraggingHandle && drag.isDragging && penState.points.length > 0) {
+    const lastIdx = penState.points.length - 1;
+    const anchor = penState.points[lastIdx];
+    // Set handleOut to cursor position (absolute coords)
+    const handleOut = { x: worldX, y: worldY };
+    // Mirror handleIn symmetrically around anchor
+    const handleIn = {
+      x: 2 * anchor.x - worldX,
+      y: 2 * anchor.y - worldY,
+    };
+    penState.points[lastIdx] = {
+      ...anchor,
+      handleOut,
+      handleIn,
+    };
+  }
+
+  if (penState.isDrawing) {
+    updatePenPreview();
+  }
+}
+
+function handlePenUp() {
+  penState.isDraggingHandle = false;
+  if (penState.isDrawing) {
+    updatePenPreview();
+  }
+}
+
+function updatePenPreview() {
+  const store = useStore.getState();
+  if (penState.points.length === 0) return;
+
+  const layerColor = store.layers[store.activeLayerIndex]?.color || "#4a90e2";
+
+  // Build preview points: existing points + synthetic tail at cursor
+  const previewPoints: PathPoint[] = [...penState.points];
+  if (penState.currentMouse && !penState.isDraggingHandle) {
+    previewPoints.push({ x: penState.currentMouse.x, y: penState.currentMouse.y });
+  }
+
+  // Compute bounding box from all points
+  const xs = previewPoints.map((p) => p.x);
+  const ys = previewPoints.map((p) => p.y);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+
+  const drawObj: DesignObject = {
+    id: penState.objectId,
+    type: "path",
+    name: "Drawing path",
+    transform: {
+      x: minX,
+      y: minY,
+      width: maxX - minX || 1,
+      height: maxY - minY || 1,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+    },
+    layerIndex: store.activeLayerIndex,
+    visible: true,
+    locked: false,
+    fill: null,
+    stroke: layerColor,
+    strokeWidth: 1,
+    opacity: 1,
+    points: previewPoints,
+    closed: false,
+  };
+
+  store.setDrawingObject(drawObj);
+}
+
+function commitPen(closed: boolean) {
+  if (penState.points.length < 2) {
+    cancelPen();
+    return;
+  }
+
+  const store = useStore.getState();
+  const layerColor = store.layers[store.activeLayerIndex]?.color || "#4a90e2";
+  const points = [...penState.points];
+
+  // Compute bounding box
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+
+  const obj: DesignObject = {
+    id: penState.objectId,
+    type: "path",
+    name: `Path ${store.objects.length + 1}`,
+    transform: {
+      x: minX,
+      y: minY,
+      width: maxX - minX || 1,
+      height: maxY - minY || 1,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+    },
+    layerIndex: store.activeLayerIndex,
+    visible: true,
+    locked: false,
+    fill: null,
+    stroke: layerColor,
+    strokeWidth: 1,
+    opacity: 1,
+    points,
+    closed,
+  };
+
+  store.setDrawingObject(null);
+  resetPenState();
+
+  store.withUndo("draw-path", () => {
+    store.addObject(obj);
+    store.setSelectedIds([obj.id]);
+  });
+}
+
+function cancelPen() {
+  if (penState.points.length >= 2) {
+    commitPen(false);
+    return;
+  }
+  useStore.getState().setDrawingObject(null);
+  resetPenState();
+}
+
+function resetPenState() {
+  penState.isDrawing = false;
+  penState.points = [];
+  penState.currentMouse = null;
+  penState.isDraggingHandle = false;
+  penState.objectId = "";
+}
+
+// --- NODE EDITOR ---
+
+export function hitTestNodeHandles(
+  worldX: number,
+  worldY: number,
+  zoom: number
+): { index: number; target: "node" | "handleIn" | "handleOut" } | null {
+  const store = useStore.getState();
+  const { pathId } = store.nodeEditState;
+  if (!pathId) return null;
+
+  const obj = store.objects.find((o) => o.id === pathId);
+  if (!obj || !obj.points) return null;
+
+  const hitRadius = NODE_HIT_RADIUS / zoom;
+
+  // Hit test handles first (they're on top visually)
+  for (let i = 0; i < obj.points.length; i++) {
+    const pt = obj.points[i];
+    if (pt.handleOut) {
+      const dist = Math.hypot(worldX - pt.handleOut.x, worldY - pt.handleOut.y);
+      if (dist < hitRadius) return { index: i, target: "handleOut" };
+    }
+    if (pt.handleIn) {
+      const dist = Math.hypot(worldX - pt.handleIn.x, worldY - pt.handleIn.y);
+      if (dist < hitRadius) return { index: i, target: "handleIn" };
+    }
+  }
+
+  // Hit test anchor points
+  for (let i = 0; i < obj.points.length; i++) {
+    const pt = obj.points[i];
+    const dist = Math.hypot(worldX - pt.x, worldY - pt.y);
+    if (dist < hitRadius) return { index: i, target: "node" };
+  }
+
+  return null;
+}
+
+function handleNodeDown(worldX: number, worldY: number, _e: React.PointerEvent) {
+  const store = useStore.getState();
+
+  // 1. Hit test nodes/handles on current path
+  if (store.nodeEditState.pathId) {
+    const hit = hitTestNodeHandles(worldX, worldY, store.camera.zoom);
+    if (hit) {
+      const obj = store.objects.find((o) => o.id === store.nodeEditState.pathId);
+      if (obj && obj.points) {
+        nodeDrag.isDragging = true;
+        nodeDrag.nodeIndex = hit.index;
+        nodeDrag.target = hit.target;
+        nodeDrag.startX = worldX;
+        nodeDrag.startY = worldY;
+        nodeDrag.originalPoints = obj.points.map((p) => ({
+          ...p,
+          handleIn: p.handleIn ? { ...p.handleIn } : undefined,
+          handleOut: p.handleOut ? { ...p.handleOut } : undefined,
+        }));
+        store.setNodeEditState({ pathId: store.nodeEditState.pathId, selectedNodeIndex: hit.index });
+        store.beginPropertyEdit();
+      }
+      return;
+    }
+  }
+
+  // 2. Hit test objects
+  const hitId = hitTest(worldX, worldY);
+  if (hitId) {
+    const hitObj = store.objects.find((o) => o.id === hitId);
+    if (hitObj && hitObj.type === "path") {
+      // Enter node editing on this path
+      store.setSelectedIds([hitId]);
+      store.setNodeEditState({ pathId: hitId, selectedNodeIndex: null });
+    } else {
+      // Select non-path normally, clear node edit
+      store.setSelectedIds([hitId]);
+      store.setNodeEditState({ pathId: null, selectedNodeIndex: null });
+    }
+    return;
+  }
+
+  // 3. Empty space -- deselect node, keep path selected
+  store.setNodeEditState({
+    pathId: store.nodeEditState.pathId,
+    selectedNodeIndex: null,
+  });
+}
+
+function handleNodeMove(worldX: number, worldY: number) {
+  if (!nodeDrag.isDragging) return;
+
+  const store = useStore.getState();
+  const { pathId } = store.nodeEditState;
+  if (!pathId) return;
+
+  const obj = store.objects.find((o) => o.id === pathId);
+  if (!obj || !obj.points) return;
+
+  const dx = worldX - nodeDrag.startX;
+  const dy = worldY - nodeDrag.startY;
+  const newPoints = nodeDrag.originalPoints.map((p) => ({
+    ...p,
+    handleIn: p.handleIn ? { ...p.handleIn } : undefined,
+    handleOut: p.handleOut ? { ...p.handleOut } : undefined,
+  }));
+
+  const idx = nodeDrag.nodeIndex;
+  const origPt = nodeDrag.originalPoints[idx];
+
+  if (nodeDrag.target === "node") {
+    // Move anchor + both handles together
+    newPoints[idx] = {
+      ...origPt,
+      x: origPt.x + dx,
+      y: origPt.y + dy,
+      handleIn: origPt.handleIn
+        ? { x: origPt.handleIn.x + dx, y: origPt.handleIn.y + dy }
+        : undefined,
+      handleOut: origPt.handleOut
+        ? { x: origPt.handleOut.x + dx, y: origPt.handleOut.y + dy }
+        : undefined,
+    };
+  } else if (nodeDrag.target === "handleOut") {
+    const newHandleOut = {
+      x: origPt.handleOut!.x + dx,
+      y: origPt.handleOut!.y + dy,
+    };
+    newPoints[idx] = {
+      ...origPt,
+      handleOut: newHandleOut,
+      // Mirror handleIn if it exists
+      handleIn: origPt.handleIn
+        ? { x: 2 * origPt.x - newHandleOut.x, y: 2 * origPt.y - newHandleOut.y }
+        : undefined,
+    };
+  } else if (nodeDrag.target === "handleIn") {
+    const newHandleIn = {
+      x: origPt.handleIn!.x + dx,
+      y: origPt.handleIn!.y + dy,
+    };
+    newPoints[idx] = {
+      ...origPt,
+      handleIn: newHandleIn,
+      // Mirror handleOut if it exists
+      handleOut: origPt.handleOut
+        ? { x: 2 * origPt.x - newHandleIn.x, y: 2 * origPt.y - newHandleIn.y }
+        : undefined,
+    };
+  }
+
+  store.updateObject(pathId, { points: newPoints });
+}
+
+function handleNodeUp() {
+  if (nodeDrag.isDragging) {
+    useStore.getState().commitPropertyEdit();
+    nodeDrag.isDragging = false;
+    nodeDrag.nodeIndex = -1;
+    nodeDrag.target = null;
+    nodeDrag.originalPoints = [];
+  }
+}
+
+export function deleteSelectedNode() {
+  const store = useStore.getState();
+  const { pathId, selectedNodeIndex } = store.nodeEditState;
+  if (!pathId || selectedNodeIndex === null) return;
+
+  const obj = store.objects.find((o) => o.id === pathId);
+  if (!obj || !obj.points) return;
+
+  if (obj.points.length <= 2) {
+    // Deleting would leave < 2 points -- delete entire object
+    store.withUndo("delete-path", () => {
+      store.removeObjects([pathId]);
+    });
+    store.setNodeEditState({ pathId: null, selectedNodeIndex: null });
+    return;
+  }
+
+  const newPoints = obj.points.filter((_, i) => i !== selectedNodeIndex);
+  const newSelectedIdx = selectedNodeIndex >= newPoints.length ? newPoints.length - 1 : selectedNodeIndex;
+
+  store.withUndo("delete-node", () => {
+    store.updateObject(pathId, { points: newPoints });
+  });
+  store.setNodeEditState({ pathId, selectedNodeIndex: newSelectedIdx });
+}
+
+export function handleViewportDoubleClick(worldX: number, worldY: number) {
+  const store = useStore.getState();
+  const tool = store.activeTool;
+
+  if (tool === "pen" && penState.isDrawing) {
+    commitPen(false);
+    return;
+  }
+
+  if (tool === "node" && store.nodeEditState.pathId) {
+    const hit = hitTestNodeHandles(worldX, worldY, store.camera.zoom);
+    if (hit && hit.target === "node") {
+      const obj = store.objects.find((o) => o.id === store.nodeEditState.pathId);
+      if (!obj || !obj.points) return;
+
+      const pt = obj.points[hit.index];
+      const newPoints = obj.points.map((p) => ({ ...p, handleIn: p.handleIn ? { ...p.handleIn } : undefined, handleOut: p.handleOut ? { ...p.handleOut } : undefined }));
+
+      if (pt.handleIn || pt.handleOut) {
+        // Has handles -> remove them (corner)
+        newPoints[hit.index] = { x: pt.x, y: pt.y, handleIn: undefined, handleOut: undefined };
+      } else {
+        // No handles -> auto-generate smooth handles
+        const pts = obj.points;
+        const prevIdx = (hit.index - 1 + pts.length) % pts.length;
+        const nextIdx = (hit.index + 1) % pts.length;
+        const prev = pts[prevIdx];
+        const next = pts[nextIdx];
+
+        // Direction from prev to next
+        const dirX = next.x - prev.x;
+        const dirY = next.y - prev.y;
+        const dirLen = Math.hypot(dirX, dirY) || 1;
+
+        // Handle length = 1/3 distance to neighbors
+        const distPrev = Math.hypot(pt.x - prev.x, pt.y - prev.y);
+        const distNext = Math.hypot(pt.x - next.x, pt.y - next.y);
+        const handleLenIn = distPrev / 3;
+        const handleLenOut = distNext / 3;
+
+        newPoints[hit.index] = {
+          x: pt.x,
+          y: pt.y,
+          handleIn: {
+            x: pt.x - (dirX / dirLen) * handleLenIn,
+            y: pt.y - (dirY / dirLen) * handleLenIn,
+          },
+          handleOut: {
+            x: pt.x + (dirX / dirLen) * handleLenOut,
+            y: pt.y + (dirY / dirLen) * handleLenOut,
+          },
+        };
+      }
+
+      store.withUndo("toggle-smooth", () => {
+        store.updateObject(store.nodeEditState.pathId!, { points: newPoints });
+      });
+      return;
+    }
+  }
+}
+
+// --- POSITION LASER ---
+
+function handlePositionLaserDown(worldX: number, worldY: number) {
+  const store = useStore.getState();
+  if (!store.machineConnected || store.machineState !== "idle") return;
+  // Convert canvas Y (top-down) to GRBL Y (bottom-up)
+  const machineY = store.workspaceHeight - worldY;
+  machineConnection.jogTo(worldX, machineY);
+}
+
+// --- TOOL CHANGE ---
+
+export function handleToolChange(newTool: ToolType, previousTool: ToolType) {
+  if (previousTool === "pen" && penState.isDrawing) {
+    cancelPen();
+  }
+  if (previousTool === "node") {
+    nodeDrag.isDragging = false;
+    nodeDrag.nodeIndex = -1;
+    nodeDrag.target = null;
+    nodeDrag.originalPoints = [];
+    useStore.getState().setNodeEditState({ pathId: null, selectedNodeIndex: null });
+  }
+  if (newTool === "node") {
+    // Auto-enter node editing if a path is selected
+    const store = useStore.getState();
+    if (store.selectedIds.length === 1) {
+      const obj = store.objects.find((o) => o.id === store.selectedIds[0]);
+      if (obj && obj.type === "path") {
+        store.setNodeEditState({ pathId: obj.id, selectedNodeIndex: null });
+      }
+    }
+  }
+}
+
+// --- VIEWPORT KEY HANDLER ---
+
+export function handleViewportKeyDown(e: KeyboardEvent): boolean {
+  const store = useStore.getState();
+  const tool = store.activeTool;
+
+  // Pen tool key intercepts
+  if (tool === "pen" && penState.isDrawing) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commitPen(false);
+      return true;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      cancelPen();
+      return true;
+    }
+  }
+
+  // Node tool key intercepts
+  if (tool === "node") {
+    if ((e.key === "Delete" || e.key === "Backspace") && store.nodeEditState.selectedNodeIndex !== null) {
+      e.preventDefault();
+      deleteSelectedNode();
+      return true;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      if (store.nodeEditState.selectedNodeIndex !== null) {
+        store.setNodeEditState({ pathId: store.nodeEditState.pathId, selectedNodeIndex: null });
+      } else {
+        store.setNodeEditState({ pathId: null, selectedNodeIndex: null });
+      }
+      return true;
+    }
+  }
+
+  return false;
 }
