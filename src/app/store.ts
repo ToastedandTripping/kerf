@@ -604,10 +604,36 @@ export const useStore = create<AppState>((set, get) => ({
 
       if (selected.length === 1) {
         const obj = selected[0];
-        if (axis === "horizontal") {
-          updateObject(obj.id, { transform: { ...obj.transform, scaleX: obj.transform.scaleX * -1 } });
+        const t = obj.transform;
+        const centerX = t.x + t.width / 2;
+        const centerY = t.y + t.height / 2;
+
+        if ((obj.type === "path" || obj.type === "line") && obj.points) {
+          // Bake flip into geometry: mirror point coordinates through center
+          const flippedPoints = obj.points.map((p) => {
+            const fp = { ...p };
+            if (axis === "horizontal") {
+              fp.x = 2 * centerX - p.x;
+              if (p.handleIn) fp.handleIn = { x: 2 * centerX - p.handleIn.x, y: p.handleIn.y };
+              if (p.handleOut) fp.handleOut = { x: 2 * centerX - p.handleOut.x, y: p.handleOut.y };
+            } else {
+              fp.y = 2 * centerY - p.y;
+              if (p.handleIn) fp.handleIn = { x: p.handleIn.x, y: 2 * centerY - p.handleIn.y };
+              if (p.handleOut) fp.handleOut = { x: p.handleOut.x, y: 2 * centerY - p.handleOut.y };
+            }
+            return fp;
+          });
+          updateObject(obj.id, { points: flippedPoints, transform: { ...t, scaleX: 1, scaleY: 1 } });
+        } else if (obj.type === "image" || obj.type === "text") {
+          // Keep scale on transform -- renderer handles it
+          if (axis === "horizontal") {
+            updateObject(obj.id, { transform: { ...t, scaleX: t.scaleX * -1 } });
+          } else {
+            updateObject(obj.id, { transform: { ...t, scaleY: t.scaleY * -1 } });
+          }
         } else {
-          updateObject(obj.id, { transform: { ...obj.transform, scaleY: obj.transform.scaleY * -1 } });
+          // Symmetric primitives (rect, ellipse): flip is visual no-op, reset scale
+          updateObject(obj.id, { transform: { ...t, scaleX: 1, scaleY: 1 } });
         }
       } else {
         // Flip group around collective center
@@ -1287,6 +1313,25 @@ export const useStore = create<AppState>((set, get) => ({
 
 // --- Boolean operation helpers ---
 
+/** Sample a cubic bezier segment using de Casteljau's algorithm */
+function sampleBezierSegment(
+  p0: { x: number; y: number },
+  cp1: { x: number; y: number },
+  cp2: { x: number; y: number },
+  p1: { x: number; y: number },
+  steps = 16,
+): Array<polygonClipping.Pair> {
+  const points: Array<polygonClipping.Pair> = [];
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const mt = 1 - t;
+    const x = mt * mt * mt * p0.x + 3 * mt * mt * t * cp1.x + 3 * mt * t * t * cp2.x + t * t * t * p1.x;
+    const y = mt * mt * mt * p0.y + 3 * mt * mt * t * cp1.y + 3 * mt * t * t * cp2.y + t * t * t * p1.y;
+    points.push([x, y]);
+  }
+  return points;
+}
+
 function objectToPolygon(obj: DesignObject): polygonClipping.Polygon | null {
   const t = obj.transform;
   switch (obj.type) {
@@ -1315,8 +1360,29 @@ function objectToPolygon(obj: DesignObject): polygonClipping.Polygon | null {
     }
     case "path": {
       if (!obj.points || obj.points.length < 3) return null;
-      // Flatten path to linear segments (ignore bezier handles for boolean ops)
-      const ring: polygonClipping.Ring = obj.points.map((p) => [p.x, p.y] as polygonClipping.Pair);
+      // Sample bezier curves to preserve shape during boolean ops
+      const ring: polygonClipping.Ring = [[obj.points[0].x, obj.points[0].y]];
+      for (let i = 1; i < obj.points.length; i++) {
+        const prev = obj.points[i - 1];
+        const pt = obj.points[i];
+        if (prev.handleOut && pt.handleIn) {
+          ring.push(...sampleBezierSegment(
+            { x: prev.x, y: prev.y }, prev.handleOut, pt.handleIn, { x: pt.x, y: pt.y },
+          ));
+        } else {
+          ring.push([pt.x, pt.y]);
+        }
+      }
+      // Handle closing curve
+      if (obj.closed && obj.points.length >= 2) {
+        const last = obj.points[obj.points.length - 1];
+        const first = obj.points[0];
+        if (last.handleOut && first.handleIn) {
+          ring.push(...sampleBezierSegment(
+            { x: last.x, y: last.y }, last.handleOut, first.handleIn, { x: first.x, y: first.y },
+          ));
+        }
+      }
       // Close the ring
       if (ring.length > 0 && (ring[0][0] !== ring[ring.length - 1][0] || ring[0][1] !== ring[ring.length - 1][1])) {
         ring.push([ring[0][0], ring[0][1]]);

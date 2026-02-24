@@ -99,6 +99,7 @@ export const fileOperations = {
       } else {
         const content = await fsModule.readTextFile(pathStr);
         const project = JSON.parse(content) as KerfProject;
+        migrateFlipTransforms(project.objects);
         useStore.getState().loadProject(project);
         useStore.getState().setProjectPath(pathStr);
       }
@@ -211,38 +212,42 @@ async function saveToPath(path: string) {
   useStore.getState().setDirty(false);
 }
 
+/** Migrate pre-fix .kerf files: bake scaleX/scaleY into path points, reset for primitives */
+function migrateFlipTransforms(objects: DesignObject[]) {
+  for (const obj of objects) {
+    const t = obj.transform;
+    if (obj.type === "group" && obj.children) {
+      migrateFlipTransforms(obj.children);
+    }
+    if ((obj.type === "path" || obj.type === "line") && obj.points && (t.scaleX < 0 || t.scaleY < 0)) {
+      const centerX = t.x + t.width / 2;
+      const centerY = t.y + t.height / 2;
+      for (const p of obj.points) {
+        if (t.scaleX < 0) {
+          p.x = 2 * centerX - p.x;
+          if (p.handleIn) p.handleIn.x = 2 * centerX - p.handleIn.x;
+          if (p.handleOut) p.handleOut.x = 2 * centerX - p.handleOut.x;
+        }
+        if (t.scaleY < 0) {
+          p.y = 2 * centerY - p.y;
+          if (p.handleIn) p.handleIn.y = 2 * centerY - p.handleIn.y;
+          if (p.handleOut) p.handleOut.y = 2 * centerY - p.handleOut.y;
+        }
+      }
+      t.scaleX = 1;
+      t.scaleY = 1;
+    } else if (obj.type === "rectangle" || obj.type === "ellipse") {
+      t.scaleX = 1;
+      t.scaleY = 1;
+    }
+    // Images and text: leave scaleX/scaleY as-is (renderer reads them)
+  }
+}
+
 // ===================== DXF IMPORT =====================
 
 function importDxfContent(content: string) {
-  try {
-    // Dynamic import of dxf-parser
-    const DxfParser = (window as any).__dxfParser || null;
-    if (!DxfParser) {
-      // Fallback: parse DXF manually for common entities
-      parseDxfManual(content);
-      return;
-    }
-    const parser = new DxfParser();
-    const dxf = parser.parseSync(content);
-    if (!dxf || !dxf.entities) return;
-
-    const store = useStore.getState();
-    const layerColor = store.layers[store.activeLayerIndex]?.color || "#4a90e2";
-    const newObjects: DesignObject[] = [];
-
-    for (const entity of dxf.entities) {
-      const obj = dxfEntityToObject(entity, layerColor);
-      if (obj) newObjects.push(obj);
-    }
-
-    if (newObjects.length > 0) {
-      newObjects.forEach(store.addObject);
-      store.setSelectedIds(newObjects.map((o) => o.id));
-      store.addConsoleLine(`DXF imported: ${newObjects.length} objects`, "info");
-    }
-  } catch (err) {
-    parseDxfManual(content);
-  }
+  parseDxfManual(content);
 }
 
 function parseDxfManual(content: string) {
@@ -343,6 +348,46 @@ function parseDxfManual(content: string) {
         });
       }
     }
+
+    if (code === 0 && value === "ARC") {
+      let cx = 0, cy = 0, r = 0, startAngle = 0, endAngle = 360;
+      while (i < lines.length) {
+        const p = nextPair();
+        if (!p) break;
+        if (p[0] === 0) { i -= 2; break; }
+        if (p[0] === 10) cx = parseFloat(p[1]);
+        if (p[0] === 20) cy = parseFloat(p[1]);
+        if (p[0] === 40) r = parseFloat(p[1]);
+        if (p[0] === 50) startAngle = parseFloat(p[1]);
+        if (p[0] === 51) endAngle = parseFloat(p[1]);
+      }
+      // Skip malformed arcs: invalid radius or zero sweep
+      if (r > 0 && startAngle !== endAngle) {
+        // Sample arc at ~1-degree intervals (CCW convention per DXF spec)
+        let sweep = endAngle - startAngle;
+        if (sweep <= 0) sweep += 360;
+        const steps = Math.min(Math.ceil(Math.abs(sweep)), 360);
+        const pts: Array<{ x: number; y: number }> = [];
+        for (let s = 0; s <= steps; s++) {
+          const angle = (startAngle + (sweep * s) / steps) * Math.PI / 180;
+          pts.push({ x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) });
+        }
+        if (pts.length >= 2) {
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          for (const pt of pts) {
+            minX = Math.min(minX, pt.x); minY = Math.min(minY, pt.y);
+            maxX = Math.max(maxX, pt.x); maxY = Math.max(maxY, pt.y);
+          }
+          newObjects.push({
+            id: generateId(), type: "path", name: `DXF Arc ${newObjects.length + 1}`,
+            transform: { x: minX, y: minY, width: (maxX - minX) || 1, height: (maxY - minY) || 1, rotation: 0, scaleX: 1, scaleY: 1 },
+            layerIndex: store.activeLayerIndex, visible: true, locked: false,
+            fill: null, stroke: layerColor, strokeWidth: 1, opacity: 1,
+            points: pts, closed: false,
+          });
+        }
+      }
+    }
   }
 
   if (newObjects.length > 0) {
@@ -351,55 +396,6 @@ function parseDxfManual(content: string) {
     store.addConsoleLine(`DXF imported: ${newObjects.length} objects`, "info");
   } else {
     store.addConsoleLine("DXF import: no supported entities found", "error");
-  }
-}
-
-function dxfEntityToObject(entity: any, layerColor: string): DesignObject | null {
-  const store = useStore.getState();
-  const base = {
-    layerIndex: store.activeLayerIndex, visible: true, locked: false,
-    fill: null, stroke: layerColor, strokeWidth: 1, opacity: 1,
-  };
-
-  switch (entity.type) {
-    case "LINE":
-      return {
-        ...base, id: generateId(), type: "line", name: `DXF Line`,
-        transform: {
-          x: Math.min(entity.vertices[0].x, entity.vertices[1].x),
-          y: Math.min(entity.vertices[0].y, entity.vertices[1].y),
-          width: Math.abs(entity.vertices[1].x - entity.vertices[0].x),
-          height: Math.abs(entity.vertices[1].y - entity.vertices[0].y),
-          rotation: 0, scaleX: 1, scaleY: 1,
-        },
-        points: entity.vertices.map((v: any) => ({ x: v.x, y: v.y })),
-      };
-    case "CIRCLE":
-      return {
-        ...base, id: generateId(), type: "ellipse", name: `DXF Circle`,
-        transform: {
-          x: entity.center.x - entity.radius, y: entity.center.y - entity.radius,
-          width: entity.radius * 2, height: entity.radius * 2,
-          rotation: 0, scaleX: 1, scaleY: 1,
-        },
-      };
-    case "LWPOLYLINE":
-    case "POLYLINE": {
-      const pts = (entity.vertices || []).map((v: any) => ({ x: v.x, y: v.y }));
-      if (pts.length < 2) return null;
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const p of pts) {
-        minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
-        maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
-      }
-      return {
-        ...base, id: generateId(), type: "path", name: `DXF Polyline`,
-        transform: { x: minX, y: minY, width: maxX - minX, height: maxY - minY, rotation: 0, scaleX: 1, scaleY: 1 },
-        points: pts, closed: entity.shape || false,
-      };
-    }
-    default:
-      return null;
   }
 }
 

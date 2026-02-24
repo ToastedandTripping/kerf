@@ -666,6 +666,13 @@ function renderTextObject(obj: DesignObject): Container | null {
   text.x = px;
   text.y = py;
   text.alpha = obj.opacity;
+
+  // Apply flip (scaleX/scaleY from transform)
+  const sx = t.scaleX ?? 1;
+  const sy = t.scaleY ?? 1;
+  if (sx < 0) { text.scale.x *= -1; text.x += t.width * PX_PER_MM; }
+  if (sy < 0) { text.scale.y *= -1; text.y += t.height * PX_PER_MM; }
+
   return text;
 }
 
@@ -687,6 +694,13 @@ function renderImageObject(obj: DesignObject): Container | null {
     sprite.width = pw;
     sprite.height = ph;
     sprite.alpha = obj.opacity;
+
+    // Apply flip (scaleX/scaleY from transform)
+    const sx = t.scaleX ?? 1;
+    const sy = t.scaleY ?? 1;
+    if (sx < 0) { sprite.scale.x *= -1; sprite.x += pw; }
+    if (sy < 0) { sprite.scale.y *= -1; sprite.y += ph; }
+
     return sprite;
   } catch {
     // Fallback: draw a placeholder box

@@ -112,12 +112,42 @@ function offsetRingByDistance(
   return result;
 }
 
-/** Convert store objects to CutObjects for the Rust engine */
-function toCutObjects(objects: DesignObject[], layers: Layer[]): CutObject[] {
-  const result: CutObject[] = [];
-
+/** Recursively flatten groups into leaf objects with parent offsets applied */
+function flattenObjects(objects: DesignObject[]): DesignObject[] {
+  const result: DesignObject[] = [];
   for (const obj of objects) {
-    if (!obj.visible || obj.locked || obj.type === "text" || obj.type === "image") continue;
+    if (obj.type === "group" && obj.children) {
+      for (const child of obj.children) {
+        const expanded = {
+          ...child,
+          transform: {
+            ...child.transform,
+            x: child.transform.x + obj.transform.x,
+            y: child.transform.y + obj.transform.y,
+          },
+        };
+        result.push(...flattenObjects([expanded]));
+      }
+    } else {
+      result.push(obj);
+    }
+  }
+  return result;
+}
+
+/** Convert store objects to CutObjects for the Rust engine */
+function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutObject[]; warnings: string[] } {
+  const flat = flattenObjects(objects);
+  const result: CutObject[] = [];
+  const warnings: string[] = [];
+
+  for (const obj of flat) {
+    if (!obj.visible || obj.locked) continue;
+    if (obj.type === "text") {
+      warnings.push(`Text object "${obj.name}" skipped -- use Ctrl+Shift+C to convert to path`);
+      continue;
+    }
+    if (obj.type === "image") continue;
 
     const layer = layers.find((l) => l.index === obj.layerIndex) || layers[0];
     const paths: CutObject["paths"] = [];
@@ -162,7 +192,7 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): CutObject[] {
     }
   }
 
-  return result;
+  return { objects: result, warnings };
 }
 
 /** Generate G-code for image objects using the dedicated Rust image pipeline */
@@ -227,7 +257,12 @@ function mergeGcodeResults(results: GcodeResult[]): GcodeResult {
 /** Generate G-code from the current design using Rust backend */
 export async function generateGcode(): Promise<GcodeResult> {
   const store = useStore.getState();
-  const cutObjects = toCutObjects(store.objects, store.layers);
+  const { objects: cutObjects, warnings } = toCutObjects(store.objects, store.layers);
+
+  // Surface warnings for skipped objects in the console panel
+  for (const w of warnings) {
+    store.addConsoleLine(w, "info");
+  }
 
   try {
     // Image engraving first (runs before vector cuts)
