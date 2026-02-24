@@ -137,8 +137,9 @@ export const machineConnection = {
   async softReset(): Promise<void> {
     await this.sendByte(0x18); // Ctrl+X
     const store = useStore.getState();
-    store.setMachineState("idle");
     store.addConsoleLine("Soft reset sent", "info");
+    // Poll actual state instead of assuming idle
+    await this.pollStatus();
   },
 
   async feedHold(): Promise<void> {
@@ -149,5 +150,51 @@ export const machineConnection = {
   async cycleResume(): Promise<void> {
     await this.sendByte(0x7e); // '~'
     useStore.getState().setMachineState("run");
+  },
+
+  async emergencyStop(): Promise<void> {
+    const store = useStore.getState();
+    store.addConsoleLine("Emergency stop initiated", "warning");
+
+    // 1. Feed hold -- decelerates and auto-zeros laser under M4
+    try { await this.sendByte(0x21); } catch { /* continue regardless */ }
+
+    // 2. Wait for deceleration
+    await new Promise((r) => setTimeout(r, 100));
+
+    // 3. Explicit M5 -- kills laser in both M3 and M4 modes
+    try { await this.send("M5"); } catch { /* continue regardless */ }
+
+    // 4. Soft reset -- reinitialize controller
+    try {
+      await this.sendByte(0x18);
+      await this.pollStatus();
+    } catch { /* continue regardless */ }
+
+    store.addConsoleLine("Emergency stop complete", "warning");
+  },
+
+  async queryGrblSettings(): Promise<void> {
+    const store = useStore.getState();
+    try {
+      store.addConsoleLine("$$", "sent");
+      const responses = await invoke<string[]>("serial_send", { command: "$$" });
+      for (const line of responses) {
+        const match = line.match(/^\$(\d+)=([\d.]+)/);
+        if (match) {
+          const key = parseInt(match[1], 10);
+          const value = parseFloat(match[2]);
+          if (key === 30) {
+            store.setGrblSValueMax(value);
+            store.addConsoleLine(`$30=${value} (S-value max)`, "info");
+          } else if (key === 32) {
+            store.setGrblLaserMode(value === 1);
+            store.addConsoleLine(`$32=${value} (laser mode ${value === 1 ? "enabled" : "disabled"})`, "info");
+          }
+        }
+      }
+    } catch (e) {
+      store.addConsoleLine(`Failed to query GRBL settings: ${e}`, "error");
+    }
   },
 };

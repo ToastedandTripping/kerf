@@ -196,7 +196,7 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
 }
 
 /** Generate G-code for image objects using the dedicated Rust image pipeline */
-async function generateImageGcode(): Promise<GcodeResult | null> {
+async function generateImageGcode(sValueMax: number = 1000): Promise<GcodeResult | null> {
   const store = useStore.getState();
   const imageObjects = store.objects.filter(
     (obj) => obj.type === "image" && obj.visible && !obj.locked && obj.imageData,
@@ -232,6 +232,7 @@ async function generateImageGcode(): Promise<GcodeResult | null> {
         gamma: adj.gamma,
         invert: adj.invert,
         workspaceHeight: store.workspaceHeight,
+        sValueMax,
       },
     });
     results.push(result);
@@ -264,13 +265,27 @@ export async function generateGcode(): Promise<GcodeResult> {
     store.addConsoleLine(w, "info");
   }
 
+  // M3 constant-power warnings
+  for (const obj of cutObjects) {
+    if (obj.layer.powerMode !== "variable") {
+      store.addConsoleLine(
+        `Layer uses constant power (M3). Laser will not reduce power during speed changes. Use variable power (M4) unless doing constant-speed through-cuts.`,
+        "warning",
+      );
+      break; // One warning is enough
+    }
+  }
+
+  const sValueMax = store.grblSValueMax;
+
   try {
     // Image engraving first (runs before vector cuts)
-    const imageResult = await generateImageGcode();
+    const imageResult = await generateImageGcode(sValueMax);
 
     const vectorResult = await invoke<GcodeResult>("generate_gcode", {
       objects: cutObjects,
       workspaceHeight: store.workspaceHeight,
+      sValueMax,
     });
 
     if (imageResult) {
@@ -280,12 +295,12 @@ export async function generateGcode(): Promise<GcodeResult> {
   } catch (e) {
     // Fallback: generate G-code in JS if Rust isn't available
     console.warn("Rust G-code gen failed, using JS fallback:", e);
-    return generateGcodeFallback(cutObjects, store.workspaceHeight);
+    return generateGcodeFallback(cutObjects, store.workspaceHeight, sValueMax);
   }
 }
 
 /** Pure JS fallback G-code generator */
-function generateGcodeFallback(objects: CutObject[], workspaceHeight: number): GcodeResult {
+function generateGcodeFallback(objects: CutObject[], workspaceHeight: number, sValueMax: number = 1000): GcodeResult {
   const lines: string[] = [];
   const moves: GcodeMove[] = [];
   let cutDist = 0;
@@ -301,7 +316,7 @@ function generateGcodeFallback(objects: CutObject[], workspaceHeight: number): G
 
   for (const obj of objects) {
     const speed = obj.layer.speed * 60; // mm/s to mm/min
-    const sMax = Math.round(obj.layer.power / 100 * 1000);
+    const sMax = Math.round(obj.layer.power / 100 * sValueMax);
     const powerCmd = obj.layer.powerMode === "variable" ? "M4" : "M3";
 
     for (let pass = 0; pass < obj.layer.passes; pass++) {

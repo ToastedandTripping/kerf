@@ -103,13 +103,17 @@ interface AppState {
   machineConnected: boolean;
   machineState: "idle" | "run" | "hold" | "alarm" | "disconnected";
   machinePosition: { x: number; y: number; z: number };
+  grblSValueMax: number;
+  grblLaserMode: boolean;
   setMachineConnected: (connected: boolean) => void;
   setMachineState: (state: "idle" | "run" | "hold" | "alarm" | "disconnected") => void;
   setMachinePosition: (pos: { x: number; y: number; z: number }) => void;
+  setGrblSValueMax: (v: number) => void;
+  setGrblLaserMode: (v: boolean) => void;
 
   // Console
-  consoleLines: Array<{ text: string; type: "sent" | "received" | "info" | "error" }>;
-  addConsoleLine: (text: string, type: "sent" | "received" | "info" | "error") => void;
+  consoleLines: Array<{ text: string; type: "sent" | "received" | "info" | "error" | "warning" }>;
+  addConsoleLine: (text: string, type: "sent" | "received" | "info" | "error" | "warning") => void;
   clearConsole: () => void;
 
   // G-code / Preview
@@ -423,9 +427,13 @@ export const useStore = create<AppState>((set, get) => ({
   machineConnected: false,
   machineState: "disconnected",
   machinePosition: { x: 0, y: 0, z: 0 },
+  grblSValueMax: 1000,
+  grblLaserMode: false,
   setMachineConnected: (connected) => set({ machineConnected: connected }),
   setMachineState: (state) => set({ machineState: state }),
   setMachinePosition: (pos) => set({ machinePosition: pos }),
+  setGrblSValueMax: (v) => set({ grblSValueMax: v }),
+  setGrblLaserMode: (v) => set({ grblLaserMode: v }),
 
   // Console
   consoleLines: [],

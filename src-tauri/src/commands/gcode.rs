@@ -4,7 +4,8 @@ use crate::engine::optimizer;
 
 /// Generate G-code from design objects
 #[tauri::command]
-pub fn generate_gcode(objects: Vec<CutObject>, workspace_height: f64) -> Result<GcodeResult, String> {
+pub fn generate_gcode(objects: Vec<CutObject>, workspace_height: f64, s_value_max: Option<f64>) -> Result<GcodeResult, String> {
+    let s_value_max = s_value_max.unwrap_or(1000.0);
     // Optimize cut order
     let mut sorted = objects;
 
@@ -36,7 +37,7 @@ pub fn generate_gcode(objects: Vec<CutObject>, workspace_height: f64) -> Result<
         final_objects.push(line_objects[idx].clone());
     }
 
-    let result = gcode_gen::generate_gcode(&final_objects, workspace_height);
+    let result = gcode_gen::generate_gcode(&final_objects, workspace_height, s_value_max);
     Ok(result)
 }
 

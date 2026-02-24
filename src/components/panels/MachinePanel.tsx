@@ -2,6 +2,45 @@ import { useState, useEffect, useCallback } from "react";
 import { useStore } from "../../app/store";
 import { machineConnection } from "../../lib/machine/connection";
 import { generateGcode } from "../../lib/machine/gcodeGen";
+import type { DesignObject } from "../../app/types";
+
+/** Compute bounding box of all visible, unlocked design objects */
+function getDesignBounds(objects: DesignObject[]): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let count = 0;
+  for (const obj of flattenAll(objects)) {
+    if (!obj.visible || obj.locked) continue;
+    if (obj.type === "group") continue;
+    minX = Math.min(minX, obj.transform.x);
+    minY = Math.min(minY, obj.transform.y);
+    maxX = Math.max(maxX, obj.transform.x + obj.transform.width);
+    maxY = Math.max(maxY, obj.transform.y + obj.transform.height);
+    count++;
+  }
+  return count > 0 ? { minX, minY, maxX, maxY } : null;
+}
+
+/** Recursively flatten groups */
+function flattenAll(objects: DesignObject[]): DesignObject[] {
+  const result: DesignObject[] = [];
+  for (const obj of objects) {
+    if (obj.type === "group" && obj.children) {
+      for (const child of obj.children) {
+        result.push(...flattenAll([{
+          ...child,
+          transform: {
+            ...child.transform,
+            x: child.transform.x + obj.transform.x,
+            y: child.transform.y + obj.transform.y,
+          },
+        }]));
+      }
+    } else {
+      result.push(obj);
+    }
+  }
+  return result;
+}
 
 export function MachinePanel() {
   const machineConnected = useStore((s) => s.machineConnected);
@@ -14,6 +53,7 @@ export function MachinePanel() {
   const jobRunning = useStore((s) => s.jobRunning);
   const setJobRunning = useStore((s) => s.setJobRunning);
   const setJobProgress = useStore((s) => s.setJobProgress);
+  const jobProgress = useStore((s) => s.jobProgress);
   const activeTool = useStore((s) => s.activeTool);
   const setActiveTool = useStore((s) => s.setActiveTool);
 
@@ -43,6 +83,15 @@ export function MachinePanel() {
       }
       try {
         await machineConnection.connect(selectedPort);
+        await machineConnection.queryGrblSettings();
+        await machineConnection.pollStatus();
+        // Warn if laser mode is disabled
+        if (!useStore.getState().grblLaserMode) {
+          addConsoleLine(
+            "GRBL laser mode ($32) is disabled. Laser will not auto-zero at speed changes. Run $32=1 in the console to enable.",
+            "warning",
+          );
+        }
       } catch {
         // Error already logged by connection module
       }
@@ -68,6 +117,19 @@ export function MachinePanel() {
     if (!gcodeResult) {
       addConsoleLine("Generate G-code first", "error");
       return;
+    }
+
+    // Pre-flight bounds check
+    const { objects, workspaceWidth, workspaceHeight } = useStore.getState();
+    const bounds = getDesignBounds(objects);
+    if (bounds) {
+      if (bounds.minX < 0 || bounds.minY < 0 || bounds.maxX > workspaceWidth || bounds.maxY > workspaceHeight) {
+        addConsoleLine(
+          "Design extends outside workspace bounds. Move or resize objects to fit.",
+          "error",
+        );
+        return;
+      }
     }
 
     setJobRunning(true);
@@ -129,7 +191,7 @@ export function MachinePanel() {
 
   async function handleStop() {
     setJobRunning(false);
-    await machineConnection.softReset();
+    await machineConnection.emergencyStop();
   }
 
   const stateColors: Record<string, string> = {
@@ -295,8 +357,35 @@ export function MachinePanel() {
 
           {/* Action buttons */}
           <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
-            <ActionButton label="Frame" color="var(--accent)" onClick={() => machineConnection.send("G1 X0 Y0 F1000\nG1 X100 Y0\nG1 X100 Y100\nG1 X0 Y100\nG1 X0 Y0")} />
-            <ActionButton label="Fire" color="var(--accent-warm)" onClick={() => machineConnection.send("M3 S5\nG4 P0.5\nM5")} />
+            <ActionButton
+              label="Frame"
+              color="var(--accent)"
+              disabled={!machineConnected || machineState !== "idle" || jobRunning}
+              onClick={async () => {
+                const bounds = getDesignBounds(useStore.getState().objects);
+                if (!bounds) {
+                  addConsoleLine("No objects to frame", "error");
+                  return;
+                }
+                const { workspaceHeight } = useStore.getState();
+                const y0 = workspaceHeight - bounds.maxY;
+                const y1 = workspaceHeight - bounds.minY;
+                await machineConnection.send(`G0 X${bounds.minX.toFixed(3)} Y${y0.toFixed(3)}`);
+                await machineConnection.send(`G0 X${bounds.maxX.toFixed(3)} Y${y0.toFixed(3)}`);
+                await machineConnection.send(`G0 X${bounds.maxX.toFixed(3)} Y${y1.toFixed(3)}`);
+                await machineConnection.send(`G0 X${bounds.minX.toFixed(3)} Y${y1.toFixed(3)}`);
+                await machineConnection.send(`G0 X${bounds.minX.toFixed(3)} Y${y0.toFixed(3)}`);
+              }}
+            />
+            <ActionButton
+              label="Fire"
+              color="var(--accent-warm)"
+              disabled={!machineConnected || machineState !== "idle" || jobRunning}
+              onClick={async () => {
+                const sVal = Math.round(5 / 1000 * useStore.getState().grblSValueMax);
+                await machineConnection.send(`M3 S${sVal}\nG4 P0.5\nM5`);
+              }}
+            />
             <ActionButton label="Set Origin" color="var(--text-secondary)" onClick={() => machineConnection.setOrigin()} />
             <button
               onClick={() => setActiveTool(activeTool === "positionLaser" ? "select" : "positionLaser")}
@@ -384,7 +473,7 @@ export function MachinePanel() {
             <div style={{ background: "var(--bg-input)", borderRadius: "var(--radius-sm)", height: "4px", overflow: "hidden" }}>
               <div style={{
                 height: "100%",
-                width: `${useStore.getState().jobProgress * 100}%`,
+                width: `${jobProgress * 100}%`,
                 background: "var(--accent)",
                 transition: "width 0.3s",
               }} />
@@ -489,10 +578,11 @@ function JogButton({
   );
 }
 
-function ActionButton({ label, color, onClick }: { label: string; color: string; onClick: () => void }) {
+function ActionButton({ label, color, onClick, disabled }: { label: string; color: string; onClick: () => void; disabled?: boolean }) {
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       style={{
         padding: "4px 8px",
         borderRadius: "var(--radius-sm)",
@@ -501,8 +591,9 @@ function ActionButton({ label, color, onClick }: { label: string; color: string;
         color,
         fontSize: "10px",
         fontWeight: 600,
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
         textTransform: "uppercase",
+        opacity: disabled ? 0.4 : 1,
       }}
     >
       {label}

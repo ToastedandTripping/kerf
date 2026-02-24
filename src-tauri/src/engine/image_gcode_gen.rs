@@ -38,7 +38,11 @@ pub struct ImageEngraveRequest {
     pub gamma: f64,             // 0.1 to 5.0
     pub invert: bool,
     pub workspace_height: f64,  // for Y-flip
+    #[serde(default = "default_s_value_max")]
+    pub s_value_max: f64,       // GRBL $30 setting
 }
+
+fn default_s_value_max() -> f64 { 1000.0 }
 
 /// Generate G-code from an image engraving request
 pub fn generate(req: &ImageEngraveRequest) -> Result<GcodeResult, String> {
@@ -137,8 +141,8 @@ fn generate_scan_gcode(
     let mut cur_y = 0.0_f64;
 
     let speed_mm_min = req.speed * 60.0;
-    let s_max = (req.power / 100.0 * 1000.0).round();
-    let s_min = (req.power_min / 100.0 * 1000.0).round();
+    let s_max = (req.power / 100.0 * req.s_value_max).round();
+    let s_min = (req.power_min / 100.0 * req.s_value_max).round();
     let power_cmd = if req.power_mode == "variable" || is_grayscale { "M4" } else { "M3" };
     let interval = if req.interval > 0.0 { req.interval } else { 0.1 };
     let overscan = req.overscan.max(0.0);

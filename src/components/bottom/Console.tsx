@@ -71,6 +71,7 @@ export function Console() {
     received: "var(--success)",
     info: "var(--text-secondary)",
     error: "var(--danger)",
+    warning: "var(--accent-warm)",
   };
 
   const linePrefixes: Record<string, string> = {
@@ -78,6 +79,7 @@ export function Console() {
     received: "<<< ",
     info: "[i] ",
     error: "[!] ",
+    warning: "[!] ",
   };
 
   return (

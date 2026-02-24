@@ -185,7 +185,7 @@ fn generate_scan_lines(
 }
 
 /// Generate G-code from a list of objects with their layer settings
-pub fn generate_gcode(objects: &[CutObject], workspace_height: f64) -> GcodeResult {
+pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max: f64) -> GcodeResult {
     let mut lines: Vec<String> = Vec::new();
     let mut moves: Vec<GcodeMove> = Vec::new();
     let mut total_distance = 0.0_f64;
@@ -207,8 +207,8 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64) -> GcodeResu
     for obj in objects {
         let layer = &obj.layer;
         let speed_mm_min = layer.speed * 60.0; // Convert mm/s to mm/min
-        let s_max = (layer.power / 100.0 * 1000.0).round();
-        let _s_min = (layer.power_min / 100.0 * 1000.0).round();
+        let s_max = (layer.power / 100.0 * s_value_max).round();
+        let _s_min = (layer.power_min / 100.0 * s_value_max).round();
 
         // Power mode command
         let power_cmd = if layer.power_mode == "variable" { "M4" } else { "M3" };
