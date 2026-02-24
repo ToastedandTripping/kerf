@@ -202,16 +202,9 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64) -> GcodeResu
     lines.push("G0 X0 Y0 ; home".to_string());
     lines.push(String::new());
 
-    // Sort objects: process by layer priority, inner shapes first within each layer
-    let mut sorted_objects = objects.to_vec();
-    sorted_objects.sort_by(|a, b| {
-        // Inner first: smaller area first
-        let area_a = a.width * a.height;
-        let area_b = b.width * b.height;
-        area_a.partial_cmp(&area_b).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    // Objects arrive pre-sorted by commands/gcode.rs (inner-first + nearest-neighbor). Do not re-sort.
 
-    for obj in &sorted_objects {
+    for obj in objects {
         let layer = &obj.layer;
         let speed_mm_min = layer.speed * 60.0; // Convert mm/s to mm/min
         let s_max = (layer.power / 100.0 * 1000.0).round();
@@ -485,6 +478,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64) -> GcodeResu
                     let overscan = layer.overscan.max(0.0);
                     let scanning_offset = layer.scanning_offset;
 
+                    // TODO: rotate scan lines to match object rotation -- current approach overscans outside rotated boundary
                     let (x_min, x_max, y_min, y_max) = if obj.rotation.abs() > 0.001 {
                         let cx = obj.x + obj.width / 2.0;
                         let cy = obj.y + obj.height / 2.0;

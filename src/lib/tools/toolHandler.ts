@@ -103,6 +103,9 @@ export function handleViewportPointerDown(
     case "pen":
       handlePenDown(worldX, worldY, e);
       break;
+    case "text":
+      handleTextDown(worldX, worldY);
+      break;
     case "node":
       handleNodeDown(worldX, worldY, e);
       break;
@@ -1316,6 +1319,37 @@ export function handleViewportDoubleClick(worldX: number, worldY: number) {
 }
 
 // --- POSITION LASER ---
+
+function handleTextDown(worldX: number, worldY: number) {
+  const store = useStore.getState();
+  const obj: DesignObject = {
+    id: generateId(),
+    type: "text",
+    name: `Text ${store.objects.length + 1}`,
+    transform: {
+      x: worldX,
+      y: worldY,
+      width: 0,
+      height: 0,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+    },
+    layerIndex: store.activeLayerIndex,
+    visible: true,
+    locked: false,
+    fill: "#e8e8e8",
+    stroke: "#e8e8e8",
+    strokeWidth: 0,
+    opacity: 1,
+    text: "Text",
+    fontSize: 18,
+    fontFamily: "sans-serif",
+  };
+  store.addObject(obj);
+  store.setSelectedIds([obj.id]);
+  store.setActiveTool("select");
+}
 
 function handlePositionLaserDown(worldX: number, worldY: number) {
   const store = useStore.getState();
