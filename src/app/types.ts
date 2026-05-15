@@ -69,6 +69,7 @@ export interface Layer {
   color: string;
   visible: boolean;
   locked: boolean;
+  output: boolean;
   // Cut settings
   mode: CutMode;
   power: number; // 0-100 max power
@@ -132,7 +133,7 @@ export interface CameraState {
 }
 
 const layerDefaults = {
-  visible: true, locked: false, powerMin: 0, powerMode: "constant" as PowerMode,
+  visible: true, locked: false, output: true, powerMin: 0, powerMode: "constant" as PowerMode,
   interval: 0.1, airAssist: true, cutInnerFirst: true, dither: "floydSteinberg" as const,
   overcut: 0, leadIn: 0, leadOut: 0, overscan: 2.5, bidirectional: true,
   crossHatch: false, scanningOffset: 0, tabSpacing: 0, tabWidth: 2,

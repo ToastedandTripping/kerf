@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { Application, Container, Graphics, Text, TextStyle, Sprite, Texture } from "pixi.js";
 import { useStore } from "../../app/store";
 import type { DesignObject } from "../../app/types";
@@ -7,6 +7,7 @@ import { handleViewportPointerDown, handleViewportPointerMove, handleViewportPoi
 const PX_PER_MM = 3.78; // ~96dpi -> mm conversion for screen display
 
 export function Viewport() {
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const appRef = useRef<Application | null>(null);
   const worldRef = useRef<Container | null>(null);
@@ -211,7 +212,8 @@ export function Viewport() {
     const g = selectionOverlayRef.current;
     g.clear();
 
-    // Per-object selection outlines
+    // Per-object selection outlines (color-coded by layer)
+    const layers = useStore.getState().layers;
     for (const id of selectedIds) {
       const obj = objects.find((o) => o.id === id);
       if (!obj) continue;
@@ -222,7 +224,9 @@ export function Viewport() {
       const ph = t.height * PX_PER_MM;
       const rot = (t.rotation || 0) * Math.PI / 180;
 
-      g.setStrokeStyle({ width: 1 / camera.zoom, color: 0x4a90e2, alpha: 0.8 });
+      const layerColor = layers[obj.layerIndex]?.color || "#4a90e2";
+      const selColor = parseInt(layerColor.replace("#", ""), 16);
+      g.setStrokeStyle({ width: 1 / camera.zoom, color: selColor, alpha: 0.8 });
       if (rot !== 0) {
         // Draw rotated bounding box
         const cx = px + pw / 2;
@@ -508,9 +512,30 @@ export function Viewport() {
           const worldY = (e.clientY - rect.top - camera.y) / camera.zoom / PX_PER_MM;
           handleViewportDoubleClick(worldX, worldY);
         }}
-        onContextMenu={(e) => e.preventDefault()}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          const store = useStore.getState();
+          if (store.selectedIds.length > 0) {
+            setContextMenu({ x: e.clientX, y: e.clientY });
+          }
+        }}
       />
       {marqueeStyle && <div style={marqueeStyle} />}
+      {/* Right-click context menu */}
+      {contextMenu && (
+        <>
+          <div
+            style={{ position: "fixed", inset: 0, zIndex: 100 }}
+            onClick={() => setContextMenu(null)}
+            onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }}
+          />
+          <ContextMenuContent
+            x={contextMenu.x}
+            y={contextMenu.y}
+            onClose={() => setContextMenu(null)}
+          />
+        </>
+      )}
       {/* Smart alignment guides */}
       {guides.map((g, i) =>
         g.type === "v" ? (
@@ -712,6 +737,78 @@ function renderImageObject(obj: DesignObject): Container | null {
     g.moveTo(px + pw, py).lineTo(px, py + ph).stroke();
     return g;
   }
+}
+
+function ContextMenuContent({ x, y, onClose }: { x: number; y: number; onClose: () => void }) {
+  const layers = useStore((s) => s.layers);
+  const selectedIds = useStore((s) => s.selectedIds);
+
+  function moveToLayer(layerIndex: number) {
+    const store = useStore.getState();
+    store.withUndo("move-to-layer", () => {
+      for (const id of selectedIds) {
+        store.updateObject(id, { layerIndex });
+        const layerColor = layers[layerIndex]?.color || "#4a90e2";
+        store.updateObject(id, { stroke: layerColor });
+      }
+    });
+    store.addConsoleLine(
+      `Moved ${selectedIds.length} object${selectedIds.length !== 1 ? "s" : ""} to ${layers[layerIndex]?.name}`,
+      "info",
+    );
+    onClose();
+  }
+
+  const itemStyle: React.CSSProperties = {
+    display: "flex", alignItems: "center", gap: "8px",
+    padding: "6px 12px", fontSize: "12px", color: "var(--text-primary)",
+    cursor: "pointer", border: "none", background: "none", width: "100%",
+    textAlign: "left",
+  };
+
+  return (
+    <div style={{
+      position: "fixed", left: x, top: y, zIndex: 101,
+      background: "var(--bg-panel)", border: "1px solid var(--border)",
+      borderRadius: "var(--radius-sm)", boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+      minWidth: "160px", padding: "4px 0",
+    }}>
+      <div style={{
+        padding: "4px 12px 6px", fontSize: "10px", color: "var(--text-muted)",
+        textTransform: "uppercase", letterSpacing: "0.5px",
+      }}>
+        Move to Layer
+      </div>
+      {layers.map((l) => (
+        <button
+          key={l.index}
+          style={itemStyle}
+          onClick={() => moveToLayer(l.index)}
+          onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--bg-hover)"; }}
+          onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "none"; }}
+        >
+          <div style={{
+            width: "10px", height: "10px", borderRadius: "2px",
+            background: l.color, flexShrink: 0,
+          }} />
+          <span>{l.name}</span>
+        </button>
+      ))}
+      <div style={{ height: "1px", background: "var(--border)", margin: "4px 0" }} />
+      <button
+        style={itemStyle}
+        onClick={() => {
+          const store = useStore.getState();
+          store.withUndo("delete", () => store.removeObjects(selectedIds));
+          onClose();
+        }}
+        onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--bg-hover)"; }}
+        onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "none"; }}
+      >
+        <span style={{ color: "#e24a4a" }}>Delete</span>
+      </button>
+    </div>
+  );
 }
 
 export { PX_PER_MM };

@@ -163,6 +163,21 @@ function LayerRow({
           {layer.power}% {layer.speed}mm/s
         </span>
 
+        {/* Output toggle */}
+        <IconButton
+          onClick={() => onUpdate({ output: !layer.output })}
+          title={layer.output ? "Disable output (won't cut)" : "Enable output"}
+          active={layer.output}
+        >
+          <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2">
+            {layer.output ? (
+              <path d="M7 2v8M3 6l4 4 4-4" />
+            ) : (
+              <><path d="M7 2v8M3 6l4 4 4-4" opacity="0.3" /><line x1="2" y1="2" x2="12" y2="12" /></>
+            )}
+          </svg>
+        </IconButton>
+
         {/* Visibility */}
         <IconButton
           onClick={() => onUpdate({ visible: !layer.visible })}

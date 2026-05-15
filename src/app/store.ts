@@ -386,7 +386,7 @@ export const useStore = create<AppState>((set, get) => ({
   loadProject: (project) =>
     set({
       objects: project.objects,
-      layers: project.layers,
+      layers: project.layers.map(l => ({ ...l, output: l.output ?? true })),
       camera: project.camera,
       workspaceWidth: project.workspaceWidth,
       workspaceHeight: project.workspaceHeight,

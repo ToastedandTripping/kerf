@@ -143,13 +143,14 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
 
   for (const obj of flat) {
     if (!obj.visible || obj.locked) continue;
+    const layer = layers.find((l) => l.index === obj.layerIndex) || layers[0];
+    if (layer.output === false) continue;
     if (obj.type === "text") {
       warnings.push(`Text object "${obj.name}" skipped -- use Ctrl+Shift+C to convert to path`);
       continue;
     }
     if (obj.type === "image") continue;
 
-    const layer = layers.find((l) => l.index === obj.layerIndex) || layers[0];
     const paths: CutObject["paths"] = [];
 
     if (obj.points && obj.points.length >= 2) {

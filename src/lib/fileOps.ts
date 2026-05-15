@@ -89,7 +89,8 @@ export const fileOperations = {
       const ext = pathStr.split(".").pop()?.toLowerCase() || "";
       if (ext === "svg") {
         const content = await fsModule.readTextFile(pathStr);
-        importSvgContent(content);
+        const { dialogState } = await import("../app/App");
+        dialogState.openSvgImport(content);
       } else if (ext === "dxf") {
         const content = await fsModule.readTextFile(pathStr);
         importDxfContent(content);
@@ -140,7 +141,9 @@ export const fileOperations = {
       if (!path) return;
       const pathStr = typeof path === "string" ? path : (path as any).path ?? String(path);
       const content = await fsModule.readTextFile(pathStr);
-      importSvgContent(content);
+      // Route through the SVG import dialog for layer mapping
+      const { dialogState } = await import("../app/App");
+      dialogState.openSvgImport(content);
     }
   },
 
@@ -245,6 +248,10 @@ function migrateFlipTransforms(objects: DesignObject[]) {
 }
 
 // ===================== DXF IMPORT =====================
+
+export function importDxfDirect(content: string) {
+  parseDxfManual(content);
+}
 
 function importDxfContent(content: string) {
   parseDxfManual(content);
@@ -535,7 +542,7 @@ function parseTransform(attr: string): Matrix {
 
 // ===================== SVG IMPORT =====================
 
-function importSvgContent(svgText: string) {
+export function importSvgContent(svgText: string) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(svgText, "image/svg+xml");
   const svg = doc.querySelector("svg");

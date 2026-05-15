@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { MenuBar } from "../components/topbar/MenuBar";
 import { Toolbar } from "../components/toolbar/Toolbar";
 import { Viewport } from "../components/viewport/Viewport";
@@ -17,16 +17,27 @@ import { ProjectNotesDialog } from "../components/panels/ProjectNotesDialog";
 import { QrCodeDialog } from "../components/panels/QrCodeDialog";
 import { ImageTraceDialog } from "../components/panels/ImageTraceDialog";
 import { MaterialTestDialog } from "../components/panels/MaterialTestDialog";
+import { SvgImportDialog } from "../components/panels/SvgImportDialog";
 import { useKeyboardShortcuts } from "../lib/shortcuts";
+import { handleFileDrop } from "../lib/fileDrop";
 
 // Expose dialog openers globally so menus/commands can trigger them
-export const dialogState = {
+export const dialogState: {
+  openGrblSettings: () => void;
+  openSettings: () => void;
+  openProjectNotes: () => void;
+  openQrCode: () => void;
+  openImageTrace: () => void;
+  openMaterialTest: () => void;
+  openSvgImport: (svgContent: string) => void;
+} = {
   openGrblSettings: () => {},
   openSettings: () => {},
   openProjectNotes: () => {},
   openQrCode: () => {},
   openImageTrace: () => {},
   openMaterialTest: () => {},
+  openSvgImport: () => {},
 };
 
 export default function App() {
@@ -38,6 +49,9 @@ export default function App() {
   const [qrOpen, setQrOpen] = useState(false);
   const [traceOpen, setTraceOpen] = useState(false);
   const [materialTestOpen, setMaterialTestOpen] = useState(false);
+  const [svgImportOpen, setSvgImportOpen] = useState(false);
+  const [pendingSvgContent, setPendingSvgContent] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
 
   // Wire up global dialog openers
   dialogState.openGrblSettings = () => setGrblOpen(true);
@@ -46,17 +60,63 @@ export default function App() {
   dialogState.openQrCode = () => setQrOpen(true);
   dialogState.openImageTrace = () => setTraceOpen(true);
   dialogState.openMaterialTest = () => setMaterialTestOpen(true);
+  dialogState.openSvgImport = (svgContent: string) => {
+    setPendingSvgContent(svgContent);
+    setSvgImportOpen(true);
+  };
+
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(true);
+  }, []);
+
+  const onDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.currentTarget === e.target || !e.currentTarget.contains(e.relatedTarget as Node)) {
+      setDragOver(false);
+    }
+  }, []);
+
+  const onDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+    handleFileDrop(e.dataTransfer.files);
+  }, []);
 
   return (
     <div
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
       style={{
         display: "flex",
         flexDirection: "column",
         height: "100vh",
         width: "100vw",
         background: "var(--bg-app)",
+        position: "relative",
       }}
     >
+      {dragOver && (
+        <div style={{
+          position: "absolute", inset: 0, zIndex: 99999,
+          background: "rgba(74, 144, 226, 0.08)",
+          border: "2px dashed rgba(74, 144, 226, 0.5)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          pointerEvents: "none",
+        }}>
+          <div style={{
+            padding: "16px 32px", borderRadius: "8px",
+            background: "rgba(0, 0, 0, 0.7)", color: "#fff",
+            fontSize: "14px", fontWeight: 500,
+          }}>
+            Drop to import
+          </div>
+        </div>
+      )}
       <MenuBar />
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
         <Toolbar />
@@ -92,6 +152,11 @@ export default function App() {
       <QrCodeDialog open={qrOpen} onClose={() => setQrOpen(false)} />
       <ImageTraceDialog open={traceOpen} onClose={() => setTraceOpen(false)} />
       <MaterialTestDialog open={materialTestOpen} onClose={() => setMaterialTestOpen(false)} />
+      <SvgImportDialog
+        open={svgImportOpen}
+        svgContent={pendingSvgContent}
+        onClose={() => { setSvgImportOpen(false); setPendingSvgContent(null); }}
+      />
     </div>
   );
 }
