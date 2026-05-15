@@ -73,13 +73,33 @@ export function StatusBar() {
           Console
         </button>
       </div>
-      <div style={{ display: "flex", gap: "16px", alignItems: "center" }}>
-        <span>Zoom: {Math.round(camera.zoom * 100)}%</span>
+      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+        <ZoomButton label="Fit" onClick={() => useStore.getState().zoomToFitAll()} />
+        <ZoomButton label="100%" onClick={() => useStore.getState().setCamera({ zoom: 1 })} />
+        <span style={{ minWidth: "44px", textAlign: "right" }}>{Math.round(camera.zoom * 100)}%</span>
+        <span style={{ color: "var(--border)" }}>|</span>
         <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px" }}>
           X: {cursorPosition.x.toFixed(1)} &nbsp; Y: {cursorPosition.y.toFixed(1)} mm
         </span>
+        <span style={{ color: "var(--border)" }}>|</span>
+        <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>? shortcuts</span>
       </div>
     </div>
+  );
+}
+
+function ZoomButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        background: "none", border: "1px solid var(--border)",
+        borderRadius: "3px", color: "var(--text-muted)", fontSize: "9px",
+        fontWeight: 600, padding: "1px 6px", cursor: "pointer",
+      }}
+    >
+      {label}
+    </button>
   );
 }
 

@@ -18,6 +18,7 @@ import { QrCodeDialog } from "../components/panels/QrCodeDialog";
 import { ImageTraceDialog } from "../components/panels/ImageTraceDialog";
 import { MaterialTestDialog } from "../components/panels/MaterialTestDialog";
 import { SvgImportDialog } from "../components/panels/SvgImportDialog";
+import { ShortcutOverlay } from "../components/panels/ShortcutOverlay";
 import { useKeyboardShortcuts } from "../lib/shortcuts";
 import { handleFileDrop } from "../lib/fileDrop";
 
@@ -157,6 +158,7 @@ export default function App() {
         svgContent={pendingSvgContent}
         onClose={() => { setSvgImportOpen(false); setPendingSvgContent(null); }}
       />
+      <ShortcutOverlay />
     </div>
   );
 }
