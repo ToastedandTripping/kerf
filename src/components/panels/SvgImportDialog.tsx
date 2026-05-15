@@ -298,6 +298,14 @@ export function SvgImportDialog({ open, svgContent, onClose }: Props) {
 }
 
 // SVG import with layer assignment based on color mapping
+function getViewBoxOffset(svg: SVGSVGElement): { x: number; y: number } {
+  const vb = svg.getAttribute("viewBox");
+  if (!vb) return { x: 0, y: 0 };
+  const parts = vb.split(/[\s,]+/).map(Number);
+  if (parts.length < 4) return { x: 0, y: 0 };
+  return { x: parts[0] || 0, y: parts[1] || 0 };
+}
+
 function importSvgWithLayers(svgText: string, colorToLayer: Map<string, number> | null) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(svgText, "image/svg+xml");
@@ -309,7 +317,12 @@ function importSvgWithLayers(svgText: string, colorToLayer: Map<string, number> 
   const globalScale = computeGlobalScale(svg);
   const styleMap = parseEmbeddedStyles(svg);
 
-  walkElementWithLayers(svg, identityMatrix, globalScale, styleMap, store.activeLayerIndex, colorToLayer, newObjects);
+  const vbOffset = getViewBoxOffset(svg);
+  const initialMatrix: Matrix = vbOffset.x !== 0 || vbOffset.y !== 0
+    ? [1, 0, 0, 1, -vbOffset.x, -vbOffset.y]
+    : identityMatrix;
+
+  walkElementWithLayers(svg, initialMatrix, globalScale, styleMap, store.activeLayerIndex, colorToLayer, newObjects);
 
   if (newObjects.length > 0) {
     store.withUndo("svg-import", () => {

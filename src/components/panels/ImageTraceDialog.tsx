@@ -165,22 +165,40 @@ export function ImageTraceDialog({ open, onClose }: Props) {
         const rawPoints = parsePathD(d);
         if (rawPoints.length < 2) continue;
 
-        // Scale from SVG pixel space to mm space
+        // vtracer outputs translate(x,y) on each path element
+        let offsetX = 0;
+        let offsetY = 0;
+        const transformAttr = pathEl.getAttribute("transform");
+        if (transformAttr) {
+          const translateMatch = transformAttr.match(/translate\(\s*([^,\s]+)\s*[,\s]\s*([^)]+)\)/);
+          if (translateMatch) {
+            offsetX = parseFloat(translateMatch[1]) || 0;
+            offsetY = parseFloat(translateMatch[2]) || 0;
+          }
+        }
+
+        // Scale from SVG pixel space (with translate offset) to mm space
         const scaledPoints: PathPoint[] = rawPoints.map((p) => {
+          const px = p.x + offsetX;
+          const py = p.y + offsetY;
           const scaled: PathPoint = {
-            x: imgT.x + (p.x / result.widthPx) * imgT.width,
-            y: imgT.y + (p.y / result.heightPx) * imgT.height,
+            x: imgT.x + (px / result.widthPx) * imgT.width,
+            y: imgT.y + (py / result.heightPx) * imgT.height,
           };
           if (p.handleIn) {
+            const hx = p.handleIn.x + offsetX;
+            const hy = p.handleIn.y + offsetY;
             scaled.handleIn = {
-              x: imgT.x + (p.handleIn.x / result.widthPx) * imgT.width,
-              y: imgT.y + (p.handleIn.y / result.heightPx) * imgT.height,
+              x: imgT.x + (hx / result.widthPx) * imgT.width,
+              y: imgT.y + (hy / result.heightPx) * imgT.height,
             };
           }
           if (p.handleOut) {
+            const hx = p.handleOut.x + offsetX;
+            const hy = p.handleOut.y + offsetY;
             scaled.handleOut = {
-              x: imgT.x + (p.handleOut.x / result.widthPx) * imgT.width,
-              y: imgT.y + (p.handleOut.y / result.heightPx) * imgT.height,
+              x: imgT.x + (hx / result.widthPx) * imgT.width,
+              y: imgT.y + (hy / result.heightPx) * imgT.height,
             };
           }
           return scaled;

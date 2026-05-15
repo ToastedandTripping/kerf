@@ -553,19 +553,33 @@ export function importSvgContent(svgText: string) {
   const store = useStore.getState();
   const newObjects: DesignObject[] = [];
 
-  // Determine coordinate scaling from viewBox + width/height
+  // Determine coordinate scaling and viewBox offset
   const globalScale = computeGlobalScale(svg);
+  const vbOffset = getViewBoxOffset(svg);
+
+  // Apply viewBox offset as initial transform
+  const initialMatrix: Matrix = vbOffset.x !== 0 || vbOffset.y !== 0
+    ? [1, 0, 0, 1, -vbOffset.x, -vbOffset.y]
+    : identityMatrix;
 
   // Collect CSS styles from <style> elements
   const styleMap = parseEmbeddedStyles(svg);
 
   // Recursively walk the SVG tree, accumulating transforms
-  walkElement(svg, identityMatrix, globalScale, styleMap, store.activeLayerIndex, newObjects);
+  walkElement(svg, initialMatrix, globalScale, styleMap, store.activeLayerIndex, newObjects);
 
   newObjects.forEach(store.addObject);
   if (newObjects.length > 0) {
     store.setSelectedIds(newObjects.map((o) => o.id));
   }
+}
+
+function getViewBoxOffset(svg: SVGSVGElement): { x: number; y: number } {
+  const vb = svg.getAttribute("viewBox");
+  if (!vb) return { x: 0, y: 0 };
+  const parts = vb.split(/[\s,]+/).map(Number);
+  if (parts.length < 4) return { x: 0, y: 0 };
+  return { x: parts[0] || 0, y: parts[1] || 0 };
 }
 
 function computeGlobalScale(svg: SVGSVGElement): number {
