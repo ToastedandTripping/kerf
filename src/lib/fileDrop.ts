@@ -1,6 +1,4 @@
-import { useStore, generateId } from "../app/store";
-import { dialogState } from "../app/App";
-import type { DesignObject } from "../app/types";
+import { useStore } from "../app/store";
 
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "bmp", "gif", "webp"]);
 
@@ -29,34 +27,9 @@ function importDroppedImage(file: File) {
     const base64 = reader.result as string;
     const img = new Image();
     img.onload = () => {
-      const store = useStore.getState();
-      const widthMm = (img.width / 96) * 25.4;
-      const heightMm = (img.height / 96) * 25.4;
-
-      const obj: DesignObject = {
-        id: generateId(),
-        type: "image",
-        name: file.name,
-        transform: {
-          x: 10, y: 10,
-          width: widthMm, height: heightMm,
-          rotation: 0, scaleX: 1, scaleY: 1,
-        },
-        layerIndex: store.activeLayerIndex,
-        visible: true, locked: false,
-        fill: null, stroke: "#999999", strokeWidth: 0, opacity: 1,
-        imageData: base64,
-      };
-
-      store.addObject(obj);
-      store.setSelectedIds([obj.id]);
-      store.addConsoleLine(
-        `Dropped image: ${file.name} (${img.width}x${img.height}px, ${widthMm.toFixed(0)}x${heightMm.toFixed(0)}mm)`,
-        "info"
-      );
-
-      // Auto-open trace dialog for the dropped image
-      setTimeout(() => dialogState.openImageTrace(), 100);
+      import("../app/App").then(({ dialogState }) => {
+        dialogState.openImageImport(base64, file.name, img.width, img.height);
+      });
     };
     img.src = base64;
   };
@@ -67,7 +40,9 @@ function importDroppedSvg(file: File) {
   const reader = new FileReader();
   reader.onload = () => {
     const svgContent = reader.result as string;
-    dialogState.openSvgImport(svgContent);
+    import("../app/App").then(({ dialogState }) => {
+      dialogState.openSvgImport(svgContent);
+    });
   };
   reader.readAsText(file);
 }
@@ -76,7 +51,6 @@ function importDroppedDxf(file: File) {
   const reader = new FileReader();
   reader.onload = () => {
     const content = reader.result as string;
-    // Use the existing DXF import from fileOps (re-exported for drop)
     import("./fileOps").then(({ importDxfDirect }) => {
       importDxfDirect(content);
     });

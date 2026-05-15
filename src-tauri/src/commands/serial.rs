@@ -6,6 +6,7 @@ use std::time::Duration;
 use tauri::State;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PortInfo {
     pub name: String,
     pub port_type: String,

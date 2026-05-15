@@ -209,8 +209,11 @@ export function SvgImportDialog({ open, svgContent, onClose }: Props) {
           {/* Color-to-layer mapping */}
           {colorGroups.length > 0 && (
             <div style={{ marginBottom: "12px" }}>
-              <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "8px" }}>
+              <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>
                 Assign colors to layers ({colorGroups.length} color{colorGroups.length !== 1 ? "s" : ""} found)
+              </div>
+              <div style={{ fontSize: "10px", color: "var(--text-muted)", marginBottom: "8px" }}>
+                Each color group maps to a layer. Elements with the same color will share cut/engrave settings.
               </div>
               <div style={{ maxHeight: "200px", overflowY: "auto" }}>
                 {colorGroups.map((group, idx) => (
@@ -253,6 +256,18 @@ export function SvgImportDialog({ open, svgContent, onClose }: Props) {
               </div>
             </div>
           )}
+        </div>
+
+        {/* Hint */}
+        <div style={{
+          padding: "0 20px 0",
+        }}>
+          <div style={{
+            fontSize: "10px", color: "var(--text-muted)",
+            padding: "8px", background: "rgba(74,144,226,0.06)", borderRadius: "var(--radius-sm)",
+          }}>
+            After import, right-click any element to move it to a different layer. Each path, shape, or line can have its own layer for separate cut/engrave settings.
+          </div>
         </div>
 
         {/* Buttons */}
@@ -311,8 +326,11 @@ function computeGlobalScale(svg: SVGSVGElement): number {
   const vb = svg.getAttribute("viewBox");
   const wAttr = svg.getAttribute("width");
   if (!vb) {
-    if (wAttr) return parseSvgLengthToMm(wAttr) > 0 ? 1 : 1;
-    return 1;
+    if (wAttr) {
+      const widthMm = parseSvgLengthToMm(wAttr);
+      if (widthMm > 0) return 1;
+    }
+    return 0.2646;
   }
   const parts = vb.split(/[\s,]+/).map(Number);
   if (parts.length < 4 || parts[2] === 0) return 1;

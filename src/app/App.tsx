@@ -18,6 +18,7 @@ import { QrCodeDialog } from "../components/panels/QrCodeDialog";
 import { ImageTraceDialog } from "../components/panels/ImageTraceDialog";
 import { MaterialTestDialog } from "../components/panels/MaterialTestDialog";
 import { SvgImportDialog } from "../components/panels/SvgImportDialog";
+import { ImageImportDialog } from "../components/panels/ImageImportDialog";
 import { ShortcutOverlay } from "../components/panels/ShortcutOverlay";
 import { useKeyboardShortcuts } from "../lib/shortcuts";
 import { handleFileDrop } from "../lib/fileDrop";
@@ -31,6 +32,7 @@ export const dialogState: {
   openImageTrace: () => void;
   openMaterialTest: () => void;
   openSvgImport: (svgContent: string) => void;
+  openImageImport: (data: string, name: string, width: number, height: number) => void;
 } = {
   openGrblSettings: () => {},
   openSettings: () => {},
@@ -39,6 +41,7 @@ export const dialogState: {
   openImageTrace: () => {},
   openMaterialTest: () => {},
   openSvgImport: () => {},
+  openImageImport: () => {},
 };
 
 export default function App() {
@@ -52,6 +55,8 @@ export default function App() {
   const [materialTestOpen, setMaterialTestOpen] = useState(false);
   const [svgImportOpen, setSvgImportOpen] = useState(false);
   const [pendingSvgContent, setPendingSvgContent] = useState<string | null>(null);
+  const [imageImportOpen, setImageImportOpen] = useState(false);
+  const [pendingImage, setPendingImage] = useState<{ data: string; name: string; width: number; height: number } | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
   // Wire up global dialog openers
@@ -64,6 +69,10 @@ export default function App() {
   dialogState.openSvgImport = (svgContent: string) => {
     setPendingSvgContent(svgContent);
     setSvgImportOpen(true);
+  };
+  dialogState.openImageImport = (data: string, name: string, width: number, height: number) => {
+    setPendingImage({ data, name, width, height });
+    setImageImportOpen(true);
   };
 
   const onDragOver = useCallback((e: React.DragEvent) => {
@@ -157,6 +166,19 @@ export default function App() {
         open={svgImportOpen}
         svgContent={pendingSvgContent}
         onClose={() => { setSvgImportOpen(false); setPendingSvgContent(null); }}
+      />
+      <ImageImportDialog
+        open={imageImportOpen}
+        imageData={pendingImage?.data ?? null}
+        fileName={pendingImage?.name ?? ""}
+        imageWidth={pendingImage?.width ?? 0}
+        imageHeight={pendingImage?.height ?? 0}
+        onClose={() => { setImageImportOpen(false); setPendingImage(null); }}
+        onImported={() => {
+          if (pendingImage) {
+            setTimeout(() => dialogState.openImageTrace(), 100);
+          }
+        }}
       />
       <ShortcutOverlay />
     </div>

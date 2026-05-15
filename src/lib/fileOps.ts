@@ -398,8 +398,10 @@ function parseDxfManual(content: string) {
   }
 
   if (newObjects.length > 0) {
-    newObjects.forEach(store.addObject);
-    store.setSelectedIds(newObjects.map((o) => o.id));
+    store.withUndo("dxf-import", () => {
+      newObjects.forEach(store.addObject);
+      store.setSelectedIds(newObjects.map((o) => o.id));
+    });
     store.addConsoleLine(`DXF imported: ${newObjects.length} objects`, "info");
   } else {
     store.addConsoleLine("DXF import: no supported entities found", "error");
