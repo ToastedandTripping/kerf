@@ -9,6 +9,10 @@ use tauri::State;
 pub struct PortInfo {
     pub name: String,
     pub port_type: String,
+    pub vid: Option<u16>,
+    pub pid: Option<u16>,
+    pub manufacturer: Option<String>,
+    pub product: Option<String>,
 }
 
 pub struct SerialState {
@@ -33,17 +37,25 @@ pub fn list_serial_ports() -> Result<Vec<PortInfo>, String> {
 
     Ok(ports
         .iter()
-        .map(|p| PortInfo {
-            name: p.port_name.clone(),
-            port_type: match &p.port_type {
-                serialport::SerialPortType::UsbPort(info) => {
-                    format!("USB: {} {}",
-                        info.manufacturer.as_deref().unwrap_or("Unknown"),
-                        info.product.as_deref().unwrap_or(""))
-                }
-                serialport::SerialPortType::PciPort => "PCI".to_string(),
-                serialport::SerialPortType::BluetoothPort => "Bluetooth".to_string(),
-                serialport::SerialPortType::Unknown => "Unknown".to_string(),
+        .map(|p| match &p.port_type {
+            serialport::SerialPortType::UsbPort(info) => PortInfo {
+                name: p.port_name.clone(),
+                port_type: format!("USB: {} {}",
+                    info.manufacturer.as_deref().unwrap_or("Unknown"),
+                    info.product.as_deref().unwrap_or("")),
+                vid: Some(info.vid),
+                pid: Some(info.pid),
+                manufacturer: info.manufacturer.clone(),
+                product: info.product.clone(),
+            },
+            other => PortInfo {
+                name: p.port_name.clone(),
+                port_type: match other {
+                    serialport::SerialPortType::PciPort => "PCI".to_string(),
+                    serialport::SerialPortType::BluetoothPort => "Bluetooth".to_string(),
+                    _ => "Unknown".to_string(),
+                },
+                vid: None, pid: None, manufacturer: None, product: None,
             },
         })
         .collect())

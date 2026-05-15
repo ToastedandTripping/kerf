@@ -1,11 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../app/store";
+import { sortPortsByPriority } from "./knownDevices";
 
 interface PortInfo {
   name: string;
   portType: string;
+  vid: number | null;
+  pid: number | null;
+  manufacturer: string | null;
+  product: string | null;
 }
 
+const LAST_PORT_KEY = "kerf-last-port";
+const LAST_BAUD_KEY = "kerf-last-baud";
 let statusPollInterval: ReturnType<typeof setInterval> | null = null;
 let jobPollingSuspended = false;
 let unsubscribeJobRunning: (() => void) | null = null;
@@ -13,10 +20,34 @@ let unsubscribeJobRunning: (() => void) | null = null;
 export const machineConnection = {
   async listPorts(): Promise<PortInfo[]> {
     try {
-      return await invoke<PortInfo[]>("list_serial_ports");
+      const ports = await invoke<PortInfo[]>("list_serial_ports");
+      return sortPortsByPriority(ports);
     } catch (e) {
       console.error("Failed to list ports:", e);
       return [];
+    }
+  },
+
+  getLastPort(): { name: string; baudRate: number } | null {
+    try {
+      const name = localStorage.getItem(LAST_PORT_KEY);
+      const baud = localStorage.getItem(LAST_BAUD_KEY);
+      if (name) return { name, baudRate: baud ? parseInt(baud) : 115200 };
+    } catch {}
+    return null;
+  },
+
+  async autoConnect(): Promise<boolean> {
+    const last = this.getLastPort();
+    if (!last) return false;
+    const ports = await this.listPorts();
+    const exists = ports.find(p => p.name === last.name);
+    if (!exists) return false;
+    try {
+      await this.connect(last.name, last.baudRate);
+      return true;
+    } catch {
+      return false;
     }
   },
 
@@ -30,6 +61,11 @@ export const machineConnection = {
       store.setMachineConnected(true);
       store.setMachineState("idle");
       store.addConsoleLine(response, "received");
+
+      try {
+        localStorage.setItem(LAST_PORT_KEY, portName);
+        localStorage.setItem(LAST_BAUD_KEY, String(baudRate));
+      } catch {}
 
       // Start status polling
       statusPollInterval = setInterval(() => this.pollStatus(), 250);

@@ -58,20 +58,29 @@ export function MachinePanel() {
   const setActiveTool = useStore((s) => s.setActiveTool);
 
   const [selectedPort, setSelectedPort] = useState("");
-  const [ports, setPorts] = useState<Array<{ name: string; portType: string }>>([]);
+  const [ports, setPorts] = useState<Array<{ name: string; portType: string; vid: number | null; pid: number | null }>>([]);
   const [jogStep, setJogStep] = useState(10);
   const [expanded, setExpanded] = useState(true);
   const [generating, setGenerating] = useState(false);
 
-  // Scan for serial ports
   const refreshPorts = useCallback(async () => {
     const found = await machineConnection.listPorts();
     setPorts(found);
-  }, []);
+    if (!selectedPort && found.length > 0) {
+      const last = machineConnection.getLastPort();
+      const match = found.find(p => p.name === last?.name);
+      setSelectedPort(match ? match.name : found[0].name);
+    }
+  }, [selectedPort]);
 
   useEffect(() => {
     refreshPorts();
-  }, [refreshPorts]);
+    if (!machineConnected) {
+      machineConnection.autoConnect().then(ok => {
+        if (ok) refreshPorts();
+      });
+    }
+  }, []);
 
   async function handleConnect() {
     if (machineConnected) {
@@ -470,13 +479,24 @@ export function MachinePanel() {
 
           {/* Job progress bar */}
           {jobRunning && (
-            <div style={{ background: "var(--bg-input)", borderRadius: "var(--radius-sm)", height: "4px", overflow: "hidden" }}>
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10px", color: "var(--text-muted)", marginBottom: "2px" }}>
+                <span>{Math.round(jobProgress * 100)}%</span>
+                {gcodeResult && jobProgress > 0 && (
+                  <span>~{formatTime(gcodeResult.estimatedTimeSecs * (1 - jobProgress))} remaining</span>
+                )}
+              </div>
               <div style={{
-                height: "100%",
-                width: `${jobProgress * 100}%`,
-                background: "var(--accent)",
-                transition: "width 0.3s",
-              }} />
+                background: "var(--bg-input)", borderRadius: "var(--radius-sm)",
+                height: "4px", overflow: "hidden",
+              }}>
+                <div style={{
+                  height: "100%",
+                  width: `${jobProgress * 100}%`,
+                  background: machineState === "hold" ? "var(--accent-warm)" : "var(--accent)",
+                  transition: "width 0.3s",
+                }} />
+              </div>
             </div>
           )}
 
