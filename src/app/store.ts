@@ -399,7 +399,7 @@ export const useStore = create<AppState>((set, get) => ({
   toProject: () => {
     const state = get();
     return {
-      version: "0.1.0",
+      version: "0.3.1",
       name: state.projectName,
       objects: state.objects,
       layers: state.layers,
