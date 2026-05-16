@@ -21,3 +21,4 @@ Thumbs.db
 
 # Tauri
 src-tauri/target/
+.playwright-mcp/

@@ -1,10 +1,14 @@
 ---
 status: active
-current: Phase 1 — Import & Trace
-next: Phase 2 — Layer Workflow
-testing: null
+current: Phase 4 — UX & Polish (remaining items)
+next: Phase 5 — Advanced
+testing: v0.3.1 -- trace preprocessing, import dialogs
 pinned: true
 shipped:
+  - date: 2026-05-15
+    item: Phase 1-3 — Drag-drop import, SVG layer mapping, image import dialog, trace preprocessing pipeline, connection auto-detect, job progress
+  - date: 2026-05-15
+    item: Phase 4 (partial) — Keyboard shortcut overlay, zoom presets, security hardening
   - date: 2026-05-14
     item: CI/CD — GitHub Actions build pipeline, .dmg/.deb/.AppImage releases
   - date: 2026-02-22
