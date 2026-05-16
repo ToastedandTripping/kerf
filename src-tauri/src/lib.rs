@@ -10,8 +10,6 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .manage(SerialState::default())
         .invoke_handler(tauri::generate_handler![
-            commands::file_io::read_file,
-            commands::file_io::write_file,
             commands::gcode::generate_gcode,
             commands::gcode::generate_image_gcode,
             commands::serial::list_serial_ports,

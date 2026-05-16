@@ -835,11 +835,7 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       // Load font locally first (works offline in Tauri), fall back to CDN
       let font: opentype.Font;
-      try {
-        font = await opentype.load("/fonts/OpenSans-Regular.ttf");
-      } catch {
-        font = await opentype.load("https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/opensans/OpenSans%5Bwdth%2Cwght%5D.ttf");
-      }
+      font = await opentype.load("/fonts/OpenSans-Regular.ttf");
 
       const fontSize = obj.fontSize || 12;
       // Convert mm font size to font units (opentype uses unitsPerEm)

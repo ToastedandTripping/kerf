@@ -53,7 +53,7 @@ This takes a few minutes the first time (compiling from source).
 
 ```bash
 # Clone the repo
-git clone https://github.com/secretsaunacompany-ui/kerf.git
+git clone https://github.com/ToastedandTripping/kerf.git
 cd kerf
 
 # Install frontend dependencies
@@ -69,13 +69,11 @@ The app opens automatically at 1400x900. Hot reload works for frontend changes (
 
 ## GitHub Auth
 
-The repo is under the `secretsaunacompany-ui` org. If you need to authenticate:
-
 ```bash
 gh auth login
 ```
 
-Select GitHub.com, HTTPS, and authenticate with the SSC account. See memory file `reference_github_accounts.md` for account switching between personal (ToastedandTripping) and SSC.
+Select GitHub.com, HTTPS, and authenticate.
 
 ## Troubleshooting
 

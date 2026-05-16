@@ -12,6 +12,7 @@
     "fs:allow-write",
     "fs:allow-exists",
     "fs:allow-mkdir",
-    "fs:scope-home"
+    "fs:scope-desktop",
+    "fs:scope-document"
   ]
 }

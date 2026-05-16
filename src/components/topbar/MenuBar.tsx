@@ -1,3 +1,4 @@
+import { useState, useRef } from "react";
 import { useStore } from "../../app/store";
 import { fileOperations } from "../../lib/fileOps";
 import { dialogState } from "../../app/App";
@@ -231,11 +232,25 @@ interface MenuItem {
 }
 
 function MenuButton({ label, items }: { label: string; items: MenuItem[] }) {
+  const [open, setOpen] = useState(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function scheduleClose() {
+    closeTimer.current = setTimeout(() => setOpen(false), 100);
+  }
+  function cancelClose() {
+    if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null; }
+  }
+
   return (
-    <div style={{ position: "relative" }} className="menu-button-wrap">
+    <div
+      style={{ position: "relative" }}
+      onMouseEnter={cancelClose}
+      onMouseLeave={scheduleClose}
+    >
       <button
         style={{
-          background: "none",
+          background: open ? "var(--bg-hover)" : "none",
           border: "none",
           color: "var(--text-secondary)",
           padding: "4px 10px",
@@ -244,81 +259,70 @@ function MenuButton({ label, items }: { label: string; items: MenuItem[] }) {
           fontSize: "13px",
           WebkitAppRegion: "no-drag",
         } as React.CSSProperties}
-        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = "none";
-          const dropdown = e.currentTarget.nextElementSibling as HTMLElement;
-          if (dropdown) dropdown.style.display = "none";
-        }}
-        onClick={(e) => {
-          const dropdown = e.currentTarget.nextElementSibling as HTMLElement;
-          if (dropdown) {
-            dropdown.style.display = dropdown.style.display === "block" ? "none" : "block";
-          }
-        }}
+        onMouseEnter={(e) => { if (!open) e.currentTarget.style.background = "var(--bg-hover)"; }}
+        onMouseLeave={(e) => { if (!open) e.currentTarget.style.background = "none"; }}
+        onClick={() => setOpen(!open)}
       >
         {label}
       </button>
-      <div
-        style={{
-          display: "none",
-          position: "absolute",
-          top: "100%",
-          left: 0,
-          background: "var(--bg-panel)",
-          border: "1px solid var(--border)",
-          borderRadius: "var(--radius-md)",
-          boxShadow: "var(--shadow-panel)",
-          minWidth: "200px",
-          padding: "4px 0",
-          zIndex: 1000,
-        }}
-        onMouseEnter={(e) => (e.currentTarget.style.display = "block")}
-        onMouseLeave={(e) => (e.currentTarget.style.display = "none")}
-      >
-        {items.map((item, i) =>
-          item.type === "separator" ? (
-            <div
-              key={i}
-              style={{
-                height: "1px",
-                background: "var(--border)",
-                margin: "4px 0",
-              }}
-            />
-          ) : (
-            <button
-              key={i}
-              style={{
-                display: "flex",
-                width: "100%",
-                justifyContent: "space-between",
-                alignItems: "center",
-                background: "none",
-                border: "none",
-                color: "var(--text-primary)",
-                padding: "6px 12px",
-                cursor: "pointer",
-                fontSize: "13px",
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
-              onClick={(e) => {
-                item.action?.();
-                const dropdown = e.currentTarget.parentElement;
-                if (dropdown) (dropdown as HTMLElement).style.display = "none";
-              }}
-            >
-              <span>{item.label}</span>
-              {item.shortcut && (
-                <span style={{ color: "var(--text-muted)", fontSize: "11px", marginLeft: "24px" }}>
-                  {item.shortcut}
-                </span>
-              )}
-            </button>
-          )
-        )}
-      </div>
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            background: "var(--bg-panel)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-md)",
+            boxShadow: "var(--shadow-panel)",
+            minWidth: "200px",
+            padding: "4px 0",
+            zIndex: 1000,
+          }}
+        >
+          {items.map((item, i) =>
+            item.type === "separator" ? (
+              <div
+                key={i}
+                style={{
+                  height: "1px",
+                  background: "var(--border)",
+                  margin: "4px 0",
+                }}
+              />
+            ) : (
+              <button
+                key={i}
+                style={{
+                  display: "flex",
+                  width: "100%",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  background: "none",
+                  border: "none",
+                  color: "var(--text-primary)",
+                  padding: "6px 12px",
+                  cursor: "pointer",
+                  fontSize: "13px",
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+                onClick={() => {
+                  item.action?.();
+                  setOpen(false);
+                }}
+              >
+                <span>{item.label}</span>
+                {item.shortcut && (
+                  <span style={{ color: "var(--text-muted)", fontSize: "11px", marginLeft: "24px" }}>
+                    {item.shortcut}
+                  </span>
+                )}
+              </button>
+            )
+          )}
+        </div>
+      )}
     </div>
   );
 }

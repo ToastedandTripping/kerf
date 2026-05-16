@@ -229,4 +229,4 @@ These are deliberate exclusions, not oversights:
 - Repo: github.com/ToastedandTripping/kerf (public, master branch)
 - Stack: Tauri v2 / React 18 / Pixi.js 8 / Rust / Zustand
 - License: (to be determined — recommend MIT for maximum adoption)
-- Research: ~/marvin/research/open-source-laser-cadcam-landscape-20260514/
+- Research: landscape analysis conducted May 2026
