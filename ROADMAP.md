@@ -1,14 +1,14 @@
 ---
 status: active
-current: Phase 4 — UX & Polish (remaining items)
-next: Phase 5 — Advanced
+current: v0.4 — Production-Ready Core
+next: v0.5 — Advanced Engraving
 testing: v0.3.1 -- trace preprocessing, import dialogs
 pinned: true
 shipped:
   - date: 2026-05-15
     item: Phase 1-3 — Drag-drop import, SVG layer mapping, image import dialog, trace preprocessing pipeline, connection auto-detect, job progress
   - date: 2026-05-15
-    item: Phase 4 (partial) — Keyboard shortcut overlay, zoom presets, security hardening
+    item: Phase 4 (partial) — Keyboard shortcut overlay, zoom presets, security hardening, animated cut preview (play/pause/scrub/speed), object snap guides (edge/center alignment)
   - date: 2026-05-14
     item: CI/CD — GitHub Actions build pipeline, .dmg/.deb/.AppImage releases
   - date: 2026-02-22
@@ -42,6 +42,50 @@ Import (SVG/PNG/DXF) → Trace if raster → Assign to layers → Preview → Se
 milling, or anything that dilutes the core loop. The drawing tools
 that exist (rectangle, ellipse, pen, text) stay for quick additions
 -- they don't need to become Illustrator.
+
+## Gap Analysis vs LightBurn (May 2026)
+
+LightBurn ($99 Core / $199 Pro) is the commercial benchmark. Their moat
+is not any single feature but 14 years of integration polish. Kerf's
+moat is free, modern stack, cross-platform, focused.
+
+**Architecture-complete (data model ready, UI needs work):**
+Overcut, lead-in/out, overscan, bidirectional, cross-hatch, scanning
+offset, tabs, kerf offset, perforation, sub-layers, material library,
+dithering (6 algorithms + grayscale), image adjustments, node editing,
+Boolean ops, array tools.
+
+**Tier 1 gaps (workflow-blocking):**
+- Animated cut preview (can't verify order before burning material)
+- Object snapping (no snap to edges/centers of other objects)
+- Auto-read workspace from GRBL $130/$131
+- Recent files + auto-save recovery
+- Layer reorder (controls cut sequence = safety-critical)
+
+**Tier 2 gaps (productivity/quality):**
+- Offset Fill mode (concentric contour paths)
+- Scan angle + rotation between passes
+- Cut planner: multi-criteria ordering, flood fill, choose corner
+- Power Scale per shape (gradient depth in one layer)
+- Grayscale power curve (non-linear per-shade mapping)
+- PDF/AI import
+- Material library UX (export/share/merge, ship defaults)
+
+**Tier 3 gaps (advanced/pro — post-v0.5):**
+- Camera system (overlay + calibration + print-and-cut)
+- Variable text / serialization (CSV merge, serial numbers)
+- Rotary axis (chuck + roller, Y-axis substitution)
+- Multiple machine profiles
+- Text on path
+- Auto-nesting (bin-packing)
+- Network streaming
+
+**Quality/polish gap:**
+- Feedback density (state communication throughout UI)
+- Error recovery (guided resolution from GRBL alarms, USB disconnect)
+- Documentation (zero user-facing docs currently)
+- Onboarding (no first-launch guide)
+- Time estimation accuracy (doesn't account for acceleration curves)
 
 ## Competitive Position
 
@@ -156,43 +200,104 @@ Serial connection exists. Needs to be bulletproof.
 
 ---
 
-## Phase 4 — UX & Polish
+## v0.4 — Production-Ready Core
 
-*Make it feel like a real app, not a prototype.*
+*Thesis: close every Tier 1 gap so a user with GRBL can do real paid
+work without hitting a wall. Cherry-pick highest-leverage Tier 2 items.*
 
-### 4a. Canvas & Viewport
-- [ ] Smooth zoom to cursor (Pixi.js viewport)
-- [ ] Minimap for large workspaces
-- [ ] Workspace size matches machine bed (from GRBL settings)
-- [ ] Object snapping: to grid, to other objects, to workspace edges
+### 4.1 Animated Cut Preview
+The single most important gap. Users will not trust their material to
+software that can't show what's about to happen.
+- [ ] Playback animation of G-code moves (play/pause/speed control)
+- [ ] Time scrubber: drag to any point in the job
+- [ ] Color-code by type: cut = layer color, travel = gray dashed
+- [ ] Layer visibility toggles in preview
+- [ ] Estimated time display accounting for acceleration
 
-### 4b. Selection & Manipulation
-- [ ] Multi-select with bounding box
-- [ ] Align tools (left/center/right/top/middle/bottom, distribute)
-- [ ] Group/ungroup
-- [ ] Precise position/size input fields
+### 4.2 Object Snapping
+Precise layout without typing coordinates.
+- [ ] Snap to grid (exists — verify working)
+- [ ] Snap to edges/centers of other objects
+- [ ] Snap to workspace bounds
+- [ ] Visual snap indicators (guide lines appear on snap)
+- [ ] Hold modifier key to temporarily disable snap
 
-### 4c. Visual Design
-- [ ] Dark mode by default (already matches Lee's preference)
-- [ ] Clean, minimal chrome: content-first layout
-- [ ] Keyboard shortcut overlay (? key)
-- [ ] Onboarding: first-launch guide covering import → layer → send
+### 4.3 Workspace Auto-Configuration
+- [ ] On connect, read GRBL $130/$131 and set workspace size
+- [ ] Display machine limits as workspace boundary
+- [ ] Warn if design exceeds machine bed
 
-### 4d. File Operations
-- [ ] Recent files list
-- [ ] Auto-save recovery
-- [ ] Export G-code to file (for SD card workflow)
+### 4.4 File Persistence
+- [ ] Recent files list (last 10, displayed on launch/File menu)
+- [ ] Auto-save to recovery location every 60s
+- [ ] Crash recovery: detect recovery file on launch, offer restore
+
+### 4.5 Layer Reorder + Cut Sequence
+Safety-critical: controls what gets cut in what order.
+- [ ] Drag layers to reorder (changes G-code output sequence)
+- [ ] Visual cut order numbers on layer rows
+- [ ] "Move to Layer" context menu on canvas objects
+
+### 4.6 Scan Angle Control
+Minimal code, huge engraving flexibility.
+- [ ] `scanAngle` field per layer (0-360 degrees)
+- [ ] `angleIncrement` per layer (auto-rotate between passes)
+- [ ] Wire through Rust engine (rotation_rad already exists)
+
+### 4.7 Power Scale Per Shape
+Gradient depth effects without multiple layers.
+- [ ] `powerScale` property on DesignObject (0-100%, default 100%)
+- [ ] Editable in Properties panel when shape selected
+- [ ] Multiplied against layer power at G-code generation time
+- [ ] Visual indicator on canvas (opacity matches power scale)
+
+### 4.8 Material Library Polish
+Data model is complete — make it usable.
+- [ ] Ship 10-15 defaults (3mm ply, 6mm ply, 3mm/6mm acrylic,
+      cardboard, leather, anodized aluminum, MDF, cork, fabric)
+- [ ] Export/import as .json
+- [ ] Quick-apply from library to active layer
+- [ ] "Save current settings" button on layer panel
+
+### 4.9 First-Launch Onboarding
+Not a manual — just enough to make the core loop obvious.
+- [ ] 3-4 step walk-through: import → assign layer → connect → send
+- [ ] Show only once (localStorage flag)
+- [ ] "Show again" option in Help menu
+- [ ] Contextual tooltips on first use of key panels
+
+### 4.10 Polish & Quality
+- [ ] Smooth zoom to cursor position
+- [ ] Precise position/size input fields in Properties panel
+- [ ] GRBL alarm state recovery (guided steps to unlock)
+- [ ] USB disconnect mid-job: pause, alert, offer reconnect
+- [ ] Status bar: always show connection state + machine position
 
 ---
 
-## Phase 5 — Advanced (Post-Launch)
+## v0.5 — Advanced Engraving (Post v0.4)
 
-*Only after Phases 1-4 are solid.*
+*Make photo/image engraving competitive with LightBurn output quality.*
 
-- [ ] Camera alignment (USB webcam, calibration wizard)
-- [ ] Rotary axis support
-- [ ] Multiple machine profiles
-- [ ] Plugin/extension system
+- [ ] Offset Fill mode (concentric paths following shape contour)
+- [ ] Flood Fill (proximity-based non-sequential scanning)
+- [ ] Grayscale power curve editor (non-linear per-shade mapping)
+- [ ] Newsprint / halftone dithering algorithm
+- [ ] Image engraving preview (show dither result before sending)
+- [ ] Cut planner: multi-criteria ordering (layer → group → priority)
+- [ ] Cut planner: choose corner (consistent start point)
+- [ ] PDF import (via pdf.js or Rust pdf-extract)
+
+---
+
+## v0.6 — Production Features (Post v0.5)
+
+- [ ] Camera alignment (USB webcam, calibration wizard, overlay)
+- [ ] Print-and-cut registration (two-point alignment)
+- [ ] Rotary axis support (chuck + roller, Y-axis substitution)
+- [ ] Multiple machine profiles (switch between setups)
+- [ ] Variable text / serialization (serial numbers, CSV merge)
+- [ ] Text on path (arbitrary curve following)
 - [ ] Auto-nesting (bin-packing for material efficiency)
 - [ ] Community material library (online preset sharing)
 

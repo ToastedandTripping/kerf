@@ -39,6 +39,8 @@ interface CutObject {
     airAssist: boolean;
     cutInnerFirst: boolean;
     dither: string;
+    scanAngle: number;
+    angleIncrement: number;
     overcut: number;
     leadIn: number;
     leadOut: number;
@@ -68,6 +70,8 @@ function buildCutLayer(layer: Layer, sub?: { mode: string; power: number; powerM
     airAssist: layer.airAssist,
     cutInnerFirst: layer.cutInnerFirst,
     dither: layer.dither,
+    scanAngle: layer.scanAngle ?? 0,
+    angleIncrement: layer.angleIncrement ?? 0,
     overcut: layer.overcut,
     leadIn: layer.leadIn,
     leadOut: layer.leadOut,
@@ -135,16 +139,19 @@ function flattenObjects(objects: DesignObject[]): DesignObject[] {
   return result;
 }
 
-/** Convert store objects to CutObjects for the Rust engine */
+/** Convert store objects to CutObjects for the Rust engine, sorted by layer order */
 function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutObject[]; warnings: string[] } {
   const flat = flattenObjects(objects);
+  // Sort by layer array position (cut sequence order)
+  const layerOrder = new Map(layers.map((l, pos) => [l.index, pos]));
+  flat.sort((a, b) => (layerOrder.get(a.layerIndex) ?? 0) - (layerOrder.get(b.layerIndex) ?? 0));
   const result: CutObject[] = [];
   const warnings: string[] = [];
 
   for (const obj of flat) {
     if (!obj.visible || obj.locked) continue;
     const layer = layers.find((l) => l.index === obj.layerIndex) || layers[0];
-    if (layer.output === false) continue;
+    if (!layer.visible || layer.output === false) continue;
     if (obj.type === "text") {
       warnings.push(`Text object "${obj.name}" skipped -- use Ctrl+Shift+C to convert to path`);
       continue;
@@ -183,13 +190,21 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
       rotation: obj.transform.rotation || 0,
     };
 
+    const scale = obj.powerScale ?? 1.0;
+
     // If layer has sub-layers, emit one CutObject per sub-layer
     if (layer.subLayers && layer.subLayers.length > 0) {
       for (const sub of layer.subLayers) {
-        result.push({ ...base, id: `${obj.id}_${sub.id}`, layer: buildCutLayer(layer, sub) });
+        const cl = buildCutLayer(layer, sub);
+        cl.power *= scale;
+        cl.powerMin *= scale;
+        result.push({ ...base, id: `${obj.id}_${sub.id}`, layer: cl });
       }
     } else {
-      result.push({ ...base, layer: buildCutLayer(layer) });
+      const cl = buildCutLayer(layer);
+      cl.power *= scale;
+      cl.powerMin *= scale;
+      result.push({ ...base, layer: cl });
     }
   }
 
@@ -208,6 +223,7 @@ async function generateImageGcode(sValueMax: number = 1000): Promise<GcodeResult
   const results: GcodeResult[] = [];
   for (const obj of imageObjects) {
     const layer = store.layers.find((l) => l.index === obj.layerIndex) || store.layers[0];
+    if (!layer.visible || layer.output === false) continue;
     const adj = obj.imageAdjustments || { brightness: 0, contrast: 0, gamma: 1, invert: false };
 
     const result = await invoke<GcodeResult>("generate_image_gcode", {

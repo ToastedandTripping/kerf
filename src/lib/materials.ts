@@ -29,4 +29,13 @@ export const DEFAULT_MATERIALS: MaterialPreset[] = [
   // Cork
   { id: "cork-3-cut", name: "Cork 3mm Cut", material: "Cork", thickness: "3mm", mode: "line", power: 70, powerMin: 0, speed: 15, passes: 1, airAssist: true, interval: 0.1 },
   { id: "cork-3-engrave", name: "Cork 3mm Engrave", material: "Cork", thickness: "3mm", mode: "fill", power: 30, powerMin: 5, speed: 250, passes: 1, airAssist: false, interval: 0.1 },
+
+  // Anodized Aluminum
+  { id: "anod-alum-engrave", name: "Anodized Aluminum Engrave", material: "Aluminum", thickness: "N/A", mode: "fill", power: 60, powerMin: 15, speed: 400, passes: 1, airAssist: false, interval: 0.06 },
+
+  // Slate / Stone
+  { id: "slate-engrave", name: "Slate Engrave", material: "Slate", thickness: "5mm", mode: "fill", power: 80, powerMin: 20, speed: 150, passes: 1, airAssist: false, interval: 0.08 },
+
+  // Rubber Stamp
+  { id: "rubber-stamp", name: "Rubber Stamp (deep)", material: "Rubber", thickness: "3mm", mode: "fill", power: 90, powerMin: 0, speed: 100, passes: 3, airAssist: true, interval: 0.08 },
 ];

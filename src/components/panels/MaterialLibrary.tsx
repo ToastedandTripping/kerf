@@ -59,6 +59,40 @@ export function MaterialLibrary() {
     useStore.getState().addMaterial(preset);
   }
 
+  async function exportMaterials() {
+    try {
+      const dialog = await import("@tauri-apps/plugin-dialog");
+      const fs = await import("@tauri-apps/plugin-fs");
+      const path = await dialog.save({
+        filters: [{ name: "JSON", extensions: ["json"] }],
+        defaultPath: "kerf-materials.json",
+      });
+      if (!path) return;
+      const json = JSON.stringify(materials, null, 2);
+      await fs.writeTextFile(typeof path === "string" ? path : String(path), json);
+    } catch {}
+  }
+
+  async function importMaterials() {
+    try {
+      const dialog = await import("@tauri-apps/plugin-dialog");
+      const fs = await import("@tauri-apps/plugin-fs");
+      const path = await dialog.open({
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!path) return;
+      const content = await fs.readTextFile(typeof path === "string" ? path : String(path));
+      const imported = JSON.parse(content) as MaterialPreset[];
+      if (!Array.isArray(imported)) return;
+      const existing = new Set(materials.map((m) => m.id));
+      for (const preset of imported) {
+        if (!existing.has(preset.id)) {
+          useStore.getState().addMaterial(preset);
+        }
+      }
+    } catch {}
+  }
+
   return (
     <div style={{ borderBottom: "1px solid var(--border)" }}>
       <div
@@ -115,6 +149,36 @@ export function MaterialLibrary() {
               }}
             >
               + Save
+            </button>
+            <button
+              onClick={exportMaterials}
+              title="Export materials to JSON"
+              style={{
+                background: "var(--bg-input)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)",
+                color: "var(--text-secondary)",
+                padding: "4px 6px",
+                fontSize: "10px",
+                cursor: "pointer",
+              }}
+            >
+              Export
+            </button>
+            <button
+              onClick={importMaterials}
+              title="Import materials from JSON"
+              style={{
+                background: "var(--bg-input)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)",
+                color: "var(--text-secondary)",
+                padding: "4px 6px",
+                fontSize: "10px",
+                cursor: "pointer",
+              }}
+            >
+              Import
             </button>
           </div>
 

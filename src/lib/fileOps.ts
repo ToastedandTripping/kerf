@@ -2,6 +2,8 @@ import { useStore, generateId } from "../app/store";
 import type { DesignObject, KerfProject, PathPoint } from "../app/types";
 import { DEFAULT_LAYERS } from "../app/types";
 import { DEFAULT_MATERIALS } from "./materials";
+import { addRecentFile } from "./recentFiles";
+import { clearRecoveryFile } from "./autoSave";
 
 // We use Tauri's dialog and fs plugins when available, fallback to web APIs
 let dialogModule: typeof import("@tauri-apps/plugin-dialog") | null = null;
@@ -103,6 +105,7 @@ export const fileOperations = {
         migrateFlipTransforms(project.objects);
         useStore.getState().loadProject(project);
         useStore.getState().setProjectPath(pathStr);
+        addRecentFile(pathStr);
       }
     }
   },
@@ -111,6 +114,8 @@ export const fileOperations = {
     const store = useStore.getState();
     if (store.projectPath) {
       await saveToPath(store.projectPath);
+      addRecentFile(store.projectPath);
+      clearRecoveryFile();
     } else {
       await fileOperations.saveProjectAs();
     }
@@ -127,8 +132,25 @@ export const fileOperations = {
       const pathStr = typeof path === "string" ? path : String(path);
       await saveToPath(pathStr);
       useStore.getState().setProjectPath(pathStr);
+      addRecentFile(pathStr);
+      clearRecoveryFile();
       const name = pathStr.split("/").pop()?.replace(".kerf", "") || "Untitled";
       useStore.getState().setProjectName(name);
+    }
+  },
+
+  async openRecentFile(filePath: string) {
+    const hasTauri = await ensureTauri();
+    if (!hasTauri || !fsModule) return;
+    try {
+      const content = await fsModule.readTextFile(filePath);
+      const project = JSON.parse(content) as KerfProject;
+      migrateFlipTransforms(project.objects);
+      useStore.getState().loadProject(project);
+      useStore.getState().setProjectPath(filePath);
+      addRecentFile(filePath);
+    } catch (e) {
+      console.error("Failed to open recent file:", e);
     }
   },
 

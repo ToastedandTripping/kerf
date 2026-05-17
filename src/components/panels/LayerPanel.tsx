@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useStore } from "../../app/store";
 import type { Layer, CutMode, SubLayer } from "../../app/types";
 
@@ -28,6 +28,9 @@ export function LayerPanel() {
   const activeLayerIndex = useStore((s) => s.activeLayerIndex);
   const setActiveLayerIndex = useStore((s) => s.setActiveLayerIndex);
   const updateLayer = useStore((s) => s.updateLayer);
+  const reorderLayers = useStore((s) => s.reorderLayers);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const dragSourceRef = useRef<number | null>(null);
 
   return (
     <div
@@ -47,19 +50,42 @@ export function LayerPanel() {
           color: "var(--text-secondary)",
           textTransform: "uppercase",
           letterSpacing: "0.5px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
         }}
       >
-        Cut Layers
+        <span>Cut Layers</span>
+        <span style={{ fontSize: "9px", color: "var(--text-muted)", fontWeight: 400 }}>drag to reorder</span>
       </div>
       <div style={{ overflow: "auto", flex: 1 }}>
-        {layers.map((layer) => (
-          <LayerRow
+        {layers.map((layer, pos) => (
+          <div
             key={layer.index}
-            layer={layer}
-            active={layer.index === activeLayerIndex}
-            onClick={() => setActiveLayerIndex(layer.index)}
-            onUpdate={(partial) => updateLayer(layer.index, partial)}
-          />
+            draggable
+            onDragStart={() => { dragSourceRef.current = layer.index; }}
+            onDragOver={(e) => { e.preventDefault(); setDragOverIndex(layer.index); }}
+            onDragLeave={() => setDragOverIndex(null)}
+            onDrop={() => {
+              if (dragSourceRef.current !== null && dragSourceRef.current !== layer.index) {
+                reorderLayers(dragSourceRef.current, layer.index);
+              }
+              dragSourceRef.current = null;
+              setDragOverIndex(null);
+            }}
+            onDragEnd={() => { dragSourceRef.current = null; setDragOverIndex(null); }}
+            style={{
+              borderTop: dragOverIndex === layer.index ? "2px solid var(--accent, #4a90e2)" : "2px solid transparent",
+            }}
+          >
+            <LayerRow
+              layer={layer}
+              position={pos + 1}
+              active={layer.index === activeLayerIndex}
+              onClick={() => setActiveLayerIndex(layer.index)}
+              onUpdate={(partial) => updateLayer(layer.index, partial)}
+            />
+          </div>
         ))}
       </div>
     </div>
@@ -68,11 +94,13 @@ export function LayerPanel() {
 
 function LayerRow({
   layer,
+  position,
   active,
   onClick,
   onUpdate,
 }: {
   layer: Layer;
+  position: number;
   active: boolean;
   onClick: () => void;
   onUpdate: (partial: Partial<Layer>) => void;
@@ -119,6 +147,11 @@ function LayerRow({
         >
           {expanded ? "\u25BC" : "\u25B6"}
         </button>
+
+        {/* Cut order number */}
+        <span style={{ fontSize: "9px", color: "var(--text-muted)", fontFamily: "var(--font-mono)", width: "12px", textAlign: "center" }}>
+          {position}
+        </span>
 
         {/* Color swatch */}
         <div
@@ -333,6 +366,24 @@ function LayerRow({
                       <option value="grayscale">Grayscale</option>
                     </select>
                   </SettingRow>
+                  <SettingRow label="Scan Angle">
+                    <input
+                      type="number" min="0" max="360" step="1" value={layer.scanAngle ?? 0}
+                      onChange={(e) => onUpdate({ scanAngle: Number(e.target.value) % 360 })}
+                      style={{ ...inputStyle, width: "60px" }}
+                    />
+                    <span style={{ fontSize: "9px", color: "var(--text-muted)", marginLeft: "4px" }}>°</span>
+                  </SettingRow>
+                  {layer.passes > 1 && (
+                    <SettingRow label="Angle/Pass">
+                      <input
+                        type="number" min="0" max="180" step="1" value={layer.angleIncrement ?? 0}
+                        onChange={(e) => onUpdate({ angleIncrement: Number(e.target.value) })}
+                        style={{ ...inputStyle, width: "60px" }}
+                      />
+                      <span style={{ fontSize: "9px", color: "var(--text-muted)", marginLeft: "4px" }}>°</span>
+                    </SettingRow>
+                  )}
                 </>
               )}
 

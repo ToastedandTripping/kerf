@@ -23,6 +23,7 @@ export function Viewport() {
   const camera = useStore((s) => s.camera);
   const setCamera = useStore((s) => s.setCamera);
   const objects = useStore((s) => s.objects);
+  const layers = useStore((s) => s.layers);
   const drawingObject = useStore((s) => s.drawingObject);
   const selectedIds = useStore((s) => s.selectedIds);
   const gridVisible = useStore((s) => s.gridVisible);
@@ -157,6 +158,8 @@ export function Viewport() {
 
     for (const obj of objects) {
       if (!obj.visible) continue;
+      const objLayer = layers[obj.layerIndex];
+      if (objLayer && !objLayer.visible) continue;
       if (obj.type === "group" && obj.children) {
         // Render group children with group offset
         for (const child of obj.children) {
@@ -194,7 +197,7 @@ export function Viewport() {
         container.addChild(g);
       }
     }
-  }, [objects]);
+  }, [objects, layers]);
 
   // Draw temporary drawing object
   useEffect(() => {

@@ -1,7 +1,23 @@
 import { useState, useRef } from "react";
 import { useStore } from "../../app/store";
 import { fileOperations } from "../../lib/fileOps";
+import { getRecentFiles, clearRecentFiles } from "../../lib/recentFiles";
+import { resetOnboarding } from "../panels/OnboardingOverlay";
 import { dialogState } from "../../app/App";
+
+function buildRecentFilesItems(): MenuItem[] {
+  const recent = getRecentFiles();
+  if (recent.length === 0) return [];
+  const items: MenuItem[] = [{ type: "separator" }];
+  for (const path of recent.slice(0, 5)) {
+    const name = path.split("/").pop() || path;
+    items.push({ label: name, action: () => fileOperations.openRecentFile(path) });
+  }
+  if (recent.length > 0) {
+    items.push({ label: "Clear Recent", action: clearRecentFiles });
+  }
+  return items;
+}
 
 export function MenuBar() {
   const projectName = useStore((s) => s.projectName);
@@ -34,6 +50,7 @@ export function MenuBar() {
       <MenuButton label="File" items={[
         { label: "New", shortcut: "Ctrl+N", action: fileOperations.newProject },
         { label: "Open...", shortcut: "Ctrl+O", action: fileOperations.openProject },
+        ...buildRecentFilesItems(),
         { type: "separator" },
         { label: "Save", shortcut: "Ctrl+S", action: fileOperations.saveProject },
         { label: "Save As...", shortcut: "Ctrl+Shift+S", action: fileOperations.saveProjectAs },
@@ -189,6 +206,14 @@ export function MenuBar() {
         { label: "Machine Settings...", action: () => dialogState.openGrblSettings() },
         { label: "Preferences...", action: () => dialogState.openSettings() },
         { label: "Project Notes...", action: () => dialogState.openProjectNotes() },
+      ]} />
+      <MenuButton label="Help" items={[
+        { label: "Keyboard Shortcuts", shortcut: "?", action: () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "?" })) },
+        { type: "separator" },
+        { label: "Welcome Guide", action: () => {
+          resetOnboarding();
+          window.location.reload();
+        }},
       ]} />
 
       <div style={{ flex: 1 }} />

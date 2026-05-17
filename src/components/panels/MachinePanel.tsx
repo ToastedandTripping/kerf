@@ -248,6 +248,35 @@ export function MachinePanel() {
 
       {expanded && (
         <div style={{ padding: "0 8px 8px", display: "flex", flexDirection: "column", gap: "8px" }}>
+          {/* Alarm recovery */}
+          {machineState === "alarm" && (
+            <div style={{
+              background: "rgba(220,50,50,0.1)", border: "1px solid rgba(220,50,50,0.3)",
+              borderRadius: "var(--radius-sm)", padding: "8px", fontSize: "11px",
+            }}>
+              <div style={{ fontWeight: 600, color: "var(--danger, #dc3232)", marginBottom: "4px" }}>
+                Machine in ALARM state
+              </div>
+              <div style={{ color: "var(--text-secondary)", marginBottom: "6px" }}>
+                A limit switch was triggered or motion was lost. Unlock and re-home to resume.
+              </div>
+              <div style={{ display: "flex", gap: "4px" }}>
+                <button
+                  onClick={() => machineConnection.send("$X")}
+                  style={{ padding: "3px 8px", fontSize: "10px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "3px", color: "var(--text-primary)", cursor: "pointer" }}
+                >
+                  Unlock ($X)
+                </button>
+                <button
+                  onClick={() => machineConnection.send("$H")}
+                  style={{ padding: "3px 8px", fontSize: "10px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "3px", color: "var(--text-primary)", cursor: "pointer" }}
+                >
+                  Home ($H)
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Connection */}
           <div style={{ display: "flex", gap: "4px" }}>
             <select

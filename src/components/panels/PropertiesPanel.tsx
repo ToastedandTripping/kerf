@@ -191,7 +191,7 @@ export function PropertiesPanel() {
             </PropertyGroup>
           )}
 
-          {/* Opacity */}
+          {/* Opacity & Power Scale */}
           <PropertyGroup label="Appearance">
             <NumberField
               label="Opacity"
@@ -199,6 +199,15 @@ export function PropertiesPanel() {
               onChange={(v) => updateObject(obj.id, { opacity: Math.max(0, Math.min(100, v)) / 100 })}
               unit="%"
               step={1}
+              onFocus={beginEdit}
+              onBlur={commitEdit}
+            />
+            <NumberField
+              label="Power Scale"
+              value={Math.round((obj.powerScale ?? 1) * 100)}
+              onChange={(v) => updateObject(obj.id, { powerScale: Math.max(1, Math.min(100, v)) / 100 })}
+              unit="%"
+              step={5}
               onFocus={beginEdit}
               onBlur={commitEdit}
             />

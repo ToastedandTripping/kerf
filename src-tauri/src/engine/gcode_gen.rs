@@ -25,6 +25,10 @@ pub struct CutLayer {
     pub air_assist: bool,
     pub cut_inner_first: bool,
     pub dither: String,
+    #[serde(default)]
+    pub scan_angle: f64,     // degrees - scan direction for fill mode
+    #[serde(default)]
+    pub angle_increment: f64, // degrees - added per pass
     pub overcut: f64,
     pub lead_in: f64,
     pub lead_out: f64,
@@ -497,7 +501,10 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                     // Scan lines are generated in the object's local (unrotated) space.
                     // The transform_to_grbl helper applies rotation + Y-flip per coordinate.
                     let (x_min, x_max, y_min, y_max) = (obj.x, obj.x + obj.width, obj.y, obj.y + obj.height);
-                    let rotation_rad = if obj.rotation.abs() > 0.001 { obj.rotation.to_radians() } else { 0.0 };
+                    // Combine object rotation + layer scan angle + per-pass angle increment
+                    let obj_rot = if obj.rotation.abs() > 0.001 { obj.rotation.to_radians() } else { 0.0 };
+                    let layer_angle = layer.scan_angle.to_radians() + (pass as f64) * layer.angle_increment.to_radians();
+                    let rotation_rad = obj_rot + layer_angle;
                     let center_x = obj.x + obj.width / 2.0;
                     let center_y = obj.y + obj.height / 2.0;
 

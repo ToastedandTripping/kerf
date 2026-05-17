@@ -46,6 +46,7 @@ export interface DesignObject {
   stroke: string;
   strokeWidth: number;
   opacity: number;
+  powerScale?: number; // 0-1, multiplier against layer power (default 1.0)
   // Type-specific
   cornerRadius?: number; // rectangle
   points?: PathPoint[]; // path / line
@@ -83,6 +84,9 @@ export interface Layer {
   cutInnerFirst: boolean;
   // Image engraving
   dither: "threshold" | "ordered" | "floydSteinberg" | "jarvis" | "stucki" | "grayscale";
+  // Scan direction
+  scanAngle: number; // degrees, 0 = horizontal
+  angleIncrement: number; // degrees added per pass (0 = same angle every pass)
   // Advanced cut settings (Phase G)
   overcut: number; // mm - extend past start point
   leadIn: number; // mm - lead-in distance
@@ -135,6 +139,7 @@ export interface CameraState {
 const layerDefaults = {
   visible: true, locked: false, output: true, powerMin: 0, powerMode: "constant" as PowerMode,
   interval: 0.1, airAssist: true, cutInnerFirst: true, dither: "floydSteinberg" as const,
+  scanAngle: 0, angleIncrement: 0,
   overcut: 0, leadIn: 0, leadOut: 0, overscan: 2.5, bidirectional: true,
   crossHatch: false, scanningOffset: 0, tabSpacing: 0, tabWidth: 2,
   kerfOffset: 0, perforationCut: 0, perforationSkip: 0,

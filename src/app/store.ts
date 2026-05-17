@@ -45,6 +45,7 @@ interface AppState {
   activeLayerIndex: number;
   setActiveLayerIndex: (index: number) => void;
   updateLayer: (index: number, partial: Partial<Layer>) => void;
+  reorderLayers: (fromIndex: number, toIndex: number) => void;
   addSubLayer: (layerIndex: number) => void;
   removeSubLayer: (layerIndex: number, subLayerId: string) => void;
   updateSubLayer: (layerIndex: number, subLayerId: string, changes: Partial<SubLayer>) => void;
@@ -105,11 +106,14 @@ interface AppState {
   machinePosition: { x: number; y: number; z: number };
   grblSValueMax: number;
   grblLaserMode: boolean;
+  grblAccelX: number;
+  grblAccelY: number;
   setMachineConnected: (connected: boolean) => void;
   setMachineState: (state: "idle" | "run" | "hold" | "alarm" | "disconnected") => void;
   setMachinePosition: (pos: { x: number; y: number; z: number }) => void;
   setGrblSValueMax: (v: number) => void;
   setGrblLaserMode: (v: boolean) => void;
+  setGrblAccel: (x: number, y: number) => void;
 
   // Console
   consoleLines: Array<{ text: string; type: "sent" | "received" | "info" | "error" | "warning" }>;
@@ -258,6 +262,26 @@ export const useStore = create<AppState>((set, get) => ({
         l.index === index ? { ...l, ...partial } : l
       ),
     })),
+  reorderLayers: (fromIndex, toIndex) =>
+    set((state) => {
+      const newLayers = [...state.layers];
+      const fromPos = newLayers.findIndex((l) => l.index === fromIndex);
+      const toPos = newLayers.findIndex((l) => l.index === toIndex);
+      if (fromPos === -1 || toPos === -1 || fromPos === toPos) return state;
+      const [moved] = newLayers.splice(fromPos, 1);
+      newLayers.splice(toPos, 0, moved);
+      const indexMap = new Map<number, number>();
+      const reindexed = newLayers.map((l, i) => {
+        indexMap.set(l.index, i);
+        return { ...l, index: i };
+      });
+      const objects = state.objects.map((o) => ({
+        ...o,
+        layerIndex: indexMap.get(o.layerIndex) ?? o.layerIndex,
+      }));
+      const activeLayerIndex = indexMap.get(state.activeLayerIndex) ?? state.activeLayerIndex;
+      return { layers: reindexed, objects, activeLayerIndex, isDirty: true };
+    }),
   addSubLayer: (layerIndex) =>
     set((state) => ({
       layers: state.layers.map((l) => {
@@ -429,11 +453,14 @@ export const useStore = create<AppState>((set, get) => ({
   machinePosition: { x: 0, y: 0, z: 0 },
   grblSValueMax: 1000,
   grblLaserMode: false,
+  grblAccelX: 500,
+  grblAccelY: 500,
   setMachineConnected: (connected) => set({ machineConnected: connected }),
   setMachineState: (state) => set({ machineState: state }),
   setMachinePosition: (pos) => set({ machinePosition: pos }),
   setGrblSValueMax: (v) => set({ grblSValueMax: v }),
   setGrblLaserMode: (v) => set({ grblLaserMode: v }),
+  setGrblAccel: (x, y) => set({ grblAccelX: x, grblAccelY: y }),
 
   // Console
   consoleLines: [],

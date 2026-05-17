@@ -16,6 +16,7 @@ const LAST_BAUD_KEY = "kerf-last-baud";
 let statusPollInterval: ReturnType<typeof setInterval> | null = null;
 let jobPollingSuspended = false;
 let unsubscribeJobRunning: (() => void) | null = null;
+let consecutivePollFailures = 0;
 
 export const machineConnection = {
   async listPorts(): Promise<PortInfo[]> {
@@ -138,6 +139,7 @@ export const machineConnection = {
 
     try {
       const status = await invoke<string>("serial_get_status");
+      consecutivePollFailures = 0;
       // Parse GRBL status: <Idle|MPos:0.000,0.000,0.000|FS:0,0>
       const match = status.match(/<(\w+)\|MPos:([-\d.]+),([-\d.]+),([-\d.]+)/);
       if (match) {
@@ -150,7 +152,18 @@ export const machineConnection = {
         });
       }
     } catch {
-      // Silently ignore poll errors
+      consecutivePollFailures++;
+      if (consecutivePollFailures >= 3) {
+        store.setMachineConnected(false);
+        store.setMachineState("disconnected");
+        store.addConsoleLine("Connection lost — check USB cable", "error");
+        if (store.jobRunning) {
+          store.setJobRunning(false);
+          store.addConsoleLine("Job aborted due to disconnect", "error");
+        }
+        this.disconnect();
+        consecutivePollFailures = 0;
+      }
     }
   },
 
@@ -215,6 +228,8 @@ export const machineConnection = {
     try {
       store.addConsoleLine("$$", "sent");
       const responses = await invoke<string[]>("serial_send", { command: "$$" });
+      let accelX = 0, accelY = 0;
+      let maxTravelX = 0, maxTravelY = 0;
       for (const line of responses) {
         const match = line.match(/^\$(\d+)=([\d.]+)/);
         if (match) {
@@ -226,8 +241,24 @@ export const machineConnection = {
           } else if (key === 32) {
             store.setGrblLaserMode(value === 1);
             store.addConsoleLine(`$32=${value} (laser mode ${value === 1 ? "enabled" : "disabled"})`, "info");
+          } else if (key === 120) {
+            accelX = value;
+          } else if (key === 121) {
+            accelY = value;
+          } else if (key === 130) {
+            maxTravelX = value;
+          } else if (key === 131) {
+            maxTravelY = value;
           }
         }
+      }
+      if (accelX > 0 || accelY > 0) {
+        store.setGrblAccel(accelX || 500, accelY || 500);
+        store.addConsoleLine(`Acceleration: X=${accelX} Y=${accelY} mm/s²`, "info");
+      }
+      if (maxTravelX > 0 && maxTravelY > 0) {
+        store.setWorkspaceSize(maxTravelX, maxTravelY);
+        store.addConsoleLine(`Workspace set to ${maxTravelX}×${maxTravelY}mm from machine settings`, "info");
       }
     } catch (e) {
       store.addConsoleLine(`Failed to query GRBL settings: ${e}`, "error");

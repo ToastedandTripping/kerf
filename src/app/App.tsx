@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { MenuBar } from "../components/topbar/MenuBar";
 import { Toolbar } from "../components/toolbar/Toolbar";
 import { Viewport } from "../components/viewport/Viewport";
@@ -22,6 +22,9 @@ import { ImageImportDialog } from "../components/panels/ImageImportDialog";
 import { ShortcutOverlay } from "../components/panels/ShortcutOverlay";
 import { useKeyboardShortcuts } from "../lib/shortcuts";
 import { handleFileDrop } from "../lib/fileDrop";
+import { startAutoSave, checkRecoveryFile, clearRecoveryFile } from "../lib/autoSave";
+import { OnboardingOverlay, shouldShowOnboarding } from "../components/panels/OnboardingOverlay";
+import { useStore } from "./store";
 
 // Expose dialog openers globally so menus/commands can trigger them
 export const dialogState: {
@@ -46,6 +49,15 @@ export const dialogState: {
 
 export default function App() {
   useKeyboardShortcuts();
+  const [recoveryOffer, setRecoveryOffer] = useState<{ timestamp: number } | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(shouldShowOnboarding);
+
+  useEffect(() => {
+    startAutoSave(60000);
+    checkRecoveryFile().then((result) => {
+      if (result) setRecoveryOffer({ timestamp: result.timestamp });
+    });
+  }, []);
 
   const [grblOpen, setGrblOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -181,6 +193,49 @@ export default function App() {
         }}
       />
       <ShortcutOverlay />
+
+      {/* First-launch onboarding */}
+      {showOnboarding && <OnboardingOverlay onClose={() => setShowOnboarding(false)} />}
+
+      {/* Recovery offer modal */}
+      {recoveryOffer && (
+        <div style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
+          display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999,
+        }}>
+          <div style={{
+            background: "var(--bg-panel)", border: "1px solid var(--border)",
+            borderRadius: "8px", padding: "24px", maxWidth: "360px", width: "90%",
+          }}>
+            <h3 style={{ margin: "0 0 8px", fontSize: "14px", color: "var(--text-primary)" }}>
+              Recover unsaved work?
+            </h3>
+            <p style={{ margin: "0 0 16px", fontSize: "12px", color: "var(--text-secondary)" }}>
+              Found auto-saved project from {new Date(recoveryOffer.timestamp).toLocaleString()}.
+            </p>
+            <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+              <button
+                onClick={() => { clearRecoveryFile(); setRecoveryOffer(null); }}
+                style={{ padding: "6px 12px", fontSize: "12px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "4px", color: "var(--text-primary)", cursor: "pointer" }}
+              >
+                Discard
+              </button>
+              <button
+                onClick={async () => {
+                  const result = await checkRecoveryFile();
+                  if (result) {
+                    useStore.getState().loadProject(result.project);
+                  }
+                  setRecoveryOffer(null);
+                }}
+                style={{ padding: "6px 12px", fontSize: "12px", background: "var(--accent, #4a90e2)", border: "none", borderRadius: "4px", color: "#fff", cursor: "pointer" }}
+              >
+                Restore
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
