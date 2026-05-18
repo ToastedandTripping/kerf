@@ -93,8 +93,8 @@ pub fn serial_connect(
         }
     }
 
-    *state.port.lock().unwrap() = Some(port);
-    *state.connected.lock().unwrap() = true;
+    *state.port.lock().map_err(|e| format!("Lock failed: {}", e))? = Some(port);
+    *state.connected.lock().map_err(|e| format!("Lock failed: {}", e))? = true;
 
     if startup.is_empty() {
         Ok(format!("Connected to {} at {} baud", port_name, baud_rate))
@@ -106,8 +106,8 @@ pub fn serial_connect(
 /// Disconnect from serial port
 #[tauri::command]
 pub fn serial_disconnect(state: State<'_, SerialState>) -> Result<(), String> {
-    *state.port.lock().unwrap() = None;
-    *state.connected.lock().unwrap() = false;
+    *state.port.lock().map_err(|e| format!("Lock failed: {}", e))? = None;
+    *state.connected.lock().map_err(|e| format!("Lock failed: {}", e))? = false;
     Ok(())
 }
 
@@ -117,7 +117,7 @@ pub fn serial_send(
     state: State<'_, SerialState>,
     command: String,
 ) -> Result<Vec<String>, String> {
-    let mut port_lock = state.port.lock().unwrap();
+    let mut port_lock = state.port.lock().map_err(|e| format!("Lock failed: {}", e))?;
     let port = port_lock.as_mut().ok_or("Not connected")?;
 
     // Send command with newline
@@ -158,7 +158,7 @@ pub fn serial_send_byte(
     state: State<'_, SerialState>,
     byte: u8,
 ) -> Result<(), String> {
-    let mut port_lock = state.port.lock().unwrap();
+    let mut port_lock = state.port.lock().map_err(|e| format!("Lock failed: {}", e))?;
     let port = port_lock.as_mut().ok_or("Not connected")?;
     port.write_all(&[byte])
         .map_err(|e| format!("Write error: {}", e))?;
@@ -171,7 +171,7 @@ pub fn serial_send_byte(
 pub fn serial_get_status(
     state: State<'_, SerialState>,
 ) -> Result<String, String> {
-    let mut port_lock = state.port.lock().unwrap();
+    let mut port_lock = state.port.lock().map_err(|e| format!("Lock failed: {}", e))?;
     let port = port_lock.as_mut().ok_or("Not connected")?;
 
     port.write_all(b"?")
@@ -189,5 +189,5 @@ pub fn serial_get_status(
 /// Check if connected
 #[tauri::command]
 pub fn serial_is_connected(state: State<'_, SerialState>) -> bool {
-    *state.connected.lock().unwrap()
+    state.connected.lock().map(|v| *v).unwrap_or(false)
 }

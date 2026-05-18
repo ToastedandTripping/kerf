@@ -159,6 +159,9 @@ export function CommandPalette() {
       />
       {/* Palette */}
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="command-palette-title"
         style={{
           position: "fixed",
           top: "20%",
@@ -178,6 +181,7 @@ export function CommandPalette() {
       >
         {/* Search input */}
         <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)" }}>
+          <span id="command-palette-title" className="sr-only" style={{ position: "absolute", width: "1px", height: "1px", overflow: "hidden", clip: "rect(0,0,0,0)" }}>Command Palette</span>
           <input
             ref={inputRef}
             value={query}

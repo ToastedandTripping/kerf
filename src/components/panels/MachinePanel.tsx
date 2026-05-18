@@ -215,6 +215,9 @@ export function MachinePanel() {
     <div style={{ borderBottom: "1px solid var(--border)" }}>
       <div
         onClick={() => setExpanded(!expanded)}
+        role="button"
+        aria-expanded={expanded}
+        aria-label="Machine panel"
         style={{
           padding: "8px 12px",
           fontSize: "11px",

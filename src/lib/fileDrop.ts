@@ -29,7 +29,7 @@ function importDroppedImage(file: File) {
     img.onload = () => {
       import("../app/App").then(({ dialogState }) => {
         dialogState.openImageImport(base64, file.name, img.width, img.height);
-      });
+      }).catch(console.error);
     };
     img.src = base64;
   };
@@ -42,7 +42,7 @@ function importDroppedSvg(file: File) {
     const svgContent = reader.result as string;
     import("../app/App").then(({ dialogState }) => {
       dialogState.openSvgImport(svgContent);
-    });
+    }).catch(console.error);
   };
   reader.readAsText(file);
 }
@@ -53,7 +53,7 @@ function importDroppedDxf(file: File) {
     const content = reader.result as string;
     import("./fileOps").then(({ importDxfDirect }) => {
       importDxfDirect(content);
-    });
+    }).catch(console.error);
   };
   reader.readAsText(file);
 }

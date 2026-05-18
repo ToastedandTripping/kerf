@@ -65,7 +65,11 @@ export function SettingsDialog({ open, onClose }: Props) {
           zIndex: 9999,
         }}
       />
-      <div style={{
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-dialog-title"
+        style={{
         position: "fixed",
         top: "50%", left: "50%",
         transform: "translate(-50%, -50%)",
@@ -77,7 +81,7 @@ export function SettingsDialog({ open, onClose }: Props) {
         zIndex: 10000,
         padding: "20px",
       }}>
-        <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "16px" }}>
+        <div id="settings-dialog-title" style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "16px" }}>
           Settings
         </div>
 

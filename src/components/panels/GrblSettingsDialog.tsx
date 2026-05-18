@@ -56,6 +56,7 @@ export function GrblSettingsDialog({ open, onClose }: Props) {
   const [loading, setLoading] = useState(false);
   const [editingKey, setEditingKey] = useState<number | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [editError, setEditError] = useState<string | null>(null);
   const [firmware, setFirmware] = useState("");
 
   useEffect(() => {
@@ -100,6 +101,11 @@ export function GrblSettingsDialog({ open, onClose }: Props) {
   }
 
   async function saveSetting(key: number, value: string) {
+    if (!/^[\d.]+$/.test(value)) {
+      setEditError("Value must be a number (digits and decimal point only)");
+      return;
+    }
+    setEditError(null);
     await machineConnection.send(`$${key}=${value}`);
     setEditingKey(null);
     // Reload settings to verify
@@ -118,7 +124,11 @@ export function GrblSettingsDialog({ open, onClose }: Props) {
           zIndex: 9999,
         }}
       />
-      <div style={{
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="grbl-settings-dialog-title"
+        style={{
         position: "fixed",
         top: "50%", left: "50%",
         transform: "translate(-50%, -50%)",
@@ -140,7 +150,7 @@ export function GrblSettingsDialog({ open, onClose }: Props) {
           display: "flex", alignItems: "center", justifyContent: "space-between",
         }}>
           <div>
-            <span style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)" }}>
+            <span id="grbl-settings-dialog-title" style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)" }}>
               GRBL Machine Settings
             </span>
             {firmware && (
@@ -197,23 +207,28 @@ export function GrblSettingsDialog({ open, onClose }: Props) {
               </span>
               <span style={{ flex: 1, color: "var(--text-primary)" }}>{s.label}</span>
               {editingKey === s.key ? (
-                <input
-                  autoFocus
-                  value={editValue}
-                  onChange={(e) => setEditValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") saveSetting(s.key, editValue);
-                    if (e.key === "Escape") setEditingKey(null);
-                  }}
-                  onBlur={() => setEditingKey(null)}
-                  style={{
-                    width: "80px", background: "var(--bg-input)",
-                    border: "1px solid var(--accent-warm)",
-                    color: "var(--text-primary)", padding: "2px 6px",
-                    borderRadius: "3px", fontSize: "12px", fontFamily: "var(--font-mono)",
-                    textAlign: "right", outline: "none",
-                  }}
-                />
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+                  <input
+                    autoFocus
+                    value={editValue}
+                    onChange={(e) => { setEditValue(e.target.value); setEditError(null); }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") saveSetting(s.key, editValue);
+                      if (e.key === "Escape") { setEditingKey(null); setEditError(null); }
+                    }}
+                    onBlur={() => { setEditingKey(null); setEditError(null); }}
+                    style={{
+                      width: "80px", background: "var(--bg-input)",
+                      border: `1px solid ${editError ? "var(--danger)" : "var(--accent-warm)"}`,
+                      color: "var(--text-primary)", padding: "2px 6px",
+                      borderRadius: "3px", fontSize: "12px", fontFamily: "var(--font-mono)",
+                      textAlign: "right", outline: "none",
+                    }}
+                  />
+                  {editError && (
+                    <span style={{ fontSize: "9px", color: "var(--danger)", marginTop: "2px" }}>{editError}</span>
+                  )}
+                </div>
               ) : (
                 <span
                   onClick={() => { setEditingKey(s.key); setEditValue(s.value); }}

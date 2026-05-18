@@ -126,12 +126,16 @@ export function ImageTraceDialog({ open, onClose }: Props) {
     return (
       <>
         <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999 }} />
-        <div style={{
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="image-trace-dialog-title"
+          style={{
           position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
           width: "420px", background: "var(--bg-panel)", border: "1px solid var(--border)",
           borderRadius: "var(--radius-lg)", boxShadow: "var(--shadow-modal)", zIndex: 10000, padding: "20px",
         }}>
-          <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "12px" }}>Trace Image</div>
+          <div id="image-trace-dialog-title" style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "12px" }}>Trace Image</div>
           <div style={{ color: "var(--text-secondary)", fontSize: "13px", marginBottom: "16px" }}>Select a single image object to trace.</div>
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
             <button onClick={onClose} style={{ background: "none", border: "1px solid var(--border)", color: "var(--text-secondary)", padding: "6px 16px", borderRadius: "var(--radius-sm)", cursor: "pointer", fontSize: "13px" }}>Close</button>
@@ -243,13 +247,17 @@ export function ImageTraceDialog({ open, onClose }: Props) {
   return (
     <>
       <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999 }} />
-      <div style={{
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="image-trace-main-dialog-title"
+        style={{
         position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
         width: "460px", maxHeight: "85vh", overflow: "auto",
         background: "var(--bg-panel)", border: "1px solid var(--border)",
         borderRadius: "var(--radius-lg)", boxShadow: "var(--shadow-modal)", zIndex: 10000, padding: "20px",
       }}>
-        <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "16px" }}>Trace Image</div>
+        <div id="image-trace-main-dialog-title" style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "16px" }}>Trace Image</div>
 
         {/* Presets */}
         <div style={{ display: "flex", gap: "4px", marginBottom: "12px", flexWrap: "wrap" }}>

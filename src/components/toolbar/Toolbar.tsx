@@ -17,6 +17,8 @@ export function Toolbar() {
 
   return (
     <div
+      role="toolbar"
+      aria-label="Drawing tools"
       style={{
         width: "var(--toolbar-width)",
         background: "var(--bg-panel)",

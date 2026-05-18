@@ -113,7 +113,11 @@ export function QrCodeDialog({ open, onClose }: Props) {
       <div onClick={onClose} style={{
         position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999,
       }} />
-      <div style={{
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="qr-code-dialog-title"
+        style={{
         position: "fixed", top: "50%", left: "50%",
         transform: "translate(-50%, -50%)",
         width: "420px",
@@ -124,7 +128,7 @@ export function QrCodeDialog({ open, onClose }: Props) {
         zIndex: 10000,
         padding: "20px",
       }}>
-        <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "16px" }}>
+        <div id="qr-code-dialog-title" style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "16px" }}>
           Generate QR Code
         </div>
 

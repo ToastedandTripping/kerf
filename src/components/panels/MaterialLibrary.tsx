@@ -70,7 +70,9 @@ export function MaterialLibrary() {
       if (!path) return;
       const json = JSON.stringify(materials, null, 2);
       await fs.writeTextFile(typeof path === "string" ? path : String(path), json);
-    } catch {}
+    } catch (e) {
+      useStore.getState().addConsoleLine(`Export materials failed: ${e}`, "error");
+    }
   }
 
   async function importMaterials() {
@@ -90,13 +92,18 @@ export function MaterialLibrary() {
           useStore.getState().addMaterial(preset);
         }
       }
-    } catch {}
+    } catch (e) {
+      useStore.getState().addConsoleLine(`Import materials failed: ${e}`, "error");
+    }
   }
 
   return (
     <div style={{ borderBottom: "1px solid var(--border)" }}>
       <div
         onClick={() => setExpanded(!expanded)}
+        role="button"
+        aria-expanded={expanded}
+        aria-label="Material library"
         style={{
           padding: "8px 12px",
           fontSize: "11px",

@@ -56,7 +56,7 @@ export default function App() {
     startAutoSave(60000);
     checkRecoveryFile().then((result) => {
       if (result) setRecoveryOffer({ timestamp: result.timestamp });
-    });
+    }).catch(console.error);
   }, []);
 
   const [grblOpen, setGrblOpen] = useState(false);

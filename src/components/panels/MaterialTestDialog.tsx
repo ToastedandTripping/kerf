@@ -187,6 +187,9 @@ export function MaterialTestDialog({ open, onClose }: Props) {
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="material-test-dialog-title"
         style={{
           background: "var(--bg-panel)",
           border: "1px solid var(--border)",
@@ -198,7 +201,7 @@ export function MaterialTestDialog({ open, onClose }: Props) {
           overflow: "auto",
         }}
       >
-        <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "16px" }}>
+        <div id="material-test-dialog-title" style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "16px" }}>
           Material Test Grid
         </div>
 

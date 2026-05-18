@@ -140,6 +140,8 @@ function LayerRow({
         {/* Expand toggle */}
         <button
           onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+          aria-expanded={expanded}
+          aria-label={`${layer.name} settings`}
           style={{
             background: "none", border: "none", color: "var(--text-muted)",
             cursor: "pointer", padding: "0", fontSize: "10px", width: "12px",

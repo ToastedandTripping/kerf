@@ -139,10 +139,14 @@ export const useStore = create<AppState>((set, get) => ({
   undoStack: [],
   redoStack: [],
   pushCommand: (cmd) =>
-    set((state) => ({
-      undoStack: [...state.undoStack, cmd],
-      redoStack: [],
-    })),
+    set((state) => {
+      const MAX_UNDO = 50;
+      const newStack = [...state.undoStack, cmd];
+      return {
+        undoStack: newStack.length > MAX_UNDO ? newStack.slice(newStack.length - MAX_UNDO) : newStack,
+        redoStack: [],
+      };
+    }),
   undo: () => {
     const { undoStack, redoStack } = get();
     if (undoStack.length === 0) return;
@@ -164,14 +168,31 @@ export const useStore = create<AppState>((set, get) => ({
     });
   },
   withUndo: (type, fn) => {
-    const before = { objects: get().objects, selectedIds: get().selectedIds };
+    // Strip imageData from snapshots to avoid duplicating large base64 strings in undo history
+    const stripImageData = (objects: import("../types").DesignObject[]): import("../types").DesignObject[] =>
+      objects.map((o) => o.imageData ? { ...o, imageData: "__UNDO_REF__" } : o);
+    const beforeObjects = get().objects;
+    const beforeSelectedIds = get().selectedIds;
+    const beforeSnapshot = stripImageData(beforeObjects);
     fn();
-    const after = { objects: get().objects, selectedIds: get().selectedIds };
-    if (before.objects !== after.objects) {
+    const afterObjects = get().objects;
+    const afterSelectedIds = get().selectedIds;
+    if (beforeObjects !== afterObjects) {
+      const afterSnapshot = stripImageData(afterObjects);
+      // Restore live imageData from current objects array when applying undo/redo
+      const restoreImageData = (snapshot: import("../types").DesignObject[]): import("../types").DesignObject[] => {
+        const live = get().objects;
+        const imageMap = new Map<string, string>();
+        for (const o of live) { if (o.imageData && o.imageData !== "__UNDO_REF__") imageMap.set(o.id, o.imageData); }
+        // Also check the before/after objects we captured at command creation time
+        for (const o of beforeObjects) { if (o.imageData && o.imageData !== "__UNDO_REF__") imageMap.set(o.id, o.imageData); }
+        for (const o of afterObjects) { if (o.imageData && o.imageData !== "__UNDO_REF__") imageMap.set(o.id, o.imageData); }
+        return snapshot.map((o) => o.imageData === "__UNDO_REF__" ? { ...o, imageData: imageMap.get(o.id) } : o);
+      };
       get().pushCommand({
         type,
-        undo: () => set({ objects: before.objects, selectedIds: before.selectedIds, isDirty: true }),
-        redo: () => set({ objects: after.objects, selectedIds: after.selectedIds, isDirty: true }),
+        undo: () => set({ objects: restoreImageData(beforeSnapshot), selectedIds: beforeSelectedIds, isDirty: true }),
+        redo: () => set({ objects: restoreImageData(afterSnapshot), selectedIds: afterSelectedIds, isDirty: true }),
       });
     }
   },

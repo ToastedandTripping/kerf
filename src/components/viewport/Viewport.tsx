@@ -6,6 +6,19 @@ import { handleViewportPointerDown, handleViewportPointerMove, handleViewportPoi
 
 const PX_PER_MM = 3.78; // ~96dpi -> mm conversion for screen display
 
+// Cache for GPU textures keyed by imageData content (avoids re-upload on every render)
+const textureCache = new Map<string, Texture>();
+
+function getOrCreateTexture(imageData: string): Texture {
+  let tex = textureCache.get(imageData);
+  if (tex) return tex;
+  const img = new Image();
+  img.src = imageData;
+  tex = Texture.from(img);
+  textureCache.set(imageData, tex);
+  return tex;
+}
+
 export function Viewport() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -19,6 +32,8 @@ export function Viewport() {
   const isPanning = useRef(false);
   const lastPan = useRef({ x: 0, y: 0 });
   const spaceHeld = useRef(false);
+  // Persistent display object cache: maps object ID to its Pixi Container
+  const displayCacheRef = useRef<Map<string, Container>>(new Map());
 
   const camera = useStore((s) => s.camera);
   const setCamera = useStore((s) => s.setCamera);
@@ -84,13 +99,13 @@ export function Viewport() {
         y: cy - (workspaceHeight * PX_PER_MM) / 2,
         zoom: 1,
       });
-    });
+    }).catch((err) => console.error("Pixi.js init failed:", err));
 
     return () => {
       initPromise.then(() => {
         app.destroy(true);
         appRef.current = null;
-      });
+      }).catch((err) => console.error("Pixi.js destroy failed:", err));
     };
   }, []);
 
@@ -148,20 +163,67 @@ export function Viewport() {
     g.rect(0, 0, w, h).stroke();
   }, [workspaceWidth, workspaceHeight]);
 
-  // Draw objects
+  // Draw objects with persistent cache (diff against previous state)
   useEffect(() => {
     if (!objectsContainerRef.current) return;
     const container = objectsContainerRef.current;
+    const cache = displayCacheRef.current;
 
-    // Clear and redraw
-    container.removeChildren();
+    // Build set of IDs that should be visible this frame
+    // For groups, we use composite keys: "groupId/childId"
+    const activeIds = new Set<string>();
+
+    function renderKey(obj: DesignObject, prefix?: string): string {
+      return prefix ? `${prefix}/${obj.id}` : obj.id;
+    }
+
+    function ensureDisplayObject(key: string, obj: DesignObject) {
+      activeIds.add(key);
+      const existing = cache.get(key);
+      if (existing) {
+        // Update existing: clear and re-render (cheaper than full teardown/rebuild)
+        if (existing instanceof Graphics) {
+          (existing as Graphics).clear();
+          renderObject(existing as Graphics, obj);
+          applyObjectRotation(existing, obj.transform);
+        } else {
+          // For text/image, replace (they need full rebuild on content change)
+          cache.delete(key);
+          container.removeChild(existing);
+          existing.destroy({ children: true });
+          const newEl = obj.type === "text" ? renderTextObject(obj)
+            : obj.type === "image" ? renderImageObject(obj) : null;
+          if (newEl) {
+            applyObjectRotation(newEl, obj.transform);
+            container.addChild(newEl);
+            cache.set(key, newEl);
+          }
+        }
+      } else {
+        // Create new display object
+        let el: Container | null = null;
+        if (obj.type === "text") {
+          el = renderTextObject(obj);
+        } else if (obj.type === "image") {
+          el = renderImageObject(obj);
+        } else {
+          const g = new Graphics();
+          renderObject(g, obj);
+          el = g;
+        }
+        if (el) {
+          applyObjectRotation(el, obj.transform);
+          container.addChild(el);
+          cache.set(key, el);
+        }
+      }
+    }
 
     for (const obj of objects) {
       if (!obj.visible) continue;
       const objLayer = layers[obj.layerIndex];
       if (objLayer && !objLayer.visible) continue;
       if (obj.type === "group" && obj.children) {
-        // Render group children with group offset
         for (const child of obj.children) {
           const offsetChild = {
             ...child,
@@ -171,30 +233,19 @@ export function Viewport() {
               y: child.transform.y + obj.transform.y,
             },
           };
-          if (child.type === "text") {
-            const el = renderTextObject(offsetChild);
-            if (el) { applyObjectRotation(el, offsetChild.transform); container.addChild(el); }
-          } else if (child.type === "image") {
-            const el = renderImageObject(offsetChild);
-            if (el) { applyObjectRotation(el, offsetChild.transform); container.addChild(el); }
-          } else {
-            const g = new Graphics();
-            renderObject(g, offsetChild);
-            applyObjectRotation(g, offsetChild.transform);
-            container.addChild(g);
-          }
+          ensureDisplayObject(renderKey(child, obj.id), offsetChild);
         }
-      } else if (obj.type === "text") {
-        const child = renderTextObject(obj);
-        if (child) { applyObjectRotation(child, obj.transform); container.addChild(child); }
-      } else if (obj.type === "image") {
-        const child = renderImageObject(obj);
-        if (child) { applyObjectRotation(child, obj.transform); container.addChild(child); }
       } else {
-        const g = new Graphics();
-        renderObject(g, obj);
-        applyObjectRotation(g, obj.transform);
-        container.addChild(g);
+        ensureDisplayObject(renderKey(obj), obj);
+      }
+    }
+
+    // Remove stale entries
+    for (const [key, displayObj] of cache) {
+      if (!activeIds.has(key)) {
+        container.removeChild(displayObj);
+        displayObj.destroy({ children: true });
+        cache.delete(key);
       }
     }
   }, [objects, layers]);
@@ -713,9 +764,7 @@ function renderImageObject(obj: DesignObject): Container | null {
   const ph = t.height * PX_PER_MM;
 
   try {
-    const img = new Image();
-    img.src = obj.imageData;
-    const texture = Texture.from(img);
+    const texture = getOrCreateTexture(obj.imageData);
     const sprite = new Sprite(texture);
     sprite.x = px;
     sprite.y = py;

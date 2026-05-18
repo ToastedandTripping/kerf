@@ -1,4 +1,4 @@
-import * as polygonClipping from "polygon-clipping";
+import polygonClipping from "polygon-clipping";
 import opentype from "opentype.js";
 import type { DesignObject } from "../types";
 import type { StoreSet, StoreGet } from "./storeTypes";

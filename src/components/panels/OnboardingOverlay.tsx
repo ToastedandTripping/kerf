@@ -40,7 +40,11 @@ export function OnboardingOverlay({ onClose }: { onClose: () => void }) {
       position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
       display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000,
     }}>
-      <div style={{
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="onboarding-overlay-title"
+        style={{
         background: "var(--bg-panel)", border: "1px solid var(--border)",
         borderRadius: "12px", padding: "32px", maxWidth: "400px", width: "90%",
         textAlign: "center",
@@ -49,7 +53,7 @@ export function OnboardingOverlay({ onClose }: { onClose: () => void }) {
           <path d={current.icon} />
         </svg>
 
-        <h2 style={{ margin: "0 0 8px", fontSize: "18px", color: "var(--text-primary)", fontWeight: 600 }}>
+        <h2 id="onboarding-overlay-title" style={{ margin: "0 0 8px", fontSize: "18px", color: "var(--text-primary)", fontWeight: 600 }}>
           {current.title}
         </h2>
         <p style={{ margin: "0 0 24px", fontSize: "13px", color: "var(--text-secondary)", lineHeight: 1.5 }}>

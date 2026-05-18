@@ -100,7 +100,11 @@ export function ShortcutOverlay() {
         position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
         zIndex: 99998, backdropFilter: "blur(2px)",
       }} />
-      <div style={{
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="shortcut-overlay-title"
+        style={{
         position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
         background: "var(--bg-panel)", border: "1px solid var(--border)",
         borderRadius: "var(--radius-lg)", boxShadow: "var(--shadow-modal)",
@@ -108,7 +112,7 @@ export function ShortcutOverlay() {
         maxWidth: "720px", width: "90vw",
       }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
-          <h2 style={{ margin: 0, fontSize: "16px", color: "var(--text-primary)", fontWeight: 600 }}>
+          <h2 id="shortcut-overlay-title" style={{ margin: 0, fontSize: "16px", color: "var(--text-primary)", fontWeight: 600 }}>
             Keyboard Shortcuts
           </h2>
           <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Press ? to close</span>

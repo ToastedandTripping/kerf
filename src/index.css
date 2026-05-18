@@ -93,6 +93,16 @@ input[type="number"]::-webkit-inner-spin-button {
   margin: 0;
 }
 
+/* Accessibility: show focus outline for keyboard navigation, hide for mouse clicks */
+*:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+*:focus:not(:focus-visible) {
+  outline: none;
+}
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
