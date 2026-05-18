@@ -78,7 +78,7 @@ export function MachinePanel() {
     if (!machineConnected) {
       machineConnection.autoConnect().then(ok => {
         if (ok) refreshPorts();
-      });
+      }).catch(console.error);
     }
   }, []);
 

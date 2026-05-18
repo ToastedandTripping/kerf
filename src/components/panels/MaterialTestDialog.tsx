@@ -148,7 +148,7 @@ export function MaterialTestDialog({ open, onClose }: Props) {
     if (target === "clipboard") {
       navigator.clipboard.writeText(gcode).then(() => {
         store.addConsoleLine(`Material test G-code copied (${gcode.split("\n").length} lines)`, "info");
-      });
+      }).catch(() => { /* clipboard may be denied */ });
       onClose();
     } else {
       const connected = useStore.getState().machineConnected;
