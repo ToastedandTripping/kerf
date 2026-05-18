@@ -101,7 +101,7 @@ export function GrblSettingsDialog({ open, onClose }: Props) {
   }
 
   async function saveSetting(key: number, value: string) {
-    if (!/^[\d.]+$/.test(value)) {
+    if (!/^\d+(\.\d+)?$/.test(value)) {
       setEditError("Value must be a number (digits and decimal point only)");
       return;
     }
