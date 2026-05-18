@@ -36,7 +36,11 @@ export function ProjectNotesDialog({ open, onClose }: Props) {
           zIndex: 9999,
         }}
       />
-      <div style={{
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="project-notes-dialog-title"
+        style={{
         position: "fixed",
         top: "50%", left: "50%",
         transform: "translate(-50%, -50%)",
@@ -48,7 +52,7 @@ export function ProjectNotesDialog({ open, onClose }: Props) {
         zIndex: 10000,
         padding: "20px",
       }}>
-        <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "12px" }}>
+        <div id="project-notes-dialog-title" style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "12px" }}>
           Project Notes
         </div>
         <textarea
