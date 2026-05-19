@@ -83,7 +83,9 @@ export interface Layer {
   // Cut optimization
   cutInnerFirst: boolean;
   // Image engraving
-  dither: "threshold" | "ordered" | "floydSteinberg" | "jarvis" | "stucki" | "grayscale";
+  dither: "threshold" | "ordered" | "floydSteinberg" | "jarvis" | "stucki" | "grayscale" | "newsprint";
+  // Power curve: user-defined transfer function (input shade 0-255 → output power 0-100%)
+  powerCurve?: Array<{ x: number; y: number }>;
   // Scan direction
   scanAngle: number; // degrees, 0 = horizontal
   angleIncrement: number; // degrees added per pass (0 = same angle every pass)

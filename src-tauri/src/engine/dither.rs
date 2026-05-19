@@ -14,6 +14,7 @@ pub enum DitherAlgorithm {
     Stucki,
     Atkinson,
     Grayscale,      // No dithering - pass-through for variable power (M4)
+    Newsprint,      // Halftone dots: grid of cells with size-proportional circles
 }
 
 impl DitherAlgorithm {
@@ -26,6 +27,7 @@ impl DitherAlgorithm {
             "stucki" => Self::Stucki,
             "atkinson" => Self::Atkinson,
             "grayscale" => Self::Grayscale,
+            "newsprint" => Self::Newsprint,
             _ => Self::FloydSteinberg, // default
         }
     }
@@ -64,6 +66,7 @@ pub fn dither_image(
         DitherAlgorithm::Stucki => dither_stucki(pixels, w, h),
         DitherAlgorithm::Atkinson => dither_atkinson(pixels, w, h),
         DitherAlgorithm::Grayscale => pixels.to_vec(), // pass-through
+        DitherAlgorithm::Newsprint => dither_newsprint(pixels, w, h, 6, 45.0),
     }
 }
 
@@ -184,6 +187,106 @@ fn dither_stucki(pixels: &[u8], w: usize, h: usize) -> Vec<u8> {
     output
 }
 
+/// Newsprint / halftone dithering: grid of cells with proportional dots.
+/// Grid is rotated by `angle` degrees to avoid Moire with scan lines.
+///
+/// For each cell: compute average brightness, draw filled circle of proportional
+/// radius at cell center. `r = cell_size/2 * sqrt(1 - avg/255)`.
+fn dither_newsprint(pixels: &[u8], w: usize, h: usize, cell_size: usize, angle: f64) -> Vec<u8> {
+    let mut output = vec![255u8; w * h]; // start white
+    let cell = cell_size.max(2);
+    let half = cell as f64 / 2.0;
+    let max_r = half;
+
+    let angle_rad = angle * std::f64::consts::PI / 180.0;
+    let cos_a = angle_rad.cos();
+    let sin_a = angle_rad.sin();
+
+    // We iterate over a rotated grid. To cover the entire image, we need to
+    // overscan in the rotated coordinate system.
+    let diagonal = ((w * w + h * h) as f64).sqrt();
+    let grid_min = -(diagonal as i32);
+    let grid_max = diagonal as i32;
+    let cell_i = cell as i32;
+
+    // Iterate over grid cell centers in rotated space
+    let mut gy = grid_min;
+    while gy <= grid_max {
+        let mut gx = grid_min;
+        while gx <= grid_max {
+            // Cell center in rotated space
+            let cx_rot = gx as f64 + half;
+            let cy_rot = gy as f64 + half;
+
+            // Transform to image space (inverse rotation)
+            let img_cx = cx_rot * cos_a + cy_rot * sin_a;
+            let img_cy = -cx_rot * sin_a + cy_rot * cos_a;
+
+            // Check if cell center is within image bounds (with margin)
+            if img_cx < -(cell as f64) || img_cx > (w + cell) as f64
+                || img_cy < -(cell as f64) || img_cy > (h + cell) as f64
+            {
+                gx += cell_i;
+                continue;
+            }
+
+            // Collect average brightness from pixels within this cell
+            let mut sum = 0u64;
+            let mut count = 0u64;
+            for dy in 0..cell {
+                for dx in 0..cell {
+                    // Point in rotated space
+                    let px_rot = gx as f64 + dx as f64;
+                    let py_rot = gy as f64 + dy as f64;
+                    // Transform to image space
+                    let px = (px_rot * cos_a + py_rot * sin_a).round() as i32;
+                    let py = (-px_rot * sin_a + py_rot * cos_a).round() as i32;
+                    if px >= 0 && px < w as i32 && py >= 0 && py < h as i32 {
+                        sum += pixels[py as usize * w + px as usize] as u64;
+                        count += 1;
+                    }
+                }
+            }
+
+            if count == 0 {
+                gx += cell_i;
+                continue;
+            }
+
+            let avg = sum as f64 / count as f64;
+            // r = max_r * sqrt(1 - avg/255): darker = bigger dot
+            let darkness = 1.0 - avg / 255.0;
+            if darkness < 0.01 {
+                gx += cell_i;
+                continue; // nearly white, skip
+            }
+            let r = max_r * darkness.sqrt();
+            let r_sq = r * r;
+
+            // Draw filled circle at (img_cx, img_cy) with radius r
+            let ix_min = ((img_cx - r).floor() as i32).max(0);
+            let ix_max = ((img_cx + r).ceil() as i32).min(w as i32 - 1);
+            let iy_min = ((img_cy - r).floor() as i32).max(0);
+            let iy_max = ((img_cy + r).ceil() as i32).min(h as i32 - 1);
+
+            for iy in iy_min..=iy_max {
+                for ix in ix_min..=ix_max {
+                    let dx = ix as f64 - img_cx;
+                    let dy = iy as f64 - img_cy;
+                    if dx * dx + dy * dy <= r_sq {
+                        output[iy as usize * w + ix as usize] = 0; // black
+                    }
+                }
+            }
+
+            gx += cell_i;
+        }
+        gy += cell_i;
+    }
+
+    output
+}
+
 fn dither_atkinson(pixels: &[u8], w: usize, h: usize) -> Vec<u8> {
     let mut buffer: Vec<i16> = pixels.iter().map(|&p| p as i16).collect();
     let mut output = vec![0u8; w * h];
@@ -210,4 +313,33 @@ fn dither_atkinson(pixels: &[u8], w: usize, h: usize) -> Vec<u8> {
         }
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn newsprint_from_str() {
+        assert_eq!(DitherAlgorithm::from_str("newsprint"), DitherAlgorithm::Newsprint);
+    }
+
+    #[test]
+    fn newsprint_uniform_white_stays_white() {
+        let pixels = vec![255u8; 20 * 20];
+        let result = dither_image(&pixels, 20, 20, DitherAlgorithm::Newsprint, 128);
+        assert_eq!(result.len(), 400);
+        // Uniform white should produce all-white output (no dots)
+        assert!(result.iter().all(|&p| p == 255), "Expected all white pixels for uniform white input");
+    }
+
+    #[test]
+    fn newsprint_uniform_black_produces_dots() {
+        let pixels = vec![0u8; 24 * 24];
+        let result = dither_image(&pixels, 24, 24, DitherAlgorithm::Newsprint, 128);
+        assert_eq!(result.len(), 576);
+        // Uniform black should produce a regular dot pattern (some black pixels)
+        let black_count = result.iter().filter(|&&p| p == 0).count();
+        assert!(black_count > 0, "Expected some black pixels for uniform black input");
+    }
 }

@@ -20,6 +20,13 @@ export interface GcodeResult {
   lineCount: number;
 }
 
+export interface PreviewDitherResult {
+  imageData: string;
+  width: number;
+  height: number;
+  ditherMethod: string;
+}
+
 interface CutObject {
   id: string;
   objType: string;
@@ -52,6 +59,7 @@ interface CutObject {
     tabWidth: number;
     perforationCut: number;
     perforationSkip: number;
+    powerCurve?: Array<[number, number]>;
   };
   cornerRadius: number | null;
   rotation: number;
@@ -83,6 +91,7 @@ function buildCutLayer(layer: Layer, sub?: { mode: string; power: number; powerM
     tabWidth: layer.tabWidth,
     perforationCut: layer.perforationCut,
     perforationSkip: layer.perforationSkip,
+    powerCurve: layer.powerCurve?.map((p) => [p.x, p.y] as [number, number]),
   };
 }
 
@@ -250,6 +259,7 @@ async function generateImageGcode(sValueMax: number = 1000): Promise<GcodeResult
         invert: adj.invert,
         workspaceHeight: store.workspaceHeight,
         sValueMax,
+        powerCurve: layer.powerCurve?.map((p) => [p.x, p.y] as [number, number]),
       },
     });
     results.push(result);
@@ -431,6 +441,45 @@ function generateGcodeFallback(objects: CutObject[], workspaceHeight: number, sV
     estimatedTimeSecs: time,
     lineCount: lines.length,
   };
+}
+
+/** Preview dithered image for a specific image object */
+export async function previewImageDither(objectId: string): Promise<PreviewDitherResult> {
+  const store = useStore.getState();
+  const obj = store.objects.find((o) => o.id === objectId);
+  if (!obj || obj.type !== "image" || !obj.imageData) {
+    throw new Error("No image object found");
+  }
+  const layer = store.layers.find((l) => l.index === obj.layerIndex) || store.layers[0];
+  const adj = obj.imageAdjustments || { brightness: 0, contrast: 0, gamma: 1, invert: false };
+
+  return invoke<PreviewDitherResult>("preview_image_dither", {
+    request: {
+      imageData: obj.imageData,
+      x: obj.transform.x,
+      y: obj.transform.y,
+      width: obj.transform.width,
+      height: obj.transform.height,
+      rotation: obj.transform.rotation || 0,
+      power: layer.power,
+      powerMin: layer.powerMin,
+      speed: layer.speed,
+      passes: layer.passes,
+      powerMode: layer.powerMode,
+      interval: layer.interval,
+      dither: layer.dither,
+      overscan: layer.overscan,
+      bidirectional: layer.bidirectional,
+      scanningOffset: layer.scanningOffset,
+      brightness: adj.brightness,
+      contrast: adj.contrast,
+      gamma: adj.gamma,
+      invert: adj.invert,
+      workspaceHeight: store.workspaceHeight,
+      sValueMax: store.grblSValueMax,
+      powerCurve: layer.powerCurve?.map((p) => [p.x, p.y] as [number, number]),
+    },
+  });
 }
 
 function rotatePoints(

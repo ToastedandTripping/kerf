@@ -1,6 +1,8 @@
 import { useState, useRef } from "react";
 import { useStore } from "../../app/store";
 import type { Layer, CutMode, SubLayer } from "../../app/types";
+import { PowerCurveEditor, PowerCurveThumbnail } from "./PowerCurveEditor";
+import type { CurvePoint } from "./PowerCurveEditor";
 
 const inputStyle: React.CSSProperties = {
   background: "var(--bg-input)",
@@ -106,11 +108,13 @@ function LayerRow({
   onUpdate: (partial: Partial<Layer>) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [curveEditorOpen, setCurveEditorOpen] = useState(false);
   const addSubLayer = useStore((s) => s.addSubLayer);
   const removeSubLayer = useStore((s) => s.removeSubLayer);
   const updateSubLayer = useStore((s) => s.updateSubLayer);
 
   const hasSubLayers = (layer.subLayers?.length ?? 0) > 0;
+  const defaultCurve: CurvePoint[] = [{ x: 0, y: 0 }, { x: 255, y: 100 }];
 
   return (
     <div
@@ -366,8 +370,32 @@ function LayerRow({
                       <option value="jarvis">Jarvis</option>
                       <option value="stucki">Stucki</option>
                       <option value="grayscale">Grayscale</option>
+                      <option value="newsprint">Newsprint (Halftone)</option>
                     </select>
                   </SettingRow>
+
+                  {/* Power Curve */}
+                  <SettingRow label="Curve">
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, width: "100%" }}>
+                      <PowerCurveThumbnail points={layer.powerCurve ?? defaultCurve} />
+                      <button
+                        onClick={() => setCurveEditorOpen(true)}
+                        style={{
+                          padding: "3px 8px",
+                          fontSize: 10,
+                          background: "var(--bg-input)",
+                          border: "1px solid var(--border)",
+                          borderRadius: "var(--radius-sm)",
+                          color: "var(--text-secondary)",
+                          cursor: "pointer",
+                          flexShrink: 0,
+                        }}
+                      >
+                        Edit
+                      </button>
+                    </div>
+                  </SettingRow>
+
                   <SettingRow label="Scan Angle">
                     <input
                       type="number" min="0" max="360" step="1" value={layer.scanAngle ?? 0}
@@ -406,6 +434,17 @@ function LayerRow({
               <AdvancedSettings layer={layer} onUpdate={onUpdate} />
             </>
           )}
+
+          {/* Power Curve Editor Modal */}
+          <PowerCurveEditor
+            open={curveEditorOpen}
+            points={layer.powerCurve ?? defaultCurve}
+            onApply={(pts) => {
+              onUpdate({ powerCurve: pts });
+              setCurveEditorOpen(false);
+            }}
+            onClose={() => setCurveEditorOpen(false)}
+          />
 
           {/* Add Sub-Layer button group */}
           <div style={{ padding: "4px 0 0 0", display: "flex", gap: "4px" }}>

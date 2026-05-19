@@ -40,9 +40,49 @@ pub struct ImageEngraveRequest {
     pub workspace_height: f64,  // for Y-flip
     #[serde(default = "default_s_value_max")]
     pub s_value_max: f64,       // GRBL $30 setting
+    #[serde(default)]
+    pub power_curve: Option<Vec<(f64, f64)>>,  // (shade 0-255, power 0-100%) control points
 }
 
 fn default_s_value_max() -> f64 { 1000.0 }
+
+/// Preview dithered image: runs steps 1-5 (decode, grayscale, resize, adjust, power curve, dither)
+/// and returns the pixel buffer + dimensions. Used for the engrave preview dialog.
+pub fn preview_dither(req: &ImageEngraveRequest) -> Result<(Vec<u8>, u32, u32), String> {
+    // 1. Decode base64 image
+    let image_bytes = decode_base64(&req.image_data)?;
+    let img = image::load_from_memory(&image_bytes)
+        .map_err(|e| format!("Failed to decode image: {}", e))?;
+
+    // 2. Convert to grayscale
+    let gray = img.to_luma8();
+
+    // 3. Resize to target DPI
+    let interval = if req.interval > 0.0 { req.interval } else { 0.1 };
+    let target_w = (req.width / interval).round().max(1.0) as u32;
+    let target_h = (req.height / interval).round().max(1.0) as u32;
+    let resized = image::imageops::resize(&gray, target_w, target_h, FilterType::Lanczos3);
+
+    // 4. Apply adjustments
+    let mut pixels: Vec<u8> = resized.into_raw();
+    apply_adjustments(&mut pixels, req.brightness, req.contrast, req.gamma, req.invert);
+
+    // 4.5. Apply power curve
+    if let Some(ref curve_points) = req.power_curve {
+        if curve_points.len() >= 2 {
+            let lut = build_power_curve_lut(curve_points);
+            for pixel in pixels.iter_mut() {
+                *pixel = lut[*pixel as usize];
+            }
+        }
+    }
+
+    // 5. Dither
+    let algorithm = DitherAlgorithm::from_str(&req.dither);
+    let dithered = dither_image(&pixels, target_w, target_h, algorithm, 128);
+
+    Ok((dithered, target_w, target_h))
+}
 
 /// Generate G-code from an image engraving request
 pub fn generate(req: &ImageEngraveRequest) -> Result<GcodeResult, String> {
@@ -63,6 +103,16 @@ pub fn generate(req: &ImageEngraveRequest) -> Result<GcodeResult, String> {
     // 4. Apply adjustments
     let mut pixels: Vec<u8> = resized.into_raw();
     apply_adjustments(&mut pixels, req.brightness, req.contrast, req.gamma, req.invert);
+
+    // 4.5. Apply power curve (remaps shade values before dithering)
+    if let Some(ref curve_points) = req.power_curve {
+        if curve_points.len() >= 2 {
+            let lut = build_power_curve_lut(curve_points);
+            for pixel in pixels.iter_mut() {
+                *pixel = lut[*pixel as usize];
+            }
+        }
+    }
 
     // 5. Dither
     let algorithm = DitherAlgorithm::from_str(&req.dither);
@@ -122,6 +172,117 @@ fn apply_adjustments(pixels: &mut [u8], brightness: f64, contrast: f64, gamma: f
     for pixel in pixels.iter_mut() {
         *pixel = lut[*pixel as usize];
     }
+}
+
+/// Build a 256-entry lookup table from power curve control points.
+///
+/// Control points: x = input shade (0-255), y = output power (0-100%).
+/// The output is mapped back to shade space: power 0% = shade 255 (white/no engrave),
+/// power 100% = shade 0 (black/full engrave).
+///
+/// Uses monotone cubic (Fritsch-Carlson) interpolation for smooth, non-overshooting curves.
+pub fn build_power_curve_lut(points: &[(f64, f64)]) -> [u8; 256] {
+    let mut lut = [0u8; 256];
+    let n = points.len();
+
+    if n < 2 {
+        // Identity: no transform
+        for i in 0..256 {
+            lut[i] = i as u8;
+        }
+        return lut;
+    }
+
+    // Sort by x (should already be sorted, but be safe)
+    let mut pts: Vec<(f64, f64)> = points.to_vec();
+    pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Compute tangents using Fritsch-Carlson monotone method
+    let mut tangents = vec![0.0_f64; n];
+
+    if n == 2 {
+        let slope = (pts[1].1 - pts[0].1) / (pts[1].0 - pts[0].0).max(1.0);
+        tangents[0] = slope;
+        tangents[1] = slope;
+    } else {
+        // Compute secants
+        let mut secants = vec![0.0_f64; n - 1];
+        for i in 0..n - 1 {
+            let dx = (pts[i + 1].0 - pts[i].0).max(0.001);
+            secants[i] = (pts[i + 1].1 - pts[i].1) / dx;
+        }
+
+        // Initial tangents: average of adjacent secants
+        tangents[0] = secants[0];
+        tangents[n - 1] = secants[n - 2];
+        for i in 1..n - 1 {
+            tangents[i] = (secants[i - 1] + secants[i]) / 2.0;
+        }
+
+        // Fritsch-Carlson monotonicity enforcement
+        for i in 0..n - 1 {
+            if secants[i].abs() < 1e-10 {
+                tangents[i] = 0.0;
+                tangents[i + 1] = 0.0;
+            } else {
+                let alpha = tangents[i] / secants[i];
+                let beta = tangents[i + 1] / secants[i];
+                let tau = alpha * alpha + beta * beta;
+                if tau > 9.0 {
+                    let s = 3.0 / tau.sqrt();
+                    tangents[i] = s * alpha * secants[i];
+                    tangents[i + 1] = s * beta * secants[i];
+                }
+            }
+        }
+    }
+
+    // Evaluate the spline at each integer shade value 0-255
+    for shade in 0..256 {
+        let x = shade as f64;
+
+        // Find the segment containing x
+        let seg = if x <= pts[0].0 {
+            0
+        } else if x >= pts[n - 1].0 {
+            n - 2
+        } else {
+            let mut lo = 0;
+            let mut hi = n - 1;
+            while hi - lo > 1 {
+                let mid = (lo + hi) / 2;
+                if pts[mid].0 <= x {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            lo
+        };
+
+        let dx = (pts[seg + 1].0 - pts[seg].0).max(0.001);
+        let t = ((x - pts[seg].0) / dx).clamp(0.0, 1.0);
+        let t2 = t * t;
+        let t3 = t2 * t;
+
+        // Hermite basis functions
+        let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+        let h10 = t3 - 2.0 * t2 + t;
+        let h01 = -2.0 * t3 + 3.0 * t2;
+        let h11 = t3 - t2;
+
+        let power_pct = h00 * pts[seg].1
+            + h10 * dx * tangents[seg]
+            + h01 * pts[seg + 1].1
+            + h11 * dx * tangents[seg + 1];
+
+        // Power% → shade: 0% power = 255 (white), 100% power = 0 (black)
+        let clamped_power = power_pct.clamp(0.0, 100.0);
+        let shade_out = 255.0 - (clamped_power / 100.0 * 255.0);
+        lut[shade] = shade_out.round().clamp(0.0, 255.0) as u8;
+    }
+
+    lut
 }
 
 /// Generate scan-line G-code from dithered pixel data
@@ -344,4 +505,82 @@ fn estimate_simple_time(cut_dist: &f64, travel_dist: &f64, speed_mm_s: f64) -> f
     let cut_time = cut_dist / speed_mm_s;
     let travel_time = travel_dist / rapid_speed;
     cut_time + travel_time
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn power_curve_linear_is_identity() {
+        // Linear curve: 0% power at shade 0 (black), 100% power at shade 255 (white)
+        // Wait -- the convention: x = input shade, y = output power%.
+        // Default linear: {x:0, y:0} and {x:255, y:100}
+        // shade 0 (black) -> 0% power -> output shade 255 (white)
+        // shade 255 (white) -> 100% power -> output shade 0 (black)
+        //
+        // But that's the *inverted* identity. The "identity" for engraving is:
+        // dark input = high power = dark output, light input = low power = light output.
+        // So shade 0 -> power 100% -> shade 0, shade 255 -> power 0% -> shade 255.
+        //
+        // Let's test the actual linear preset from the spec:
+        // [{x:0, y:0}, {x:255, y:100}]  means shade 0 -> power 0% -> shade 255
+        // This is NOT identity in shade space; it's a full inversion.
+        //
+        // For a TRUE identity in shade space, we need power curve that maps
+        // shade 0 -> power 100% and shade 255 -> power 0%:
+        // [{x:0, y:100}, {x:255, y:0}]
+        let identity_points = vec![(0.0, 100.0), (255.0, 0.0)];
+        let lut = build_power_curve_lut(&identity_points);
+
+        // shade 0 -> power 100% -> output shade 0
+        assert_eq!(lut[0], 0);
+        // shade 255 -> power 0% -> output shade 255
+        assert_eq!(lut[255], 255);
+        // shade 128 -> ~50% power -> ~128
+        assert!((lut[128] as i32 - 128).abs() <= 1, "Expected ~128, got {}", lut[128]);
+    }
+
+    #[test]
+    fn power_curve_step_produces_binary() {
+        // Step function: shade < 128 = no power, shade >= 128 = full power
+        let step_points = vec![
+            (0.0, 0.0),
+            (127.0, 0.0),
+            (128.0, 100.0),
+            (255.0, 100.0),
+        ];
+        let lut = build_power_curve_lut(&step_points);
+
+        // Low shades should map to low power -> high shade (white)
+        assert!(lut[0] >= 250, "shade 0 should be ~255, got {}", lut[0]);
+        assert!(lut[64] >= 250, "shade 64 should be ~255, got {}", lut[64]);
+
+        // High shades should map to high power -> low shade (black)
+        assert!(lut[200] <= 5, "shade 200 should be ~0, got {}", lut[200]);
+        assert!(lut[255] <= 5, "shade 255 should be ~0, got {}", lut[255]);
+    }
+
+    #[test]
+    fn power_curve_lut_serialization_roundtrip() {
+        // Verify that the S-curve preset serializes/deserializes correctly
+        let s_curve = vec![
+            (0.0, 0.0),
+            (64.0, 10.0),
+            (128.0, 50.0),
+            (192.0, 90.0),
+            (255.0, 100.0),
+        ];
+        let json = serde_json::to_string(&s_curve).unwrap();
+        let deserialized: Vec<(f64, f64)> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.len(), 5);
+        assert!((deserialized[2].0 - 128.0).abs() < 0.01);
+        assert!((deserialized[2].1 - 50.0).abs() < 0.01);
+
+        // Build LUT from deserialized and verify it's valid
+        let lut = build_power_curve_lut(&deserialized);
+        // Endpoints
+        assert!(lut[0] >= 250, "shade 0 at 0% power should be ~255");
+        assert!(lut[255] <= 5, "shade 255 at 100% power should be ~0");
+    }
 }

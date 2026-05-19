@@ -40,6 +40,8 @@ pub struct CutLayer {
     pub tab_width: f64,
     pub perforation_cut: f64,   // mm - 0 = disabled
     pub perforation_skip: f64,  // mm
+    #[serde(default)]
+    pub power_curve: Option<Vec<(f64, f64)>>,  // (shade 0-255, power 0-100%) control points
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

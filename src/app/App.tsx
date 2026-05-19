@@ -20,6 +20,7 @@ import { MaterialTestDialog } from "../components/panels/MaterialTestDialog";
 import { SvgImportDialog } from "../components/panels/SvgImportDialog";
 import { ImageImportDialog } from "../components/panels/ImageImportDialog";
 import { ShortcutOverlay } from "../components/panels/ShortcutOverlay";
+import { DitherPreviewDialog } from "../components/panels/DitherPreviewDialog";
 import { useKeyboardShortcuts } from "../lib/shortcuts";
 import { handleFileDrop } from "../lib/fileDrop";
 import { startAutoSave, checkRecoveryFile, clearRecoveryFile } from "../lib/autoSave";
@@ -36,6 +37,7 @@ export const dialogState: {
   openMaterialTest: () => void;
   openSvgImport: (svgContent: string) => void;
   openImageImport: (data: string, name: string, width: number, height: number) => void;
+  openDitherPreview: (objectId: string) => void;
 } = {
   openGrblSettings: () => {},
   openSettings: () => {},
@@ -45,6 +47,7 @@ export const dialogState: {
   openMaterialTest: () => {},
   openSvgImport: () => {},
   openImageImport: () => {},
+  openDitherPreview: () => {},
 };
 
 export default function App() {
@@ -69,6 +72,8 @@ export default function App() {
   const [pendingSvgContent, setPendingSvgContent] = useState<string | null>(null);
   const [imageImportOpen, setImageImportOpen] = useState(false);
   const [pendingImage, setPendingImage] = useState<{ data: string; name: string; width: number; height: number } | null>(null);
+  const [ditherPreviewOpen, setDitherPreviewOpen] = useState(false);
+  const [ditherPreviewObjectId, setDitherPreviewObjectId] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
   // Wire up global dialog openers
@@ -85,6 +90,10 @@ export default function App() {
   dialogState.openImageImport = (data: string, name: string, width: number, height: number) => {
     setPendingImage({ data, name, width, height });
     setImageImportOpen(true);
+  };
+  dialogState.openDitherPreview = (objectId: string) => {
+    setDitherPreviewObjectId(objectId);
+    setDitherPreviewOpen(true);
   };
 
   const onDragOver = useCallback((e: React.DragEvent) => {
@@ -191,6 +200,11 @@ export default function App() {
             setTimeout(() => dialogState.openImageTrace(), 100);
           }
         }}
+      />
+      <DitherPreviewDialog
+        open={ditherPreviewOpen}
+        objectId={ditherPreviewObjectId}
+        onClose={() => { setDitherPreviewOpen(false); setDitherPreviewObjectId(null); }}
       />
       <ShortcutOverlay />
 

@@ -1,5 +1,6 @@
 import { useStore } from "../../app/store";
 import type { ImageAdjustments } from "../../app/types";
+import { dialogState } from "../../app/App";
 
 export function PropertiesPanel() {
   const selectedIds = useStore((s) => s.selectedIds);
@@ -289,6 +290,22 @@ export function PropertiesPanel() {
                   style={inputStyle}
                 />
               </PropertyRow>
+              <button
+                onClick={() => dialogState.openDitherPreview(obj.id)}
+                style={{
+                  marginTop: 4,
+                  width: "100%",
+                  padding: "5px 8px",
+                  fontSize: 11,
+                  background: "var(--bg-input)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  color: "var(--text-secondary)",
+                  cursor: "pointer",
+                }}
+              >
+                Preview Dither
+              </button>
             </PropertyGroup>
           )}
         </div>

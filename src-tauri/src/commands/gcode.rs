@@ -1,3 +1,6 @@
+use base64::Engine;
+use image::ImageEncoder;
+
 use crate::engine::gcode_gen::{self, CutObject, GcodeResult};
 use crate::engine::image_gcode_gen::{self, ImageEngraveRequest};
 use crate::engine::optimizer;
@@ -50,4 +53,41 @@ pub async fn generate_image_gcode(request: ImageEngraveRequest) -> Result<GcodeR
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// Preview dithered image: returns base64 PNG of the processed/dithered result
+/// along with dimensions and the dither method used.
+#[tauri::command]
+pub async fn preview_image_dither(request: ImageEngraveRequest) -> Result<PreviewDitherResult, String> {
+    tokio::task::spawn_blocking(move || {
+        let dither_method = request.dither.clone();
+        let (pixels, width, height) = image_gcode_gen::preview_dither(&request)?;
+
+        // Encode as PNG
+        let mut png_buf = Vec::new();
+        let encoder = image::codecs::png::PngEncoder::new(&mut png_buf);
+        encoder.write_image(&pixels, width, height, image::ExtendedColorType::L8)
+            .map_err(|e| format!("PNG encode error: {}", e))?;
+
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png_buf);
+        let data_uri = format!("data:image/png;base64,{}", b64);
+
+        Ok(PreviewDitherResult {
+            image_data: data_uri,
+            width,
+            height,
+            dither_method,
+        })
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewDitherResult {
+    pub image_data: String,
+    pub width: u32,
+    pub height: u32,
+    pub dither_method: String,
 }
