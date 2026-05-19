@@ -7,8 +7,8 @@ export interface CurvePoint {
 
 const PRESETS: Record<string, CurvePoint[]> = {
   Linear: [
-    { x: 0, y: 0 },
-    { x: 255, y: 100 },
+    { x: 0, y: 100 },
+    { x: 255, y: 0 },
   ],
   "S-Curve": [
     { x: 0, y: 0 },

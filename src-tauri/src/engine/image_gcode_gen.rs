@@ -86,39 +86,11 @@ pub fn preview_dither(req: &ImageEngraveRequest) -> Result<(Vec<u8>, u32, u32), 
 
 /// Generate G-code from an image engraving request
 pub fn generate(req: &ImageEngraveRequest) -> Result<GcodeResult, String> {
-    // 1. Decode base64 image
-    let image_bytes = decode_base64(&req.image_data)?;
-    let img = image::load_from_memory(&image_bytes)
-        .map_err(|e| format!("Failed to decode image: {}", e))?;
-
-    // 2. Convert to grayscale
-    let gray = img.to_luma8();
-
-    // 3. Resize to target DPI
-    let interval = if req.interval > 0.0 { req.interval } else { 0.1 };
-    let target_w = (req.width / interval).round().max(1.0) as u32;
-    let target_h = (req.height / interval).round().max(1.0) as u32;
-    let resized = image::imageops::resize(&gray, target_w, target_h, FilterType::Lanczos3);
-
-    // 4. Apply adjustments
-    let mut pixels: Vec<u8> = resized.into_raw();
-    apply_adjustments(&mut pixels, req.brightness, req.contrast, req.gamma, req.invert);
-
-    // 4.5. Apply power curve (remaps shade values before dithering)
-    if let Some(ref curve_points) = req.power_curve {
-        if curve_points.len() >= 2 {
-            let lut = build_power_curve_lut(curve_points);
-            for pixel in pixels.iter_mut() {
-                *pixel = lut[*pixel as usize];
-            }
-        }
-    }
-
-    // 5. Dither
-    let algorithm = DitherAlgorithm::from_str(&req.dither);
-    let dithered = dither_image(&pixels, target_w, target_h, algorithm, 128);
+    // Steps 1-5: decode, grayscale, resize, adjust, power curve, dither
+    let (dithered, target_w, target_h) = preview_dither(req)?;
 
     // 6. Generate scan-line G-code
+    let algorithm = DitherAlgorithm::from_str(&req.dither);
     let is_grayscale = algorithm == DitherAlgorithm::Grayscale;
     generate_scan_gcode(req, &dithered, target_w, target_h, is_grayscale)
 }
@@ -513,23 +485,11 @@ mod tests {
 
     #[test]
     fn power_curve_linear_is_identity() {
-        // Linear curve: 0% power at shade 0 (black), 100% power at shade 255 (white)
-        // Wait -- the convention: x = input shade, y = output power%.
-        // Default linear: {x:0, y:0} and {x:255, y:100}
-        // shade 0 (black) -> 0% power -> output shade 255 (white)
-        // shade 255 (white) -> 100% power -> output shade 0 (black)
-        //
-        // But that's the *inverted* identity. The "identity" for engraving is:
-        // dark input = high power = dark output, light input = low power = light output.
-        // So shade 0 -> power 100% -> shade 0, shade 255 -> power 0% -> shade 255.
-        //
-        // Let's test the actual linear preset from the spec:
-        // [{x:0, y:0}, {x:255, y:100}]  means shade 0 -> power 0% -> shade 255
-        // This is NOT identity in shade space; it's a full inversion.
-        //
-        // For a TRUE identity in shade space, we need power curve that maps
-        // shade 0 -> power 100% and shade 255 -> power 0%:
-        // [{x:0, y:100}, {x:255, y:0}]
+        // The "Linear" preset is [{x:0, y:100}, {x:255, y:0}].
+        // This is the true identity in shade space:
+        //   shade 0 (black) -> 100% power -> output shade 0 (black)
+        //   shade 255 (white) -> 0% power -> output shade 255 (white)
+        // Dark stays dark, light stays light -- no tonal inversion.
         let identity_points = vec![(0.0, 100.0), (255.0, 0.0)];
         let lut = build_power_curve_lut(&identity_points);
 

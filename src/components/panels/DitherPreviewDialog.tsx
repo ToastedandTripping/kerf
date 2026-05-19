@@ -297,7 +297,7 @@ export function DitherPreviewDialog({
                 marginBottom: 1,
               }}
             >
-              Est. Time
+              Est. Time (approx.)
             </span>
             <span
               style={{
@@ -333,13 +333,12 @@ export function DitherPreviewDialog({
   );
 }
 
-/** Rough engrave time estimate from pixel dimensions */
+/** Rough engrave time estimate from pixel dimensions.
+ *  Uses hardcoded assumptions (100mm/s, 0.1mm interval) -- does not
+ *  reflect actual layer settings. Displayed as "approx." in the UI. */
 function estimateEngraveTime(w: number, h: number): number {
-  // Assume ~100mm/s engrave speed, 0.1mm interval
-  // Time per row ~ width_px * 0.1mm / 100mm/s
-  // Total ~ rows * time_per_row + travel
-  const interval = 0.1;
-  const speed = 100;
+  const interval = 0.1;  // assumed line interval (mm)
+  const speed = 100;     // assumed engrave speed (mm/s)
   const widthMm = w * interval;
   const rows = h;
   return (rows * widthMm) / speed;

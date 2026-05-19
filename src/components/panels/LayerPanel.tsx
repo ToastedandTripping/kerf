@@ -114,7 +114,7 @@ function LayerRow({
   const updateSubLayer = useStore((s) => s.updateSubLayer);
 
   const hasSubLayers = (layer.subLayers?.length ?? 0) > 0;
-  const defaultCurve: CurvePoint[] = [{ x: 0, y: 0 }, { x: 255, y: 100 }];
+  const defaultCurve: CurvePoint[] = [{ x: 0, y: 100 }, { x: 255, y: 0 }];
 
   return (
     <div
