@@ -179,14 +179,15 @@ export const useStore = create<AppState>((set, get) => ({
     const afterSelectedIds = get().selectedIds;
     if (beforeObjects !== afterObjects) {
       const afterSnapshot = stripImageData(afterObjects);
-      // Restore live imageData from current objects array when applying undo/redo
+      // Capture only the id->imageData entries from both arrays (not the full object arrays)
+      const capturedImages = new Map<string, string>();
+      for (const o of beforeObjects) { if (o.imageData && o.imageData !== "__UNDO_REF__") capturedImages.set(o.id, o.imageData); }
+      for (const o of afterObjects) { if (o.imageData && o.imageData !== "__UNDO_REF__") capturedImages.set(o.id, o.imageData); }
+      // Restore imageData from captured map + live state (closure captures capturedImages, not beforeObjects/afterObjects)
       const restoreImageData = (snapshot: import("../types").DesignObject[]): import("../types").DesignObject[] => {
         const live = get().objects;
-        const imageMap = new Map<string, string>();
+        const imageMap = new Map<string, string>(capturedImages);
         for (const o of live) { if (o.imageData && o.imageData !== "__UNDO_REF__") imageMap.set(o.id, o.imageData); }
-        // Also check the before/after objects we captured at command creation time
-        for (const o of beforeObjects) { if (o.imageData && o.imageData !== "__UNDO_REF__") imageMap.set(o.id, o.imageData); }
-        for (const o of afterObjects) { if (o.imageData && o.imageData !== "__UNDO_REF__") imageMap.set(o.id, o.imageData); }
         return snapshot.map((o) => o.imageData === "__UNDO_REF__" ? { ...o, imageData: imageMap.get(o.id) } : o);
       };
       get().pushCommand({
@@ -205,11 +206,27 @@ export const useStore = create<AppState>((set, get) => ({
   commitPropertyEdit: () => {
     const snapshot = get()._propertyEditSnapshot;
     if (snapshot && snapshot.objects !== get().objects) {
-      const after = { objects: get().objects, selectedIds: get().selectedIds };
+      const afterObjects = get().objects;
+      const afterSelectedIds = get().selectedIds;
+      // Strip imageData from snapshots to avoid duplicating large base64 strings in undo history
+      const stripImageData = (objects: import("../types").DesignObject[]): import("../types").DesignObject[] =>
+        objects.map((o) => o.imageData ? { ...o, imageData: "__UNDO_REF__" } : o);
+      const beforeSnapshot = stripImageData(snapshot.objects);
+      const afterSnapshot = stripImageData(afterObjects);
+      // Capture only the id->imageData entries (not full object arrays)
+      const capturedImages = new Map<string, string>();
+      for (const o of snapshot.objects) { if (o.imageData && o.imageData !== "__UNDO_REF__") capturedImages.set(o.id, o.imageData); }
+      for (const o of afterObjects) { if (o.imageData && o.imageData !== "__UNDO_REF__") capturedImages.set(o.id, o.imageData); }
+      const restoreImageData = (snap: import("../types").DesignObject[]): import("../types").DesignObject[] => {
+        const live = get().objects;
+        const imageMap = new Map<string, string>(capturedImages);
+        for (const o of live) { if (o.imageData && o.imageData !== "__UNDO_REF__") imageMap.set(o.id, o.imageData); }
+        return snap.map((o) => o.imageData === "__UNDO_REF__" ? { ...o, imageData: imageMap.get(o.id) } : o);
+      };
       get().pushCommand({
         type: "property-edit",
-        undo: () => set({ objects: snapshot.objects, selectedIds: snapshot.selectedIds, isDirty: true }),
-        redo: () => set({ objects: after.objects, selectedIds: after.selectedIds, isDirty: true }),
+        undo: () => set({ objects: restoreImageData(beforeSnapshot), selectedIds: snapshot.selectedIds, isDirty: true }),
+        redo: () => set({ objects: restoreImageData(afterSnapshot), selectedIds: afterSelectedIds, isDirty: true }),
       });
     }
     set({ _propertyEditSnapshot: null });

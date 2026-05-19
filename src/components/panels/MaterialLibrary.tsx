@@ -101,7 +101,9 @@ export function MaterialLibrary() {
     <div style={{ borderBottom: "1px solid var(--border)" }}>
       <div
         onClick={() => setExpanded(!expanded)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded(!expanded); } }}
         role="button"
+        tabIndex={0}
         aria-expanded={expanded}
         aria-label="Material library"
         style={{

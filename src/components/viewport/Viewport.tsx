@@ -6,16 +6,16 @@ import { handleViewportPointerDown, handleViewportPointerMove, handleViewportPoi
 
 const PX_PER_MM = 3.78; // ~96dpi -> mm conversion for screen display
 
-// Cache for GPU textures keyed by imageData content (avoids re-upload on every render)
+// Cache for GPU textures keyed by object ID (avoids retaining megabyte-sized base64 strings as Map keys)
 const textureCache = new Map<string, Texture>();
 
-function getOrCreateTexture(imageData: string): Texture {
-  let tex = textureCache.get(imageData);
+function getOrCreateTexture(id: string, imageData: string): Texture {
+  let tex = textureCache.get(id);
   if (tex) return tex;
   const img = new Image();
   img.src = imageData;
   tex = Texture.from(img);
-  textureCache.set(imageData, tex);
+  textureCache.set(id, tex);
   return tex;
 }
 
@@ -246,6 +246,23 @@ export function Viewport() {
         container.removeChild(displayObj);
         displayObj.destroy({ children: true });
         cache.delete(key);
+      }
+    }
+
+    // Evict unused GPU textures (keyed by object ID)
+    const activeImageIds = new Set<string>();
+    for (const obj of objects) {
+      if (obj.imageData) activeImageIds.add(obj.id);
+      if (obj.type === "group" && obj.children) {
+        for (const child of obj.children) {
+          if (child.imageData) activeImageIds.add(child.id);
+        }
+      }
+    }
+    for (const [id, tex] of textureCache) {
+      if (!activeImageIds.has(id)) {
+        tex.destroy(true);
+        textureCache.delete(id);
       }
     }
   }, [objects, layers]);
@@ -764,7 +781,7 @@ function renderImageObject(obj: DesignObject): Container | null {
   const ph = t.height * PX_PER_MM;
 
   try {
-    const texture = getOrCreateTexture(obj.imageData);
+    const texture = getOrCreateTexture(obj.id, obj.imageData);
     const sprite = new Sprite(texture);
     sprite.x = px;
     sprite.y = py;
