@@ -126,13 +126,25 @@ export async function extractVectorPaths(
     for (const sub of pathList) {
       if (sub.points.length < 2) continue;
 
-      // Compute bounding box
+      // Compute bounding box (include bezier control points which can extend beyond endpoints)
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for (const pt of sub.points) {
         minX = Math.min(minX, pt.x);
         minY = Math.min(minY, pt.y);
         maxX = Math.max(maxX, pt.x);
         maxY = Math.max(maxY, pt.y);
+        if (pt.handleIn) {
+          minX = Math.min(minX, pt.handleIn.x);
+          minY = Math.min(minY, pt.handleIn.y);
+          maxX = Math.max(maxX, pt.handleIn.x);
+          maxY = Math.max(maxY, pt.handleIn.y);
+        }
+        if (pt.handleOut) {
+          minX = Math.min(minX, pt.handleOut.x);
+          minY = Math.min(minY, pt.handleOut.y);
+          maxX = Math.max(maxX, pt.handleOut.x);
+          maxY = Math.max(maxY, pt.handleOut.y);
+        }
       }
 
       const obj: DesignObject = {

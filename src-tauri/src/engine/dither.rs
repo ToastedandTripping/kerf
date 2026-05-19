@@ -355,6 +355,8 @@ mod tests {
         // but the dot counts should differ
         assert!(black_small > 0 && black_large > 0,
             "Both should have dots: small={}, large={}", black_small, black_large);
+        assert_ne!(black_small, black_large,
+            "Different cell sizes should produce different dot counts: small={}, large={}", black_small, black_large);
     }
 
     #[test]
