@@ -21,6 +21,7 @@ import { SvgImportDialog } from "../components/panels/SvgImportDialog";
 import { ImageImportDialog } from "../components/panels/ImageImportDialog";
 import { ShortcutOverlay } from "../components/panels/ShortcutOverlay";
 import { DitherPreviewDialog } from "../components/panels/DitherPreviewDialog";
+import { PdfImportDialog } from "../components/panels/PdfImportDialog";
 import { useKeyboardShortcuts } from "../lib/shortcuts";
 import { handleFileDrop } from "../lib/fileDrop";
 import { startAutoSave, checkRecoveryFile, clearRecoveryFile } from "../lib/autoSave";
@@ -38,6 +39,7 @@ export const dialogState: {
   openSvgImport: (svgContent: string) => void;
   openImageImport: (data: string, name: string, width: number, height: number) => void;
   openDitherPreview: (objectId: string) => void;
+  openPdfImport: (data: ArrayBuffer, name: string) => void;
 } = {
   openGrblSettings: () => {},
   openSettings: () => {},
@@ -48,6 +50,7 @@ export const dialogState: {
   openSvgImport: () => {},
   openImageImport: () => {},
   openDitherPreview: () => {},
+  openPdfImport: () => {},
 };
 
 export default function App() {
@@ -74,6 +77,8 @@ export default function App() {
   const [pendingImage, setPendingImage] = useState<{ data: string; name: string; width: number; height: number } | null>(null);
   const [ditherPreviewOpen, setDitherPreviewOpen] = useState(false);
   const [ditherPreviewObjectId, setDitherPreviewObjectId] = useState<string | null>(null);
+  const [pdfImportOpen, setPdfImportOpen] = useState(false);
+  const [pendingPdf, setPendingPdf] = useState<{ data: ArrayBuffer; name: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
   // Wire up global dialog openers
@@ -94,6 +99,10 @@ export default function App() {
   dialogState.openDitherPreview = (objectId: string) => {
     setDitherPreviewObjectId(objectId);
     setDitherPreviewOpen(true);
+  };
+  dialogState.openPdfImport = (data: ArrayBuffer, name: string) => {
+    setPendingPdf({ data, name });
+    setPdfImportOpen(true);
   };
 
   const onDragOver = useCallback((e: React.DragEvent) => {
@@ -205,6 +214,17 @@ export default function App() {
         open={ditherPreviewOpen}
         objectId={ditherPreviewObjectId}
         onClose={() => { setDitherPreviewOpen(false); setDitherPreviewObjectId(null); }}
+      />
+      <PdfImportDialog
+        open={pdfImportOpen}
+        pdfData={pendingPdf?.data ?? null}
+        fileName={pendingPdf?.name ?? ""}
+        onClose={() => { setPdfImportOpen(false); setPendingPdf(null); }}
+        onImport={(imageData, width, height) => {
+          setPdfImportOpen(false);
+          setPendingPdf(null);
+          dialogState.openImageImport(imageData, pendingPdf?.name ?? "pdf-page.png", width, height);
+        }}
       />
       <ShortcutOverlay />
 

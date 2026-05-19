@@ -60,9 +60,12 @@ interface CutObject {
     perforationCut: number;
     perforationSkip: number;
     powerCurve?: Array<[number, number]>;
+    fillOrder?: string;
   };
   cornerRadius: number | null;
   rotation: number;
+  priority?: number;
+  groupId?: string;
 }
 
 /** Build layer settings for a CutObject from a Layer (or SubLayer override) */
@@ -92,6 +95,7 @@ function buildCutLayer(layer: Layer, sub?: { mode: string; power: number; powerM
     perforationCut: layer.perforationCut,
     perforationSkip: layer.perforationSkip,
     powerCurve: layer.powerCurve?.map((p) => [p.x, p.y] as [number, number]),
+    fillOrder: layer.fillOrder || "sequential",
   };
 }
 
@@ -197,6 +201,8 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
       paths,
       cornerRadius: obj.cornerRadius || null,
       rotation: obj.transform.rotation || 0,
+      priority: obj.priority ?? 0,
+      groupId: undefined as string | undefined,
     };
 
     const scale = obj.powerScale ?? 1.0;
@@ -313,6 +319,8 @@ export async function generateGcode(): Promise<GcodeResult> {
       objects: cutObjects,
       workspaceHeight: store.workspaceHeight,
       sValueMax,
+      startCorner: store.startCorner || "bottomLeft",
+      workspaceWidth: store.workspaceWidth,
     });
 
     if (imageResult) {

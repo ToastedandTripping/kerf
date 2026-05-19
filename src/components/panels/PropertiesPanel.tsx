@@ -214,6 +214,22 @@ export function PropertiesPanel() {
             />
           </PropertyGroup>
 
+          {/* Cut Order */}
+          <PropertyGroup label="Cut Order">
+            <NumberField
+              label="Priority"
+              value={obj.priority ?? 0}
+              onChange={(v) => updateObject(obj.id, { priority: Math.max(0, Math.min(99, Math.round(v))) })}
+              unit=""
+              step={1}
+              onFocus={beginEdit}
+              onBlur={commitEdit}
+            />
+            <div style={{ fontSize: "10px", color: "var(--text-muted)", marginTop: "4px", lineHeight: 1.4 }}>
+              Higher cuts first. 0 = default order.
+            </div>
+          </PropertyGroup>
+
           {/* Image adjustments */}
           {obj.type === "image" && (
             <PropertyGroup label="Image">

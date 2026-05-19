@@ -7,6 +7,7 @@ import type {
   CameraState,
   KerfProject,
   MaterialPreset,
+  StartCorner,
 } from "../types";
 
 export type StoreSet = StoreApi<AppState>["setState"];
@@ -182,6 +183,10 @@ export interface AppState {
   booleanIntersection: () => void;
   booleanXor: () => void;
   offsetPaths: (distance: number) => void;
+
+  // Start corner for cut ordering
+  startCorner: StartCorner;
+  setStartCorner: (corner: StartCorner) => void;
 
   // Project notes
   projectNotes: string;

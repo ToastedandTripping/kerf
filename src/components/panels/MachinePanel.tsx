@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useStore } from "../../app/store";
 import { machineConnection } from "../../lib/machine/connection";
 import { generateGcode } from "../../lib/machine/gcodeGen";
-import type { DesignObject } from "../../app/types";
+import type { DesignObject, StartCorner } from "../../app/types";
 
 /** Compute bounding box of all visible, unlocked design objects */
 function getDesignBounds(objects: DesignObject[]): { minX: number; minY: number; maxX: number; maxY: number } | null {
@@ -56,6 +56,8 @@ export function MachinePanel() {
   const jobProgress = useStore((s) => s.jobProgress);
   const activeTool = useStore((s) => s.activeTool);
   const setActiveTool = useStore((s) => s.setActiveTool);
+  const startCorner = useStore((s) => s.startCorner);
+  const setStartCorner = useStore((s) => s.setStartCorner);
 
   const [selectedPort, setSelectedPort] = useState("");
   const [ports, setPorts] = useState<Array<{ name: string; portType: string; vid: number | null; pid: number | null }>>([]);
@@ -450,6 +452,37 @@ export function MachinePanel() {
             </button>
           </div>
 
+          {/* Start Corner selector */}
+          <div>
+            <div style={{
+              fontSize: "10px",
+              color: "var(--text-muted)",
+              textTransform: "uppercase",
+              letterSpacing: "0.3px",
+              marginBottom: "4px",
+            }}>
+              Start Corner
+            </div>
+            <div style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(3, 32px)",
+              gridTemplateRows: "repeat(3, 32px)",
+              gap: "2px",
+              width: "fit-content",
+              margin: "0 auto",
+            }}>
+              <StartCornerButton corner="topLeft" active={startCorner} onClick={setStartCorner} />
+              <div />
+              <StartCornerButton corner="topRight" active={startCorner} onClick={setStartCorner} />
+              <div />
+              <StartCornerButton corner="center" active={startCorner} onClick={setStartCorner} />
+              <div />
+              <StartCornerButton corner="bottomLeft" active={startCorner} onClick={setStartCorner} />
+              <div />
+              <StartCornerButton corner="bottomRight" active={startCorner} onClick={setStartCorner} />
+            </div>
+          </div>
+
           {/* Generate + Preview buttons */}
           <div style={{ display: "flex", gap: "4px" }}>
             <button
@@ -628,6 +661,74 @@ function JogButton({
       }}
     >
       {label}
+    </button>
+  );
+}
+
+const CORNER_DOT_POSITIONS: Record<StartCorner, { cx: number; cy: number }> = {
+  topLeft: { cx: 2, cy: 2 },
+  topRight: { cx: 18, cy: 2 },
+  bottomLeft: { cx: 2, cy: 18 },
+  bottomRight: { cx: 18, cy: 18 },
+  center: { cx: 10, cy: 10 },
+};
+
+const CORNER_LABELS: Record<StartCorner, string> = {
+  topLeft: "Top Left",
+  topRight: "Top Right",
+  bottomLeft: "Bottom Left",
+  bottomRight: "Bottom Right",
+  center: "Center",
+};
+
+function StartCornerButton({
+  corner,
+  active,
+  onClick,
+}: {
+  corner: StartCorner;
+  active: StartCorner;
+  onClick: (c: StartCorner) => void;
+}) {
+  const isActive = active === corner;
+  const dot = CORNER_DOT_POSITIONS[corner];
+
+  return (
+    <button
+      onClick={() => onClick(corner)}
+      aria-label={CORNER_LABELS[corner]}
+      style={{
+        width: "32px",
+        height: "32px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        borderRadius: "var(--radius-sm)",
+        cursor: "pointer",
+        border: isActive ? "1px solid var(--accent)" : "1px solid var(--border)",
+        background: isActive ? "rgba(74,144,226,0.15)" : "var(--bg-input)",
+        fontSize: 0,
+        transition: "background 100ms ease, border-color 100ms ease",
+        color: isActive ? "var(--accent)" : "var(--text-muted)",
+      }}
+      onMouseEnter={(e) => {
+        if (!isActive) {
+          e.currentTarget.style.background = "var(--bg-hover)";
+          e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)";
+        }
+      }}
+      onMouseLeave={(e) => {
+        if (!isActive) {
+          e.currentTarget.style.background = "var(--bg-input)";
+          e.currentTarget.style.borderColor = "var(--border)";
+        }
+      }}
+    >
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+        <rect x="2" y="2" width="16" height="16" rx="1"
+          stroke="currentColor" strokeWidth="1" fill="none" />
+        <circle cx={dot.cx} cy={dot.cy} r="2" fill="currentColor" />
+      </svg>
     </button>
   );
 }

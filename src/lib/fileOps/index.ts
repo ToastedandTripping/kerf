@@ -81,6 +81,7 @@ export const fileOperations = {
           { name: "Kerf Project", extensions: ["kerf"] },
           { name: "SVG", extensions: ["svg"] },
           { name: "DXF", extensions: ["dxf"] },
+          { name: "PDF", extensions: ["pdf"] },
           { name: "Images", extensions: ["png", "jpg", "jpeg", "bmp", "gif", "webp"] },
           { name: "All Files", extensions: ["*"] },
         ],
@@ -95,6 +96,13 @@ export const fileOperations = {
       } else if (ext === "dxf") {
         const content = await fsModule.readTextFile(pathStr);
         importDxfContent(content);
+      } else if (ext === "pdf") {
+        const data = await fsModule.readFile(pathStr);
+        const { pdfBytesToArrayBuffer } = await import("./pdfImport");
+        const { dialogState } = await import("../../app/App");
+        const arrayBuffer = pdfBytesToArrayBuffer(data);
+        const fileName = pathStr.split("/").pop() || "document.pdf";
+        dialogState.openPdfImport(arrayBuffer, fileName);
       } else if (["png", "jpg", "jpeg", "bmp", "gif", "webp"].includes(ext)) {
         const data = await fsModule.readFile(pathStr);
         importImageData(data, ext);
@@ -191,6 +199,23 @@ export const fileOperations = {
       const pathStr = typeof path === "string" ? path : (path as any).path ?? String(path);
       const content = await fsModule.readTextFile(pathStr);
       importDxfContent(content);
+    }
+  },
+
+  async importPdf() {
+    const hasTauri = await ensureTauri();
+    if (hasTauri && dialogModule && fsModule) {
+      const path = await dialogModule.open({
+        filters: [{ name: "PDF", extensions: ["pdf"] }],
+      });
+      if (!path) return;
+      const pathStr = typeof path === "string" ? path : (path as any).path ?? String(path);
+      const data = await fsModule.readFile(pathStr);
+      const { pdfBytesToArrayBuffer } = await import("./pdfImport");
+      const { dialogState } = await import("../../app/App");
+      const arrayBuffer = pdfBytesToArrayBuffer(data);
+      const fileName = pathStr.split("/").pop() || "document.pdf";
+      dialogState.openPdfImport(arrayBuffer, fileName);
     }
   },
 

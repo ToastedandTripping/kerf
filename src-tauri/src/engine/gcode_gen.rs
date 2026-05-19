@@ -42,6 +42,8 @@ pub struct CutLayer {
     pub perforation_skip: f64,  // mm
     #[serde(default)]
     pub power_curve: Option<Vec<(f64, f64)>>,  // (shade 0-255, power 0-100%) control points
+    #[serde(default)]
+    pub fill_order: Option<String>,  // "sequential" (default) or "flood"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +59,10 @@ pub struct CutObject {
     pub layer: CutLayer,
     pub corner_radius: Option<f64>,
     pub rotation: f64,
+    #[serde(default)]
+    pub priority: Option<i32>,
+    #[serde(default)]
+    pub group_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -541,6 +547,72 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                             &mut cur_x, &mut cur_y,
                             y_min, y_max, x_min, x_max, true,
                         );
+                    }
+                }
+                "offsetFill" => {
+                    // Offset fill mode: concentric paths spiraling inward
+                    lines.push(format!("; Offset Fill: {} ({}% @ {}mm/s, interval {}mm)",
+                        obj.id, layer.power, layer.speed, layer.interval));
+
+                    let interval = if layer.interval > 0.0 { layer.interval } else { 0.5 };
+
+                    // Build polygon from object geometry
+                    let path = if obj.paths.is_empty() {
+                        object_to_path(obj)
+                    } else {
+                        let mut p = obj.paths[0].clone();
+                        rotate_segment(&mut p, obj);
+                        p
+                    };
+
+                    if path.points.len() >= 3 {
+                        let polygon: Vec<super::gcode_gen::Point> = path.points.iter()
+                            .map(|p| Point { x: p.x, y: p.y })
+                            .collect();
+
+                        let rings = super::offset::generate_offset_rings(&polygon, interval);
+
+                        lines.push(format!("{} S{}", power_cmd, s_max));
+
+                        for ring in &rings {
+                            if ring.len() < 2 { continue; }
+
+                            // Rapid to ring start
+                            let (rsx, rsy) = (ring[0].x, workspace_height - ring[0].y);
+                            let dist = ((rsx - cur_x).powi(2) + (rsy - cur_y).powi(2)).sqrt();
+                            travel_distance += dist;
+                            total_distance += dist;
+                            lines.push(format!("G0 X{:.3} Y{:.3}", rsx, rsy));
+                            moves.push(GcodeMove { x: rsx, y: rsy, move_type: "rapid".to_string(), speed: 3000.0, power: 0.0 });
+                            cur_x = rsx;
+                            cur_y = rsy;
+
+                            // Cut along ring
+                            for pt in ring.iter().skip(1) {
+                                let (px, py) = (pt.x, workspace_height - pt.y);
+                                let d = ((px - cur_x).powi(2) + (py - cur_y).powi(2)).sqrt();
+                                cut_distance += d;
+                                total_distance += d;
+                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", px, py, speed_mm_min, s_max));
+                                moves.push(GcodeMove { x: px, y: py, move_type: "cut".to_string(), speed: speed_mm_min, power: s_max });
+                                cur_x = px;
+                                cur_y = py;
+                            }
+
+                            // Close the ring
+                            let (fx, fy) = (ring[0].x, workspace_height - ring[0].y);
+                            let d = ((fx - cur_x).powi(2) + (fy - cur_y).powi(2)).sqrt();
+                            if d > 0.001 {
+                                cut_distance += d;
+                                total_distance += d;
+                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", fx, fy, speed_mm_min, s_max));
+                                moves.push(GcodeMove { x: fx, y: fy, move_type: "cut".to_string(), speed: speed_mm_min, power: s_max });
+                                cur_x = fx;
+                                cur_y = fy;
+                            }
+                        }
+
+                        lines.push("M5".to_string());
                     }
                 }
                 _ => {}
