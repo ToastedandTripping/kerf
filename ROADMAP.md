@@ -1,10 +1,14 @@
 ---
 status: active
-current: v0.4 — Production-Ready Core
-next: v0.5 — Advanced Engraving
-testing: v0.3.1 -- trace preprocessing, import dialogs
+current: v0.5 — Advanced Engraving
+next: v0.6 — Production Features
+testing: null
 pinned: true
 shipped:
+  - date: 2026-05-19
+    item: v0.5 — Advanced Engraving — power curve editor, newsprint dither, dither preview, offset fill, flood fill, multi-criteria cut ordering, start corner, PDF import
+  - date: 2026-05-18
+    item: v0.4 — Production-Ready Core — layer reorder, power scale, scan angle, auto-save, onboarding, production audit (27 tests, ARIA, Pixi cache, undo fix)
   - date: 2026-05-15
     item: Phase 1-3 — Drag-drop import, SVG layer mapping, image import dialog, trace preprocessing pipeline, connection auto-detect, job progress
   - date: 2026-05-15
@@ -63,12 +67,12 @@ Boolean ops, array tools.
 - Layer reorder (controls cut sequence = safety-critical)
 
 **Tier 2 gaps (productivity/quality):**
-- Offset Fill mode (concentric contour paths)
+- ~~Offset Fill mode~~ (v0.5)
 - Scan angle + rotation between passes
-- Cut planner: multi-criteria ordering, flood fill, choose corner
-- Power Scale per shape (gradient depth in one layer)
-- Grayscale power curve (non-linear per-shade mapping)
-- PDF/AI import
+- ~~Cut planner: multi-criteria ordering, flood fill, choose corner~~ (v0.5)
+- ~~Power Scale per shape~~ (v0.4)
+- ~~Grayscale power curve~~ (v0.5)
+- ~~PDF import~~ (v0.5, raster; vector extraction pending)
 - Material library UX (export/share/merge, ship defaults)
 
 **Tier 3 gaps (advanced/pro — post-v0.5):**
@@ -275,18 +279,18 @@ Not a manual — just enough to make the core loop obvious.
 
 ---
 
-## v0.5 — Advanced Engraving (Post v0.4)
+## v0.5 — Advanced Engraving (Current)
 
 *Make photo/image engraving competitive with LightBurn output quality.*
 
-- [ ] Offset Fill mode (concentric paths following shape contour)
-- [ ] Flood Fill (proximity-based non-sequential scanning)
-- [ ] Grayscale power curve editor (non-linear per-shade mapping)
-- [ ] Newsprint / halftone dithering algorithm
-- [ ] Image engraving preview (show dither result before sending)
-- [ ] Cut planner: multi-criteria ordering (layer → group → priority)
-- [ ] Cut planner: choose corner (consistent start point)
-- [ ] PDF import (via pdf.js or Rust pdf-extract)
+- [x] Offset Fill mode (concentric paths following shape contour)
+- [x] Flood Fill (proximity-based non-sequential scanning)
+- [x] Grayscale power curve editor (non-linear per-shade mapping)
+- [x] Newsprint / halftone dithering algorithm
+- [x] Image engraving preview (show dither result before sending)
+- [x] Cut planner: multi-criteria ordering (layer → group → priority)
+- [x] Cut planner: choose corner (consistent start point)
+- [x] PDF import (raster via pdf.js; vector extraction planned for v0.6)
 
 ---
 
