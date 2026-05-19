@@ -57,11 +57,13 @@ export interface DesignObject {
   // Image
   imageData?: string; // base64
   imageAdjustments?: ImageAdjustments; // image
+  // Cut ordering
+  priority?: number; // 0-99, higher = cut first, default 0
   // Group
   children?: DesignObject[]; // group
 }
 
-export type CutMode = "line" | "fill";
+export type CutMode = "line" | "fill" | "offsetFill";
 export type PowerMode = "constant" | "variable"; // M3 vs M4
 
 export interface Layer {
@@ -83,7 +85,11 @@ export interface Layer {
   // Cut optimization
   cutInnerFirst: boolean;
   // Image engraving
-  dither: "threshold" | "ordered" | "floydSteinberg" | "jarvis" | "stucki" | "grayscale";
+  dither: "threshold" | "ordered" | "floydSteinberg" | "jarvis" | "stucki" | "grayscale" | "newsprint";
+  // Power curve: user-defined transfer function (input shade 0-255 → output power 0-100%)
+  powerCurve?: Array<{ x: number; y: number }>;
+  // Fill ordering
+  fillOrder?: "sequential" | "flood"; // default "sequential"
   // Scan direction
   scanAngle: number; // degrees, 0 = horizontal
   angleIncrement: number; // degrees added per pass (0 = same angle every pass)
@@ -154,6 +160,8 @@ export const DEFAULT_LAYERS: Layer[] = [
   { index: 5, name: "Layer 5", color: "#4ae2e2", mode: "line", power: 100, speed: 20, passes: 1, ...layerDefaults },
 ];
 
+export type StartCorner = "bottomLeft" | "bottomRight" | "topLeft" | "topRight" | "center";
+
 export interface KerfProject {
   version: string;
   name: string;
@@ -164,4 +172,5 @@ export interface KerfProject {
   workspaceHeight: number;
   notes?: string;
   materials?: MaterialPreset[];
+  startCorner?: StartCorner;
 }

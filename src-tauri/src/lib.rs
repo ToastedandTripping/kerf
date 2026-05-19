@@ -12,6 +12,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::gcode::generate_gcode,
             commands::gcode::generate_image_gcode,
+            commands::gcode::preview_image_dither,
             commands::serial::list_serial_ports,
             commands::serial::serial_connect,
             commands::serial::serial_disconnect,

@@ -1,6 +1,8 @@
 import { useState, useRef } from "react";
 import { useStore } from "../../app/store";
 import type { Layer, CutMode, SubLayer } from "../../app/types";
+import { PowerCurveEditor, PowerCurveThumbnail } from "./PowerCurveEditor";
+import type { CurvePoint } from "./PowerCurveEditor";
 
 const inputStyle: React.CSSProperties = {
   background: "var(--bg-input)",
@@ -106,11 +108,13 @@ function LayerRow({
   onUpdate: (partial: Partial<Layer>) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [curveEditorOpen, setCurveEditorOpen] = useState(false);
   const addSubLayer = useStore((s) => s.addSubLayer);
   const removeSubLayer = useStore((s) => s.removeSubLayer);
   const updateSubLayer = useStore((s) => s.updateSubLayer);
 
   const hasSubLayers = (layer.subLayers?.length ?? 0) > 0;
+  const defaultCurve: CurvePoint[] = [{ x: 0, y: 100 }, { x: 255, y: 0 }];
 
   return (
     <div
@@ -185,11 +189,15 @@ function LayerRow({
         ) : (
           <span style={{
             fontSize: "9px", padding: "1px 4px", borderRadius: "3px",
-            background: layer.mode === "fill" ? "rgba(226,74,74,0.2)" : "rgba(74,144,226,0.2)",
-            color: layer.mode === "fill" ? "#e28a8a" : "#8ab4e2",
+            background: layer.mode === "fill" ? "rgba(226,74,74,0.2)"
+              : layer.mode === "offsetFill" ? "rgba(74,226,138,0.2)"
+              : "rgba(74,144,226,0.2)",
+            color: layer.mode === "fill" ? "#e28a8a"
+              : layer.mode === "offsetFill" ? "#8ae2b4"
+              : "#8ab4e2",
             textTransform: "uppercase", fontWeight: 600,
           }}>
-            {layer.mode}
+            {layer.mode === "offsetFill" ? "offset" : layer.mode}
           </span>
         )}
 
@@ -265,6 +273,7 @@ function LayerRow({
                 >
                   <option value="line">Line (Vector Cut)</option>
                   <option value="fill">Fill (Raster Engrave)</option>
+                  <option value="offsetFill">Offset Fill</option>
                 </select>
               </SettingRow>
 
@@ -341,7 +350,7 @@ function LayerRow({
               </SettingRow>
 
               {/* Fill-specific settings */}
-              {layer.mode === "fill" && (
+              {(layer.mode === "fill" || layer.mode === "offsetFill") && (
                 <>
                   <SettingRow label="Interval">
                     <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
@@ -354,37 +363,76 @@ function LayerRow({
                     </div>
                   </SettingRow>
 
-                  <SettingRow label="Dither">
-                    <select
-                      value={layer.dither}
-                      onChange={(e) => onUpdate({ dither: e.target.value as Layer["dither"] })}
-                      style={selectStyle}
-                    >
-                      <option value="threshold">Threshold</option>
-                      <option value="ordered">Ordered</option>
-                      <option value="floydSteinberg">Floyd-Steinberg</option>
-                      <option value="jarvis">Jarvis</option>
-                      <option value="stucki">Stucki</option>
-                      <option value="grayscale">Grayscale</option>
-                    </select>
-                  </SettingRow>
-                  <SettingRow label="Scan Angle">
-                    <input
-                      type="number" min="0" max="360" step="1" value={layer.scanAngle ?? 0}
-                      onChange={(e) => onUpdate({ scanAngle: Number(e.target.value) % 360 })}
-                      style={{ ...inputStyle, width: "60px" }}
-                    />
-                    <span style={{ fontSize: "9px", color: "var(--text-muted)", marginLeft: "4px" }}>°</span>
-                  </SettingRow>
-                  {layer.passes > 1 && (
-                    <SettingRow label="Angle/Pass">
-                      <input
-                        type="number" min="0" max="180" step="1" value={layer.angleIncrement ?? 0}
-                        onChange={(e) => onUpdate({ angleIncrement: Number(e.target.value) })}
-                        style={{ ...inputStyle, width: "60px" }}
-                      />
-                      <span style={{ fontSize: "9px", color: "var(--text-muted)", marginLeft: "4px" }}>°</span>
-                    </SettingRow>
+                  {layer.mode === "fill" && (
+                    <>
+                      <SettingRow label="Dither">
+                        <select
+                          value={layer.dither}
+                          onChange={(e) => onUpdate({ dither: e.target.value as Layer["dither"] })}
+                          style={selectStyle}
+                        >
+                          <option value="threshold">Threshold</option>
+                          <option value="ordered">Ordered</option>
+                          <option value="floydSteinberg">Floyd-Steinberg</option>
+                          <option value="jarvis">Jarvis</option>
+                          <option value="stucki">Stucki</option>
+                          <option value="grayscale">Grayscale</option>
+                          <option value="newsprint">Newsprint (Halftone)</option>
+                        </select>
+                      </SettingRow>
+
+                      <SettingRow label="Order">
+                        <select
+                          value={layer.fillOrder ?? "sequential"}
+                          onChange={(e) => onUpdate({ fillOrder: e.target.value as "sequential" | "flood" })}
+                          style={selectStyle}
+                        >
+                          <option value="sequential">Sequential</option>
+                          <option value="flood">Flood (Nearest)</option>
+                        </select>
+                      </SettingRow>
+
+                      {/* Power Curve */}
+                      <SettingRow label="Curve">
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, width: "100%" }}>
+                          <PowerCurveThumbnail points={layer.powerCurve ?? defaultCurve} />
+                          <button
+                            onClick={() => setCurveEditorOpen(true)}
+                            style={{
+                              padding: "3px 8px",
+                              fontSize: 10,
+                              background: "var(--bg-input)",
+                              border: "1px solid var(--border)",
+                              borderRadius: "var(--radius-sm)",
+                              color: "var(--text-secondary)",
+                              cursor: "pointer",
+                              flexShrink: 0,
+                            }}
+                          >
+                            Edit
+                          </button>
+                        </div>
+                      </SettingRow>
+
+                      <SettingRow label="Scan Angle">
+                        <input
+                          type="number" min="0" max="360" step="1" value={layer.scanAngle ?? 0}
+                          onChange={(e) => onUpdate({ scanAngle: Number(e.target.value) % 360 })}
+                          style={{ ...inputStyle, width: "60px" }}
+                        />
+                        <span style={{ fontSize: "9px", color: "var(--text-muted)", marginLeft: "4px" }}>°</span>
+                      </SettingRow>
+                      {layer.passes > 1 && (
+                        <SettingRow label="Angle/Pass">
+                          <input
+                            type="number" min="0" max="180" step="1" value={layer.angleIncrement ?? 0}
+                            onChange={(e) => onUpdate({ angleIncrement: Number(e.target.value) })}
+                            style={{ ...inputStyle, width: "60px" }}
+                          />
+                          <span style={{ fontSize: "9px", color: "var(--text-muted)", marginLeft: "4px" }}>°</span>
+                        </SettingRow>
+                      )}
+                    </>
                   )}
                 </>
               )}
@@ -394,10 +442,14 @@ function LayerRow({
                 <ToggleChip label="Air Assist" active={layer.airAssist} onClick={() => onUpdate({ airAssist: !layer.airAssist })} />
                 <ToggleChip label="Inner First" active={layer.cutInnerFirst} onClick={() => onUpdate({ cutInnerFirst: !layer.cutInnerFirst })} />
                 <ToggleChip label="Lock" active={layer.locked} onClick={() => onUpdate({ locked: !layer.locked })} />
-                {layer.mode === "fill" && (
+                {(layer.mode === "fill" || layer.mode === "offsetFill") && (
                   <>
-                    <ToggleChip label="Bidir" active={layer.bidirectional} onClick={() => onUpdate({ bidirectional: !layer.bidirectional })} />
-                    <ToggleChip label="Cross" active={layer.crossHatch} onClick={() => onUpdate({ crossHatch: !layer.crossHatch })} />
+                    {layer.mode === "fill" && (
+                      <>
+                        <ToggleChip label="Bidir" active={layer.bidirectional} onClick={() => onUpdate({ bidirectional: !layer.bidirectional })} />
+                        <ToggleChip label="Cross" active={layer.crossHatch} onClick={() => onUpdate({ crossHatch: !layer.crossHatch })} />
+                      </>
+                    )}
                   </>
                 )}
               </div>
@@ -406,6 +458,17 @@ function LayerRow({
               <AdvancedSettings layer={layer} onUpdate={onUpdate} />
             </>
           )}
+
+          {/* Power Curve Editor Modal */}
+          <PowerCurveEditor
+            open={curveEditorOpen}
+            points={layer.powerCurve ?? defaultCurve}
+            onApply={(pts) => {
+              onUpdate({ powerCurve: pts });
+              setCurveEditorOpen(false);
+            }}
+            onClose={() => setCurveEditorOpen(false)}
+          />
 
           {/* Add Sub-Layer button group */}
           <div style={{ padding: "4px 0 0 0", display: "flex", gap: "4px" }}>
@@ -533,6 +596,7 @@ function SubLayerRow({
         >
           <option value="line">Line (Vector Cut)</option>
           <option value="fill">Fill (Raster Engrave)</option>
+          <option value="offsetFill">Offset Fill</option>
         </select>
       </SettingRow>
 

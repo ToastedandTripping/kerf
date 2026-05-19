@@ -253,13 +253,14 @@ export const useStore = create<AppState>((set, get) => ({
       projectName: project.name,
       projectNotes: project.notes || "",
       materials: project.materials || DEFAULT_MATERIALS,
+      startCorner: project.startCorner || "bottomLeft",
       isDirty: false,
       selectedIds: [],
     }),
   toProject: () => {
     const state = get();
     return {
-      version: "0.3.1",
+      version: "0.5.0",
       name: state.projectName,
       objects: state.objects,
       layers: state.layers,
@@ -268,6 +269,7 @@ export const useStore = create<AppState>((set, get) => ({
       workspaceHeight: state.workspaceHeight,
       notes: state.projectNotes,
       materials: state.materials,
+      startCorner: state.startCorner,
     };
   },
 
@@ -473,6 +475,10 @@ export const useStore = create<AppState>((set, get) => ({
 
     set({ camera: { zoom, x: viewW / 2 - cx * zoom, y: viewH / 2 - cy * zoom } });
   },
+
+  // Start corner
+  startCorner: "bottomLeft",
+  setStartCorner: (corner) => set({ startCorner: corner, isDirty: true }),
 
   // Project notes
   projectNotes: "",

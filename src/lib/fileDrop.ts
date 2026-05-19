@@ -15,6 +15,8 @@ export function handleFileDrop(files: FileList) {
       importDroppedSvg(file);
     } else if (ext === "dxf") {
       importDroppedDxf(file);
+    } else if (ext === "pdf") {
+      importDroppedPdf(file);
     } else {
       useStore.getState().addConsoleLine(`Unsupported file type: .${ext}`, "warning");
     }
@@ -45,6 +47,17 @@ function importDroppedSvg(file: File) {
     }).catch(console.error);
   };
   reader.readAsText(file);
+}
+
+function importDroppedPdf(file: File) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const arrayBuffer = reader.result as ArrayBuffer;
+    import("../app/App").then(({ dialogState }) => {
+      dialogState.openPdfImport(arrayBuffer, file.name);
+    }).catch(console.error);
+  };
+  reader.readAsArrayBuffer(file);
 }
 
 function importDroppedDxf(file: File) {
