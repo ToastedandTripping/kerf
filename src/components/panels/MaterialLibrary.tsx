@@ -141,7 +141,6 @@ export function MaterialLibrary() {
                 color: "var(--text-primary)",
                 padding: "4px 8px",
                 fontSize: "11px",
-                outline: "none",
               }}
             />
             <button

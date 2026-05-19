@@ -177,7 +177,6 @@ export function Console() {
             fontFamily: "var(--font-mono)",
             fontSize: "12px",
             padding: "4px 0",
-            outline: "none",
           }}
         />
       </div>

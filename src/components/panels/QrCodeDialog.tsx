@@ -95,7 +95,6 @@ export function QrCodeDialog({ open, onClose }: Props) {
     padding: "6px 10px",
     borderRadius: "var(--radius-sm)",
     fontSize: "13px",
-    outline: "none",
   };
 
   const chipStyle = (active: boolean): React.CSSProperties => ({

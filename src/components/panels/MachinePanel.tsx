@@ -298,7 +298,6 @@ export function MachinePanel() {
                 color: "var(--text-primary)",
                 padding: "4px 6px",
                 fontSize: "11px",
-                outline: "none",
               }}
             >
               <option value="">Select port...</option>

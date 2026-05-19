@@ -71,7 +71,6 @@ export function ProjectNotesDialog({ open, onClose }: Props) {
             fontSize: "13px",
             fontFamily: "inherit",
             resize: "vertical",
-            outline: "none",
           }}
         />
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "12px" }}>

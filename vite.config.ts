@@ -12,6 +12,9 @@ export default defineConfig(async () => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  optimizeDeps: {
+    include: ["pdfjs-dist"],
+  },
   clearScreen: false,
   server: {
     port: 1420,

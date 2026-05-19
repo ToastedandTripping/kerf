@@ -42,6 +42,10 @@ pub struct ImageEngraveRequest {
     pub s_value_max: f64,       // GRBL $30 setting
     #[serde(default)]
     pub power_curve: Option<Vec<(f64, f64)>>,  // (shade 0-255, power 0-100%) control points
+    #[serde(default)]
+    pub newsprint_cell_size: Option<u32>,  // Newsprint dither cell size (default 6)
+    #[serde(default)]
+    pub newsprint_angle: Option<f64>,      // Newsprint dither angle (default 45)
 }
 
 fn default_s_value_max() -> f64 { 1000.0 }
@@ -77,8 +81,15 @@ pub fn preview_dither(req: &ImageEngraveRequest) -> Result<(Vec<u8>, u32, u32), 
         }
     }
 
-    // 5. Dither
-    let algorithm = DitherAlgorithm::from_str(&req.dither);
+    // 5. Dither -- format newsprint params into the dither string if applicable
+    let dither_str = if req.dither == "newsprint" {
+        let cs = req.newsprint_cell_size.unwrap_or(6);
+        let ang = req.newsprint_angle.unwrap_or(45.0);
+        format!("newsprint:{}:{}", cs, ang)
+    } else {
+        req.dither.clone()
+    };
+    let algorithm = DitherAlgorithm::from_str(&dither_str);
     let dithered = dither_image(&pixels, target_w, target_h, algorithm, 128);
 
     Ok((dithered, target_w, target_h))

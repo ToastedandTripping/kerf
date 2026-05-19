@@ -446,5 +446,4 @@ const inputStyle: React.CSSProperties = {
   padding: "4px 6px",
   fontSize: "12px",
   width: "100%",
-  outline: "none",
 };

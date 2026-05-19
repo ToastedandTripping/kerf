@@ -142,62 +142,75 @@ fn signed_area(pts: &[Point]) -> f64 {
     area / 2.0
 }
 
-/// Simple self-intersection removal: walk the polygon, detect crossing edges,
-/// keep the larger loop.
+/// Iterative self-intersection removal: walk the polygon, detect crossing edges,
+/// keep the larger loop. Repeats up to 10 times to handle multiple self-intersections
+/// that can arise from offsetting complex concave polygons.
 fn remove_self_intersections(pts: &[Point]) -> Vec<Point> {
-    let n = pts.len();
-    if n < 4 {
-        return pts.to_vec();
-    }
+    let mut current = pts.to_vec();
 
-    // Check all non-adjacent edge pairs for intersections
-    for i in 0..n {
-        let i_next = (i + 1) % n;
-        for j in (i + 2)..n {
-            if j == n - 1 && i == 0 {
-                continue; // Adjacent pair (last, first)
-            }
-            let j_next = (j + 1) % n;
+    for _ in 0..10 {
+        let n = current.len();
+        if n < 4 {
+            return current;
+        }
 
-            if let Some((t, u, int_pt)) = segment_intersection(
-                &pts[i], &pts[i_next],
-                &pts[j], &pts[j_next],
-            ) {
-                if t > 1e-10 && t < 1.0 - 1e-10 && u > 1e-10 && u < 1.0 - 1e-10 {
-                    // Build loop A: 0..=i, int_pt, j+1..end
-                    let mut loop_a = Vec::new();
-                    for k in 0..=i {
-                        loop_a.push(pts[k].clone());
+        let mut found = false;
+
+        // Check all non-adjacent edge pairs for intersections
+        'outer: for i in 0..n {
+            let i_next = (i + 1) % n;
+            for j in (i + 2)..n {
+                if j == n - 1 && i == 0 {
+                    continue; // Adjacent pair (last, first)
+                }
+                let j_next = (j + 1) % n;
+
+                if let Some((t, u, int_pt)) = segment_intersection(
+                    &current[i], &current[i_next],
+                    &current[j], &current[j_next],
+                ) {
+                    if t > 1e-10 && t < 1.0 - 1e-10 && u > 1e-10 && u < 1.0 - 1e-10 {
+                        // Build loop A: 0..=i, int_pt, j+1..end
+                        let mut loop_a = Vec::new();
+                        for k in 0..=i {
+                            loop_a.push(current[k].clone());
+                        }
+                        loop_a.push(int_pt.clone());
+                        for k in (j + 1)..n {
+                            loop_a.push(current[k].clone());
+                        }
+
+                        // Build loop B: int_pt, i+1..=j
+                        let mut loop_b = Vec::new();
+                        loop_b.push(int_pt.clone());
+                        for k in (i + 1)..=j {
+                            loop_b.push(current[k].clone());
+                        }
+
+                        // Keep the larger loop
+                        let area_a = signed_area(&loop_a).abs();
+                        let area_b = signed_area(&loop_b).abs();
+
+                        current = if area_a >= area_b && loop_a.len() >= 3 {
+                            loop_a
+                        } else if loop_b.len() >= 3 {
+                            loop_b
+                        } else {
+                            return current;
+                        };
+                        found = true;
+                        break 'outer;
                     }
-                    loop_a.push(int_pt.clone());
-                    for k in (j + 1)..n {
-                        loop_a.push(pts[k].clone());
-                    }
-
-                    // Build loop B: int_pt, i+1..=j
-                    let mut loop_b = Vec::new();
-                    loop_b.push(int_pt.clone());
-                    for k in (i + 1)..=j {
-                        loop_b.push(pts[k].clone());
-                    }
-
-                    // Keep the larger loop
-                    let area_a = signed_area(&loop_a).abs();
-                    let area_b = signed_area(&loop_b).abs();
-
-                    return if area_a >= area_b && loop_a.len() >= 3 {
-                        loop_a
-                    } else if loop_b.len() >= 3 {
-                        loop_b
-                    } else {
-                        pts.to_vec()
-                    };
                 }
             }
         }
+
+        if !found {
+            break; // No more self-intersections
+        }
     }
 
-    pts.to_vec()
+    current
 }
 
 /// Line segment intersection: returns (t, u, point) where t is parameter on seg1, u on seg2
@@ -280,6 +293,46 @@ mod tests {
         assert!(result.is_some());
         let ring = result.unwrap();
         assert!(ring.len() >= 3);
+    }
+
+    #[test]
+    fn star_shape_offset_removes_multiple_self_intersections() {
+        // 6-pointed star (CCW) -- offsetting inward creates multiple self-intersections
+        let pts = vec![
+            Point { x: 5.0, y: 0.0 },
+            Point { x: 6.5, y: 3.5 },
+            Point { x: 10.0, y: 5.0 },
+            Point { x: 6.5, y: 6.5 },
+            Point { x: 5.0, y: 10.0 },
+            Point { x: 3.5, y: 6.5 },
+            Point { x: 0.0, y: 5.0 },
+            Point { x: 3.5, y: 3.5 },
+        ];
+        // A moderate offset should still produce a valid polygon
+        let result = offset_polygon_inward(&pts, 1.0);
+        assert!(result.is_some(), "Star offset should not collapse at 1mm");
+        let ring = result.unwrap();
+        assert!(ring.len() >= 3, "Result should have at least 3 points");
+
+        // Verify no self-intersections remain by checking all non-adjacent edge pairs
+        let n = ring.len();
+        for i in 0..n {
+            let i_next = (i + 1) % n;
+            for j in (i + 2)..n {
+                if j == n - 1 && i == 0 { continue; }
+                let j_next = (j + 1) % n;
+                if let Some((t, u, _)) = segment_intersection(
+                    &ring[i], &ring[i_next],
+                    &ring[j], &ring[j_next],
+                ) {
+                    assert!(
+                        t <= 1e-10 || t >= 1.0 - 1e-10 || u <= 1e-10 || u >= 1.0 - 1e-10,
+                        "Found self-intersection at edges {}-{} and {}-{}: t={}, u={}",
+                        i, i_next, j, j_next, t, u
+                    );
+                }
+            }
+        }
     }
 
     #[test]

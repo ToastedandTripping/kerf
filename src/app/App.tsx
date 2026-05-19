@@ -27,6 +27,7 @@ import { handleFileDrop } from "../lib/fileDrop";
 import { startAutoSave, checkRecoveryFile, clearRecoveryFile } from "../lib/autoSave";
 import { OnboardingOverlay, shouldShowOnboarding } from "../components/panels/OnboardingOverlay";
 import { useStore } from "./store";
+import { generateId } from "./store/storeTypes";
 
 // Expose dialog openers globally so menus/commands can trigger them
 export const dialogState: {
@@ -225,6 +226,16 @@ export default function App() {
           setPendingPdf(null);
           dialogState.openImageImport(imageData, pendingPdf?.name ?? "pdf-page.png", width, height);
         }}
+        onImportVector={(objects) => {
+          setPdfImportOpen(false);
+          setPendingPdf(null);
+          const addObject = useStore.getState().addObject;
+          for (const obj of objects) {
+            addObject(obj);
+          }
+        }}
+        generateId={generateId}
+        defaultLayerIndex={useStore.getState().activeLayerIndex}
       />
       <ShortcutOverlay />
 

@@ -108,7 +108,6 @@ const inputStyle: React.CSSProperties = {
   fontSize: "12px",
   width: "70px",
   textAlign: "right",
-  outline: "none",
 };
 
 const labelStyle: React.CSSProperties = {
