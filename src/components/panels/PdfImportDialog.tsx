@@ -1,4 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.mjs?url";
+import type { DesignObject } from "../../app/types";
+import { extractVectorPaths } from "../../lib/fileOps/pdfImport";
 
 interface PdfImportDialogProps {
   open: boolean;
@@ -6,6 +9,9 @@ interface PdfImportDialogProps {
   fileName: string;
   onClose: () => void;
   onImport: (imageData: string, width: number, height: number) => void;
+  onImportVector?: (objects: DesignObject[]) => void;
+  generateId?: () => string;
+  defaultLayerIndex?: number;
 }
 
 interface PageInfo {
@@ -19,7 +25,7 @@ interface PageInfo {
 
 type ImportMode = "raster" | "vector";
 
-export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport }: PdfImportDialogProps) {
+export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, onImportVector, generateId, defaultLayerIndex }: PdfImportDialogProps) {
   const [pages, setPages] = useState<PageInfo[]>([]);
   const [selectedPage, setSelectedPage] = useState<number>(1);
   const [dpi, setDpi] = useState(150);
@@ -45,11 +51,8 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport }: 
 
       try {
         const pdfjsLib = await import("pdfjs-dist");
-        // Set worker source - use bundled worker
-        pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-          "pdfjs-dist/build/pdf.worker.mjs",
-          import.meta.url
-        ).toString();
+        // Set worker source - use Vite ?url import for reliable bundling in Tauri production builds
+        pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
 
         const loadingTask = pdfjsLib.getDocument({ data: pdfData! });
         const doc = await loadingTask.promise;
@@ -149,22 +152,50 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport }: 
     try {
       const doc = pdfDocRef.current;
       const page = await doc.getPage(selectedPage);
-      const scale = dpi / 72;
-      const viewport = page.getViewport({ scale });
-      const canvas = document.createElement("canvas");
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        await page.render({ canvasContext: ctx, viewport, canvas }).promise;
-        const imageData = canvas.toDataURL("image/png");
-        onImport(imageData, viewport.width, viewport.height);
+
+      if (mode === "vector" && onImportVector && generateId) {
+        // Vector extraction mode
+        const viewport = page.getViewport({ scale: 1.0 });
+        const pageHeightPt = viewport.height;
+        const layerIdx = defaultLayerIndex ?? 0;
+        const vectorObjects = await extractVectorPaths(page, pageHeightPt, generateId, layerIdx);
+
+        if (vectorObjects.length === 0) {
+          // No vectors found (scanned PDF) -- fall back to raster
+          console.warn("PDF vector extraction returned 0 paths, falling back to raster import");
+          const scale = dpi / 72;
+          const rasterViewport = page.getViewport({ scale });
+          const canvas = document.createElement("canvas");
+          canvas.width = rasterViewport.width;
+          canvas.height = rasterViewport.height;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            await page.render({ canvasContext: ctx, viewport: rasterViewport, canvas }).promise;
+            const imageData = canvas.toDataURL("image/png");
+            onImport(imageData, rasterViewport.width, rasterViewport.height);
+          }
+        } else {
+          onImportVector(vectorObjects);
+        }
+      } else {
+        // Raster mode (existing behavior)
+        const scale = dpi / 72;
+        const viewport = page.getViewport({ scale });
+        const canvas = document.createElement("canvas");
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          await page.render({ canvasContext: ctx, viewport, canvas }).promise;
+          const imageData = canvas.toDataURL("image/png");
+          onImport(imageData, viewport.width, viewport.height);
+        }
       }
     } catch (e) {
       setError(`Import failed: ${e}`);
     }
     setLoading(false);
-  }, [selectedPage, dpi, onImport]);
+  }, [selectedPage, dpi, mode, onImport, onImportVector, generateId, defaultLayerIndex]);
 
   // Handle Escape key
   useEffect(() => {
@@ -402,7 +433,6 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport }: 
                 color: "var(--text-primary)",
                 padding: "3px 6px",
                 fontSize: "11px",
-                outline: "none",
               }}
             />
             <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>dpi</span>

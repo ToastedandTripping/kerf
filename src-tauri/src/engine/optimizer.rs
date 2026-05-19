@@ -271,6 +271,8 @@ mod tests {
             perforation_skip: 0.0,
             power_curve: None,
             fill_order: None,
+            newsprint_cell_size: None,
+            newsprint_angle: None,
         }
     }
 

@@ -61,6 +61,8 @@ interface CutObject {
     perforationSkip: number;
     powerCurve?: Array<[number, number]>;
     fillOrder?: string;
+    newsprintCellSize?: number;
+    newsprintAngle?: number;
   };
   cornerRadius: number | null;
   rotation: number;
@@ -96,6 +98,8 @@ function buildCutLayer(layer: Layer, sub?: { mode: string; power: number; powerM
     perforationSkip: layer.perforationSkip,
     powerCurve: layer.powerCurve?.map((p) => [p.x, p.y] as [number, number]),
     fillOrder: layer.fillOrder || "sequential",
+    newsprintCellSize: layer.newsprintCellSize,
+    newsprintAngle: layer.newsprintAngle,
   };
 }
 
@@ -129,8 +133,9 @@ function offsetRingByDistance(
   return result;
 }
 
-/** Recursively flatten groups into leaf objects with parent offsets applied */
-function flattenObjects(objects: DesignObject[]): DesignObject[] {
+/** Recursively flatten groups into leaf objects with parent offsets applied.
+ *  Sets groupId on each child to the nearest parent group's id for cut-planner affinity. */
+function flattenObjects(objects: DesignObject[], parentGroupId?: string): DesignObject[] {
   const result: DesignObject[] = [];
   for (const obj of objects) {
     if (obj.type === "group" && obj.children) {
@@ -142,11 +147,12 @@ function flattenObjects(objects: DesignObject[]): DesignObject[] {
             x: child.transform.x + obj.transform.x,
             y: child.transform.y + obj.transform.y,
           },
+          groupId: obj.id,
         };
-        result.push(...flattenObjects([expanded]));
+        result.push(...flattenObjects([expanded], obj.id));
       }
     } else {
-      result.push(obj);
+      result.push(parentGroupId ? { ...obj, groupId: parentGroupId } : obj);
     }
   }
   return result;
@@ -202,7 +208,7 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
       cornerRadius: obj.cornerRadius || null,
       rotation: obj.transform.rotation || 0,
       priority: obj.priority ?? 0,
-      groupId: undefined as string | undefined,
+      groupId: obj.groupId,
     };
 
     const scale = obj.powerScale ?? 1.0;
@@ -266,6 +272,8 @@ async function generateImageGcode(sValueMax: number = 1000): Promise<GcodeResult
         workspaceHeight: store.workspaceHeight,
         sValueMax,
         powerCurve: layer.powerCurve?.map((p) => [p.x, p.y] as [number, number]),
+        newsprintCellSize: layer.newsprintCellSize,
+        newsprintAngle: layer.newsprintAngle,
       },
     });
     results.push(result);
@@ -486,6 +494,8 @@ export async function previewImageDither(objectId: string): Promise<PreviewDithe
       workspaceHeight: store.workspaceHeight,
       sValueMax: store.grblSValueMax,
       powerCurve: layer.powerCurve?.map((p) => [p.x, p.y] as [number, number]),
+      newsprintCellSize: layer.newsprintCellSize,
+      newsprintAngle: layer.newsprintAngle,
     },
   });
 }

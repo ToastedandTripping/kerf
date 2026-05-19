@@ -44,6 +44,10 @@ pub struct CutLayer {
     pub power_curve: Option<Vec<(f64, f64)>>,  // (shade 0-255, power 0-100%) control points
     #[serde(default)]
     pub fill_order: Option<String>,  // "sequential" (default) or "flood"
+    #[serde(default)]
+    pub newsprint_cell_size: Option<u32>,  // Newsprint dither cell size (default 6)
+    #[serde(default)]
+    pub newsprint_angle: Option<f64>,      // Newsprint dither angle (default 45)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

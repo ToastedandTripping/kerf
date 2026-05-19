@@ -222,7 +222,7 @@ export function GrblSettingsDialog({ open, onClose }: Props) {
                       border: `1px solid ${editError ? "var(--danger)" : "var(--accent-warm)"}`,
                       color: "var(--text-primary)", padding: "2px 6px",
                       borderRadius: "3px", fontSize: "12px", fontFamily: "var(--font-mono)",
-                      textAlign: "right", outline: "none",
+                      textAlign: "right",
                     }}
                   />
                   {editError && (

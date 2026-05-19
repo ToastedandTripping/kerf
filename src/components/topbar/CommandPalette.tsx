@@ -194,7 +194,6 @@ export function CommandPalette() {
               border: "none",
               color: "var(--text-primary)",
               fontSize: "14px",
-              outline: "none",
             }}
           />
         </div>

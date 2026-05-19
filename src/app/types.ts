@@ -61,6 +61,8 @@ export interface DesignObject {
   priority?: number; // 0-99, higher = cut first, default 0
   // Group
   children?: DesignObject[]; // group
+  // Cut ordering: parent group ID for group affinity in cut planner
+  groupId?: string;
 }
 
 export type CutMode = "line" | "fill" | "offsetFill";
@@ -88,6 +90,9 @@ export interface Layer {
   dither: "threshold" | "ordered" | "floydSteinberg" | "jarvis" | "stucki" | "grayscale" | "newsprint";
   // Power curve: user-defined transfer function (input shade 0-255 → output power 0-100%)
   powerCurve?: Array<{ x: number; y: number }>;
+  // Newsprint dithering parameters
+  newsprintCellSize?: number; // pixels, default 6
+  newsprintAngle?: number;    // degrees, default 45
   // Fill ordering
   fillOrder?: "sequential" | "flood"; // default "sequential"
   // Scan direction

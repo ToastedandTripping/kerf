@@ -38,7 +38,6 @@ export function SettingsDialog({ open, onClose }: Props) {
     fontSize: "13px",
     fontFamily: "var(--font-mono)",
     textAlign: "right",
-    outline: "none",
   };
 
   const labelStyle: React.CSSProperties = {

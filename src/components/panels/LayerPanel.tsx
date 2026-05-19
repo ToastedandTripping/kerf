@@ -12,7 +12,6 @@ const inputStyle: React.CSSProperties = {
   padding: "3px 6px",
   fontSize: "11px",
   width: "100%",
-  outline: "none",
 };
 
 const selectStyle: React.CSSProperties = {
@@ -380,6 +379,41 @@ function LayerRow({
                           <option value="newsprint">Newsprint (Halftone)</option>
                         </select>
                       </SettingRow>
+
+                      {layer.dither === "newsprint" && (
+                        <>
+                          <SettingRow label="Cell Size">
+                            <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
+                              <input
+                                type="range" min="2" max="20" value={layer.newsprintCellSize ?? 6}
+                                onChange={(e) => onUpdate({ newsprintCellSize: Number(e.target.value) })}
+                                style={{ flex: 1, accentColor: "var(--accent)" }}
+                              />
+                              <input
+                                type="number" min="2" max="20" value={layer.newsprintCellSize ?? 6}
+                                onChange={(e) => onUpdate({ newsprintCellSize: Math.max(2, Math.min(20, Number(e.target.value))) })}
+                                style={{ ...inputStyle, width: "42px", textAlign: "right" }}
+                              />
+                              <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>px</span>
+                            </div>
+                          </SettingRow>
+                          <SettingRow label="Angle">
+                            <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
+                              <input
+                                type="range" min="0" max="90" step="5" value={layer.newsprintAngle ?? 45}
+                                onChange={(e) => onUpdate({ newsprintAngle: Number(e.target.value) })}
+                                style={{ flex: 1, accentColor: "var(--accent)" }}
+                              />
+                              <input
+                                type="number" min="0" max="90" step="5" value={layer.newsprintAngle ?? 45}
+                                onChange={(e) => onUpdate({ newsprintAngle: Math.max(0, Math.min(90, Number(e.target.value))) })}
+                                style={{ ...inputStyle, width: "42px", textAlign: "right" }}
+                              />
+                              <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>{"°"}</span>
+                            </div>
+                          </SettingRow>
+                        </>
+                      )}
 
                       <SettingRow label="Order">
                         <select
