@@ -92,44 +92,88 @@ pub fn multi_criteria_sort(objects: &mut Vec<CutObject>, start_x: f64, start_y: 
         }
     }
 
-    // Step 3: Within each group, sort inner-first then nearest-neighbor
-    let mut final_order: Vec<usize> = Vec::with_capacity(objects.len());
-    for (_pri, _gid, indices) in &groups {
-        if indices.len() == 1 {
-            final_order.push(indices[0]);
-            continue;
-        }
-        // Collect objects for this group
-        let group_objs: Vec<&CutObject> = indices.iter().map(|&i| &objects[i]).collect();
+    // Step 3: Within each group, sort inner-first and apply NN.
+    // Build resolved group contents (inner-first + NN within each group).
+    let original: Vec<CutObject> = objects.clone();
+    let mut resolved_groups: Vec<(i32, Vec<CutObject>)> = Vec::new();
+    for (pri, _gid, indices) in &groups {
+        let mut group_objs: Vec<CutObject> = indices.iter().map(|&i| original[i].clone()).collect();
 
         // Sort inner-first within group
-        let mut sorted_indices: Vec<usize> = (0..indices.len()).collect();
-        sorted_indices.sort_by(|&a, &b| {
-            let area_a = group_objs[a].width * group_objs[a].height;
-            let area_b = group_objs[b].width * group_objs[b].height;
+        group_objs.sort_by(|a, b| {
+            let area_a = a.width * a.height;
+            let area_b = b.width * b.height;
             area_a.partial_cmp(&area_b).unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        for si in sorted_indices {
-            final_order.push(indices[si]);
+        resolved_groups.push((*pri, group_objs));
+    }
+
+    // Step 4: Nearest-neighbor ordering of groups within each priority level.
+    // Inner-first ordering within each group is preserved (important for cut safety).
+    // NN determines which group to visit next, minimizing head travel between groups.
+    objects.clear();
+    let mut cur_x = start_x;
+    let mut cur_y = start_y;
+
+    // Process groups by priority level
+    let mut gi = 0;
+    while gi < resolved_groups.len() {
+        let pri = resolved_groups[gi].0;
+        // Find all groups at this priority level
+        let mut gj = gi + 1;
+        while gj < resolved_groups.len() && resolved_groups[gj].0 == pri {
+            gj += 1;
         }
-    }
 
-    // Apply the ordering
-    let original: Vec<CutObject> = objects.clone();
-    for (dest, &src) in final_order.iter().enumerate() {
-        objects[dest] = original[src].clone();
-    }
+        if gj - gi == 1 {
+            // Single group at this priority -- emit in inner-first order
+            let group = &mut resolved_groups[gi].1;
+            if let Some(last) = group.last() {
+                let (ex, ey) = (last.x + last.width, last.y + last.height);
+                cur_x = ex;
+                cur_y = ey;
+            }
+            objects.extend(group.drain(..));
+        } else {
+            // Multiple groups at same priority -- pick nearest group first (by first object)
+            let group_indices: Vec<usize> = (gi..gj).collect();
+            let mut visited = vec![false; gj - gi];
 
-    // Step 4: Apply nearest-neighbor within priority groups
-    // (We apply NN as a final optimization pass on the entire array,
-    //  but only allowing swaps within the same priority level)
-    let _ = (start_x, start_y); // Used by optimize_cut_order_from when called externally
+            for _ in 0..(gj - gi) {
+                let mut best_local = 0;
+                let mut best_dist = f64::MAX;
+
+                for (li, &gidx) in group_indices.iter().enumerate() {
+                    if visited[li] { continue; }
+                    if let Some(first_obj) = resolved_groups[gidx].1.first() {
+                        let (sx, sy) = (first_obj.x, first_obj.y);
+                        let dist = ((sx - cur_x).powi(2) + (sy - cur_y).powi(2)).sqrt();
+                        if dist < best_dist {
+                            best_dist = dist;
+                            best_local = li;
+                        }
+                    }
+                }
+
+                visited[best_local] = true;
+                let gidx = group_indices[best_local];
+                let group = &mut resolved_groups[gidx].1;
+                if let Some(last) = group.last() {
+                    let (ex, ey) = (last.x + last.width, last.y + last.height);
+                    cur_x = ex;
+                    cur_y = ey;
+                }
+                objects.extend(group.drain(..));
+            }
+        }
+
+        gi = gj;
+    }
 }
 
 /// Reorder scan segments by nearest-neighbor (flood fill order).
 /// Each segment is (y_pos, x_start, x_end). Returns reordered segments.
-#[allow(dead_code)]
 pub fn flood_reorder_segments(
     segments: &[(f64, f64, f64)],
 ) -> Vec<(f64, f64, f64)> {
@@ -298,5 +342,89 @@ mod tests {
         let order = optimize_cut_order_from(&objs, 500.0, 300.0);
         // near_tr is closer to (500, 300) than near_tl
         assert_eq!(order[0], 1); // near_tr first
+    }
+
+    // --- flood_reorder_segments tests ---
+
+    #[test]
+    fn flood_single_contiguous_row_unchanged() {
+        // A single contiguous row of segments should come out in the same order
+        // (each segment's end is already nearest to the next segment's start)
+        let segments = vec![
+            (0.0, 0.0, 10.0),
+            (0.0, 10.0, 20.0),
+            (0.0, 20.0, 30.0),
+        ];
+        let result = flood_reorder_segments(&segments);
+        assert_eq!(result.len(), 3);
+        // All on same row, already sequential -- order should be preserved
+        assert_eq!(result[0], (0.0, 0.0, 10.0));
+        assert_eq!(result[1], (0.0, 10.0, 20.0));
+        assert_eq!(result[2], (0.0, 20.0, 30.0));
+    }
+
+    #[test]
+    fn flood_two_distant_regions_closer_first() {
+        // Two groups: near origin and far away.
+        // Starting from (0,0), the near group should be visited first.
+        let segments = vec![
+            (100.0, 100.0, 110.0), // far region
+            (0.0, 0.0, 10.0),      // near region
+            (100.0, 110.0, 120.0), // far region (adjacent to first)
+            (0.0, 10.0, 20.0),     // near region (adjacent to second)
+        ];
+        let result = flood_reorder_segments(&segments);
+        assert_eq!(result.len(), 4);
+        // Near-origin segments should come first
+        assert!(result[0].0 < 50.0, "first segment should be from near region");
+        assert!(result[1].0 < 50.0, "second segment should be from near region");
+        // Far segments last
+        assert!(result[2].0 >= 50.0, "third segment should be from far region");
+        assert!(result[3].0 >= 50.0, "fourth segment should be from far region");
+    }
+
+    #[test]
+    fn flood_empty_and_single() {
+        // Empty input
+        let empty: Vec<(f64, f64, f64)> = vec![];
+        assert_eq!(flood_reorder_segments(&empty).len(), 0);
+
+        // Single segment
+        let single = vec![(5.0, 0.0, 10.0)];
+        let result = flood_reorder_segments(&single);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], (5.0, 0.0, 10.0));
+    }
+
+    // --- nearest-neighbor within multi_criteria_sort tests ---
+
+    #[test]
+    fn nn_picks_nearest_group_first() {
+        // Two groups at same priority: groupA near origin, groupB far away.
+        // NN from (0,0) should visit groupA first.
+        let mut objs = vec![
+            make_obj("b1", 200.0, 200.0, 10.0, 10.0, Some(1), Some("groupB")),
+            make_obj("a1", 1.0, 1.0, 10.0, 10.0, Some(1), Some("groupA")),
+            make_obj("b2", 210.0, 200.0, 5.0, 5.0, Some(1), Some("groupB")),
+            make_obj("a2", 5.0, 5.0, 5.0, 5.0, Some(1), Some("groupA")),
+        ];
+        multi_criteria_sort(&mut objs, 0.0, 0.0);
+        // groupA is nearer to (0,0) so should come first
+        assert!(
+            objs[0].group_id.as_deref() == Some("groupA"),
+            "nearest group should be visited first, got {:?}", objs[0].id,
+        );
+        assert!(
+            objs[1].group_id.as_deref() == Some("groupA"),
+            "group cohesion: second item should still be groupA",
+        );
+        // groupB comes after
+        assert!(
+            objs[2].group_id.as_deref() == Some("groupB"),
+            "far group should come after near group",
+        );
+        // Inner-first within groupA: a2 (25 area) before a1 (100 area)
+        assert_eq!(objs[0].id, "a2", "smaller groupA item first (inner-first)");
+        assert_eq!(objs[1].id, "a1", "larger groupA item second");
     }
 }

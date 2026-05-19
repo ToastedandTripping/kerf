@@ -11,8 +11,10 @@ interface PdfImportDialogProps {
 interface PageInfo {
   pageNum: number;
   thumbnail: string | null;
-  width: number;
-  height: number;
+  /** Page width in PDF points (1 pt = 1/72 inch), at scale 1.0 */
+  widthPt: number;
+  /** Page height in PDF points (1 pt = 1/72 inch), at scale 1.0 */
+  heightPt: number;
 }
 
 type ImportMode = "raster" | "vector";
@@ -59,12 +61,12 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport }: 
         const pageInfos: PageInfo[] = [];
         for (let i = 1; i <= doc.numPages; i++) {
           const page = await doc.getPage(i);
-          const viewport = page.getViewport({ scale: 0.5 }); // Low-res for thumbnails
+          const viewport = page.getViewport({ scale: 1.0 }); // Scale 1.0 = dimensions in PDF points
           pageInfos.push({
             pageNum: i,
             thumbnail: null,
-            width: viewport.width,
-            height: viewport.height,
+            widthPt: viewport.width,
+            heightPt: viewport.height,
           });
         }
 
@@ -177,12 +179,12 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport }: 
   if (!open) return null;
 
   // Calculate pixel dimensions for the DPI readout
+  // PageInfo stores dimensions in PDF points (1 pt = 1/72 inch) at scale 1.0
   const selectedPageInfo = pages.find((p) => p.pageNum === selectedPage);
-  const pxWidth = selectedPageInfo ? Math.round(selectedPageInfo.width * (dpi / 72) * (72 / (0.3 * 72))) : 0;
-  const pxHeight = selectedPageInfo ? Math.round(selectedPageInfo.height * (dpi / 72) * (72 / (0.3 * 72))) : 0;
-  // More accurate: use PDF page dimensions in points (1 point = 1/72 inch)
-  const mmWidth = selectedPageInfo ? Math.round((selectedPageInfo.width / 0.3) * 25.4 / 72) : 0;
-  const mmHeight = selectedPageInfo ? Math.round((selectedPageInfo.height / 0.3) * 25.4 / 72) : 0;
+  const pxWidth = selectedPageInfo ? Math.round(selectedPageInfo.widthPt * dpi / 72) : 0;
+  const pxHeight = selectedPageInfo ? Math.round(selectedPageInfo.heightPt * dpi / 72) : 0;
+  const mmWidth = selectedPageInfo ? Math.round(selectedPageInfo.widthPt * 25.4 / 72) : 0;
+  const mmHeight = selectedPageInfo ? Math.round(selectedPageInfo.heightPt * 25.4 / 72) : 0;
 
   const titleId = "pdf-import-title";
 
@@ -414,7 +416,7 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport }: 
               marginTop: "3px",
               paddingLeft: "36px",
             }}>
-              {"→"} {Math.round(pxWidth * dpi / 150)} x {Math.round(pxHeight * dpi / 150)} px ({mmWidth} x {mmHeight} mm)
+              {"→"} {pxWidth} x {pxHeight} px ({mmWidth} x {mmHeight} mm)
             </div>
           )}
         </div>

@@ -101,6 +101,17 @@ struct ScanLineParams {
     center_y: f64,
 }
 
+/// A single scan segment in design space (before transform to GRBL coords).
+/// `y` is the scan-line position, `x_start`/`x_end` define the engrave stroke,
+/// and `forward` indicates direction (for bidirectional scanning).
+#[derive(Debug, Clone)]
+struct ScanSegment {
+    y: f64,       // line position (scan-line coordinate)
+    x_start: f64, // start of engrave (in scan axis)
+    x_end: f64,   // end of engrave (in scan axis)
+    forward: bool, // direction of travel
+}
+
 /// Transform a design-space point through optional rotation and Y-flip to GRBL coordinates
 fn transform_to_grbl(x: f64, y: f64, params: &ScanLineParams) -> (f64, f64) {
     let (rx, ry) = if params.rotation_rad.abs() > 0.001 {
@@ -115,7 +126,123 @@ fn transform_to_grbl(x: f64, y: f64, params: &ScanLineParams) -> (f64, f64) {
     (rx, params.workspace_height - ry)
 }
 
-/// Generate scan lines for fill mode (horizontal or vertical)
+/// Collect scan segments for fill mode (horizontal or vertical) without emitting G-code.
+fn collect_scan_segments(
+    params: &ScanLineParams,
+    scan_min: f64,
+    scan_max: f64,
+    line_min: f64,
+    line_max: f64,
+) -> Vec<ScanSegment> {
+    let mut segments = Vec::new();
+    let mut pos = line_min;
+    let mut forward = true;
+
+    while pos <= line_max {
+        let offset = if !forward { params.scanning_offset } else { 0.0 };
+        let (start, end) = if forward {
+            (scan_min, scan_max)
+        } else {
+            (scan_max + offset, scan_min + offset)
+        };
+
+        segments.push(ScanSegment {
+            y: pos,
+            x_start: start,
+            x_end: end,
+            forward,
+        });
+
+        pos += params.interval;
+        if params.bidirectional {
+            forward = !forward;
+        }
+    }
+
+    segments
+}
+
+/// Emit G-code from a list of scan segments (possibly reordered).
+fn emit_scan_segments(
+    segments: &[ScanSegment],
+    params: &ScanLineParams,
+    lines: &mut Vec<String>,
+    moves: &mut Vec<GcodeMove>,
+    cut_distance: &mut f64,
+    travel_distance: &mut f64,
+    total_distance: &mut f64,
+    cur_x: &mut f64,
+    cur_y: &mut f64,
+    vertical: bool,
+) {
+    for seg in segments {
+        let overscan_start = if seg.forward { seg.x_start - params.overscan } else { seg.x_start + params.overscan };
+        let overscan_end = if seg.forward { seg.x_end + params.overscan } else { seg.x_end - params.overscan };
+
+        let (rsx, rsy) = if vertical {
+            transform_to_grbl(seg.y, overscan_start, params)
+        } else {
+            transform_to_grbl(overscan_start, seg.y, params)
+        };
+
+        // Rapid to overscan start
+        let dist = ((rsx - *cur_x).powi(2) + (rsy - *cur_y).powi(2)).sqrt();
+        *travel_distance += dist;
+        *total_distance += dist;
+        lines.push(format!("G0 X{:.3} Y{:.3}", rsx, rsy));
+        moves.push(GcodeMove { x: rsx, y: rsy, move_type: "rapid".to_string(), speed: 3000.0, power: 0.0 });
+
+        // Accelerate to boundary at engrave speed with laser off
+        if params.overscan > 0.0 {
+            let (bsx, bsy) = if vertical {
+                transform_to_grbl(seg.y, seg.x_start, params)
+            } else {
+                transform_to_grbl(seg.x_start, seg.y, params)
+            };
+            let d = params.overscan;
+            *travel_distance += d;
+            *total_distance += d;
+            lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S0", bsx, bsy, params.speed_mm_min));
+            moves.push(GcodeMove { x: bsx, y: bsy, move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0 });
+        }
+
+        // Engrave scan line
+        lines.push(format!("{} S{}", params.power_cmd, params.s_max));
+        let (esx, esy) = if vertical {
+            transform_to_grbl(seg.y, seg.x_end, params)
+        } else {
+            transform_to_grbl(seg.x_end, seg.y, params)
+        };
+        let scan_dist = (seg.x_end - seg.x_start).abs();
+        *cut_distance += scan_dist;
+        *total_distance += scan_dist;
+        lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", esx, esy, params.speed_mm_min, params.s_max));
+        moves.push(GcodeMove { x: esx, y: esy, move_type: "engrave".to_string(), speed: params.speed_mm_min, power: params.s_max });
+        lines.push("M5".to_string());
+
+        // Deceleration overscan zone
+        if params.overscan > 0.0 {
+            let (oex, oey) = if vertical {
+                transform_to_grbl(seg.y, overscan_end, params)
+            } else {
+                transform_to_grbl(overscan_end, seg.y, params)
+            };
+            let d = params.overscan;
+            *travel_distance += d;
+            *total_distance += d;
+            lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S0", oex, oey, params.speed_mm_min));
+            moves.push(GcodeMove { x: oex, y: oey, move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0 });
+            *cur_x = oex;
+            *cur_y = oey;
+        } else {
+            *cur_x = esx;
+            *cur_y = esy;
+        }
+    }
+}
+
+/// Generate scan lines for fill mode (horizontal or vertical).
+/// Collects segments, optionally reorders for flood fill, then emits G-code.
 fn generate_scan_lines(
     params: &ScanLineParams,
     lines: &mut Vec<String>,
@@ -130,87 +257,34 @@ fn generate_scan_lines(
     line_min: f64,
     line_max: f64,
     vertical: bool,
+    fill_order: Option<&str>,
 ) {
-    let mut pos = line_min;
-    let mut forward = true;
+    let segments = collect_scan_segments(params, scan_min, scan_max, line_min, line_max);
 
-    while pos <= line_max {
-        let offset = if !forward { params.scanning_offset } else { 0.0 };
-        let (start, end) = if forward {
-            (scan_min, scan_max)
-        } else {
-            (scan_max + offset, scan_min + offset)
-        };
+    let segments = if fill_order == Some("flood") {
+        // Convert to (y, x_start, x_end) tuples for flood reorder
+        let tuples: Vec<(f64, f64, f64)> = segments.iter()
+            .map(|s| (s.y, s.x_start, s.x_end))
+            .collect();
+        let reordered = super::optimizer::flood_reorder_segments(&tuples);
+        // Rebuild ScanSegments from reordered tuples, recalculating direction
+        reordered.iter()
+            .map(|&(y, x_start, x_end)| ScanSegment {
+                y,
+                x_start,
+                x_end,
+                forward: x_end >= x_start,
+            })
+            .collect()
+    } else {
+        segments
+    };
 
-        // Overscan: rapid to extended start, then move to boundary at speed with laser off
-        let overscan_start = if forward { start - params.overscan } else { start + params.overscan };
-        let overscan_end = if forward { end + params.overscan } else { end - params.overscan };
-
-        let (rsx, rsy) = if vertical {
-            transform_to_grbl(pos, overscan_start, params)
-        } else {
-            transform_to_grbl(overscan_start, pos, params)
-        };
-
-        // Rapid to overscan start
-        let dist = ((rsx - *cur_x).powi(2) + (rsy - *cur_y).powi(2)).sqrt();
-        *travel_distance += dist;
-        *total_distance += dist;
-        lines.push(format!("G0 X{:.3} Y{:.3}", rsx, rsy));
-        moves.push(GcodeMove { x: rsx, y: rsy, move_type: "rapid".to_string(), speed: 3000.0, power: 0.0 });
-
-        // Accelerate to boundary at engrave speed with laser off
-        if params.overscan > 0.0 {
-            let (bsx, bsy) = if vertical {
-                transform_to_grbl(pos, start, params)
-            } else {
-                transform_to_grbl(start, pos, params)
-            };
-            let d = params.overscan;
-            *travel_distance += d;
-            *total_distance += d;
-            lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S0", bsx, bsy, params.speed_mm_min));
-            moves.push(GcodeMove { x: bsx, y: bsy, move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0 });
-        }
-
-        // Engrave scan line
-        lines.push(format!("{} S{}", params.power_cmd, params.s_max));
-        let (esx, esy) = if vertical {
-            transform_to_grbl(pos, end, params)
-        } else {
-            transform_to_grbl(end, pos, params)
-        };
-        let scan_dist = (end - start).abs();
-        *cut_distance += scan_dist;
-        *total_distance += scan_dist;
-        lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", esx, esy, params.speed_mm_min, params.s_max));
-        moves.push(GcodeMove { x: esx, y: esy, move_type: "engrave".to_string(), speed: params.speed_mm_min, power: params.s_max });
-        lines.push("M5".to_string());
-
-        // Deceleration overscan zone
-        if params.overscan > 0.0 {
-            let (oex, oey) = if vertical {
-                transform_to_grbl(pos, overscan_end, params)
-            } else {
-                transform_to_grbl(overscan_end, pos, params)
-            };
-            let d = params.overscan;
-            *travel_distance += d;
-            *total_distance += d;
-            lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S0", oex, oey, params.speed_mm_min));
-            moves.push(GcodeMove { x: oex, y: oey, move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0 });
-            *cur_x = oex;
-            *cur_y = oey;
-        } else {
-            *cur_x = esx;
-            *cur_y = esy;
-        }
-
-        pos += params.interval;
-        if params.bidirectional {
-            forward = !forward;
-        }
-    }
+    emit_scan_segments(
+        &segments, params, lines, moves,
+        cut_distance, travel_distance, total_distance,
+        cur_x, cur_y, vertical,
+    );
 }
 
 /// Generate G-code from a list of objects with their layer settings
@@ -530,12 +604,14 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                         center_y,
                     };
 
+                    let fill_order = layer.fill_order.as_deref();
+
                     // Horizontal scan lines
                     generate_scan_lines(
                         &scan_params, &mut lines, &mut moves,
                         &mut cut_distance, &mut travel_distance, &mut total_distance,
                         &mut cur_x, &mut cur_y,
-                        x_min, x_max, y_min, y_max, false,
+                        x_min, x_max, y_min, y_max, false, fill_order,
                     );
 
                     // Cross-hatch: vertical scan lines
@@ -545,7 +621,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                             &scan_params, &mut lines, &mut moves,
                             &mut cut_distance, &mut travel_distance, &mut total_distance,
                             &mut cur_x, &mut cur_y,
-                            y_min, y_max, x_min, x_max, true,
+                            y_min, y_max, x_min, x_max, true, fill_order,
                         );
                     }
                 }
@@ -556,23 +632,27 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
 
                     let interval = if layer.interval > 0.0 { layer.interval } else { 0.5 };
 
-                    // Build polygon from object geometry
-                    let path = if obj.paths.is_empty() {
-                        object_to_path(obj)
+                    // Build polygons from object geometry -- iterate all paths
+                    let paths_to_offset: Vec<PathSegment> = if obj.paths.is_empty() {
+                        vec![object_to_path(obj)]
                     } else {
-                        let mut p = obj.paths[0].clone();
-                        rotate_segment(&mut p, obj);
-                        p
+                        obj.paths.iter().map(|p| {
+                            let mut seg = p.clone();
+                            rotate_segment(&mut seg, obj);
+                            seg
+                        }).collect()
                     };
 
-                    if path.points.len() >= 3 {
+                    lines.push(format!("{} S{}", power_cmd, s_max));
+
+                    for path in &paths_to_offset {
+                        if path.points.len() < 3 { continue; }
+
                         let polygon: Vec<super::gcode_gen::Point> = path.points.iter()
                             .map(|p| Point { x: p.x, y: p.y })
                             .collect();
 
                         let rings = super::offset::generate_offset_rings(&polygon, interval);
-
-                        lines.push(format!("{} S{}", power_cmd, s_max));
 
                         for ring in &rings {
                             if ring.len() < 2 { continue; }
@@ -611,9 +691,9 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                 cur_y = fy;
                             }
                         }
-
-                        lines.push("M5".to_string());
                     }
+
+                    lines.push("M5".to_string());
                 }
                 _ => {}
             }
