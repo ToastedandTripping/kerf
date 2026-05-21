@@ -1,7 +1,7 @@
 ---
 status: active
-current: v0.5 — Advanced Engraving
-next: v0.6 — Production Features
+current: v0.6 — Production Features
+next: v0.7 — Camera & Rotary
 testing: null
 pinned: true
 shipped:
@@ -296,13 +296,13 @@ Not a manual — just enough to make the core loop obvious.
 
 ## v0.6 — Production Features (Post v0.5)
 
+- [x] Variable text / serialization (serial numbers, CSV merge, template workflow)
+- [x] Auto-nesting (skyline bin-packing for material efficiency)
 - [ ] Camera alignment (USB webcam, calibration wizard, overlay)
 - [ ] Print-and-cut registration (two-point alignment)
 - [ ] Rotary axis support (chuck + roller, Y-axis substitution)
 - [ ] Multiple machine profiles (switch between setups)
-- [ ] Variable text / serialization (serial numbers, CSV merge)
 - [ ] Text on path (arbitrary curve following)
-- [ ] Auto-nesting (bin-packing for material efficiency)
 - [ ] Community material library (online preset sharing)
 
 ---

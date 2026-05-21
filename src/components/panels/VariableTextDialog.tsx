@@ -13,6 +13,7 @@ type Mode = "serial" | "csv";
 export function VariableTextDialog({ open, onClose }: Props) {
   const objects = useStore((s) => s.objects);
   const generateVariableText = useStore((s) => s.generateVariableText);
+  const nestObjects = useStore((s) => s.nestObjects);
 
   const [mode, setMode] = useState<Mode>("serial");
 
@@ -29,8 +30,9 @@ export function VariableTextDialog({ open, onClose }: Props) {
   const [csvRows, setCsvRows] = useState<string[][]>([]);
   const [csvFileName, setCsvFileName] = useState("");
 
-  // Auto-nest checkbox (Phase D integration point -- noop for now)
+  // Auto-nest after generation
   const [autoNest, setAutoNest] = useState(false);
+  const [nestStatus, setNestStatus] = useState<string | null>(null);
 
   // Escape key dismisses dialog
   useEffect(() => {
@@ -105,6 +107,20 @@ export function VariableTextDialog({ open, onClose }: Props) {
     };
 
     await generateVariableText(config);
+
+    if (autoNest) {
+      const nestResult = await nestObjects({
+        spacing: 2,
+        rotation: "bestFit",
+        useSelection: true,
+      });
+      setNestStatus(
+        `Nested ${nestResult.placed.length}/${nestResult.placed.length + nestResult.unplaced.length} at ${Math.round(nestResult.efficiency * 100)}% efficiency`
+      );
+      // Brief delay so user can see the status before dialog closes
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+
     onClose();
   }
 
@@ -271,14 +287,25 @@ export function VariableTextDialog({ open, onClose }: Props) {
           </div>
         )}
 
-        {/* Auto-nest option (Phase D integration point) */}
+        {/* Auto-nest option */}
         <label style={{
           display: "flex", alignItems: "center", gap: "6px",
-          marginBottom: "16px", cursor: "pointer", fontSize: "12px", color: "var(--text-secondary)",
+          marginBottom: nestStatus ? "8px" : "16px", cursor: "pointer", fontSize: "12px", color: "var(--text-secondary)",
         }}>
           <input type="checkbox" checked={autoNest} onChange={(e) => setAutoNest(e.target.checked)} />
           Auto-nest after generation
         </label>
+
+        {/* Nest status */}
+        {nestStatus && (
+          <div style={{
+            marginBottom: "16px", fontSize: "11px", color: "var(--text-muted)",
+            padding: "4px 8px", background: "rgba(80, 180, 100, 0.1)",
+            borderRadius: "var(--radius-sm)",
+          }}>
+            {nestStatus}
+          </div>
+        )}
 
         {/* Buttons */}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>

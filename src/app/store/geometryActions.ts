@@ -1,9 +1,10 @@
 import polygonClipping from "polygon-clipping";
 import opentype from "opentype.js";
-import type { DesignObject, VariableTextConfig } from "../types";
+import type { DesignObject, VariableTextConfig, NestConfig, NestResult } from "../types";
 import type { StoreSet, StoreGet } from "./storeTypes";
 import { generateId } from "./storeTypes";
 import { hasPlaceholders, extractPlaceholders, substitutePlaceholders, generateSerialValues } from "../../lib/variableText";
+import { computeAABB, nestItems } from "../../lib/nesting";
 
 // Module-level font cache to avoid reloading on every conversion
 let cachedFont: opentype.Font | null = null;
@@ -738,10 +739,73 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
       console.log(`Generated ${rows.length} instances (${allNewObjects.length} objects total)`);
     },
 
-    nestObjects: async () => {
-      // Stub implementation — real nesting algorithm in Batch 2 (Phase C)
-      console.warn("nestObjects: not yet implemented (Batch 2)");
-      return { placed: [], unplaced: [], efficiency: 0 };
+    nestObjects: async (config: NestConfig): Promise<NestResult> => {
+      const { objects, selectedIds, workspaceWidth, workspaceHeight } = get();
+
+      // Select candidates: selected if useSelection + selection exists, else all visible/unlocked
+      let candidates: DesignObject[];
+      if (config.useSelection && selectedIds.length > 0) {
+        candidates = objects.filter((o) => selectedIds.includes(o.id) && o.visible && !o.locked);
+      } else {
+        candidates = objects.filter((o) => o.visible && !o.locked);
+      }
+
+      if (candidates.length === 0) {
+        return { placed: [], unplaced: [], efficiency: 0 };
+      }
+
+      // Compute AABB for each candidate
+      const nestInput = candidates.map((obj) => {
+        const aabb = computeAABB(obj);
+        return {
+          id: obj.id,
+          w: aabb.w,
+          h: aabb.h,
+          originalRotation: obj.transform.rotation,
+        };
+      });
+
+      // Run nesting algorithm
+      const result = nestItems(
+        nestInput,
+        workspaceWidth,
+        workspaceHeight,
+        config.spacing,
+        config.rotation,
+      );
+
+      // Apply placements in single undo snapshot
+      if (result.placed.length > 0) {
+        get().withUndo("auto-nest", () => {
+          const { updateObject } = get();
+          for (const placement of result.placed) {
+            const obj = candidates.find((o) => o.id === placement.objectId);
+            if (!obj) continue;
+
+            // Calculate offset to center the object within its AABB at the placement position
+            const newRotation = obj.transform.rotation + placement.rotation;
+            const newAABB = computeAABB({
+              ...obj,
+              transform: { ...obj.transform, rotation: newRotation },
+            });
+
+            updateObject(placement.objectId, {
+              transform: {
+                ...obj.transform,
+                x: placement.x + (newAABB.w - obj.transform.width) / 2,
+                y: placement.y + (newAABB.h - obj.transform.height) / 2,
+                rotation: newRotation % 360,
+              },
+            });
+          }
+        });
+      }
+
+      console.log(
+        `Nested ${result.placed.length}/${candidates.length} objects at ${Math.round(result.efficiency * 100)}% efficiency`
+      );
+
+      return result;
     },
   };
 }

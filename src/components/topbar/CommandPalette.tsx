@@ -85,6 +85,8 @@ function getCommands(): Command[] {
     { id: "tool-grbl", label: "Machine Settings", category: "Tools", action: () => dialogState.openGrblSettings() },
     { id: "tool-settings", label: "Preferences", category: "Tools", action: () => dialogState.openSettings() },
     { id: "tool-notes", label: "Project Notes", category: "Tools", action: () => dialogState.openProjectNotes() },
+    { id: "tool-variable-text", label: "Variable Text", category: "Tools", action: () => dialogState.openVariableText() },
+    { id: "tool-auto-nest", label: "Auto-Nest", category: "Tools", action: () => dialogState.openNesting() },
   ];
 }
 
