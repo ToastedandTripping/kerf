@@ -8,6 +8,9 @@ import type {
   KerfProject,
   MaterialPreset,
   StartCorner,
+  VariableTextConfig,
+  NestConfig,
+  NestResult,
 } from "../types";
 
 export type StoreSet = StoreApi<AppState>["setState"];
@@ -205,6 +208,12 @@ export interface AppState {
   // Node editing
   nodeEditState: { pathId: string | null; selectedNodeIndex: number | null };
   setNodeEditState: (state: { pathId: string | null; selectedNodeIndex: number | null }) => void;
+
+  // Variable text generation
+  generateVariableText: (config: VariableTextConfig) => Promise<void>;
+
+  // Auto-nesting (stub — real implementation in Batch 2)
+  nestObjects: (config: NestConfig) => Promise<NestResult>;
 }
 
 let idCounter = 0;

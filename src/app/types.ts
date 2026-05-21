@@ -1,3 +1,37 @@
+// Variable Text
+export interface SerialConfig {
+  start: number;
+  increment: number;
+  count: number;
+  zeroPad: number;
+  prefix: string;
+  suffix: string;
+}
+
+export type VariableDataSource =
+  | { type: "serial"; config: SerialConfig }
+  | { type: "csv"; headers: string[]; rows: string[][]; fileName: string };
+
+export interface VariableTextConfig {
+  dataSource: VariableDataSource;
+  templateObjectIds: string[];  // empty = all objects with {placeholders}
+}
+
+// Auto-Nesting
+export type NestRotation = "none" | "90" | "bestFit";
+
+export interface NestConfig {
+  spacing: number;        // mm gap, default 2
+  rotation: NestRotation;
+  useSelection: boolean;
+}
+
+export interface NestResult {
+  placed: Array<{ objectId: string; x: number; y: number; rotation: number }>;
+  unplaced: string[];
+  efficiency: number;     // 0-1
+}
+
 export type ToolType =
   | "select"
   | "rectangle"
@@ -63,6 +97,8 @@ export interface DesignObject {
   children?: DesignObject[]; // group
   // Cut ordering: parent group ID for group affinity in cut planner
   groupId?: string;
+  // Variable text template marker
+  isTemplate?: boolean;
 }
 
 export type CutMode = "line" | "fill" | "offsetFill";
