@@ -15,6 +15,9 @@ async function loadFont(): Promise<opentype.Font> {
   fontLoadPromise = opentype.load("/fonts/OpenSans-Regular.ttf").then((font) => {
     cachedFont = font;
     return font;
+  }).catch((err) => {
+    fontLoadPromise = null;
+    throw err;
   });
   return fontLoadPromise;
 }
@@ -684,6 +687,10 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
 
       if (rows.length === 0) return;
 
+      // Cap rows to prevent runaway generation
+      const data = rows.slice(0, 10000);
+      rows = data;
+
       // Generate all instances
       const allNewObjects: DesignObject[] = [];
       for (const row of rows) {
@@ -712,21 +719,21 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
 
       // Add all generated objects in single undo snapshot
       get().withUndo("generate-variable-text", () => {
-        const { addObject, setSelectedIds } = get();
+        const { addObject, setSelectedIds, updateObject } = get();
         const newIds: string[] = [];
         for (const obj of allNewObjects) {
           addObject(obj);
           newIds.push(obj.id);
         }
         setSelectedIds(newIds);
-      });
 
-      // Mark template objects
-      for (const template of templates) {
-        if (!template.isTemplate) {
-          get().updateObject(template.id, { isTemplate: true });
+        // Mark template objects inside undo boundary
+        for (const template of templates) {
+          if (!template.isTemplate) {
+            updateObject(template.id, { isTemplate: true });
+          }
         }
-      }
+      });
 
       console.log(`Generated ${rows.length} instances (${allNewObjects.length} objects total)`);
     },

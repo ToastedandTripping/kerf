@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useStore } from "../../app/store";
 import type { VariableTextConfig, VariableDataSource, SerialConfig } from "../../app/types";
 import { extractPlaceholders, generateSerialValues, hasPlaceholders, parseCsv } from "../../lib/variableText";
@@ -31,6 +31,15 @@ export function VariableTextDialog({ open, onClose }: Props) {
 
   // Auto-nest checkbox (Phase D integration point -- noop for now)
   const [autoNest, setAutoNest] = useState(false);
+
+  // Escape key dismisses dialog
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && open) onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [open, onClose]);
 
   // Find template objects (text objects with placeholders)
   const templateObjects = useMemo(
@@ -173,7 +182,7 @@ export function VariableTextDialog({ open, onClose }: Props) {
             <label style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
               <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase" }}>Count</span>
               <input
-                type="number" value={count} min={1} onChange={(e) => setCount(Number(e.target.value))}
+                type="number" value={count} min={1} max={9999} onChange={(e) => setCount(Number(e.target.value))}
                 style={{ background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: "11px", padding: "3px 6px", color: "var(--text-primary)" }}
               />
             </label>

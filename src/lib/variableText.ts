@@ -30,8 +30,9 @@ export function generateSerialValues(config: SerialConfig): string[] {
   const results: string[] = [];
   for (let i = 0; i < config.count; i++) {
     const num = config.start + i * config.increment;
-    const padded = String(num).padStart(config.zeroPad, "0");
-    results.push(`${config.prefix}${padded}${config.suffix}`);
+    const sign = num < 0 ? "-" : "";
+    const padded = String(Math.abs(num)).padStart(config.zeroPad, "0");
+    results.push(`${config.prefix}${sign}${padded}${config.suffix}`);
   }
   return results;
 }
@@ -55,7 +56,7 @@ export function parseCsv(csvText: string): { headers: string[]; rows: string[][]
   if (result.data.length === 0) {
     return { headers: [], rows: [] };
   }
-  const headers = result.data[0];
+  const headers = result.data[0].map((h: string) => h.trim());
   const rows = result.data.slice(1);
   return { headers, rows };
 }

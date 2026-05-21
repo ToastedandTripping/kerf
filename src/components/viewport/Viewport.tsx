@@ -784,7 +784,6 @@ function renderTextObject(obj: DesignObject): Container | null {
     indicator.rect(px - 2, py - 2, pw + 4, ph + 4);
     indicator.fill({ color: 0xe8894a, alpha: 0.1 });
     indicator.setStrokeStyle({ width: 1, color: 0xe8894a, alpha: 0.5 });
-    indicator.rect(px - 2, py - 2, pw + 4, ph + 4);
     indicator.stroke();
     container.addChildAt(indicator, 0);
 
