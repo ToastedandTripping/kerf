@@ -16,6 +16,7 @@ export function NestingDialog({ open, onClose }: Props) {
   const [rotation, setRotation] = useState<NestRotation>("bestFit");
   const [result, setResult] = useState<NestResult | null>(null);
   const [nesting, setNesting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Escape key dismisses dialog
   useEffect(() => {
@@ -28,7 +29,10 @@ export function NestingDialog({ open, onClose }: Props) {
 
   // Reset result when dialog opens
   useEffect(() => {
-    if (open) setResult(null);
+    if (open) {
+      setResult(null);
+      setError(null);
+    }
   }, [open]);
 
   // Determine scope
@@ -47,6 +51,7 @@ export function NestingDialog({ open, onClose }: Props) {
 
   async function handleNest() {
     setNesting(true);
+    setError(null);
     try {
       const nestResult = await nestObjects({
         spacing,
@@ -54,6 +59,8 @@ export function NestingDialog({ open, onClose }: Props) {
         useSelection: selectedIds.length > 0,
       });
       setResult(nestResult);
+    } catch (e) {
+      setError(String(e));
     } finally {
       setNesting(false);
     }
@@ -109,7 +116,7 @@ export function NestingDialog({ open, onClose }: Props) {
               max={20}
               step={0.5}
               value={spacing}
-              onChange={(e) => setSpacing(Math.max(0, Math.min(20, Number(e.target.value))))}
+              onChange={(e) => setSpacing(Math.max(0, Math.min(20, Number(e.target.value) || 0)))}
               style={{
                 width: "56px", background: "var(--bg-input)", border: "1px solid var(--border)",
                 borderRadius: "var(--radius-sm)", fontSize: "11px", padding: "3px 6px",
@@ -143,6 +150,20 @@ export function NestingDialog({ open, onClose }: Props) {
             ))}
           </div>
         </div>
+
+        {/* Error display */}
+        {error && (
+          <div style={{
+            marginBottom: "16px", padding: "8px 12px",
+            background: "rgba(220, 60, 60, 0.1)",
+            border: "1px solid rgba(220, 60, 60, 0.3)",
+            borderRadius: "var(--radius-sm)",
+            fontSize: "12px",
+            color: "#dc3c3c",
+          }}>
+            {error}
+          </div>
+        )}
 
         {/* Results bar */}
         {result && (

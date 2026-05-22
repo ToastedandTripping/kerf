@@ -86,42 +86,47 @@ export function VariableTextDialog({ open, onClose }: Props) {
   }
 
   async function handleGenerate() {
-    let dataSource: VariableDataSource;
-    if (mode === "serial") {
-      dataSource = {
-        type: "serial",
-        config: { start, increment, count, zeroPad, prefix, suffix },
+    try {
+      let dataSource: VariableDataSource;
+      if (mode === "serial") {
+        dataSource = {
+          type: "serial",
+          config: { start, increment, count, zeroPad, prefix, suffix },
+        };
+      } else {
+        dataSource = {
+          type: "csv",
+          headers: csvHeaders,
+          rows: csvRows,
+          fileName: csvFileName,
+        };
+      }
+
+      const config: VariableTextConfig = {
+        dataSource,
+        templateObjectIds: templateObjects.map((o) => o.id),
       };
-    } else {
-      dataSource = {
-        type: "csv",
-        headers: csvHeaders,
-        rows: csvRows,
-        fileName: csvFileName,
-      };
+
+      await generateVariableText(config);
+
+      if (autoNest) {
+        const nestResult = await nestObjects({
+          spacing: 2,
+          rotation: "bestFit",
+          useSelection: true,
+        });
+        setNestStatus(
+          `Nested ${nestResult.placed.length}/${nestResult.placed.length + nestResult.unplaced.length} at ${Math.round(nestResult.efficiency * 100)}% efficiency`
+        );
+        // Brief delay so user can see the status before dialog closes
+        await new Promise((r) => setTimeout(r, 1200));
+      }
+
+      onClose();
+    } catch (err) {
+      console.error("Variable text generation failed:", err);
+      onClose();
     }
-
-    const config: VariableTextConfig = {
-      dataSource,
-      templateObjectIds: templateObjects.map((o) => o.id),
-    };
-
-    await generateVariableText(config);
-
-    if (autoNest) {
-      const nestResult = await nestObjects({
-        spacing: 2,
-        rotation: "bestFit",
-        useSelection: true,
-      });
-      setNestStatus(
-        `Nested ${nestResult.placed.length}/${nestResult.placed.length + nestResult.unplaced.length} at ${Math.round(nestResult.efficiency * 100)}% efficiency`
-      );
-      // Brief delay so user can see the status before dialog closes
-      await new Promise((r) => setTimeout(r, 1200));
-    }
-
-    onClose();
   }
 
   const canGenerate =

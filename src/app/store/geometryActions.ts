@@ -668,6 +668,8 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
       // Build substitution rows from data source
       let rows: Record<string, string>[];
       if (config.dataSource.type === "serial") {
+        const { count } = config.dataSource.config;
+        if (!Number.isFinite(count) || count < 1) return;
         const values = generateSerialValues(config.dataSource.config);
         // Find the placeholder name from the first template
         const firstTemplate = templates.find((t) => t.text && hasPlaceholders(t));
@@ -742,12 +744,15 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
     nestObjects: async (config: NestConfig): Promise<NestResult> => {
       const { objects, selectedIds, workspaceWidth, workspaceHeight } = get();
 
+      // Clamp spacing to valid range
+      const spacing = Math.max(0, Math.min(config.spacing, Math.min(workspaceWidth, workspaceHeight) / 2));
+
       // Select candidates: selected if useSelection + selection exists, else all visible/unlocked
       let candidates: DesignObject[];
       if (config.useSelection && selectedIds.length > 0) {
-        candidates = objects.filter((o) => selectedIds.includes(o.id) && o.visible && !o.locked);
+        candidates = objects.filter((o) => selectedIds.includes(o.id) && o.visible && !o.locked && !o.isTemplate);
       } else {
-        candidates = objects.filter((o) => o.visible && !o.locked);
+        candidates = objects.filter((o) => o.visible && !o.locked && !o.isTemplate);
       }
 
       if (candidates.length === 0) {
@@ -770,7 +775,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
         nestInput,
         workspaceWidth,
         workspaceHeight,
-        config.spacing,
+        spacing,
         config.rotation,
       );
 

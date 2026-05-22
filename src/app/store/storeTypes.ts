@@ -212,7 +212,7 @@ export interface AppState {
   // Variable text generation
   generateVariableText: (config: VariableTextConfig) => Promise<void>;
 
-  // Auto-nesting (stub — real implementation in Batch 2)
+  // Auto-nesting
   nestObjects: (config: NestConfig) => Promise<NestResult>;
 }
 
