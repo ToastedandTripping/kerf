@@ -22,6 +22,8 @@ import { ImageImportDialog } from "../components/panels/ImageImportDialog";
 import { ShortcutOverlay } from "../components/panels/ShortcutOverlay";
 import { DitherPreviewDialog } from "../components/panels/DitherPreviewDialog";
 import { PdfImportDialog } from "../components/panels/PdfImportDialog";
+import { VariableTextDialog } from "../components/panels/VariableTextDialog";
+import { NestingDialog } from "../components/panels/NestingDialog";
 import { useKeyboardShortcuts } from "../lib/shortcuts";
 import { handleFileDrop } from "../lib/fileDrop";
 import { startAutoSave, checkRecoveryFile, clearRecoveryFile } from "../lib/autoSave";
@@ -41,6 +43,8 @@ export const dialogState: {
   openImageImport: (data: string, name: string, width: number, height: number) => void;
   openDitherPreview: (objectId: string) => void;
   openPdfImport: (data: ArrayBuffer, name: string) => void;
+  openVariableText: () => void;
+  openNesting: () => void;
 } = {
   openGrblSettings: () => {},
   openSettings: () => {},
@@ -52,6 +56,8 @@ export const dialogState: {
   openImageImport: () => {},
   openDitherPreview: () => {},
   openPdfImport: () => {},
+  openVariableText: () => {},
+  openNesting: () => {},
 };
 
 export default function App() {
@@ -80,6 +86,8 @@ export default function App() {
   const [ditherPreviewObjectId, setDitherPreviewObjectId] = useState<string | null>(null);
   const [pdfImportOpen, setPdfImportOpen] = useState(false);
   const [pendingPdf, setPendingPdf] = useState<{ data: ArrayBuffer; name: string } | null>(null);
+  const [variableTextOpen, setVariableTextOpen] = useState(false);
+  const [nestingOpen, setNestingOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
 
   // Wire up global dialog openers
@@ -105,6 +113,8 @@ export default function App() {
     setPendingPdf({ data, name });
     setPdfImportOpen(true);
   };
+  dialogState.openVariableText = () => setVariableTextOpen(true);
+  dialogState.openNesting = () => setNestingOpen(true);
 
   const onDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -237,6 +247,8 @@ export default function App() {
         generateId={generateId}
         defaultLayerIndex={useStore.getState().activeLayerIndex}
       />
+      <VariableTextDialog open={variableTextOpen} onClose={() => setVariableTextOpen(false)} />
+      <NestingDialog open={nestingOpen} onClose={() => setNestingOpen(false)} />
       <ShortcutOverlay />
 
       {/* First-launch onboarding */}

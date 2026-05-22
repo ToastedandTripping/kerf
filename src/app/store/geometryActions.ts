@@ -1,8 +1,149 @@
 import polygonClipping from "polygon-clipping";
 import opentype from "opentype.js";
-import type { DesignObject } from "../types";
+import type { DesignObject, VariableTextConfig, NestConfig, NestResult } from "../types";
 import type { StoreSet, StoreGet } from "./storeTypes";
 import { generateId } from "./storeTypes";
+import { hasPlaceholders, extractPlaceholders, substitutePlaceholders, generateSerialValues } from "../../lib/variableText";
+import { computeAABB, nestItems } from "../../lib/nesting";
+
+// Module-level font cache to avoid reloading on every conversion
+let cachedFont: opentype.Font | null = null;
+let fontLoadPromise: Promise<opentype.Font> | null = null;
+
+async function loadFont(): Promise<opentype.Font> {
+  if (cachedFont) return cachedFont;
+  if (fontLoadPromise) return fontLoadPromise;
+  fontLoadPromise = opentype.load("/fonts/OpenSans-Regular.ttf").then((font) => {
+    cachedFont = font;
+    return font;
+  }).catch((err) => {
+    fontLoadPromise = null;
+    throw err;
+  });
+  return fontLoadPromise;
+}
+
+/**
+ * Convert a single text DesignObject into an array of path DesignObjects (one per glyph).
+ * Standalone function — no store dependency.
+ */
+export async function textObjectToPaths(obj: DesignObject): Promise<DesignObject[]> {
+  if (obj.type !== "text" || !obj.text) return [];
+
+  const font = await loadFont();
+  const fontSize = obj.fontSize || 12;
+  const scale = fontSize / font.unitsPerEm;
+
+  const glyphs = font.stringToGlyphs(obj.text);
+  let xOffset = 0;
+  const prepared: DesignObject[] = [];
+
+  for (const glyph of glyphs) {
+    const path = glyph.getPath(0, 0, font.unitsPerEm);
+    const commands = path.commands;
+
+    if (commands.length === 0) {
+      xOffset += (glyph.advanceWidth || 0) * scale;
+      continue;
+    }
+
+    const pathPoints: Array<{ x: number; y: number; handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } }> = [];
+    let currentX = 0, currentY = 0;
+
+    for (const cmd of commands) {
+      switch (cmd.type) {
+        case "M":
+          currentX = cmd.x! * scale;
+          currentY = cmd.y! * scale;
+          pathPoints.push({ x: obj.transform.x + xOffset + currentX, y: obj.transform.y + fontSize + currentY });
+          break;
+        case "L":
+          currentX = cmd.x! * scale;
+          currentY = cmd.y! * scale;
+          pathPoints.push({ x: obj.transform.x + xOffset + currentX, y: obj.transform.y + fontSize + currentY });
+          break;
+        case "C": {
+          const prevPt = pathPoints[pathPoints.length - 1];
+          if (prevPt) {
+            prevPt.handleOut = {
+              x: obj.transform.x + xOffset + cmd.x1! * scale,
+              y: obj.transform.y + fontSize + cmd.y1! * scale,
+            };
+          }
+          currentX = cmd.x! * scale;
+          currentY = cmd.y! * scale;
+          pathPoints.push({
+            x: obj.transform.x + xOffset + currentX,
+            y: obj.transform.y + fontSize + currentY,
+            handleIn: {
+              x: obj.transform.x + xOffset + cmd.x2! * scale,
+              y: obj.transform.y + fontSize + cmd.y2! * scale,
+            },
+          });
+          break;
+        }
+        case "Q": {
+          const qPrev = pathPoints[pathPoints.length - 1];
+          const qpx = qPrev ? qPrev.x : 0;
+          const qpy = qPrev ? qPrev.y : 0;
+          const cpx = cmd.x1! * scale;
+          const cpy = cmd.y1! * scale;
+          if (qPrev) {
+            qPrev.handleOut = {
+              x: qpx + (2 / 3) * (obj.transform.x + xOffset + cpx - qpx),
+              y: qpy + (2 / 3) * (obj.transform.y + fontSize + cpy - qpy),
+            };
+          }
+          currentX = cmd.x! * scale;
+          currentY = cmd.y! * scale;
+          const endX = obj.transform.x + xOffset + currentX;
+          const endY = obj.transform.y + fontSize + currentY;
+          pathPoints.push({
+            x: endX,
+            y: endY,
+            handleIn: {
+              x: endX + (2 / 3) * (obj.transform.x + xOffset + cpx - endX),
+              y: endY + (2 / 3) * (obj.transform.y + fontSize + cpy - endY),
+            },
+          });
+          break;
+        }
+        case "Z":
+          break;
+      }
+    }
+
+    if (pathPoints.length > 1) {
+      const xs = pathPoints.map(p => p.x);
+      const ys = pathPoints.map(p => p.y);
+      const minX = Math.min(...xs);
+      const minY = Math.min(...ys);
+      const maxX = Math.max(...xs);
+      const maxY = Math.max(...ys);
+
+      prepared.push({
+        ...obj,
+        id: generateId(),
+        type: "path",
+        text: undefined,
+        fontSize: undefined,
+        fontFamily: undefined,
+        isTemplate: undefined,
+        points: pathPoints,
+        closed: true,
+        transform: {
+          ...obj.transform,
+          x: minX, y: minY,
+          width: maxX - minX, height: maxY - minY,
+        },
+      });
+    }
+
+    xOffset += (glyph.advanceWidth || 0) * scale;
+  }
+
+  return prepared;
+}
 
 export function createGeometryActions(set: StoreSet, get: StoreGet) {
   return {
@@ -312,118 +453,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
       if (!obj || obj.type !== "text" || !obj.text) return;
 
       try {
-        let font: opentype.Font;
-        font = await opentype.load("/fonts/OpenSans-Regular.ttf");
-
-        const fontSize = obj.fontSize || 12;
-        const scale = fontSize / font.unitsPerEm;
-
-        const glyphs = font.stringToGlyphs(obj.text);
-        let xOffset = 0;
-        const prepared: DesignObject[] = [];
-
-        for (const glyph of glyphs) {
-          const path = glyph.getPath(0, 0, font.unitsPerEm);
-          const commands = path.commands;
-
-          if (commands.length === 0) {
-            xOffset += (glyph.advanceWidth || 0) * scale;
-            continue;
-          }
-
-          const pathPoints: Array<{ x: number; y: number; handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } }> = [];
-          let currentX = 0, currentY = 0;
-
-          for (const cmd of commands) {
-            switch (cmd.type) {
-              case "M":
-                currentX = cmd.x! * scale;
-                currentY = cmd.y! * scale;
-                pathPoints.push({ x: obj.transform.x + xOffset + currentX, y: obj.transform.y + fontSize + currentY });
-                break;
-              case "L":
-                currentX = cmd.x! * scale;
-                currentY = cmd.y! * scale;
-                pathPoints.push({ x: obj.transform.x + xOffset + currentX, y: obj.transform.y + fontSize + currentY });
-                break;
-              case "C": {
-                const prevPt = pathPoints[pathPoints.length - 1];
-                if (prevPt) {
-                  prevPt.handleOut = {
-                    x: obj.transform.x + xOffset + cmd.x1! * scale,
-                    y: obj.transform.y + fontSize + cmd.y1! * scale,
-                  };
-                }
-                currentX = cmd.x! * scale;
-                currentY = cmd.y! * scale;
-                pathPoints.push({
-                  x: obj.transform.x + xOffset + currentX,
-                  y: obj.transform.y + fontSize + currentY,
-                  handleIn: {
-                    x: obj.transform.x + xOffset + cmd.x2! * scale,
-                    y: obj.transform.y + fontSize + cmd.y2! * scale,
-                  },
-                });
-                break;
-              }
-              case "Q": {
-                const qPrev = pathPoints[pathPoints.length - 1];
-                const qpx = qPrev ? qPrev.x : 0;
-                const qpy = qPrev ? qPrev.y : 0;
-                const cpx = cmd.x1! * scale;
-                const cpy = cmd.y1! * scale;
-                if (qPrev) {
-                  qPrev.handleOut = {
-                    x: qpx + (2 / 3) * (obj.transform.x + xOffset + cpx - qpx),
-                    y: qpy + (2 / 3) * (obj.transform.y + fontSize + cpy - qpy),
-                  };
-                }
-                currentX = cmd.x! * scale;
-                currentY = cmd.y! * scale;
-                const endX = obj.transform.x + xOffset + currentX;
-                const endY = obj.transform.y + fontSize + currentY;
-                pathPoints.push({
-                  x: endX,
-                  y: endY,
-                  handleIn: {
-                    x: endX + (2 / 3) * (obj.transform.x + xOffset + cpx - endX),
-                    y: endY + (2 / 3) * (obj.transform.y + fontSize + cpy - endY),
-                  },
-                });
-                break;
-              }
-              case "Z":
-                break;
-            }
-          }
-
-          if (pathPoints.length > 1) {
-            const xs = pathPoints.map(p => p.x);
-            const ys = pathPoints.map(p => p.y);
-            const minX = Math.min(...xs);
-            const minY = Math.min(...ys);
-            const maxX = Math.max(...xs);
-            const maxY = Math.max(...ys);
-
-            prepared.push({
-              ...obj,
-              id: generateId(),
-              type: "path",
-              text: undefined,
-              fontSize: undefined,
-              fontFamily: undefined,
-              points: pathPoints,
-              closed: true,
-              transform: {
-                ...obj.transform,
-                x: minX, y: minY,
-                width: maxX - minX, height: maxY - minY,
-              },
-            });
-          }
-
-          xOffset += (glyph.advanceWidth || 0) * scale;
-        }
+        const prepared = await textObjectToPaths(obj);
 
         get().withUndo("convert-to-path", () => {
           const { removeObjects, addObject, setSelectedIds } = get();
@@ -620,6 +650,167 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
         }
         setSelectedIds(newIds);
       });
+    },
+
+    generateVariableText: async (config: VariableTextConfig) => {
+      const { objects } = get();
+
+      // Find template objects: use specified IDs, or auto-detect all text objects with placeholders
+      let templates: DesignObject[];
+      if (config.templateObjectIds.length > 0) {
+        templates = objects.filter((o) => config.templateObjectIds.includes(o.id));
+      } else {
+        templates = objects.filter((o) => o.type === "text" && hasPlaceholders(o));
+      }
+
+      if (templates.length === 0) return;
+
+      // Build substitution rows from data source
+      let rows: Record<string, string>[];
+      if (config.dataSource.type === "serial") {
+        const { count } = config.dataSource.config;
+        if (!Number.isFinite(count) || count < 1) return;
+        const values = generateSerialValues(config.dataSource.config);
+        // Find the placeholder name from the first template
+        const firstTemplate = templates.find((t) => t.text && hasPlaceholders(t));
+        const placeholderNames = firstTemplate ? extractPlaceholders(firstTemplate.text!) : ["serial"];
+        const primaryName = placeholderNames[0] || "serial";
+        rows = values.map((v) => ({ [primaryName]: v }));
+      } else {
+        // CSV data source
+        const { headers, rows: csvRows } = config.dataSource;
+        rows = csvRows.map((row) => {
+          const record: Record<string, string> = {};
+          for (let i = 0; i < headers.length; i++) {
+            record[headers[i]] = row[i] || "";
+          }
+          return record;
+        });
+      }
+
+      if (rows.length === 0) return;
+
+      // Cap rows to prevent runaway generation
+      const data = rows.slice(0, 10000);
+      rows = data;
+
+      // Generate all instances
+      const allNewObjects: DesignObject[] = [];
+      for (const row of rows) {
+        for (const template of templates) {
+          if (!template.text) continue;
+          const substitutedText = substitutePlaceholders(template.text, row);
+          const cloned: DesignObject = {
+            ...template,
+            id: generateId(),
+            text: substitutedText,
+            isTemplate: undefined,
+            name: `${template.name} [${Object.values(row)[0] || ""}]`,
+          };
+          // Convert text to paths
+          try {
+            const paths = await textObjectToPaths(cloned);
+            allNewObjects.push(...paths);
+          } catch {
+            // If path conversion fails, add as text object
+            allNewObjects.push(cloned);
+          }
+        }
+      }
+
+      if (allNewObjects.length === 0) return;
+
+      // Add all generated objects in single undo snapshot
+      get().withUndo("generate-variable-text", () => {
+        const { addObject, setSelectedIds, updateObject } = get();
+        const newIds: string[] = [];
+        for (const obj of allNewObjects) {
+          addObject(obj);
+          newIds.push(obj.id);
+        }
+        setSelectedIds(newIds);
+
+        // Mark template objects inside undo boundary
+        for (const template of templates) {
+          if (!template.isTemplate) {
+            updateObject(template.id, { isTemplate: true });
+          }
+        }
+      });
+
+      console.log(`Generated ${rows.length} instances (${allNewObjects.length} objects total)`);
+    },
+
+    nestObjects: async (config: NestConfig): Promise<NestResult> => {
+      const { objects, selectedIds, workspaceWidth, workspaceHeight } = get();
+
+      // Clamp spacing to valid range
+      const spacing = Math.max(0, Math.min(config.spacing, Math.min(workspaceWidth, workspaceHeight) / 2));
+
+      // Select candidates: selected if useSelection + selection exists, else all visible/unlocked
+      let candidates: DesignObject[];
+      if (config.useSelection && selectedIds.length > 0) {
+        candidates = objects.filter((o) => selectedIds.includes(o.id) && o.visible && !o.locked && !o.isTemplate);
+      } else {
+        candidates = objects.filter((o) => o.visible && !o.locked && !o.isTemplate);
+      }
+
+      if (candidates.length === 0) {
+        return { placed: [], unplaced: [], efficiency: 0 };
+      }
+
+      // Compute AABB for each candidate
+      const nestInput = candidates.map((obj) => {
+        const aabb = computeAABB(obj);
+        return {
+          id: obj.id,
+          w: aabb.w,
+          h: aabb.h,
+          originalRotation: obj.transform.rotation,
+        };
+      });
+
+      // Run nesting algorithm
+      const result = nestItems(
+        nestInput,
+        workspaceWidth,
+        workspaceHeight,
+        spacing,
+        config.rotation,
+      );
+
+      // Apply placements in single undo snapshot
+      if (result.placed.length > 0) {
+        get().withUndo("auto-nest", () => {
+          const { updateObject } = get();
+          for (const placement of result.placed) {
+            const obj = candidates.find((o) => o.id === placement.objectId);
+            if (!obj) continue;
+
+            // Calculate offset to center the object within its AABB at the placement position
+            const newRotation = obj.transform.rotation + placement.rotation;
+            const newAABB = computeAABB({
+              ...obj,
+              transform: { ...obj.transform, rotation: newRotation },
+            });
+
+            updateObject(placement.objectId, {
+              transform: {
+                ...obj.transform,
+                x: placement.x + (newAABB.w - obj.transform.width) / 2,
+                y: placement.y + (newAABB.h - obj.transform.height) / 2,
+                rotation: newRotation % 360,
+              },
+            });
+          }
+        });
+      }
+
+      console.log(
+        `Nested ${result.placed.length}/${candidates.length} objects at ${Math.round(result.efficiency * 100)}% efficiency`
+      );
+
+      return result;
     },
   };
 }

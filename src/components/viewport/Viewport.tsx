@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import { Application, Container, Graphics, Text, TextStyle, Sprite, Texture } from "pixi.js";
 import { useStore } from "../../app/store";
 import type { DesignObject } from "../../app/types";
+import { hasPlaceholders } from "../../lib/variableText";
 import { handleViewportPointerDown, handleViewportPointerMove, handleViewportPointerUp, getMarqueeState, getSelectionBBox, handleViewportDoubleClick } from "../../lib/tools/toolHandler";
 
 const PX_PER_MM = 3.78; // ~96dpi -> mm conversion for screen display
@@ -757,6 +758,37 @@ function renderTextObject(obj: DesignObject): Container | null {
     wordWrap: t.width > 0,
     wordWrapWidth: t.width > 0 ? t.width * PX_PER_MM : undefined,
   });
+
+  const isTemplate = hasPlaceholders(obj);
+
+  // If template, wrap in container with indicator
+  if (isTemplate) {
+    const container = new Container();
+    const text = new Text({ text: obj.text, style });
+    text.x = px;
+    text.y = py;
+    text.alpha = obj.opacity;
+
+    const sx = t.scaleX ?? 1;
+    const sy = t.scaleY ?? 1;
+    if (sx < 0) { text.scale.x *= -1; text.x += t.width * PX_PER_MM; }
+    if (sy < 0) { text.scale.y *= -1; text.y += t.height * PX_PER_MM; }
+
+    container.addChild(text);
+
+    // Dashed border indicator for template text
+    const pw = Math.max(t.width * PX_PER_MM, text.width);
+    const ph = Math.max(t.height * PX_PER_MM, text.height);
+    const indicator = new Graphics();
+    // Warm accent tint at 10% opacity
+    indicator.rect(px - 2, py - 2, pw + 4, ph + 4);
+    indicator.fill({ color: 0xe8894a, alpha: 0.1 });
+    indicator.setStrokeStyle({ width: 1, color: 0xe8894a, alpha: 0.5 });
+    indicator.stroke();
+    container.addChildAt(indicator, 0);
+
+    return container;
+  }
 
   const text = new Text({ text: obj.text, style });
   text.x = px;
