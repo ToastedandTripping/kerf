@@ -1,6 +1,8 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { Application, Container, Graphics, Text, TextStyle, Sprite, Texture } from "pixi.js";
+import { useShallow } from "zustand/shallow";
 import { useStore } from "../../app/store";
+import { getDirtyObjectIds, clearDirtyObjectIds, setCursorPosition } from "../../app/store";
 import type { DesignObject } from "../../app/types";
 import { hasPlaceholders } from "../../lib/variableText";
 import { handleViewportPointerDown, handleViewportPointerMove, handleViewportPointerUp, getMarqueeState, getSelectionBBox, handleViewportDoubleClick } from "../../lib/tools/toolHandler";
@@ -9,6 +11,9 @@ const PX_PER_MM = 3.78; // ~96dpi -> mm conversion for screen display
 
 // Cache for GPU textures keyed by object ID (avoids retaining megabyte-sized base64 strings as Map keys)
 const textureCache = new Map<string, Texture>();
+
+// P8: Content hash cache keyed by display cache key (avoids rebuilding text/image when only transform changes)
+const contentHashCache = new Map<string, string>();
 
 function getOrCreateTexture(id: string, imageData: string): Texture {
   let tex = textureCache.get(id);
@@ -33,6 +38,8 @@ export function Viewport() {
   const isPanning = useRef(false);
   const lastPan = useRef({ x: 0, y: 0 });
   const spaceHeld = useRef(false);
+  // P5: Camera ref for deferred pan writes
+  const panCameraRef = useRef({ x: 0, y: 0, zoom: 1 });
   // Persistent display object cache: maps object ID to its Pixi Container
   const displayCacheRef = useRef<Map<string, Container>>(new Map());
 
@@ -41,16 +48,22 @@ export function Viewport() {
   const objects = useStore((s) => s.objects);
   const layers = useStore((s) => s.layers);
   const drawingObject = useStore((s) => s.drawingObject);
-  const selectedIds = useStore((s) => s.selectedIds);
   const gridVisible = useStore((s) => s.gridVisible);
   const gridSize = useStore((s) => s.gridSize);
   const workspaceWidth = useStore((s) => s.workspaceWidth);
   const workspaceHeight = useStore((s) => s.workspaceHeight);
-  const setCursorPosition = useStore((s) => s.setCursorPosition);
   const activeTool = useStore((s) => s.activeTool);
   const nodeEditState = useStore((s) => s.nodeEditState);
   const setNodeEditState = useStore((s) => s.setNodeEditState);
   const guides = useStore((s) => s.guides);
+
+  // P7: Derived slice -- only re-renders selection overlay when selected objects' transforms change
+  const selectedTransforms = useStore(useShallow((s) => {
+    return s.selectedIds.map((id) => {
+      const obj = s.objectsById.get(id);
+      return obj ? { id: obj.id, transform: obj.transform, type: obj.type, layerIndex: obj.layerIndex, locked: obj.locked, points: obj.points } : null;
+    }).filter((x): x is NonNullable<typeof x> => x != null);
+  }));
 
   // Initialize Pixi.js
   useEffect(() => {
@@ -170,6 +183,10 @@ export function Viewport() {
     const container = objectsContainerRef.current;
     const cache = displayCacheRef.current;
 
+    // P3: Dirty tracking -- only re-render changed objects during drag
+    const dirty = getDirtyObjectIds();
+    clearDirtyObjectIds();
+
     // Build set of IDs that should be visible this frame
     // For groups, we use composite keys: "groupId/childId"
     const activeIds = new Set<string>();
@@ -182,19 +199,31 @@ export function Viewport() {
       activeIds.add(key);
       const existing = cache.get(key);
       if (existing) {
+        // P3: If dirty set is non-empty and this object isn't dirty, skip re-render
+        if (dirty.size > 0 && !dirty.has(obj.id)) {
+          return;
+        }
         // Update existing: clear and re-render (cheaper than full teardown/rebuild)
         if (existing instanceof Graphics) {
           (existing as Graphics).clear();
           renderObject(existing as Graphics, obj);
           applyObjectRotation(existing, obj.transform);
         } else {
-          // For text/image, replace (they need full rebuild on content change)
+          // P8: Content hash for text/image -- skip destroy+rebuild when only transform changed
+          const hash = contentHash(obj);
+          if (contentHashCache.get(key) === hash) {
+            // Content unchanged -- just update transform position
+            applyTextImageTransform(existing, obj);
+            return;
+          }
+          // Content changed -- destroy and rebuild
           cache.delete(key);
           container.removeChild(existing);
           existing.destroy({ children: true });
           const newEl = obj.type === "text" ? renderTextObject(obj)
             : obj.type === "image" ? renderImageObject(obj) : null;
           if (newEl) {
+            contentHashCache.set(key, hash);
             applyObjectRotation(newEl, obj.transform);
             container.addChild(newEl);
             cache.set(key, newEl);
@@ -205,8 +234,10 @@ export function Viewport() {
         let el: Container | null = null;
         if (obj.type === "text") {
           el = renderTextObject(obj);
+          if (el) contentHashCache.set(key, contentHash(obj));
         } else if (obj.type === "image") {
           el = renderImageObject(obj);
+          if (el) contentHashCache.set(key, contentHash(obj));
         } else {
           const g = new Graphics();
           renderObject(g, obj);
@@ -247,6 +278,7 @@ export function Viewport() {
         container.removeChild(displayObj);
         displayObj.destroy({ children: true });
         cache.delete(key);
+        contentHashCache.delete(key); // P8: clean up hash cache
       }
     }
 
@@ -278,7 +310,7 @@ export function Viewport() {
     }
   }, [drawingObject]);
 
-  // Draw selection indicators + handles + marquee
+  // Draw selection indicators + handles + marquee (P7: uses derived slice)
   useEffect(() => {
     if (!selectionOverlayRef.current) return;
     const g = selectionOverlayRef.current;
@@ -286,17 +318,16 @@ export function Viewport() {
 
     // Per-object selection outlines (color-coded by layer)
     const layers = useStore.getState().layers;
-    for (const id of selectedIds) {
-      const obj = objects.find((o) => o.id === id);
-      if (!obj) continue;
-      const t = obj.transform;
+    for (const sel of selectedTransforms) {
+      if (!sel) continue;
+      const t = sel.transform;
       const px = t.x * PX_PER_MM;
       const py = t.y * PX_PER_MM;
       const pw = t.width * PX_PER_MM;
       const ph = t.height * PX_PER_MM;
       const rot = (t.rotation || 0) * Math.PI / 180;
 
-      const layerColor = layers[obj.layerIndex]?.color || "#4a90e2";
+      const layerColor = layers[sel.layerIndex]?.color || "#4a90e2";
       const selColor = parseInt(layerColor.replace("#", ""), 16);
       g.setStrokeStyle({ width: 1 / camera.zoom, color: selColor, alpha: 0.8 });
       if (rot !== 0) {
@@ -316,7 +347,7 @@ export function Viewport() {
       }
 
       // Lock indicator
-      if (obj.locked) {
+      if (sel.locked) {
         const lockSize = 10 / camera.zoom;
         const lx = px + pw - lockSize - 2 / camera.zoom;
         const ly = py + 2 / camera.zoom;
@@ -325,7 +356,7 @@ export function Viewport() {
     }
 
     // Group bounding box with handles (when anything is selected)
-    if (selectedIds.length > 0) {
+    if (selectedTransforms.length > 0) {
       const bbox = getSelectionBBox();
       if (bbox) {
         const bx = bbox.x * PX_PER_MM;
@@ -334,7 +365,7 @@ export function Viewport() {
         const bh = bbox.h * PX_PER_MM;
 
         // Multi-selection bounding box
-        if (selectedIds.length > 1) {
+        if (selectedTransforms.length > 1) {
           g.setStrokeStyle({ width: 1 / camera.zoom, color: 0x4a90e2, alpha: 0.4 });
           g.rect(bx, by, bw, bh).stroke();
         }
@@ -380,7 +411,7 @@ export function Viewport() {
     }
     // --- Node editing overlay ---
     if (activeTool === "node" && nodeEditState.pathId) {
-      const pathObj = objects.find((o) => o.id === nodeEditState.pathId);
+      const pathObj = useStore.getState().objectsById.get(nodeEditState.pathId);
       if (!pathObj || !pathObj.points) {
         // Stale state -- path was deleted
         setNodeEditState({ pathId: null, selectedNodeIndex: null });
@@ -423,7 +454,7 @@ export function Viewport() {
         }
       }
     }
-  }, [selectedIds, objects, camera.zoom, activeTool, nodeEditState]);
+  }, [selectedTransforms, camera.zoom, activeTool, nodeEditState]);
 
   // Track marquee box for HTML overlay rendering
   const marqueeRef = useRef<{ x: number; y: number; w: number; h: number; dir: "ltr" | "rtl" } | null>(null);
@@ -482,6 +513,8 @@ export function Viewport() {
       if (e.button === 1 || (e.button === 0 && spaceHeld.current)) {
         isPanning.current = true;
         lastPan.current = { x: e.clientX, y: e.clientY };
+        // P5: Initialize pan camera ref from current camera state
+        panCameraRef.current = { x: camera.x, y: camera.y, zoom: camera.zoom };
         if (canvasRef.current) canvasRef.current.style.cursor = "grabbing";
         return;
       }
@@ -503,10 +536,19 @@ export function Viewport() {
       if (!rect) return;
 
       if (isPanning.current) {
+        // P5: Direct Pixi update during pan -- no Zustand writes until pointer-up
         const dx = e.clientX - lastPan.current.x;
         const dy = e.clientY - lastPan.current.y;
         lastPan.current = { x: e.clientX, y: e.clientY };
-        setCamera({ x: camera.x + dx, y: camera.y + dy });
+        panCameraRef.current = {
+          x: panCameraRef.current.x + dx,
+          y: panCameraRef.current.y + dy,
+          zoom: panCameraRef.current.zoom,
+        };
+        if (worldRef.current) {
+          worldRef.current.x = panCameraRef.current.x;
+          worldRef.current.y = panCameraRef.current.y;
+        }
         return;
       }
 
@@ -527,12 +569,14 @@ export function Viewport() {
         marqueeRef.current = null;
       }
     },
-    [camera, setCamera, setCursorPosition]
+    [camera, setCamera]
   );
 
   const handlePointerUp = useCallback(
     (e: React.PointerEvent) => {
       if (isPanning.current) {
+        // P5: Single sync to Zustand store when pan ends
+        setCamera(panCameraRef.current);
         isPanning.current = false;
         if (canvasRef.current) {
           canvasRef.current.style.cursor = spaceHeld.current ? "grab" : getCursor(activeTool);
@@ -631,6 +675,59 @@ export function Viewport() {
       )}
     </div>
   );
+}
+
+/** P8: Content hash for text/image objects -- skip GPU texture rebuild when only transform changed */
+function contentHash(obj: DesignObject): string {
+  if (obj.type === "text") return `${obj.text}|${obj.fontSize}|${obj.fontFamily}|${obj.fill}|${obj.opacity}`;
+  if (obj.type === "image") return `${obj.imageData?.slice(0, 50)}|${obj.opacity}`;
+  return "";
+}
+
+/** P8: Update position of text/image display object without destroying and rebuilding */
+function applyTextImageTransform(displayObj: Container, obj: DesignObject) {
+  const t = obj.transform;
+  const px = t.x * PX_PER_MM;
+  const py = t.y * PX_PER_MM;
+  const pw = t.width * PX_PER_MM;
+  const ph = t.height * PX_PER_MM;
+  const rot = (t.rotation || 0) * Math.PI / 180;
+
+  // Reset pivot/position/rotation first
+  displayObj.pivot.set(0, 0);
+  displayObj.position.set(0, 0);
+  displayObj.rotation = 0;
+
+  if (displayObj instanceof Sprite) {
+    displayObj.x = px;
+    displayObj.y = py;
+    displayObj.width = pw;
+    displayObj.height = ph;
+    const sx = t.scaleX ?? 1;
+    const sy = t.scaleY ?? 1;
+    if (sx < 0) { displayObj.scale.x *= -1; displayObj.x += pw; }
+    if (sy < 0) { displayObj.scale.y *= -1; displayObj.y += ph; }
+  } else if (displayObj instanceof Text) {
+    displayObj.x = px;
+    displayObj.y = py;
+    const sx = t.scaleX ?? 1;
+    const sy = t.scaleY ?? 1;
+    if (sx < 0) { displayObj.scale.x = -1; displayObj.x += pw; } else { displayObj.scale.x = 1; }
+    if (sy < 0) { displayObj.scale.y = -1; displayObj.y += ph; } else { displayObj.scale.y = 1; }
+  } else {
+    // Container (template text) -- update child positions
+    for (const child of displayObj.children) {
+      if (child instanceof Text) {
+        child.x = px;
+        child.y = py;
+      }
+    }
+  }
+
+  // Re-apply rotation if needed
+  if (rot !== 0) {
+    applyObjectRotation(displayObj, t);
+  }
 }
 
 /** Apply rotation transform to a Pixi display object around its bounding box center */

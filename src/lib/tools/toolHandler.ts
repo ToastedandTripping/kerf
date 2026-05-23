@@ -293,7 +293,9 @@ export function getSelectionBBox(): { x: number; y: number; w: number; h: number
   const store = useStore.getState();
   if (store.selectedIds.length === 0) return null;
 
-  const selected = store.objects.filter((o) => store.selectedIds.includes(o.id));
+  const selected = store.selectedIds
+    .map((id) => store.objectsById.get(id))
+    .filter((o): o is DesignObject => o != null);
   if (selected.length === 0) return null;
 
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -350,9 +352,9 @@ function handleSelectDown(worldX: number, worldY: number, e: React.PointerEvent)
       drag.activeHandle = handle;
       const bbox = getSelectionBBox()!;
       drag.handleOriginal = { x: bbox.x, y: bbox.y, width: bbox.w, height: bbox.h };
-      // Store original transforms for all selected objects
+      // Store original transforms for all selected objects (P6: O(1) lookup)
       for (const id of store.selectedIds) {
-        const obj = store.objects.find((o) => o.id === id);
+        const obj = store.objectsById.get(id);
         if (obj) {
           drag.originalTransforms.set(id, {
             x: obj.transform.x,
@@ -385,10 +387,10 @@ function handleSelectDown(worldX: number, worldY: number, e: React.PointerEvent)
       store.setSelectedIds([hitId]);
     }
     drag.dragTarget = hitId;
-    // Store original positions for all selected objects
+    // Store original positions for all selected objects (P6: O(1) lookup)
     const selectedIds = useStore.getState().selectedIds;
     for (const id of selectedIds) {
-      const obj = store.objects.find((o) => o.id === id);
+      const obj = store.objectsById.get(id);
       if (obj) {
         drag.originalTransforms.set(id, {
           x: obj.transform.x,
@@ -496,28 +498,36 @@ function handleSelectMove(worldX: number, worldY: number, e: React.PointerEvent)
     }
   }
 
-  store.setGuides(guides);
+  // P2: Diff guides before writing to avoid unnecessary Zustand set() calls
+  const currentGuides = store.guides;
+  const guidesChanged = guides.length !== currentGuides.length ||
+    guides.some((g, i) => g.type !== currentGuides[i]?.type || g.pos !== currentGuides[i]?.pos);
+  if (guidesChanged) store.setGuides(guides);
 
+  // P1: Batch all object updates into a single Zustand set() call
+  const updates: Array<{ id: string; partial: Partial<DesignObject> }> = [];
   for (const id of store.selectedIds) {
     const original = drag.originalTransforms.get(id);
-    if (original) {
-      let newX = original.x + dx + snapDx;
-      let newY = original.y + dy + snapDy;
+    if (!original) continue;
+    const obj = store.objectsById.get(id); // P6: O(1) lookup
+    if (!obj) continue;
 
-      if (store.snapToGrid) {
-        newX = Math.round(newX / store.gridSize) * store.gridSize;
-        newY = Math.round(newY / store.gridSize) * store.gridSize;
-      }
+    let newX = original.x + dx + snapDx;
+    let newY = original.y + dy + snapDy;
 
-      store.updateObject(id, {
-        transform: {
-          ...store.objects.find((o) => o.id === id)!.transform,
-          x: newX,
-          y: newY,
-        },
-      });
+    if (store.snapToGrid) {
+      newX = Math.round(newX / store.gridSize) * store.gridSize;
+      newY = Math.round(newY / store.gridSize) * store.gridSize;
     }
+
+    updates.push({
+      id,
+      partial: {
+        transform: { ...obj.transform, x: newX, y: newY },
+      },
+    });
   }
+  if (updates.length > 0) store.updateObjects(updates);
 }
 
 function handleResizeMove(worldX: number, worldY: number, e: React.PointerEvent) {
@@ -539,15 +549,20 @@ function handleResizeMove(worldX: number, worldY: number, e: React.PointerEvent)
       delta = Math.round(delta / 15) * 15;
     }
 
+    const rotUpdates: Array<{ id: string; partial: Partial<DesignObject> }> = [];
     for (const id of store.selectedIds) {
       const objOrig = drag.originalTransforms.get(id);
       if (!objOrig) continue;
-      const obj = store.objects.find((o) => o.id === id);
+      const obj = store.objectsById.get(id);
       if (!obj) continue;
-      store.updateObject(id, {
-        transform: { ...obj.transform, rotation: (obj.transform.rotation + delta) % 360 },
+      rotUpdates.push({
+        id,
+        partial: {
+          transform: { ...obj.transform, rotation: (obj.transform.rotation + delta) % 360 },
+        },
       });
     }
+    if (rotUpdates.length > 0) store.updateObjects(rotUpdates);
     // Reset start angle so rotation is incremental
     drag.startX = worldX;
     drag.startY = worldY;
@@ -594,11 +609,12 @@ function handleResizeMove(worldX: number, worldY: number, e: React.PointerEvent)
   if (newW < 1) { newW = 1; }
   if (newH < 1) { newH = 1; }
 
-  // Scale each selected object proportionally
+  // Scale each selected object proportionally (P1: batched, P6: O(1) lookup)
+  const scaleUpdates: Array<{ id: string; partial: Partial<DesignObject> }> = [];
   for (const id of store.selectedIds) {
     const objOrig = drag.originalTransforms.get(id);
     if (!objOrig) continue;
-    const obj = store.objects.find((o) => o.id === id);
+    const obj = store.objectsById.get(id);
     if (!obj) continue;
 
     const relX = (objOrig.x - orig.x) / (orig.width || 1);
@@ -606,16 +622,20 @@ function handleResizeMove(worldX: number, worldY: number, e: React.PointerEvent)
     const relW = objOrig.width / (orig.width || 1);
     const relH = objOrig.height / (orig.height || 1);
 
-    store.updateObject(id, {
-      transform: {
-        ...obj.transform,
-        x: newX + relX * newW,
-        y: newY + relY * newH,
-        width: Math.max(1, relW * newW),
-        height: Math.max(1, relH * newH),
+    scaleUpdates.push({
+      id,
+      partial: {
+        transform: {
+          ...obj.transform,
+          x: newX + relX * newW,
+          y: newY + relY * newH,
+          width: Math.max(1, relW * newW),
+          height: Math.max(1, relH * newH),
+        },
       },
     });
   }
+  if (scaleUpdates.length > 0) store.updateObjects(scaleUpdates);
 }
 
 function updateMarqueeSelection(worldX: number, worldY: number) {
@@ -663,7 +683,7 @@ function handleSelectUp(_worldX: number, _worldY: number) {
     const finalPositions = new Map<string, { x: number; y: number; width: number; height: number; rotation: number }>();
 
     for (const id of store.selectedIds) {
-      const obj = store.objects.find((o) => o.id === id);
+      const obj = store.objectsById.get(id);
       if (obj) {
         finalPositions.set(id, {
           x: obj.transform.x, y: obj.transform.y,
@@ -689,7 +709,7 @@ function handleSelectUp(_worldX: number, _worldY: number) {
         type: "resize",
         undo: () => {
           for (const [id, pos] of originalPositions) {
-            const obj = useStore.getState().objects.find((o) => o.id === id);
+            const obj = useStore.getState().objectsById.get(id);
             if (obj) {
               useStore.getState().updateObject(id, {
                 transform: { ...obj.transform, ...pos },
@@ -699,7 +719,7 @@ function handleSelectUp(_worldX: number, _worldY: number) {
         },
         redo: () => {
           for (const [id, pos] of finalPositions) {
-            const obj = useStore.getState().objects.find((o) => o.id === id);
+            const obj = useStore.getState().objectsById.get(id);
             if (obj) {
               useStore.getState().updateObject(id, {
                 transform: { ...obj.transform, ...pos },
@@ -727,7 +747,7 @@ function handleSelectUp(_worldX: number, _worldY: number) {
     }
 
     for (const id of store.selectedIds) {
-      const obj = store.objects.find((o) => o.id === id);
+      const obj = store.objectsById.get(id);
       if (obj) {
         finalPositions.set(id, { x: obj.transform.x, y: obj.transform.y });
       }
@@ -747,7 +767,7 @@ function handleSelectUp(_worldX: number, _worldY: number) {
         type: "move",
         undo: () => {
           for (const [id, pos] of originalPositions) {
-            const obj = useStore.getState().objects.find((o) => o.id === id);
+            const obj = useStore.getState().objectsById.get(id);
             if (obj) {
               useStore.getState().updateObject(id, {
                 transform: { ...obj.transform, x: pos.x, y: pos.y },
@@ -757,7 +777,7 @@ function handleSelectUp(_worldX: number, _worldY: number) {
         },
         redo: () => {
           for (const [id, pos] of finalPositions) {
-            const obj = useStore.getState().objects.find((o) => o.id === id);
+            const obj = useStore.getState().objectsById.get(id);
             if (obj) {
               useStore.getState().updateObject(id, {
                 transform: { ...obj.transform, x: pos.x, y: pos.y },

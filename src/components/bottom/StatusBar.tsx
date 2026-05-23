@@ -1,4 +1,6 @@
+import { useSyncExternalStore } from "react";
 import { useStore } from "../../app/store";
+import { subscribeCursorPosition, getCursorPosition } from "../../app/store";
 
 const stateColors: Record<string, string> = {
   idle: "var(--success)",
@@ -9,7 +11,8 @@ const stateColors: Record<string, string> = {
 };
 
 export function StatusBar() {
-  const cursorPosition = useStore((s) => s.cursorPosition);
+  // P4: Cursor position via useSyncExternalStore (removed from Zustand)
+  const cursorPosition = useSyncExternalStore(subscribeCursorPosition, getCursorPosition);
   const camera = useStore((s) => s.camera);
   const objects = useStore((s) => s.objects);
   const selectedIds = useStore((s) => s.selectedIds);
