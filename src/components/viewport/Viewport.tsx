@@ -679,8 +679,8 @@ export function Viewport() {
 
 /** P8: Content hash for text/image objects -- skip GPU texture rebuild when only transform changed */
 function contentHash(obj: DesignObject): string {
-  if (obj.type === "text") return `${obj.text}|${obj.fontSize}|${obj.fontFamily}|${obj.fill}|${obj.opacity}`;
-  if (obj.type === "image") return `${obj.imageData?.slice(0, 50)}|${obj.opacity}`;
+  if (obj.type === "text") return `${obj.text}|${obj.fontSize}|${obj.fontFamily}|${obj.fill}|${obj.stroke}|${obj.opacity}|${obj.transform.width}`;
+  if (obj.type === "image") return `${obj.imageData?.slice(0, 50)}|${obj.opacity}|${JSON.stringify(obj.imageAdjustments)}`;
   return "";
 }
 
