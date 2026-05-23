@@ -347,7 +347,9 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
         const newObjects = [...remaining];
         newObjects.splice(Math.min(insertIdx, newObjects.length), 0, group);
 
-        set({ objects: newObjects, selectedIds: [groupId], isDirty: true });
+        const byId = new Map<string, import("../types").DesignObject>();
+        for (const o of newObjects) byId.set(o.id, o);
+        set({ objects: newObjects, objectsById: byId, selectedIds: [groupId], isDirty: true });
       });
     },
 
@@ -379,7 +381,9 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
           }
         }
 
-        set({ objects: newObjects, selectedIds: newSelectedIds, isDirty: true });
+        const byId = new Map<string, import("../types").DesignObject>();
+        for (const o of newObjects) byId.set(o.id, o);
+        set({ objects: newObjects, objectsById: byId, selectedIds: newSelectedIds, isDirty: true });
       });
     },
 

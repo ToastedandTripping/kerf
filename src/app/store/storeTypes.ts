@@ -29,8 +29,10 @@ export interface AppState {
 
   // Objects
   objects: DesignObject[];
+  objectsById: Map<string, DesignObject>;
   addObject: (obj: DesignObject) => void;
   updateObject: (id: string, partial: Partial<DesignObject>) => void;
+  updateObjects: (updates: Array<{ id: string; partial: Partial<DesignObject> }>) => void;
   removeObjects: (ids: string[]) => void;
   setObjects: (objects: DesignObject[]) => void;
 
@@ -202,9 +204,6 @@ export interface AppState {
   // UI
   showConsole: boolean;
   setShowConsole: (v: boolean) => void;
-  cursorPosition: { x: number; y: number };
-  setCursorPosition: (pos: { x: number; y: number }) => void;
-
   // Node editing
   nodeEditState: { pathId: string | null; selectedNodeIndex: number | null };
   setNodeEditState: (state: { pathId: string | null; selectedNodeIndex: number | null }) => void;

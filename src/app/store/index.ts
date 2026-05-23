@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { SubLayer } from "../types";
+import type { DesignObject, SubLayer } from "../types";
 import { DEFAULT_LAYERS } from "../types";
 import { DEFAULT_MATERIALS } from "../../lib/materials";
 import { createGeometryActions } from "./geometryActions";
@@ -8,6 +8,32 @@ import type { AppState } from "./storeTypes";
 export type { AppState } from "./storeTypes";
 export { generateId } from "./storeTypes";
 
+// --- P3: Module-level dirty tracking (not in Zustand state to avoid triggering subscribers) ---
+let dirtyObjectIds: Set<string> = new Set();
+export const getDirtyObjectIds = () => dirtyObjectIds;
+export const clearDirtyObjectIds = () => { dirtyObjectIds = new Set(); };
+
+// --- P4: Module-level cursor position (removed from Zustand to avoid 60 set() calls/sec) ---
+let _cursorPosition = { x: 0, y: 0 };
+let _cursorListeners: Array<() => void> = [];
+
+export function setCursorPosition(pos: { x: number; y: number }) {
+  _cursorPosition = pos;
+  for (const fn of _cursorListeners) fn();
+}
+export function getCursorPosition() { return _cursorPosition; }
+export function subscribeCursorPosition(fn: () => void) {
+  _cursorListeners.push(fn);
+  return () => { _cursorListeners = _cursorListeners.filter((f) => f !== fn); };
+}
+
+// --- P6: Helper to build objectsById map ---
+function buildObjectsById(objects: DesignObject[]): Map<string, DesignObject> {
+  const map = new Map<string, DesignObject>();
+  for (const o of objects) map.set(o.id, o);
+  return map;
+}
+
 export const useStore = create<AppState>((set, get) => ({
   // Tool
   activeTool: "select",
@@ -15,25 +41,55 @@ export const useStore = create<AppState>((set, get) => ({
 
   // Objects
   objects: [],
+  objectsById: new Map(),
   addObject: (obj) =>
-    set((state) => ({
-      objects: [...state.objects, obj],
-      isDirty: true,
-    })),
-  updateObject: (id, partial) =>
-    set((state) => ({
-      objects: state.objects.map((o) =>
+    set((state) => {
+      const newObjects = [...state.objects, obj];
+      return {
+        objects: newObjects,
+        objectsById: buildObjectsById(newObjects),
+        isDirty: true,
+      };
+    }),
+  updateObject: (id, partial) => {
+    dirtyObjectIds.add(id);
+    set((state) => {
+      const newObjects = state.objects.map((o) =>
         o.id === id ? { ...o, ...partial } : o
-      ),
-      isDirty: true,
-    })),
+      );
+      return {
+        objects: newObjects,
+        objectsById: buildObjectsById(newObjects),
+        isDirty: true,
+      };
+    });
+  },
+  updateObjects: (updates) => {
+    for (const u of updates) dirtyObjectIds.add(u.id);
+    set((state) => {
+      const updateMap = new Map(updates.map((u) => [u.id, u.partial]));
+      const newObjects = state.objects.map((o) => {
+        const partial = updateMap.get(o.id);
+        return partial ? { ...o, ...partial } : o;
+      });
+      return {
+        objects: newObjects,
+        objectsById: buildObjectsById(newObjects),
+        isDirty: true,
+      };
+    });
+  },
   removeObjects: (ids) =>
-    set((state) => ({
-      objects: state.objects.filter((o) => !ids.includes(o.id)),
-      selectedIds: state.selectedIds.filter((id) => !ids.includes(id)),
-      isDirty: true,
-    })),
-  setObjects: (objects) => set({ objects }),
+    set((state) => {
+      const newObjects = state.objects.filter((o) => !ids.includes(o.id));
+      return {
+        objects: newObjects,
+        objectsById: buildObjectsById(newObjects),
+        selectedIds: state.selectedIds.filter((id) => !ids.includes(id)),
+        isDirty: true,
+      };
+    }),
+  setObjects: (objects) => set({ objects, objectsById: buildObjectsById(objects) }),
 
   // Selection
   selectedIds: [],
@@ -78,7 +134,7 @@ export const useStore = create<AppState>((set, get) => ({
         layerIndex: indexMap.get(o.layerIndex) ?? o.layerIndex,
       }));
       const activeLayerIndex = indexMap.get(state.activeLayerIndex) ?? state.activeLayerIndex;
-      return { layers: reindexed, objects, activeLayerIndex, isDirty: true };
+      return { layers: reindexed, objects, objectsById: buildObjectsById(objects), activeLayerIndex, isDirty: true };
     }),
   addSubLayer: (layerIndex) =>
     set((state) => ({
@@ -192,8 +248,14 @@ export const useStore = create<AppState>((set, get) => ({
       };
       get().pushCommand({
         type,
-        undo: () => set({ objects: restoreImageData(beforeSnapshot), selectedIds: beforeSelectedIds, isDirty: true }),
-        redo: () => set({ objects: restoreImageData(afterSnapshot), selectedIds: afterSelectedIds, isDirty: true }),
+        undo: () => {
+          const restored = restoreImageData(beforeSnapshot);
+          set({ objects: restored, objectsById: buildObjectsById(restored), selectedIds: beforeSelectedIds, isDirty: true });
+        },
+        redo: () => {
+          const restored = restoreImageData(afterSnapshot);
+          set({ objects: restored, objectsById: buildObjectsById(restored), selectedIds: afterSelectedIds, isDirty: true });
+        },
       });
     }
   },
@@ -225,8 +287,14 @@ export const useStore = create<AppState>((set, get) => ({
       };
       get().pushCommand({
         type: "property-edit",
-        undo: () => set({ objects: restoreImageData(beforeSnapshot), selectedIds: snapshot.selectedIds, isDirty: true }),
-        redo: () => set({ objects: restoreImageData(afterSnapshot), selectedIds: afterSelectedIds, isDirty: true }),
+        undo: () => {
+          const restored = restoreImageData(beforeSnapshot);
+          set({ objects: restored, objectsById: buildObjectsById(restored), selectedIds: snapshot.selectedIds, isDirty: true });
+        },
+        redo: () => {
+          const restored = restoreImageData(afterSnapshot);
+          set({ objects: restored, objectsById: buildObjectsById(restored), selectedIds: afterSelectedIds, isDirty: true });
+        },
       });
     }
     set({ _propertyEditSnapshot: null });
@@ -246,6 +314,7 @@ export const useStore = create<AppState>((set, get) => ({
   loadProject: (project) =>
     set({
       objects: project.objects,
+      objectsById: buildObjectsById(project.objects),
       layers: project.layers.map(l => ({ ...l, output: l.output ?? true })),
       camera: project.camera,
       workspaceWidth: project.workspaceWidth,
@@ -327,7 +396,7 @@ export const useStore = create<AppState>((set, get) => ({
         if (idx < 0 || idx >= state.objects.length - 1) return state;
         const objs = [...state.objects];
         [objs[idx], objs[idx + 1]] = [objs[idx + 1], objs[idx]];
-        return { objects: objs, isDirty: true };
+        return { objects: objs, objectsById: buildObjectsById(objs), isDirty: true };
       });
     });
   },
@@ -338,7 +407,7 @@ export const useStore = create<AppState>((set, get) => ({
         if (idx <= 0) return state;
         const objs = [...state.objects];
         [objs[idx - 1], objs[idx]] = [objs[idx], objs[idx - 1]];
-        return { objects: objs, isDirty: true };
+        return { objects: objs, objectsById: buildObjectsById(objs), isDirty: true };
       });
     });
   },
@@ -350,7 +419,7 @@ export const useStore = create<AppState>((set, get) => ({
         const objs = [...state.objects];
         const [obj] = objs.splice(idx, 1);
         objs.push(obj);
-        return { objects: objs, isDirty: true };
+        return { objects: objs, objectsById: buildObjectsById(objs), isDirty: true };
       });
     });
   },
@@ -362,7 +431,7 @@ export const useStore = create<AppState>((set, get) => ({
         const objs = [...state.objects];
         const [obj] = objs.splice(idx, 1);
         objs.unshift(obj);
-        return { objects: objs, isDirty: true };
+        return { objects: objs, objectsById: buildObjectsById(objs), isDirty: true };
       });
     });
   },
@@ -491,9 +560,6 @@ export const useStore = create<AppState>((set, get) => ({
   // UI
   showConsole: false,
   setShowConsole: (v) => set({ showConsole: v }),
-  cursorPosition: { x: 0, y: 0 },
-  setCursorPosition: (pos) => set({ cursorPosition: pos }),
-
   // Node editing
   nodeEditState: { pathId: null, selectedNodeIndex: null },
   setNodeEditState: (state) => set({ nodeEditState: state }),
