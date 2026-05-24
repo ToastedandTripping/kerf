@@ -19,6 +19,7 @@ export function handleFileDrop(files: FileList) {
       importDroppedPdf(file);
     } else {
       useStore.getState().addConsoleLine(`Unsupported file type: .${ext}`, "warning");
+      useStore.getState().setStatusMessage(`Unsupported file type: .${ext}`);
     }
   }
 }
@@ -65,7 +66,13 @@ function importDroppedDxf(file: File) {
   reader.onload = () => {
     const content = reader.result as string;
     import("./fileOps").then(({ importDxfDirect }) => {
+      const beforeCount = useStore.getState().objects.length;
       importDxfDirect(content);
+      const afterCount = useStore.getState().objects.length;
+      const added = afterCount - beforeCount;
+      if (added > 0) {
+        useStore.getState().setStatusMessage(`Imported ${file.name} -- ${added} object${added !== 1 ? "s" : ""}`);
+      }
     }).catch(console.error);
   };
   reader.readAsText(file);

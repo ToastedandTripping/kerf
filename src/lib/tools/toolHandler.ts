@@ -250,7 +250,7 @@ export function hitTestHandle(worldX: number, worldY: number, zoom: number): Han
   const bbox = getSelectionBBox();
   if (!bbox) return null;
 
-  const handleSize = 8 / zoom; // handle size in world coords (mm)
+  const handleSize = Math.max(12, 8) / zoom; // minimum 12 screen-pixel hit target
   const hs = handleSize / 2;
 
   // Rotation handle (above top center)

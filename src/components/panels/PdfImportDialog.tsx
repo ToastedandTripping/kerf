@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.mjs?url";
 import type { DesignObject } from "../../app/types";
+import { useStore } from "../../app/store";
 import { extractVectorPaths } from "../../lib/fileOps/pdfImport";
 
 interface PdfImportDialogProps {
@@ -162,7 +163,7 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
 
         if (vectorObjects.length === 0) {
           // No vectors found (scanned PDF) -- fall back to raster
-          console.warn("PDF vector extraction returned 0 paths, falling back to raster import");
+          useStore.getState().setStatusMessage("No vector paths found -- imported as raster image");
           const scale = dpi / 72;
           const rasterViewport = page.getViewport({ scale });
           const canvas = document.createElement("canvas");

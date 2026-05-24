@@ -9,7 +9,7 @@ interface Props {
   imageWidth: number;
   imageHeight: number;
   onClose: () => void;
-  onImported: () => void;
+  onImported: (autoTrace: boolean) => void;
 }
 
 export function ImageImportDialog({ open, imageData, fileName, imageWidth, imageHeight, onClose, onImported }: Props) {
@@ -48,7 +48,8 @@ export function ImageImportDialog({ open, imageData, fileName, imageWidth, image
       "info"
     );
 
-    onImported();
+    useStore.getState().setStatusMessage(`Imported ${fileName} -- ${imageWidth}x${imageHeight}px`);
+    onImported(autoTrace);
     onClose();
   }
 
@@ -81,6 +82,7 @@ export function ImageImportDialog({ open, imageData, fileName, imageWidth, image
         {/* Info */}
         <div style={{ fontSize: "11px", color: "var(--text-muted)", marginBottom: "12px" }}>
           {fileName} -- {imageWidth}x{imageHeight}px ({widthMm.toFixed(0)}x{heightMm.toFixed(0)}mm)
+          <span style={{ opacity: 0.6, marginLeft: "4px" }}>assuming 96 dpi</span>
         </div>
 
         {/* Layer selection */}

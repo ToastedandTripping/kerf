@@ -285,8 +285,8 @@ export function SvgImportDialog({ open, svgContent, onClose }: Props) {
             borderRadius: "var(--radius-sm)", cursor: "pointer", fontSize: "13px",
           }}>Cancel</button>
           <button onClick={handleImportFlat} style={{
-            background: "none", border: "1px solid var(--border)",
-            color: "var(--text-secondary)", padding: "6px 16px",
+            background: "rgba(74,144,226,0.08)", border: "1px solid rgba(74,144,226,0.25)",
+            color: "var(--accent)", padding: "6px 16px",
             borderRadius: "var(--radius-sm)", cursor: "pointer", fontSize: "13px",
           }}>Import to Active Layer</button>
           <button onClick={handleImport} disabled={importing} style={{
@@ -294,6 +294,7 @@ export function SvgImportDialog({ open, svgContent, onClose }: Props) {
             border: "none", color: importing ? "var(--text-muted)" : "#fff",
             padding: "6px 16px", borderRadius: "var(--radius-sm)",
             cursor: importing ? "default" : "pointer", fontSize: "13px",
+            fontWeight: 600,
           }}>{importing ? "Importing..." : "Import with Layers"}</button>
         </div>
       </div>

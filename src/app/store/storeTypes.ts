@@ -133,6 +133,7 @@ export interface AppState {
     estimatedTimeSecs: number;
     lineCount: number;
   } | null;
+  gcodeStale: boolean;
   setGcodeResult: (result: AppState["gcodeResult"]) => void;
   previewVisible: boolean;
   setPreviewVisible: (v: boolean) => void;
@@ -204,6 +205,8 @@ export interface AppState {
   // UI
   showConsole: boolean;
   setShowConsole: (v: boolean) => void;
+  statusMessage: string | null;
+  setStatusMessage: (msg: string | null) => void;
   // Node editing
   nodeEditState: { pathId: string | null; selectedNodeIndex: number | null };
   setNodeEditState: (state: { pathId: string | null; selectedNodeIndex: number | null }) => void;

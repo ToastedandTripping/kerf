@@ -49,6 +49,7 @@ export const useStore = create<AppState>((set, get) => ({
         objects: newObjects,
         objectsById: buildObjectsById(newObjects),
         isDirty: true,
+        gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
       };
     }),
   updateObject: (id, partial) => {
@@ -61,6 +62,7 @@ export const useStore = create<AppState>((set, get) => ({
         objects: newObjects,
         objectsById: buildObjectsById(newObjects),
         isDirty: true,
+        gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
       };
     });
   },
@@ -76,6 +78,7 @@ export const useStore = create<AppState>((set, get) => ({
         objects: newObjects,
         objectsById: buildObjectsById(newObjects),
         isDirty: true,
+        gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
       };
     });
   },
@@ -87,6 +90,7 @@ export const useStore = create<AppState>((set, get) => ({
         objectsById: buildObjectsById(newObjects),
         selectedIds: state.selectedIds.filter((id) => !ids.includes(id)),
         isDirty: true,
+        gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
       };
     }),
   setObjects: (objects) => set({ objects, objectsById: buildObjectsById(objects) }),
@@ -378,7 +382,8 @@ export const useStore = create<AppState>((set, get) => ({
 
   // G-code / Preview
   gcodeResult: null,
-  setGcodeResult: (result) => set({ gcodeResult: result }),
+  gcodeStale: false,
+  setGcodeResult: (result) => set({ gcodeResult: result, gcodeStale: false }),
   previewVisible: false,
   setPreviewVisible: (v) => set({ previewVisible: v }),
   previewProgress: 0,
@@ -560,6 +565,15 @@ export const useStore = create<AppState>((set, get) => ({
   // UI
   showConsole: false,
   setShowConsole: (v) => set({ showConsole: v }),
+  statusMessage: null,
+  setStatusMessage: (msg) => {
+    set({ statusMessage: msg });
+    if (msg !== null) {
+      setTimeout(() => {
+        if (get().statusMessage === msg) set({ statusMessage: null });
+      }, 3000);
+    }
+  },
   // Node editing
   nodeEditState: { pathId: null, selectedNodeIndex: null },
   setNodeEditState: (state) => set({ nodeEditState: state }),
