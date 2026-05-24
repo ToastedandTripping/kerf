@@ -37,7 +37,8 @@ src/
       PropertiesPanel.tsx    — Object transform, opacity, power scale, image adjustments
       MachinePanel.tsx       — Serial connect, jog, frame, generate, start/pause/stop
       MaterialLibrary.tsx    — Browse/search/apply/save/export/import presets
-      [8 dialog components]  — Settings, GRBL, QR, trace, material test, SVG import, etc.
+      [11 dialog components] — Settings, GRBL, QR, trace, material test, SVG/PDF import,
+                               power curve, dither preview, variable text, nesting
     toolbar/
       Toolbar.tsx            — Drawing tool selection (select, rect, ellipse, line, pen, text, node)
     topbar/
@@ -65,10 +66,15 @@ src/
     tools/
       toolHandler.ts         — Pointer event state machines for all tools, snap guides
     autoSave.ts              — 60s periodic save to Tauri appDataDir, crash recovery
-    fileDrop.ts              — Drag-and-drop file handler (SVG/DXF/image detection)
+    constants.ts             — Shared constants (PX_PER_MM)
+    fileDrop.ts              — Drag-and-drop file handler (SVG/DXF/image/PDF detection)
+    geometry/
+      index.ts               — Shared geometry utilities (offsetRingByDistance)
     materials.ts             — 18 default MaterialPreset entries
+    nesting.ts               — Skyline Bottom-Left-Fill bin-packing algorithm
     recentFiles.ts           — localStorage-backed recent file list
-    shortcuts.ts             — Keyboard shortcut registration
+    shortcuts.ts             — Keyboard shortcut registration (includes 1-6 layer assignment)
+    variableText.ts          — Template placeholder parser, serial number generator, CSV import
 
 src-tauri/src/
   commands/
@@ -81,9 +87,11 @@ src-tauri/src/
                                tabs, perforation, overcut) + fill mode (scan lines with
                                overscan, bidirectional, cross-hatch, scan angle)
     image_gcode_gen.rs       — Image→G-code: dither then scan lines
-    dither.rs                — 7 dithering algorithms (threshold, ordered, Floyd-Steinberg,
-                               Jarvis, Stucki, Atkinson, grayscale pass-through)
-    optimizer.rs             — Nearest-neighbor path ordering, inner-first sorting
+    dither.rs                — 8 dithering algorithms (threshold, ordered, Floyd-Steinberg,
+                               Jarvis, Stucki, Atkinson, grayscale, newsprint halftone)
+    offset.rs                — Polygon inward offset (convex/concave, self-intersection cleanup)
+    optimizer.rs             — Multi-criteria cut ordering (priority, group, inner-first, NN),
+                               flood fill segment reordering, start corner selection
     tracer.rs                — vtracer-based image→SVG vectorization with preprocessing
                                (adaptive threshold, morphological ops, blur)
 ```
@@ -118,7 +126,8 @@ src-tauri/src/
 
 ### State Architecture
 
-Single Zustand store with 38 state fields and 62 actions. The `geometryActions.ts`
+Single Zustand store with ~45 state fields and ~70 actions. Dialog state managed via
+`openDialogs: Set<string>` with `openDialog`/`closeDialog` actions (no module-level state). The `geometryActions.ts`
 slice is extracted as a factory function (`createGeometryActions(set, get)`) that
 spreads into the main `create()` call. All cross-slice references use lazy `get()`.
 
@@ -128,8 +137,14 @@ stripped from undo snapshots and restored from live objects. Stack capped at 50.
 ### Rendering
 
 Viewport uses Pixi.js 8 with a persistent display object cache (`Map<id, Container>`).
-On state change, existing objects are updated in place; only additions/removals create
-or destroy Pixi objects. Image textures are cached by content to avoid GPU re-uploads.
+Dirty tracking (`dirtyObjectIds` set) ensures only modified objects are re-rendered per
+frame — unrelated object changes skip the render loop. Text/image display objects use
+content hashing to avoid GPU texture re-uploads when only transforms change.
+
+Batch updates (`updateObjects`) consolidate N per-object state writes into a single
+Zustand `set()` call during drag. Cursor position and pan camera bypass Zustand entirely
+during interaction, syncing to the store only on pointer-up. `objectsById` Map and
+`selectedSet` Set provide O(1) lookups in hot paths.
 
 Selection overlay and drawing layer are separate Pixi containers on top of the
 objects container.
