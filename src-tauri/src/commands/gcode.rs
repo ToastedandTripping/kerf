@@ -17,59 +17,64 @@ fn start_point_from_corner(corner: &str, width: f64, height: f64) -> (f64, f64) 
 }
 
 /// Generate G-code from design objects
+/// Runs in spawn_blocking since G-code generation with optimization is CPU-heavy
 #[tauri::command]
-pub fn generate_gcode(
+pub async fn generate_gcode(
     objects: Vec<CutObject>,
     workspace_height: f64,
     s_value_max: Option<f64>,
     start_corner: Option<String>,
     workspace_width: Option<f64>,
 ) -> Result<GcodeResult, String> {
-    let s_value_max = s_value_max.unwrap_or(1000.0);
-    let ws_width = workspace_width.unwrap_or(500.0);
-    let corner = start_corner.as_deref().unwrap_or("bottomLeft");
-    let (start_x, start_y) = start_point_from_corner(corner, ws_width, workspace_height);
+    tokio::task::spawn_blocking(move || {
+        let s_value_max = s_value_max.unwrap_or(1000.0);
+        let ws_width = workspace_width.unwrap_or(500.0);
+        let corner = start_corner.as_deref().unwrap_or("bottomLeft");
+        let (start_x, start_y) = start_point_from_corner(corner, ws_width, workspace_height);
 
-    let mut sorted = objects;
+        let mut sorted = objects;
 
-    // Apply multi-criteria sort (priority, group, inner-first)
-    optimizer::multi_criteria_sort(&mut sorted, start_x, start_y);
+        // Apply multi-criteria sort (priority, group, inner-first)
+        optimizer::multi_criteria_sort(&mut sorted, start_x, start_y);
 
-    // Separate by layer mode: cut inner first for line mode
-    let mut line_objects: Vec<CutObject> = Vec::new();
-    let mut fill_objects: Vec<CutObject> = Vec::new();
-    let mut offset_fill_objects: Vec<CutObject> = Vec::new();
+        // Separate by layer mode: cut inner first for line mode
+        let mut line_objects: Vec<CutObject> = Vec::new();
+        let mut fill_objects: Vec<CutObject> = Vec::new();
+        let mut offset_fill_objects: Vec<CutObject> = Vec::new();
 
-    for obj in sorted.drain(..) {
-        match obj.layer.mode.as_str() {
-            "fill" => fill_objects.push(obj),
-            "offsetFill" => offset_fill_objects.push(obj),
-            _ => line_objects.push(obj),
+        for obj in sorted.drain(..) {
+            match obj.layer.mode.as_str() {
+                "fill" => fill_objects.push(obj),
+                "offsetFill" => offset_fill_objects.push(obj),
+                _ => line_objects.push(obj),
+            }
         }
-    }
 
-    // Sort inner first for line cuts
-    optimizer::sort_inner_first(&mut line_objects);
+        // Sort inner first for line cuts
+        optimizer::sort_inner_first(&mut line_objects);
 
-    // Optimize travel order from the configured start point
-    let line_order = optimizer::optimize_cut_order_from(&line_objects, start_x, start_y);
-    let fill_order = optimizer::optimize_cut_order_from(&fill_objects, start_x, start_y);
-    let offset_order = optimizer::optimize_cut_order_from(&offset_fill_objects, start_x, start_y);
+        // Optimize travel order from the configured start point
+        let line_order = optimizer::optimize_cut_order_from(&line_objects, start_x, start_y);
+        let fill_order = optimizer::optimize_cut_order_from(&fill_objects, start_x, start_y);
+        let offset_order = optimizer::optimize_cut_order_from(&offset_fill_objects, start_x, start_y);
 
-    // Build final ordered list: engrave first, then offset fills, then cuts
-    let mut final_objects: Vec<CutObject> = Vec::new();
-    for &idx in &fill_order {
-        final_objects.push(fill_objects[idx].clone());
-    }
-    for &idx in &offset_order {
-        final_objects.push(offset_fill_objects[idx].clone());
-    }
-    for &idx in &line_order {
-        final_objects.push(line_objects[idx].clone());
-    }
+        // Build final ordered list: engrave first, then offset fills, then cuts
+        let mut final_objects: Vec<CutObject> = Vec::new();
+        for &idx in &fill_order {
+            final_objects.push(fill_objects[idx].clone());
+        }
+        for &idx in &offset_order {
+            final_objects.push(offset_fill_objects[idx].clone());
+        }
+        for &idx in &line_order {
+            final_objects.push(line_objects[idx].clone());
+        }
 
-    let result = gcode_gen::generate_gcode(&final_objects, workspace_height, s_value_max);
-    Ok(result)
+        let result = gcode_gen::generate_gcode(&final_objects, workspace_height, s_value_max);
+        Ok(result)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 /// Generate G-code from an image for engraving

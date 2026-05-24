@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback } from "react";
 import { useStore } from "../../app/store";
 
-const PX_PER_MM = 3.78;
+import { PX_PER_MM } from "../../lib/constants";
 const RULER_SIZE = 24; // px thickness of ruler bar
 const BG = "#1e1e1e";
 const TICK_COLOR = "rgba(255,255,255,0.35)";

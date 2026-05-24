@@ -378,12 +378,12 @@ function handleSelectDown(worldX: number, worldY: number, e: React.PointerEvent)
       store.removeFromSelection(hitId);
     } else if (e.shiftKey) {
       // Shift+click: toggle in selection
-      if (store.selectedIds.includes(hitId)) {
+      if (store.selectedSet.has(hitId)) {
         store.removeFromSelection(hitId);
       } else {
         store.addToSelection(hitId);
       }
-    } else if (!store.selectedIds.includes(hitId)) {
+    } else if (!store.selectedSet.has(hitId)) {
       store.setSelectedIds([hitId]);
     }
     drag.dragTarget = hitId;
@@ -439,7 +439,7 @@ function handleSelectMove(worldX: number, worldY: number, e: React.PointerEvent)
   const SNAP_THRESHOLD = 2; // mm
   const guides: Array<{ type: "h" | "v"; pos: number }> = [];
   const otherObjects = store.objects.filter(
-    (o) => !store.selectedIds.includes(o.id) && o.visible && !o.locked
+    (o) => !store.selectedSet.has(o.id) && o.visible && !o.locked
   );
 
   // Compute selected objects' bounding box (at new position)
@@ -558,7 +558,7 @@ function handleResizeMove(worldX: number, worldY: number, e: React.PointerEvent)
       rotUpdates.push({
         id,
         partial: {
-          transform: { ...obj.transform, rotation: (obj.transform.rotation + delta) % 360 },
+          transform: { ...obj.transform, rotation: ((obj.transform.rotation + delta) % 360 + 360) % 360 },
         },
       });
     }

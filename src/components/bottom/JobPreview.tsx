@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import { useStore } from "../../app/store";
 
-const PX_PER_MM = 3.78;
+import { PX_PER_MM } from "../../lib/constants";
 
 const COLORS = {
   rapid: "#4A90E2",     // Blue - travel moves

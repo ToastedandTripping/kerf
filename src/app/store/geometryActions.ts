@@ -5,6 +5,7 @@ import type { StoreSet, StoreGet } from "./storeTypes";
 import { generateId } from "./storeTypes";
 import { hasPlaceholders, extractPlaceholders, substitutePlaceholders, generateSerialValues } from "../../lib/variableText";
 import { computeAABB, nestItems } from "../../lib/nesting";
+import { offsetRingByDistance } from "../../lib/geometry";
 
 // Module-level font cache to avoid reloading on every conversion
 let cachedFont: opentype.Font | null = null;
@@ -327,7 +328,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
           },
         }));
 
-        const groupId = `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const groupId = generateId();
         const group: DesignObject = {
           id: groupId,
           type: "group",
@@ -495,7 +496,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
           const obj = objects.find((o) => o.id === id);
           if (!obj) continue;
           updateObject(id, {
-            transform: { ...obj.transform, rotation: (obj.transform.rotation + angle) % 360 },
+            transform: { ...obj.transform, rotation: ((obj.transform.rotation + angle) % 360 + 360) % 360 },
           });
         }
       });
@@ -511,7 +512,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
           for (let r = 0; r < rows; r++) {
             for (let c = 0; c < cols; c++) {
               if (r === 0 && c === 0) continue;
-              const newId = `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+              const newId = generateId();
               addObject({
                 ...obj,
                 id: newId,
@@ -551,7 +552,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
             const angle = (startAngle + angleStep * i) * (Math.PI / 180);
             const newCx = cx + radius * Math.cos(angle);
             const newCy = cy + radius * Math.sin(angle);
-            const newId = `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${i}`;
+            const newId = generateId();
             addObject({
               ...obj,
               id: newId,
@@ -560,7 +561,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
                 ...obj.transform,
                 x: newCx - obj.transform.width / 2,
                 y: newCy - obj.transform.height / 2,
-                rotation: (obj.transform.rotation + angleStep * i) % 360,
+                rotation: ((obj.transform.rotation + angleStep * i) % 360 + 360) % 360,
               },
             });
             newIds.push(newId);
@@ -637,7 +638,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
           if (!poly) continue;
           const ring = poly[0];
           const offsetRing = offsetRingByDistance(ring, distance);
-          const newId = `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          const newId = generateId();
           const xs = offsetRing.map((p) => p[0]);
           const ys = offsetRing.map((p) => p[1]);
           const minX = Math.min(...xs), minY = Math.min(...ys);
@@ -803,7 +804,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
                 ...obj.transform,
                 x: placement.x + (newAABB.w - obj.transform.width) / 2,
                 y: placement.y + (newAABB.h - obj.transform.height) / 2,
-                rotation: newRotation % 360,
+                rotation: ((newRotation % 360) + 360) % 360,
               },
             });
           }
@@ -902,7 +903,7 @@ function multiPolygonToObjects(mp: polygonClipping.MultiPolygon, template: Desig
     const maxX = Math.max(...xs), maxY = Math.max(...ys);
     return {
       ...template,
-      id: `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      id: generateId(),
       type: "path" as const,
       points, closed: true,
       transform: { ...template.transform, x: minX, y: minY, width: maxX - minX, height: maxY - minY },
@@ -910,28 +911,3 @@ function multiPolygonToObjects(mp: polygonClipping.MultiPolygon, template: Desig
   });
 }
 
-function offsetRingByDistance(ring: polygonClipping.Ring, distance: number): polygonClipping.Ring {
-  const result: polygonClipping.Ring = [];
-  const n = ring.length;
-  if (n < 3) return ring;
-  const closed = ring[0][0] === ring[n - 1][0] && ring[0][1] === ring[n - 1][1];
-  const pts = closed ? ring.slice(0, -1) : ring;
-  const len = pts.length;
-
-  for (let i = 0; i < len; i++) {
-    const prev = pts[(i - 1 + len) % len];
-    const curr = pts[i];
-    const next = pts[(i + 1) % len];
-    const dx1 = curr[0] - prev[0], dy1 = curr[1] - prev[1];
-    const dx2 = next[0] - curr[0], dy2 = next[1] - curr[1];
-    const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1) || 1;
-    const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2) || 1;
-    const nx1 = -dy1 / len1, ny1 = dx1 / len1;
-    const nx2 = -dy2 / len2, ny2 = dx2 / len2;
-    const nx = nx1 + nx2, ny = ny1 + ny2;
-    const nlen = Math.sqrt(nx * nx + ny * ny) || 1;
-    result.push([curr[0] + (nx / nlen) * distance, curr[1] + (ny / nlen) * distance]);
-  }
-  if (result.length > 0) result.push([result[0][0], result[0][1]]);
-  return result;
-}

@@ -3,7 +3,7 @@ import { useStore } from "../../app/store";
 import { fileOperations } from "../../lib/fileOps";
 import { getRecentFiles, clearRecentFiles } from "../../lib/recentFiles";
 import { resetOnboarding } from "../panels/OnboardingOverlay";
-import { dialogState } from "../../app/App";
+import { openMaterialTest, openImageTrace, openQrCode, openVariableText, openNesting, openGrblSettings, openSettings, openProjectNotes } from "../../app/App";
 
 function buildRecentFilesItems(): MenuItem[] {
   const recent = getRecentFiles();
@@ -190,25 +190,25 @@ export function MenuBar() {
         { label: "Offset Outward (+1mm)", action: () => useStore.getState().offsetPaths(1) },
         { label: "Offset Inward (-1mm)", action: () => useStore.getState().offsetPaths(-1) },
         { type: "separator" },
-        { label: "Material Test Grid...", action: () => dialogState.openMaterialTest() },
+        { label: "Material Test Grid...", action: () => openMaterialTest() },
         { type: "separator" },
         { label: "Trace Image...", action: () => {
           const s = useStore.getState();
           const selected = s.objects.filter(o => s.selectedIds.includes(o.id));
           if (selected.length === 1 && selected[0].type === "image") {
-            dialogState.openImageTrace();
+            openImageTrace();
           } else {
             s.addConsoleLine("Select an image object to trace", "error");
           }
         }},
-        { label: "QR Code Generator...", action: () => dialogState.openQrCode() },
+        { label: "QR Code Generator...", action: () => openQrCode() },
         { type: "separator" },
-        { label: "Variable Text...", action: () => dialogState.openVariableText() },
-        { label: "Auto-Nest...", action: () => dialogState.openNesting() },
+        { label: "Variable Text...", action: () => openVariableText() },
+        { label: "Auto-Nest...", action: () => openNesting() },
         { type: "separator" },
-        { label: "Machine Settings...", action: () => dialogState.openGrblSettings() },
-        { label: "Preferences...", action: () => dialogState.openSettings() },
-        { label: "Project Notes...", action: () => dialogState.openProjectNotes() },
+        { label: "Machine Settings...", action: () => openGrblSettings() },
+        { label: "Preferences...", action: () => openSettings() },
+        { label: "Project Notes...", action: () => openProjectNotes() },
       ]} />
       <MenuButton label="Help" items={[
         { label: "Keyboard Shortcuts", shortcut: "?", action: () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "?" })) },

@@ -4,6 +4,8 @@ import { DEFAULT_LAYERS } from "../types";
 import { DEFAULT_MATERIALS } from "../../lib/materials";
 import { createGeometryActions } from "./geometryActions";
 import type { AppState } from "./storeTypes";
+import { generateId } from "./storeTypes";
+import { PX_PER_MM } from "../../lib/constants";
 
 export type { AppState } from "./storeTypes";
 export { generateId } from "./storeTypes";
@@ -85,10 +87,12 @@ export const useStore = create<AppState>((set, get) => ({
   removeObjects: (ids) =>
     set((state) => {
       const newObjects = state.objects.filter((o) => !ids.includes(o.id));
+      const newSelectedIds = state.selectedIds.filter((id) => !ids.includes(id));
       return {
         objects: newObjects,
         objectsById: buildObjectsById(newObjects),
-        selectedIds: state.selectedIds.filter((id) => !ids.includes(id)),
+        selectedIds: newSelectedIds,
+        selectedSet: new Set(newSelectedIds),
         isDirty: true,
         gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
       };
@@ -97,18 +101,20 @@ export const useStore = create<AppState>((set, get) => ({
 
   // Selection
   selectedIds: [],
-  setSelectedIds: (ids) => set({ selectedIds: ids }),
+  selectedSet: new Set(),
+  setSelectedIds: (ids) => set({ selectedIds: ids, selectedSet: new Set(ids) }),
   addToSelection: (id) =>
-    set((state) => ({
-      selectedIds: state.selectedIds.includes(id)
-        ? state.selectedIds
-        : [...state.selectedIds, id],
-    })),
+    set((state) => {
+      if (state.selectedSet.has(id)) return state;
+      const newIds = [...state.selectedIds, id];
+      return { selectedIds: newIds, selectedSet: new Set(newIds) };
+    }),
   removeFromSelection: (id) =>
-    set((state) => ({
-      selectedIds: state.selectedIds.filter((i) => i !== id),
-    })),
-  clearSelection: () => set({ selectedIds: [] }),
+    set((state) => {
+      const newIds = state.selectedIds.filter((i) => i !== id);
+      return { selectedIds: newIds, selectedSet: new Set(newIds) };
+    }),
+  clearSelection: () => set({ selectedIds: [], selectedSet: new Set() }),
 
   // Layers
   layers: DEFAULT_LAYERS,
@@ -145,7 +151,7 @@ export const useStore = create<AppState>((set, get) => ({
       layers: state.layers.map((l) => {
         if (l.index !== layerIndex) return l;
         const newSub: SubLayer = {
-          id: `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          id: `sub_${generateId()}`,
           mode: "line",
           power: 100,
           powerMin: 0,
@@ -155,6 +161,23 @@ export const useStore = create<AppState>((set, get) => ({
           interval: 0.1,
         };
         return { ...l, subLayers: [...(l.subLayers || []), newSub] };
+      }),
+    })),
+  addSubLayers: (layerIndex, subs) =>
+    set((state) => ({
+      layers: state.layers.map((l) => {
+        if (l.index !== layerIndex) return l;
+        const newSubs: SubLayer[] = subs.map((s) => ({
+          id: `sub_${generateId()}`,
+          mode: s.mode ?? "line",
+          power: s.power ?? 100,
+          powerMin: s.powerMin ?? 0,
+          speed: s.speed ?? 20,
+          passes: s.passes ?? 1,
+          powerMode: s.powerMode ?? "constant",
+          interval: s.interval ?? 0.1,
+        }));
+        return { ...l, subLayers: [...(l.subLayers || []), ...newSubs] };
       }),
     })),
   removeSubLayer: (layerIndex, subLayerId) =>
@@ -329,6 +352,7 @@ export const useStore = create<AppState>((set, get) => ({
       startCorner: project.startCorner || "bottomLeft",
       isDirty: false,
       selectedIds: [],
+      selectedSet: new Set(),
     }),
   toProject: () => {
     const state = get();
@@ -484,7 +508,7 @@ export const useStore = create<AppState>((set, get) => ({
       const selected = objects.filter((o) => selectedIds.includes(o.id));
       const newIds: string[] = [];
       for (const obj of selected) {
-        const newId = `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const newId = generateId();
         addObject({ ...obj, id: newId, name: obj.name + " copy" });
         newIds.push(newId);
       }
@@ -495,7 +519,6 @@ export const useStore = create<AppState>((set, get) => ({
   // Zoom helpers
   zoomToFitSelection: () => {
     const { selectedIds, objects, workspaceWidth, workspaceHeight } = get();
-    const PX_PER_MM = 3.78;
     const selected = objects.filter((o) => selectedIds.includes(o.id));
     if (selected.length === 0) return;
 
@@ -521,7 +544,6 @@ export const useStore = create<AppState>((set, get) => ({
   },
   zoomToFitAll: () => {
     const { objects, workspaceWidth, workspaceHeight } = get();
-    const PX_PER_MM = 3.78;
 
     if (objects.length === 0) {
       set({ camera: { x: 50, y: 50, zoom: 1 } });
@@ -577,4 +599,26 @@ export const useStore = create<AppState>((set, get) => ({
   // Node editing
   nodeEditState: { pathId: null, selectedNodeIndex: null },
   setNodeEditState: (state) => set({ nodeEditState: state }),
+
+  // Dialog state
+  openDialogs: new Set(),
+  openDialog: (name) => set((state) => {
+    const next = new Set(state.openDialogs);
+    next.add(name);
+    return { openDialogs: next };
+  }),
+  closeDialog: (name) => set((state) => {
+    const next = new Set(state.openDialogs);
+    next.delete(name);
+    return { openDialogs: next };
+  }),
+  dialogData: {
+    svgContent: null,
+    pendingImage: null,
+    ditherPreviewObjectId: null,
+    pendingPdf: null,
+  },
+  setDialogData: (data) => set((state) => ({
+    dialogData: { ...state.dialogData, ...data },
+  })),
 }));

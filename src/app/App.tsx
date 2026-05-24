@@ -31,37 +31,43 @@ import { OnboardingOverlay, shouldShowOnboarding } from "../components/panels/On
 import { useStore } from "./store";
 import { generateId } from "./store/storeTypes";
 
-// Expose dialog openers globally so menus/commands can trigger them
-export const dialogState: {
-  openGrblSettings: () => void;
-  openSettings: () => void;
-  openProjectNotes: () => void;
-  openQrCode: () => void;
-  openImageTrace: () => void;
-  openMaterialTest: () => void;
-  openSvgImport: (svgContent: string) => void;
-  openImageImport: (data: string, name: string, width: number, height: number) => void;
-  openDitherPreview: (objectId: string) => void;
-  openPdfImport: (data: ArrayBuffer, name: string) => void;
-  openVariableText: () => void;
-  openNesting: () => void;
-} = {
-  openGrblSettings: () => {},
-  openSettings: () => {},
-  openProjectNotes: () => {},
-  openQrCode: () => {},
-  openImageTrace: () => {},
-  openMaterialTest: () => {},
-  openSvgImport: () => {},
-  openImageImport: () => {},
-  openDitherPreview: () => {},
-  openPdfImport: () => {},
-  openVariableText: () => {},
-  openNesting: () => {},
-};
+// Dialog helpers — open dialogs via Zustand store
+export function openGrblSettings() { useStore.getState().openDialog("grbl"); }
+export function openSettings() { useStore.getState().openDialog("settings"); }
+export function openProjectNotes() { useStore.getState().openDialog("notes"); }
+export function openQrCode() { useStore.getState().openDialog("qr"); }
+export function openImageTrace() { useStore.getState().openDialog("trace"); }
+export function openMaterialTest() { useStore.getState().openDialog("materialTest"); }
+export function openVariableText() { useStore.getState().openDialog("variableText"); }
+export function openNesting() { useStore.getState().openDialog("nesting"); }
+export function openSvgImport(svgContent: string) {
+  const s = useStore.getState();
+  s.setDialogData({ svgContent });
+  s.openDialog("svgImport");
+}
+export function openImageImport(data: string, name: string, width: number, height: number) {
+  const s = useStore.getState();
+  s.setDialogData({ pendingImage: { data, name, width, height } });
+  s.openDialog("imageImport");
+}
+export function openDitherPreview(objectId: string) {
+  const s = useStore.getState();
+  s.setDialogData({ ditherPreviewObjectId: objectId });
+  s.openDialog("ditherPreview");
+}
+export function openPdfImport(data: ArrayBuffer, name: string) {
+  const s = useStore.getState();
+  s.setDialogData({ pendingPdf: { data, name } });
+  s.openDialog("pdfImport");
+}
 
 export default function App() {
   useKeyboardShortcuts();
+  const activeLayerIndex = useStore((s) => s.activeLayerIndex);
+  const openDialogs = useStore((s) => s.openDialogs);
+  const dialogData = useStore((s) => s.dialogData);
+  const closeDialog = useStore((s) => s.closeDialog);
+  const setDialogData = useStore((s) => s.setDialogData);
   const [recoveryOffer, setRecoveryOffer] = useState<{ timestamp: number } | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(shouldShowOnboarding);
 
@@ -72,49 +78,7 @@ export default function App() {
     }).catch(console.error);
   }, []);
 
-  const [grblOpen, setGrblOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [notesOpen, setNotesOpen] = useState(false);
-  const [qrOpen, setQrOpen] = useState(false);
-  const [traceOpen, setTraceOpen] = useState(false);
-  const [materialTestOpen, setMaterialTestOpen] = useState(false);
-  const [svgImportOpen, setSvgImportOpen] = useState(false);
-  const [pendingSvgContent, setPendingSvgContent] = useState<string | null>(null);
-  const [imageImportOpen, setImageImportOpen] = useState(false);
-  const [pendingImage, setPendingImage] = useState<{ data: string; name: string; width: number; height: number } | null>(null);
-  const [ditherPreviewOpen, setDitherPreviewOpen] = useState(false);
-  const [ditherPreviewObjectId, setDitherPreviewObjectId] = useState<string | null>(null);
-  const [pdfImportOpen, setPdfImportOpen] = useState(false);
-  const [pendingPdf, setPendingPdf] = useState<{ data: ArrayBuffer; name: string } | null>(null);
-  const [variableTextOpen, setVariableTextOpen] = useState(false);
-  const [nestingOpen, setNestingOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-
-  // Wire up global dialog openers
-  dialogState.openGrblSettings = () => setGrblOpen(true);
-  dialogState.openSettings = () => setSettingsOpen(true);
-  dialogState.openProjectNotes = () => setNotesOpen(true);
-  dialogState.openQrCode = () => setQrOpen(true);
-  dialogState.openImageTrace = () => setTraceOpen(true);
-  dialogState.openMaterialTest = () => setMaterialTestOpen(true);
-  dialogState.openSvgImport = (svgContent: string) => {
-    setPendingSvgContent(svgContent);
-    setSvgImportOpen(true);
-  };
-  dialogState.openImageImport = (data: string, name: string, width: number, height: number) => {
-    setPendingImage({ data, name, width, height });
-    setImageImportOpen(true);
-  };
-  dialogState.openDitherPreview = (objectId: string) => {
-    setDitherPreviewObjectId(objectId);
-    setDitherPreviewOpen(true);
-  };
-  dialogState.openPdfImport = (data: ArrayBuffer, name: string) => {
-    setPendingPdf({ data, name });
-    setPdfImportOpen(true);
-  };
-  dialogState.openVariableText = () => setVariableTextOpen(true);
-  dialogState.openNesting = () => setNestingOpen(true);
 
   const onDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -203,58 +167,57 @@ export default function App() {
       </div>
       <StatusBar />
       <CommandPalette />
-      <GrblSettingsDialog open={grblOpen} onClose={() => setGrblOpen(false)} />
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-      <ProjectNotesDialog open={notesOpen} onClose={() => setNotesOpen(false)} />
-      <QrCodeDialog open={qrOpen} onClose={() => setQrOpen(false)} />
-      <ImageTraceDialog open={traceOpen} onClose={() => setTraceOpen(false)} />
-      <MaterialTestDialog open={materialTestOpen} onClose={() => setMaterialTestOpen(false)} />
+      <GrblSettingsDialog open={openDialogs.has("grbl")} onClose={() => closeDialog("grbl")} />
+      <SettingsDialog open={openDialogs.has("settings")} onClose={() => closeDialog("settings")} />
+      <ProjectNotesDialog open={openDialogs.has("notes")} onClose={() => closeDialog("notes")} />
+      <QrCodeDialog open={openDialogs.has("qr")} onClose={() => closeDialog("qr")} />
+      <ImageTraceDialog open={openDialogs.has("trace")} onClose={() => closeDialog("trace")} />
+      <MaterialTestDialog open={openDialogs.has("materialTest")} onClose={() => closeDialog("materialTest")} />
       <SvgImportDialog
-        open={svgImportOpen}
-        svgContent={pendingSvgContent}
-        onClose={() => { setSvgImportOpen(false); setPendingSvgContent(null); }}
+        open={openDialogs.has("svgImport")}
+        svgContent={dialogData.svgContent}
+        onClose={() => { closeDialog("svgImport"); setDialogData({ svgContent: null }); }}
       />
       <ImageImportDialog
-        open={imageImportOpen}
-        imageData={pendingImage?.data ?? null}
-        fileName={pendingImage?.name ?? ""}
-        imageWidth={pendingImage?.width ?? 0}
-        imageHeight={pendingImage?.height ?? 0}
-        onClose={() => { setImageImportOpen(false); setPendingImage(null); }}
+        open={openDialogs.has("imageImport")}
+        imageData={dialogData.pendingImage?.data ?? null}
+        fileName={dialogData.pendingImage?.name ?? ""}
+        imageWidth={dialogData.pendingImage?.width ?? 0}
+        imageHeight={dialogData.pendingImage?.height ?? 0}
+        onClose={() => { closeDialog("imageImport"); setDialogData({ pendingImage: null }); }}
         onImported={(autoTrace) => {
-          if (pendingImage && autoTrace) {
-            setTimeout(() => dialogState.openImageTrace(), 100);
+          if (dialogData.pendingImage && autoTrace) {
+            setTimeout(() => openImageTrace(), 100);
           }
         }}
       />
       <DitherPreviewDialog
-        open={ditherPreviewOpen}
-        objectId={ditherPreviewObjectId}
-        onClose={() => { setDitherPreviewOpen(false); setDitherPreviewObjectId(null); }}
+        open={openDialogs.has("ditherPreview")}
+        objectId={dialogData.ditherPreviewObjectId}
+        onClose={() => { closeDialog("ditherPreview"); setDialogData({ ditherPreviewObjectId: null }); }}
       />
       <PdfImportDialog
-        open={pdfImportOpen}
-        pdfData={pendingPdf?.data ?? null}
-        fileName={pendingPdf?.name ?? ""}
-        onClose={() => { setPdfImportOpen(false); setPendingPdf(null); }}
+        open={openDialogs.has("pdfImport")}
+        pdfData={dialogData.pendingPdf?.data ?? null}
+        fileName={dialogData.pendingPdf?.name ?? ""}
+        onClose={() => { closeDialog("pdfImport"); setDialogData({ pendingPdf: null }); }}
         onImport={(imageData, width, height) => {
-          setPdfImportOpen(false);
-          setPendingPdf(null);
-          dialogState.openImageImport(imageData, pendingPdf?.name ?? "pdf-page.png", width, height);
+          closeDialog("pdfImport");
+          openImageImport(imageData, dialogData.pendingPdf?.name ?? "pdf-page.png", width, height);
         }}
         onImportVector={(objects) => {
-          setPdfImportOpen(false);
-          setPendingPdf(null);
+          closeDialog("pdfImport");
+          setDialogData({ pendingPdf: null });
           const addObject = useStore.getState().addObject;
           for (const obj of objects) {
             addObject(obj);
           }
         }}
         generateId={generateId}
-        defaultLayerIndex={useStore.getState().activeLayerIndex}
+        defaultLayerIndex={activeLayerIndex}
       />
-      <VariableTextDialog open={variableTextOpen} onClose={() => setVariableTextOpen(false)} />
-      <NestingDialog open={nestingOpen} onClose={() => setNestingOpen(false)} />
+      <VariableTextDialog open={openDialogs.has("variableText")} onClose={() => closeDialog("variableText")} />
+      <NestingDialog open={openDialogs.has("nesting")} onClose={() => closeDialog("nesting")} />
       <ShortcutOverlay />
 
       {/* First-launch onboarding */}
