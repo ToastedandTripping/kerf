@@ -109,6 +109,7 @@ function LayerRow({
   const [expanded, setExpanded] = useState(false);
   const [curveEditorOpen, setCurveEditorOpen] = useState(false);
   const addSubLayer = useStore((s) => s.addSubLayer);
+  const addSubLayers = useStore((s) => s.addSubLayers);
   const removeSubLayer = useStore((s) => s.removeSubLayer);
   const updateSubLayer = useStore((s) => s.updateSubLayer);
 
@@ -542,23 +543,11 @@ function LayerRow({
             {!hasSubLayers && (
               <button
                 onClick={() => {
-                  // Fill+Line preset: add Fill sub-layer first, then Line
-                  addSubLayer(layer.index);
-                  setTimeout(() => {
-                    const s = useStore.getState();
-                    const l = s.layers.find((lyr) => lyr.index === layer.index);
-                    if (l?.subLayers?.length === 1) {
-                      addSubLayer(layer.index);
-                      setTimeout(() => {
-                        const s2 = useStore.getState();
-                        const l2 = s2.layers.find((lyr) => lyr.index === layer.index);
-                        if (l2?.subLayers && l2.subLayers.length >= 2) {
-                          // First sub-layer becomes Fill, second stays Line (default)
-                          updateSubLayer(layer.index, l2.subLayers[0].id, { mode: "fill", power: 50, speed: 100 });
-                        }
-                      }, 0);
-                    }
-                  }, 0);
+                  // Fill+Line preset: add both sub-layers atomically
+                  addSubLayers(layer.index, [
+                    { mode: "fill", power: 50, speed: 100 },
+                    { mode: "line", power: 100, speed: 20 },
+                  ]);
                 }}
                 style={{
                   flex: 1,

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useStore } from "../../app/store";
 import { fileOperations } from "../../lib/fileOps";
-import { dialogState } from "../../app/App";
+import { openQrCode, openGrblSettings, openSettings, openProjectNotes, openVariableText, openNesting } from "../../app/App";
 
 interface Command {
   id: string;
@@ -81,12 +81,12 @@ function getCommands(): Command[] {
     { id: "bool-xor", label: "Boolean XOR", category: "Tools", action: () => s().booleanXor() },
     { id: "tool-offset-out", label: "Offset Outward (+1mm)", category: "Tools", action: () => s().offsetPaths(1) },
     { id: "tool-offset-in", label: "Offset Inward (-1mm)", category: "Tools", action: () => s().offsetPaths(-1) },
-    { id: "tool-qrcode", label: "QR Code Generator", category: "Tools", action: () => dialogState.openQrCode() },
-    { id: "tool-grbl", label: "Machine Settings", category: "Tools", action: () => dialogState.openGrblSettings() },
-    { id: "tool-settings", label: "Preferences", category: "Tools", action: () => dialogState.openSettings() },
-    { id: "tool-notes", label: "Project Notes", category: "Tools", action: () => dialogState.openProjectNotes() },
-    { id: "tool-variable-text", label: "Variable Text", category: "Tools", action: () => dialogState.openVariableText() },
-    { id: "tool-auto-nest", label: "Auto-Nest", category: "Tools", action: () => dialogState.openNesting() },
+    { id: "tool-qrcode", label: "QR Code Generator", category: "Tools", action: () => openQrCode() },
+    { id: "tool-grbl", label: "Machine Settings", category: "Tools", action: () => openGrblSettings() },
+    { id: "tool-settings", label: "Preferences", category: "Tools", action: () => openSettings() },
+    { id: "tool-notes", label: "Project Notes", category: "Tools", action: () => openProjectNotes() },
+    { id: "tool-variable-text", label: "Variable Text", category: "Tools", action: () => openVariableText() },
+    { id: "tool-auto-nest", label: "Auto-Nest", category: "Tools", action: () => openNesting() },
   ];
 }
 

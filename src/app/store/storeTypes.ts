@@ -38,6 +38,7 @@ export interface AppState {
 
   // Selection
   selectedIds: string[];
+  selectedSet: Set<string>;
   setSelectedIds: (ids: string[]) => void;
   addToSelection: (id: string) => void;
   removeFromSelection: (id: string) => void;
@@ -50,6 +51,7 @@ export interface AppState {
   updateLayer: (index: number, partial: Partial<Layer>) => void;
   reorderLayers: (fromIndex: number, toIndex: number) => void;
   addSubLayer: (layerIndex: number) => void;
+  addSubLayers: (layerIndex: number, subs: Array<Partial<SubLayer>>) => void;
   removeSubLayer: (layerIndex: number, subLayerId: string) => void;
   updateSubLayer: (layerIndex: number, subLayerId: string, changes: Partial<SubLayer>) => void;
 
@@ -210,6 +212,19 @@ export interface AppState {
   // Node editing
   nodeEditState: { pathId: string | null; selectedNodeIndex: number | null };
   setNodeEditState: (state: { pathId: string | null; selectedNodeIndex: number | null }) => void;
+
+  // Dialog state
+  openDialogs: Set<string>;
+  openDialog: (name: string) => void;
+  closeDialog: (name: string) => void;
+  // Dialog data (payloads for dialogs that need them)
+  dialogData: {
+    svgContent: string | null;
+    pendingImage: { data: string; name: string; width: number; height: number } | null;
+    ditherPreviewObjectId: string | null;
+    pendingPdf: { data: ArrayBuffer; name: string } | null;
+  };
+  setDialogData: (data: Partial<AppState["dialogData"]>) => void;
 
   // Variable text generation
   generateVariableText: (config: VariableTextConfig) => Promise<void>;

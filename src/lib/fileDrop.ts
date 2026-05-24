@@ -30,8 +30,8 @@ function importDroppedImage(file: File) {
     const base64 = reader.result as string;
     const img = new Image();
     img.onload = () => {
-      import("../app/App").then(({ dialogState }) => {
-        dialogState.openImageImport(base64, file.name, img.width, img.height);
+      import("../app/App").then(({ openImageImport }) => {
+        openImageImport(base64, file.name, img.width, img.height);
       }).catch(console.error);
     };
     img.src = base64;
@@ -43,8 +43,8 @@ function importDroppedSvg(file: File) {
   const reader = new FileReader();
   reader.onload = () => {
     const svgContent = reader.result as string;
-    import("../app/App").then(({ dialogState }) => {
-      dialogState.openSvgImport(svgContent);
+    import("../app/App").then(({ openSvgImport }) => {
+      openSvgImport(svgContent);
     }).catch(console.error);
   };
   reader.readAsText(file);
@@ -54,8 +54,8 @@ function importDroppedPdf(file: File) {
   const reader = new FileReader();
   reader.onload = () => {
     const arrayBuffer = reader.result as ArrayBuffer;
-    import("../app/App").then(({ dialogState }) => {
-      dialogState.openPdfImport(arrayBuffer, file.name);
+    import("../app/App").then(({ openPdfImport }) => {
+      openPdfImport(arrayBuffer, file.name);
     }).catch(console.error);
   };
   reader.readAsArrayBuffer(file);

@@ -91,18 +91,18 @@ export const fileOperations = {
       const ext = pathStr.split(".").pop()?.toLowerCase() || "";
       if (ext === "svg") {
         const content = await fsModule.readTextFile(pathStr);
-        const { dialogState } = await import("../../app/App");
-        dialogState.openSvgImport(content);
+        const { openSvgImport } = await import("../../app/App");
+        openSvgImport(content);
       } else if (ext === "dxf") {
         const content = await fsModule.readTextFile(pathStr);
         importDxfContent(content);
       } else if (ext === "pdf") {
         const data = await fsModule.readFile(pathStr);
         const { pdfBytesToArrayBuffer } = await import("./pdfImport");
-        const { dialogState } = await import("../../app/App");
+        const { openPdfImport } = await import("../../app/App");
         const arrayBuffer = pdfBytesToArrayBuffer(data);
         const fileName = pathStr.split("/").pop() || "document.pdf";
-        dialogState.openPdfImport(arrayBuffer, fileName);
+        openPdfImport(arrayBuffer, fileName);
       } else if (["png", "jpg", "jpeg", "bmp", "gif", "webp"].includes(ext)) {
         const data = await fsModule.readFile(pathStr);
         importImageData(data, ext);
@@ -170,8 +170,8 @@ export const fileOperations = {
       if (!path) return;
       const pathStr = typeof path === "string" ? path : (path as any).path ?? String(path);
       const content = await fsModule.readTextFile(pathStr);
-      const { dialogState } = await import("../../app/App");
-      dialogState.openSvgImport(content);
+      const { openSvgImport } = await import("../../app/App");
+      openSvgImport(content);
     }
   },
 
@@ -212,10 +212,10 @@ export const fileOperations = {
       const pathStr = typeof path === "string" ? path : (path as any).path ?? String(path);
       const data = await fsModule.readFile(pathStr);
       const { pdfBytesToArrayBuffer } = await import("./pdfImport");
-      const { dialogState } = await import("../../app/App");
+      const { openPdfImport } = await import("../../app/App");
       const arrayBuffer = pdfBytesToArrayBuffer(data);
       const fileName = pathStr.split("/").pop() || "document.pdf";
-      dialogState.openPdfImport(arrayBuffer, fileName);
+      openPdfImport(arrayBuffer, fileName);
     }
   },
 

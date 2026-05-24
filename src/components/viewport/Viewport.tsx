@@ -7,7 +7,7 @@ import type { DesignObject } from "../../app/types";
 import { hasPlaceholders } from "../../lib/variableText";
 import { handleViewportPointerDown, handleViewportPointerMove, handleViewportPointerUp, getMarqueeState, getSelectionBBox, handleViewportDoubleClick } from "../../lib/tools/toolHandler";
 
-const PX_PER_MM = 3.78; // ~96dpi -> mm conversion for screen display
+import { PX_PER_MM } from "../../lib/constants";
 
 // Cache for GPU textures keyed by object ID (avoids retaining megabyte-sized base64 strings as Map keys)
 const textureCache = new Map<string, Texture>();
@@ -1008,5 +1008,3 @@ function ContextMenuContent({ x, y, onClose }: { x: number; y: number; onClose: 
     </div>
   );
 }
-
-export { PX_PER_MM };
