@@ -58,12 +58,9 @@ export function MachinePanel() {
   const setActiveTool = useStore((s) => s.setActiveTool);
   const startCorner = useStore((s) => s.startCorner);
   const setStartCorner = useStore((s) => s.setStartCorner);
-  const isDirty = useStore((s) => s.isDirty);
+  const gcodeStale = useStore((s) => s.gcodeStale);
   const consoleLines = useStore((s) => s.consoleLines);
   const setStatusMessage = useStore((s) => s.setStatusMessage);
-
-  // U4: G-code is stale when design has changed since last generate
-  const gcodeStale = isDirty && gcodeResult !== null;
 
   const [selectedPort, setSelectedPort] = useState("");
   const [ports, setPorts] = useState<Array<{ name: string; portType: string; vid: number | null; pid: number | null }>>([]);

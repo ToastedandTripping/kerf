@@ -133,6 +133,7 @@ export interface AppState {
     estimatedTimeSecs: number;
     lineCount: number;
   } | null;
+  gcodeStale: boolean;
   setGcodeResult: (result: AppState["gcodeResult"]) => void;
   previewVisible: boolean;
   setPreviewVisible: (v: boolean) => void;
