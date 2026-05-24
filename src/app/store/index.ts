@@ -560,6 +560,15 @@ export const useStore = create<AppState>((set, get) => ({
   // UI
   showConsole: false,
   setShowConsole: (v) => set({ showConsole: v }),
+  statusMessage: null,
+  setStatusMessage: (msg) => {
+    set({ statusMessage: msg });
+    if (msg !== null) {
+      setTimeout(() => {
+        if (get().statusMessage === msg) set({ statusMessage: null });
+      }, 3000);
+    }
+  },
   // Node editing
   nodeEditState: { pathId: null, selectedNodeIndex: null },
   setNodeEditState: (state) => set({ nodeEditState: state }),

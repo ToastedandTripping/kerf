@@ -186,13 +186,19 @@ export default function App() {
             flexDirection: "column",
             borderLeft: "1px solid var(--border)",
             background: "var(--bg-panel)",
-            overflow: "auto",
+            overflow: "hidden",
           }}
         >
-          <LayerPanel />
-          <MaterialLibrary />
-          <PropertiesPanel />
-          <MachinePanel />
+          {/* Scrollable upper zone: panels */}
+          <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
+            <LayerPanel />
+            <MaterialLibrary />
+            <PropertiesPanel />
+          </div>
+          {/* Fixed bottom zone: machine controls always visible */}
+          <div style={{ flexShrink: 0, borderTop: "1px solid var(--border)", maxHeight: "50%", overflow: "auto" }}>
+            <MachinePanel />
+          </div>
         </div>
       </div>
       <StatusBar />
@@ -215,8 +221,8 @@ export default function App() {
         imageWidth={pendingImage?.width ?? 0}
         imageHeight={pendingImage?.height ?? 0}
         onClose={() => { setImageImportOpen(false); setPendingImage(null); }}
-        onImported={() => {
-          if (pendingImage) {
+        onImported={(autoTrace) => {
+          if (pendingImage && autoTrace) {
             setTimeout(() => dialogState.openImageTrace(), 100);
           }
         }}

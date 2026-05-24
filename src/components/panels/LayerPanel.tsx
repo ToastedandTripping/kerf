@@ -112,6 +112,11 @@ function LayerRow({
   const removeSubLayer = useStore((s) => s.removeSubLayer);
   const updateSubLayer = useStore((s) => s.updateSubLayer);
 
+  // U7: Highlight layer if any selected object belongs to it
+  const hasSelectedObject = useStore((s) =>
+    s.selectedIds.some((id) => s.objectsById.get(id)?.layerIndex === layer.index)
+  );
+
   const hasSubLayers = (layer.subLayers?.length ?? 0) > 0;
   const defaultCurve: CurvePoint[] = [{ x: 0, y: 100 }, { x: 255, y: 0 }];
 
@@ -120,6 +125,7 @@ function LayerRow({
       style={{
         borderLeft: `3px solid ${layer.color}`,
         transition: "background 0.1s",
+        background: hasSelectedObject && !active ? "rgba(74,144,226,0.06)" : undefined,
       }}
     >
       {/* Header row */}

@@ -204,6 +204,8 @@ export interface AppState {
   // UI
   showConsole: boolean;
   setShowConsole: (v: boolean) => void;
+  statusMessage: string | null;
+  setStatusMessage: (msg: string | null) => void;
   // Node editing
   nodeEditState: { pathId: string | null; selectedNodeIndex: number | null };
   setNodeEditState: (state: { pathId: string | null; selectedNodeIndex: number | null }) => void;

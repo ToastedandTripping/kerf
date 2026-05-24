@@ -19,6 +19,7 @@ export function StatusBar() {
   const gridVisible = useStore((s) => s.gridVisible);
   const snapToGrid = useStore((s) => s.snapToGrid);
   const machineState = useStore((s) => s.machineState);
+  const statusMessage = useStore((s) => s.statusMessage);
   const showConsole = useStore((s) => s.showConsole);
   const setShowConsole = useStore((s) => s.setShowConsole);
 
@@ -75,6 +76,20 @@ export function StatusBar() {
         >
           Console
         </button>
+
+        {/* Transient status message */}
+        {statusMessage && (
+          <span style={{
+            color: "var(--accent)",
+            fontWeight: 500,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            maxWidth: "300px",
+          }}>
+            {statusMessage}
+          </span>
+        )}
       </div>
       <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
         <ZoomButton label="Fit" onClick={() => useStore.getState().zoomToFitAll()} />

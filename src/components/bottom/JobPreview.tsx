@@ -114,9 +114,9 @@ export function JobPreview() {
     ctx.fillStyle = "rgba(26, 26, 26, 0.85)";
     ctx.fillRect(0, 0, w, h);
 
-    // Apply camera transform
+    // Apply camera transform -- match Viewport's coordinate system
     ctx.save();
-    ctx.translate(w / 2 + camera.x * camera.zoom, h / 2 + camera.y * camera.zoom);
+    ctx.translate(camera.x, camera.y);
     ctx.scale(camera.zoom, camera.zoom);
 
     // Draw workspace boundary
@@ -124,12 +124,13 @@ export function JobPreview() {
     const wsH = workspaceHeight * PX_PER_MM;
     ctx.strokeStyle = "rgba(255,255,255,0.1)";
     ctx.lineWidth = 1 / camera.zoom;
-    ctx.strokeRect(-wsW / 2, -wsH / 2, wsW, wsH);
+    ctx.strokeRect(0, 0, wsW, wsH);
 
     // Coordinate transform: workspace origin at bottom-left
+    // G-code Y=0 is bottom, screen Y=0 is top
     const toScreen = (mx: number, my: number) => ({
-      sx: (-wsW / 2 + mx * PX_PER_MM),
-      sy: (-wsH / 2 + (workspaceHeight - my) * PX_PER_MM),
+      sx: mx * PX_PER_MM,
+      sy: (workspaceHeight - my) * PX_PER_MM,
     });
 
     const currentMoveIdx = getMoveIndex(currentProgress);

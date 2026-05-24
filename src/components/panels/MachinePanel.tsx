@@ -58,6 +58,12 @@ export function MachinePanel() {
   const setActiveTool = useStore((s) => s.setActiveTool);
   const startCorner = useStore((s) => s.startCorner);
   const setStartCorner = useStore((s) => s.setStartCorner);
+  const isDirty = useStore((s) => s.isDirty);
+  const consoleLines = useStore((s) => s.consoleLines);
+  const setStatusMessage = useStore((s) => s.setStatusMessage);
+
+  // U4: G-code is stale when design has changed since last generate
+  const gcodeStale = isDirty && gcodeResult !== null;
 
   const [selectedPort, setSelectedPort] = useState("");
   const [ports, setPorts] = useState<Array<{ name: string; portType: string; vid: number | null; pid: number | null }>>([]);
@@ -180,12 +186,14 @@ export function MachinePanel() {
     }
 
     // Safety: ensure laser is off on abort/error
+    const elapsed = gcodeResult ? gcodeResult.estimatedTimeSecs * (jobProgress || 1) : 0;
     if (jobError) {
       try { await machineConnection.send("M5"); } catch { /* port may be gone */ }
       try { await machineConnection.softReset(); } catch { /* port may be gone */ }
       addConsoleLine("Job aborted", "error");
     } else {
       addConsoleLine("Job complete", "info");
+      setStatusMessage(`Job complete -- ${formatTime(elapsed)}`);
     }
 
     setJobRunning(false);
@@ -256,16 +264,32 @@ export function MachinePanel() {
       {expanded && (
         <div style={{ padding: "0 8px 8px", display: "flex", flexDirection: "column", gap: "8px" }}>
           {/* Alarm recovery */}
-          {machineState === "alarm" && (
+          {machineState === "alarm" && (() => {
+            // U15: Parse last ALARM line from console to show alarm code
+            const alarmLine = [...consoleLines].reverse().find(l => l.text.includes("ALARM:"));
+            const alarmCode = alarmLine?.text.match(/ALARM:(\d+)/)?.[1];
+            const alarmDescriptions: Record<string, string> = {
+              "1": "Hard limit triggered",
+              "2": "G-code motion target exceeds machine travel",
+              "3": "Reset while in motion",
+              "4": "Probe fail -- not cleared",
+              "5": "Probe fail -- not contacted",
+              "6": "Homing fail -- cycle not completed",
+              "7": "Homing fail -- pulloff failed",
+              "8": "Homing fail -- could not find limit switch",
+              "9": "Homing fail -- search limit switch not found",
+            };
+            const alarmDesc = alarmCode ? alarmDescriptions[alarmCode] : null;
+            return (
             <div style={{
               background: "rgba(220,50,50,0.1)", border: "1px solid rgba(220,50,50,0.3)",
               borderRadius: "var(--radius-sm)", padding: "8px", fontSize: "11px",
             }}>
               <div style={{ fontWeight: 600, color: "var(--danger, #dc3232)", marginBottom: "4px" }}>
-                Machine in ALARM state
+                Machine in ALARM state{alarmCode ? ` (ALARM:${alarmCode})` : ""}
               </div>
               <div style={{ color: "var(--text-secondary)", marginBottom: "6px" }}>
-                A limit switch was triggered or motion was lost. Unlock and re-home to resume.
+                {alarmDesc || "A limit switch was triggered or motion was lost."} Unlock and re-home to resume.
               </div>
               <div style={{ display: "flex", gap: "4px" }}>
                 <button
@@ -282,7 +306,8 @@ export function MachinePanel() {
                 </button>
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {/* Connection */}
           <div style={{ display: "flex", gap: "4px" }}>
@@ -487,37 +512,40 @@ export function MachinePanel() {
             <button
               onClick={handleGenerateGcode}
               disabled={generating}
+              title={gcodeStale ? "Design changed -- regenerate" : undefined}
               style={{
                 flex: 1,
                 padding: "5px",
                 borderRadius: "var(--radius-sm)",
-                border: "1px solid var(--accent)33",
+                border: gcodeStale ? "1px solid var(--accent-warm)" : "1px solid var(--accent)33",
                 fontSize: "10px",
                 fontWeight: 600,
                 cursor: "pointer",
-                background: "rgba(74,144,226,0.1)",
-                color: "var(--accent)",
+                background: gcodeStale ? "rgba(196,165,123,0.15)" : "rgba(74,144,226,0.1)",
+                color: gcodeStale ? "var(--accent-warm)" : "var(--accent)",
                 textTransform: "uppercase",
                 opacity: generating ? 0.5 : 1,
               }}
             >
-              {generating ? "Generating..." : "Generate G-code"}
+              {generating ? "Generating..." : gcodeStale ? "Regenerate G-code" : "Generate G-code"}
             </button>
             <button
               onClick={() => {
                 if (!gcodeResult) handleGenerateGcode().then(() => setPreviewVisible(true));
                 else setPreviewVisible(true);
               }}
+              disabled={generating}
               style={{
                 padding: "5px 10px",
                 borderRadius: "var(--radius-sm)",
                 border: "1px solid var(--accent-warm)33",
                 fontSize: "10px",
                 fontWeight: 600,
-                cursor: "pointer",
+                cursor: generating ? "not-allowed" : "pointer",
                 background: "rgba(196,165,123,0.1)",
                 color: "var(--accent-warm)",
                 textTransform: "uppercase",
+                opacity: generating ? 0.5 : 1,
               }}
             >
               Preview
@@ -612,10 +640,10 @@ export function MachinePanel() {
                 border: "none",
                 fontSize: "11px",
                 fontWeight: 700,
-                cursor: machineConnected ? "pointer" : "not-allowed",
+                cursor: machineConnected && jobRunning ? "pointer" : machineConnected ? "default" : "not-allowed",
                 background: "rgba(226,74,74,0.2)",
                 color: "var(--danger)",
-                opacity: !machineConnected ? 0.4 : 1,
+                opacity: !machineConnected ? 0.4 : !jobRunning ? 0.4 : 1,
               }}
             >
               STOP

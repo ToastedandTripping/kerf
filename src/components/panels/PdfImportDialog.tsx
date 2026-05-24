@@ -33,6 +33,7 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
   const [preview, setPreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [vectorFallbackNotice, setVectorFallbackNotice] = useState(false);
   const pdfDocRef = useRef<any>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
 
@@ -48,6 +49,7 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
       setPages([]);
       setSelectedPage(1);
       setPreview(null);
+      setVectorFallbackNotice(false);
 
       try {
         const pdfjsLib = await import("pdfjs-dist");
@@ -162,7 +164,7 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
 
         if (vectorObjects.length === 0) {
           // No vectors found (scanned PDF) -- fall back to raster
-          console.warn("PDF vector extraction returned 0 paths, falling back to raster import");
+          setVectorFallbackNotice(true);
           const scale = dpi / 72;
           const rasterViewport = page.getViewport({ scale });
           const canvas = document.createElement("canvas");
@@ -494,6 +496,19 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
             }}>
               Vector extraction works best with Illustrator or Inkscape PDFs.
               Scanned documents will fall back to raster.
+            </div>
+          )}
+          {vectorFallbackNotice && (
+            <div style={{
+              fontSize: "10px",
+              color: "var(--accent-warm)",
+              padding: "6px 8px",
+              background: "rgba(196,165,123,0.1)",
+              border: "1px solid rgba(196,165,123,0.25)",
+              borderRadius: "var(--radius-sm)",
+              marginTop: "4px",
+            }}>
+              No vector paths found -- imported as raster image.
             </div>
           )}
         </div>
