@@ -283,6 +283,22 @@ export function useKeyboardShortcuts() {
         return;
       }
 
+      // Layer assignment shortcuts (1-6)
+      if (!ctrl && !shift && !alt && key >= "1" && key <= "6") {
+        const s = useStore.getState();
+        if (s.selectedIds.length > 0) {
+          const layerIndex = parseInt(key) - 1;
+          const layerName = s.layers[layerIndex]?.name ?? `Layer ${key}`;
+          s.withUndo("layer-assign", () => {
+            s.updateObjects(
+              s.selectedIds.map((id) => ({ id, partial: { layerIndex } }))
+            );
+          });
+          s.setStatusMessage(`Moved ${s.selectedIds.length} object${s.selectedIds.length > 1 ? "s" : ""} to ${layerName}`);
+          return;
+        }
+      }
+
       // Tool shortcuts (single key, no modifier)
       if (!ctrl && !shift && !alt && toolShortcuts[key]) {
         const s = useStore.getState();

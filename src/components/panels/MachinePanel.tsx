@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useStore } from "../../app/store";
-import { machineConnection } from "../../lib/machine/connection";
+import { machineConnection, type ConnectionError } from "../../lib/machine/connection";
 import { generateGcode } from "../../lib/machine/gcodeGen";
 import type { DesignObject, StartCorner } from "../../app/types";
 
@@ -67,6 +67,23 @@ export function MachinePanel() {
   const [jogStep, setJogStep] = useState(10);
   const [expanded, setExpanded] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [connectionError, setConnectionError] = useState<{ message: string; suggestions: string[] } | null>(null);
+  const jobStartTimeRef = useRef<number>(0);
+  const [elapsedSecs, setElapsedSecs] = useState(0);
+
+  // Track job elapsed time
+  useEffect(() => {
+    if (jobRunning) {
+      if (jobStartTimeRef.current === 0) jobStartTimeRef.current = Date.now();
+      const timer = setInterval(() => {
+        setElapsedSecs(Math.floor((Date.now() - jobStartTimeRef.current) / 1000));
+      }, 1000);
+      return () => clearInterval(timer);
+    } else {
+      jobStartTimeRef.current = 0;
+      setElapsedSecs(0);
+    }
+  }, [jobRunning]);
 
   const refreshPorts = useCallback(async () => {
     const found = await machineConnection.listPorts();
@@ -90,12 +107,14 @@ export function MachinePanel() {
   async function handleConnect() {
     if (machineConnected) {
       await machineConnection.disconnect();
+      setConnectionError(null);
     } else {
       if (!selectedPort) {
         addConsoleLine("No port selected", "error");
         return;
       }
       try {
+        setConnectionError(null);
         await machineConnection.connect(selectedPort);
         await machineConnection.queryGrblSettings();
         await machineConnection.pollStatus();
@@ -106,8 +125,17 @@ export function MachinePanel() {
             "warning",
           );
         }
-      } catch {
-        // Error already logged by connection module
+      } catch (e) {
+        // Display structured error with suggestions
+        const err = e as ConnectionError;
+        if (err && err.message && err.suggestions) {
+          setConnectionError(err);
+        } else {
+          setConnectionError({
+            message: `Connection failed: ${String(e)}`,
+            suggestions: ["Check COM port selection", "Verify USB cable is connected"],
+          });
+        }
       }
     }
   }
@@ -362,6 +390,23 @@ export function MachinePanel() {
             </button>
           </div>
 
+          {/* Connection error with suggestions */}
+          {connectionError && (
+            <div style={{
+              background: "rgba(220,50,50,0.08)", border: "1px solid rgba(220,50,50,0.25)",
+              borderRadius: "var(--radius-sm)", padding: "8px", fontSize: "11px",
+            }}>
+              <div style={{ fontWeight: 600, color: "var(--danger, #dc3232)", marginBottom: "4px" }}>
+                {connectionError.message}
+              </div>
+              <ul style={{ margin: "0", paddingLeft: "16px", color: "var(--text-secondary)" }}>
+                {connectionError.suggestions.map((s, i) => (
+                  <li key={i} style={{ marginBottom: "2px" }}>{s}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {/* Position readout */}
           <div style={{
             background: "var(--bg-input)",
@@ -423,26 +468,6 @@ export function MachinePanel() {
 
           {/* Action buttons */}
           <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
-            <ActionButton
-              label="Frame"
-              color="var(--accent)"
-              disabled={!machineConnected || machineState !== "idle" || jobRunning}
-              onClick={async () => {
-                const bounds = getDesignBounds(useStore.getState().objects);
-                if (!bounds) {
-                  addConsoleLine("No objects to frame", "error");
-                  return;
-                }
-                const { workspaceHeight } = useStore.getState();
-                const y0 = workspaceHeight - bounds.maxY;
-                const y1 = workspaceHeight - bounds.minY;
-                await machineConnection.send(`G0 X${bounds.minX.toFixed(3)} Y${y0.toFixed(3)}`);
-                await machineConnection.send(`G0 X${bounds.maxX.toFixed(3)} Y${y0.toFixed(3)}`);
-                await machineConnection.send(`G0 X${bounds.maxX.toFixed(3)} Y${y1.toFixed(3)}`);
-                await machineConnection.send(`G0 X${bounds.minX.toFixed(3)} Y${y1.toFixed(3)}`);
-                await machineConnection.send(`G0 X${bounds.minX.toFixed(3)} Y${y0.toFixed(3)}`);
-              }}
-            />
             <ActionButton
               label="Fire"
               color="var(--accent-warm)"
@@ -572,10 +597,13 @@ export function MachinePanel() {
           {jobRunning && (
             <div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10px", color: "var(--text-muted)", marginBottom: "2px" }}>
+                <span style={{ fontFamily: "var(--font-mono)" }}>
+                  {formatTimeMSS(elapsedSecs)}
+                  {jobProgress > 0.01 && (
+                    <span> / ~{formatTimeMSS(Math.round(elapsedSecs / jobProgress * (1 - jobProgress)))} est.</span>
+                  )}
+                </span>
                 <span>{Math.round(jobProgress * 100)}%</span>
-                {gcodeResult && jobProgress > 0 && (
-                  <span>~{formatTime(gcodeResult.estimatedTimeSecs * (1 - jobProgress))} remaining</span>
-                )}
               </div>
               <div style={{
                 background: "var(--bg-input)", borderRadius: "var(--radius-sm)",
@@ -591,7 +619,7 @@ export function MachinePanel() {
             </div>
           )}
 
-          {/* Start / Stop controls */}
+          {/* Start / Frame / Stop controls */}
           <div style={{ display: "flex", gap: "4px" }}>
             <button
               onClick={handleStartJob}
@@ -610,6 +638,38 @@ export function MachinePanel() {
               }}
             >
               START
+            </button>
+            <button
+              onClick={async () => {
+                const bounds = getDesignBounds(useStore.getState().objects);
+                if (!bounds) {
+                  addConsoleLine("No objects to frame", "error");
+                  return;
+                }
+                const { workspaceHeight } = useStore.getState();
+                const y0 = workspaceHeight - bounds.maxY;
+                const y1 = workspaceHeight - bounds.minY;
+                await machineConnection.send(`G0 X${bounds.minX.toFixed(3)} Y${y0.toFixed(3)}`);
+                await machineConnection.send(`G0 X${bounds.maxX.toFixed(3)} Y${y0.toFixed(3)}`);
+                await machineConnection.send(`G0 X${bounds.maxX.toFixed(3)} Y${y1.toFixed(3)}`);
+                await machineConnection.send(`G0 X${bounds.minX.toFixed(3)} Y${y1.toFixed(3)}`);
+                await machineConnection.send(`G0 X${bounds.minX.toFixed(3)} Y${y0.toFixed(3)}`);
+              }}
+              disabled={!machineConnected || machineState !== "idle" || jobRunning}
+              style={{
+                flex: 1,
+                padding: "6px",
+                borderRadius: "var(--radius-sm)",
+                border: "1px solid var(--accent)",
+                fontSize: "11px",
+                fontWeight: 700,
+                cursor: machineConnected && machineState === "idle" && !jobRunning ? "pointer" : "not-allowed",
+                background: "rgba(74,144,226,0.15)",
+                color: "var(--accent)",
+                opacity: !machineConnected || machineState !== "idle" || jobRunning ? 0.4 : 1,
+              }}
+            >
+              FRAME
             </button>
             <button
               onClick={handlePauseResume}
@@ -659,6 +719,13 @@ function formatTime(secs: number): string {
   if (m < 60) return `${m}m ${s}s`;
   const h = Math.floor(m / 60);
   return `${h}h ${m % 60}m`;
+}
+
+/** Format seconds as M:SS for compact job timer display */
+function formatTimeMSS(totalSecs: number): string {
+  const m = Math.floor(totalSecs / 60);
+  const s = totalSecs % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 function JogButton({

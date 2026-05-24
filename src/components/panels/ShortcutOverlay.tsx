@@ -45,6 +45,12 @@ const SHORTCUT_GROUPS = [
     ],
   },
   {
+    title: "Layers",
+    shortcuts: [
+      { keys: "1-6", action: "Assign selection to layer" },
+    ],
+  },
+  {
     title: "Transform",
     shortcuts: [
       { keys: "Arrow keys", action: "Nudge 1mm" },

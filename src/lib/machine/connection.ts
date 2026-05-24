@@ -82,7 +82,7 @@ export const machineConnection = {
     } catch (e) {
       const msg = String(e);
       store.addConsoleLine(`Connection failed: ${msg}`, "error");
-      throw e;
+      throw categorizeConnectionError(msg);
     }
   },
 
@@ -265,3 +265,68 @@ export const machineConnection = {
     }
   },
 };
+
+export interface ConnectionError {
+  message: string;
+  suggestions: string[];
+}
+
+function categorizeConnectionError(raw: string): ConnectionError {
+  const lower = raw.toLowerCase();
+
+  if (lower.includes("permission") || lower.includes("access denied") || lower.includes("eacces")) {
+    return {
+      message: "Permission denied on serial port",
+      suggestions: [
+        "Close other programs using the port (e.g. Arduino IDE)",
+        "Check your user has permission to access serial devices",
+        "Try unplugging and reconnecting the USB cable",
+      ],
+    };
+  }
+
+  if (lower.includes("not found") || lower.includes("no such file") || lower.includes("does not exist")) {
+    return {
+      message: "Serial port not found",
+      suggestions: [
+        "Verify USB cable is connected",
+        "Try a different USB port",
+        "Click Refresh to rescan available ports",
+        "Check if the device driver is installed",
+      ],
+    };
+  }
+
+  if (lower.includes("busy") || lower.includes("in use") || lower.includes("resource")) {
+    return {
+      message: "Port is busy or in use",
+      suggestions: [
+        "Close other programs using this port (Arduino IDE, PuTTY, etc.)",
+        "Unplug and reconnect the USB cable",
+        "Try restarting the application",
+      ],
+    };
+  }
+
+  if (lower.includes("timeout") || lower.includes("timed out")) {
+    return {
+      message: "Connection timed out",
+      suggestions: [
+        "Verify baud rate is 115200 (standard for GRBL)",
+        "Check that the controller is powered on",
+        "Try unplugging and reconnecting the USB cable",
+      ],
+    };
+  }
+
+  // Generic fallback
+  return {
+    message: `Connection failed: ${raw}`,
+    suggestions: [
+      "Check COM port selection",
+      "Verify baud rate (115200 for GRBL)",
+      "Confirm USB cable is connected",
+      "Try unplugging and reconnecting",
+    ],
+  };
+}
