@@ -150,6 +150,8 @@ export interface Layer {
   perforationSkip: number; // mm - length of each skip segment
   // Sub-layers (Fill+Line workflows)
   subLayers?: SubLayer[];
+  // Material preset tracking
+  activePreset?: string; // name of applied preset, undefined = custom settings
 }
 
 export interface SubLayer {

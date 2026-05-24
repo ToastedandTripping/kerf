@@ -7,7 +7,23 @@ const stateColors: Record<string, string> = {
   run: "var(--accent)",
   hold: "var(--accent-warm)",
   alarm: "var(--danger)",
+  check: "var(--accent)",
+  door: "var(--accent-warm)",
+  home: "var(--accent)",
+  sleep: "var(--text-muted)",
   disconnected: "var(--text-muted)",
+};
+
+const stateLabels: Record<string, string> = {
+  idle: "Ready",
+  run: "Running",
+  hold: "Paused",
+  alarm: "Error",
+  check: "Check Mode",
+  door: "Door Open",
+  home: "Homing",
+  sleep: "Sleep",
+  disconnected: "Disconnected",
 };
 
 export function StatusBar() {
@@ -43,10 +59,10 @@ export function StatusBar() {
         <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
           <span style={{
             width: "6px", height: "6px", borderRadius: "50%",
-            background: stateColors[machineState],
+            background: stateColors[machineState] ?? "var(--text-muted)",
           }} />
-          <span style={{ textTransform: "capitalize", color: stateColors[machineState] }}>
-            {machineState}
+          <span style={{ color: stateColors[machineState] ?? "var(--text-muted)" }}>
+            {stateLabels[machineState] ?? machineState}
           </span>
         </span>
 
