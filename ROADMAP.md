@@ -1,10 +1,12 @@
 ---
 status: active
-current: v0.6 — Production Features
-next: v0.7 — Camera & Rotary
+current: v0.7 — Camera & Rotary
+next: v0.8 — Profiles, Text & Community
 testing: null
 pinned: true
 shipped:
+  - date: 2026-06-01
+    item: v0.6 — Variable Text + Auto-Nesting — template serialization, CSV merge, skyline bin-packing; plus perf pass (drag/pan/render loop), competitive polish (preset quick-apply, connection state, frame promotion, job timer, layer shortcuts, error guidance), code-health refactor (released as v0.6.0)
   - date: 2026-05-19
     item: v0.5 — Advanced Engraving — power curve editor, newsprint dither, dither preview, offset fill, flood fill, multi-criteria cut ordering, start corner, PDF import
   - date: 2026-05-18
@@ -279,7 +281,7 @@ Not a manual — just enough to make the core loop obvious.
 
 ---
 
-## v0.5 — Advanced Engraving (Current)
+## v0.5 — Advanced Engraving (Shipped 2026-05-19)
 
 *Make photo/image engraving competitive with LightBurn output quality.*
 
@@ -294,13 +296,32 @@ Not a manual — just enough to make the core loop obvious.
 
 ---
 
-## v0.6 — Production Features (Post v0.5)
+## v0.6 — Production Features (Shipped 2026-06-01 as v0.6.0)
+
+*Shipped the first two milestone items. Camera, rotary, and the
+remaining items moved to v0.7 and v0.8.*
 
 - [x] Variable text / serialization (serial numbers, CSV merge, template workflow)
 - [x] Auto-nesting (skyline bin-packing for material efficiency)
+
+Also landed in this release: a performance pass on the
+drag/pan/render loop (batched updates, dirty tracking, object map,
+content-hash reflow) and competitive polish (preset quick-apply,
+connection state, frame promotion, job timer, layer shortcuts,
+guided error recovery), plus a code-health refactor.
+
+---
+
+## v0.7 — Camera & Rotary (Current)
+
 - [ ] Camera alignment (USB webcam, calibration wizard, overlay)
 - [ ] Print-and-cut registration (two-point alignment)
 - [ ] Rotary axis support (chuck + roller, Y-axis substitution)
+
+---
+
+## v0.8 — Profiles, Text & Community (Next)
+
 - [ ] Multiple machine profiles (switch between setups)
 - [ ] Text on path (arbitrary curve following)
 - [ ] Community material library (online preset sharing)
