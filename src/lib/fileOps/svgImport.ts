@@ -535,6 +535,7 @@ export function parsePathD(d: string): PathPoint[] {
       case "M": {
         cx = numT(tokens, i); cy = numT(tokens, i + 1); i += 2;
         sx = cx; sy = cy;
+        lastCx2 = cx; lastCy2 = cy; // SVG spec: S/T after non-curve reflects through current point
         points.push({ x: cx, y: cy });
         lastCmd = "M";
         break;
@@ -542,42 +543,49 @@ export function parsePathD(d: string): PathPoint[] {
       case "m": {
         cx += numT(tokens, i); cy += numT(tokens, i + 1); i += 2;
         sx = cx; sy = cy;
+        lastCx2 = cx; lastCy2 = cy;
         points.push({ x: cx, y: cy });
         lastCmd = "m";
         break;
       }
       case "L": {
         cx = numT(tokens, i); cy = numT(tokens, i + 1); i += 2;
+        lastCx2 = cx; lastCy2 = cy;
         points.push({ x: cx, y: cy });
         lastCmd = "L";
         break;
       }
       case "l": {
         cx += numT(tokens, i); cy += numT(tokens, i + 1); i += 2;
+        lastCx2 = cx; lastCy2 = cy;
         points.push({ x: cx, y: cy });
         lastCmd = "l";
         break;
       }
       case "H": {
         cx = numT(tokens, i); i += 1;
+        lastCx2 = cx; lastCy2 = cy;
         points.push({ x: cx, y: cy });
         lastCmd = "H";
         break;
       }
       case "h": {
         cx += numT(tokens, i); i += 1;
+        lastCx2 = cx; lastCy2 = cy;
         points.push({ x: cx, y: cy });
         lastCmd = "h";
         break;
       }
       case "V": {
         cy = numT(tokens, i); i += 1;
+        lastCx2 = cx; lastCy2 = cy;
         points.push({ x: cx, y: cy });
         lastCmd = "V";
         break;
       }
       case "v": {
         cy += numT(tokens, i); i += 1;
+        lastCx2 = cx; lastCy2 = cy;
         points.push({ x: cx, y: cy });
         lastCmd = "v";
         break;
@@ -713,12 +721,14 @@ export function parsePathD(d: string): PathPoint[] {
           points.push({ x: p.x, y: p.y });
         }
         cx = ex; cy = ey;
+        lastCx2 = cx; lastCy2 = cy; // non-curve: reset S/T reflection anchor
         lastCmd = cmd;
         break;
       }
       case "Z":
       case "z": {
         cx = sx; cy = sy;
+        lastCx2 = cx; lastCy2 = cy; // non-curve: reset S/T reflection anchor
         lastCmd = cmd;
         break;
       }

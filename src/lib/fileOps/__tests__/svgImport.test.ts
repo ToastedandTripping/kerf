@@ -56,4 +56,32 @@ describe("parsePathD", () => {
     // Arc should produce multiple approximation points
     expect(points.length).toBeGreaterThanOrEqual(2);
   });
+
+  // D7 — S/T after non-curve command must reflect through current point, not stale (0,0)
+  it("D7: S after L reflects through current point (not stale lastCx2)", () => {
+    // M0,0 L10,0 S20,10 20,0
+    // After L, current point = (10,0). S reflects lastCx2/lastCy2.
+    // Bug: lastCx2/lastCy2 remain 0,0 → reflected CP = (2*10-0, 2*0-0) = (20, 0) (wrong)
+    // Fix: reset to current point → reflected CP = (2*10-10, 2*0-0) = (10, 0) = current point
+    const points = parsePathD("M0,0 L10,0 S20,10 20,0");
+    // points[1] = L endpoint (10,0); points[1].handleOut = reflected CP of S
+    expect(points).toHaveLength(3);
+    expect(points[1].x).toBe(10);
+    expect(points[1].y).toBe(0);
+    // Per SVG spec: preceding command is not cubic, so first CP = current point (10,0)
+    expect(points[1].handleOut).toBeDefined();
+    expect(points[1].handleOut!.x).toBeCloseTo(10, 5);
+    expect(points[1].handleOut!.y).toBeCloseTo(0, 5);
+  });
+
+  it("D7: C→S chain still works correctly (lastCx2 updated by C)", () => {
+    // C 5,5 15,5 20,0 — stores lastCx2=15, lastCy2=5
+    // S 30,5 40,0 — reflects (2*20-15, 2*0-5) = (25, -5)
+    const points = parsePathD("M0,0 C5,5 15,5 20,0 S30,5 40,0");
+    expect(points).toHaveLength(3);
+    expect(points[1].handleOut).toBeDefined();
+    // Reflected: (2*20-15, 2*0-5) = (25, -5)
+    expect(points[1].handleOut!.x).toBeCloseTo(25, 5);
+    expect(points[1].handleOut!.y).toBeCloseTo(-5, 5);
+  });
 });
