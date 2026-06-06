@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useStore } from "../index";
 import type { DesignObject } from "../../types";
+import { DEFAULT_LAYERS } from "../../types";
 
 function makeObject(overrides: Partial<DesignObject> = {}): DesignObject {
   return {
@@ -91,5 +92,42 @@ describe("Store", () => {
       });
     }
     expect(useStore.getState().undoStack.length).toBeLessThanOrEqual(50);
+  });
+
+  // D4 — loadProject must reset all prior-project state
+  it("D4: loadProject clears undoStack, redoStack, gcodeResult, gcodeStale, projectPath, nodeEditState", () => {
+    // Seed project A state
+    const objA = makeObject({ id: "objA" });
+    useStore.getState().addObject(objA);
+    useStore.getState().withUndo("mutate", () => {
+      useStore.getState().removeObjects(["objA"]);
+    });
+    expect(useStore.getState().undoStack).toHaveLength(1); // non-empty undo
+    useStore.setState({
+      gcodeResult: { gcode: "G21", moves: [], totalDistance: 0, cutDistance: 0, travelDistance: 0, estimatedTimeSecs: 0, lineCount: 1 },
+      gcodeStale: true,
+      projectPath: "/path/to/projectA.kerf",
+      nodeEditState: { pathId: "objA", selectedNodeIndex: 0 },
+    });
+
+    // Load project B
+    const projectB = {
+      version: "0.6.0",
+      name: "Project B",
+      objects: [makeObject({ id: "objB" })],
+      layers: DEFAULT_LAYERS,
+      camera: { x: 0, y: 0, zoom: 1 },
+      workspaceWidth: 300,
+      workspaceHeight: 200,
+    };
+    useStore.getState().loadProject(projectB);
+
+    const state = useStore.getState();
+    expect(state.undoStack).toEqual([]);
+    expect(state.redoStack).toEqual([]);
+    expect(state.gcodeResult).toBeNull();
+    expect(state.gcodeStale).toBe(false);
+    expect(state.projectPath).toBeNull();
+    expect(state.nodeEditState).toEqual({ pathId: null, selectedNodeIndex: null });
   });
 });

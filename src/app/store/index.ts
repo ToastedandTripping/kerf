@@ -380,6 +380,12 @@ export const useStore = create<AppState>((set, get) => ({
       isDirty: false,
       selectedIds: [],
       selectedSet: new Set(),
+      undoStack: [],
+      redoStack: [],
+      gcodeResult: null,
+      gcodeStale: false,
+      projectPath: null,
+      nodeEditState: { pathId: null, selectedNodeIndex: null },
     }),
   toProject: () => {
     const state = get();
