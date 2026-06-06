@@ -8,7 +8,7 @@ import { hasPlaceholders } from "../../lib/variableText";
 import { handleViewportPointerDown, handleViewportPointerMove, handleViewportPointerUp, getMarqueeState, getSelectionBBox, handleViewportDoubleClick } from "../../lib/tools/toolHandler";
 
 import { PX_PER_MM } from "../../lib/constants";
-import { composeGroupChildTransform } from "../../lib/geometry";
+import { composeGroupChildTransform, rotatePathPoint } from "../../lib/geometry";
 
 // Cache for GPU textures keyed by object ID (avoids retaining megabyte-sized base64 strings as Map keys)
 const textureCache = new Map<string, Texture>();
@@ -258,22 +258,49 @@ export function Viewport() {
       if (objLayer && !objLayer.visible) continue;
       if (obj.type === "group" && obj.children) {
         for (const child of obj.children) {
-          // D2: compose group rotation onto child center and combine rotation angles
           const ct = child.transform;
           const gt = obj.transform;
-          const composed = composeGroupChildTransform(
-            ct.x, ct.y, ct.width, ct.height, ct.rotation || 0,
-            gt.x, gt.y, gt.width, gt.height, gt.rotation || 0,
-          );
-          const offsetChild = {
-            ...child,
-            transform: {
-              ...ct,
-              x: composed.x,
-              y: composed.y,
-              rotation: composed.rotation,
-            },
-          };
+          const groupRot = gt.rotation || 0;
+          let offsetChild: typeof child;
+
+          // D2 path/line fix: points[] are absolute workspace coords — physically
+          // rotate them by r_g around the group center. Keep rotation = r_c only.
+          if ((child.type === "path" || child.type === "line") && child.points && child.points.length >= 1 && groupRot !== 0) {
+            const gcx = gt.x + gt.width / 2;
+            const gcy = gt.y + gt.height / 2;
+            const rotatedPoints = child.points.map((pt) => rotatePathPoint(pt, gcx, gcy, groupRot));
+            const xs = rotatedPoints.map((p) => p.x);
+            const ys = rotatedPoints.map((p) => p.y);
+            const minX = Math.min(...xs);
+            const minY = Math.min(...ys);
+            offsetChild = {
+              ...child,
+              points: rotatedPoints,
+              transform: {
+                ...ct,
+                x: minX,
+                y: minY,
+                width: Math.max(...xs) - minX,
+                height: Math.max(...ys) - minY,
+                rotation: ct.rotation || 0, // r_c only
+              },
+            };
+          } else {
+            // Primitive (or path/line with no rotation): AABB-center composition
+            const composed = composeGroupChildTransform(
+              ct.x, ct.y, ct.width, ct.height, ct.rotation || 0,
+              gt.x, gt.y, gt.width, gt.height, groupRot,
+            );
+            offsetChild = {
+              ...child,
+              transform: {
+                ...ct,
+                x: composed.x,
+                y: composed.y,
+                rotation: composed.rotation,
+              },
+            };
+          }
           ensureDisplayObject(renderKey(child, obj.id), offsetChild);
         }
       } else {

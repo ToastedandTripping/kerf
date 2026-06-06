@@ -65,6 +65,36 @@ export function composeGroupChildTransform(
 }
 
 /**
+ * Rotate a PathPoint (and its optional bezier handles) around a center by degrees.
+ * Used when composing group rotation onto path/line children whose geometry is
+ * stored as absolute workspace coordinates in points[], not derived from transform.
+ */
+export function rotatePathPoint(
+  pt: { x: number; y: number; handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } },
+  cx: number,
+  cy: number,
+  deg: number,
+): { x: number; y: number; handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } } {
+  const rad = deg * Math.PI / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+
+  function rotXY(x: number, y: number): { x: number; y: number } {
+    const dx = x - cx;
+    const dy = y - cy;
+    return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos };
+  }
+
+  const p = rotXY(pt.x, pt.y);
+  return {
+    x: p.x,
+    y: p.y,
+    handleIn: pt.handleIn ? rotXY(pt.handleIn.x, pt.handleIn.y) : undefined,
+    handleOut: pt.handleOut ? rotXY(pt.handleOut.x, pt.handleOut.y) : undefined,
+  };
+}
+
+/**
  * Offset a closed ring of points by a distance using vertex-normal averaging.
  * Positive distance offsets outward (assuming CCW winding), negative inward.
  */

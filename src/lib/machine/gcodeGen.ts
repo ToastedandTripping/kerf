@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../app/store";
 import type { DesignObject, Layer } from "../../app/types";
-import { offsetRingByDistance, composeGroupChildTransform } from "../geometry";
+import { offsetRingByDistance, composeGroupChildTransform, rotatePathPoint } from "../geometry";
 
 export interface GcodeMove {
   x: number;
@@ -106,16 +106,68 @@ function buildCutLayer(layer: Layer, sub?: { mode: string; power: number; powerM
 
 
 /**
- * D2: Compose group rotation onto a child's center position and rotation field.
- * Delegates to the shared composeGroupChildTransform helper (lib/geometry/index.ts)
- * so that this logic stays in sync with Viewport.tsx's child-render path.
+ * D2: Compose group rotation onto a child's transform.
+ *
+ * For PRIMITIVE children (rectangle, ellipse, text, image):
+ *   - Delegate to composeGroupChildTransform to rotate the AABB center and combine
+ *     rotation angles (r_g + r_c). Downstream (Rust rotate_segment, Viewport
+ *     applyObjectRotation) will apply the combined rotation to the generated geometry.
+ *
+ * For PATH/LINE children (points[] stores absolute workspace coords, decoupled from
+ *   transform.x/y):
+ *   - Physically rotate each point (and bezier handles) by r_g around the group center.
+ *   - Recompute transform.x/y/width/height from the new points AABB.
+ *   - Keep transform.rotation = r_c (child's own rotation only); r_g is already baked
+ *     into the point positions so downstream must NOT add it again.
  */
 function applyGroupRotationToChild(child: DesignObject, group: DesignObject): DesignObject {
   const t = child.transform;
   const g = group.transform;
+  const groupRot = g.rotation || 0;
+
+  // Path/line: points are absolute workspace coords — physically apply r_g
+  if ((child.type === "path" || child.type === "line") && child.points && child.points.length >= 1) {
+    if (groupRot === 0) {
+      // Fast path: no rotation, just apply group translation to transform x/y
+      return {
+        ...child,
+        transform: {
+          ...t,
+          x: t.x + g.x,
+          y: t.y + g.y,
+        },
+      };
+    }
+    const gcx = g.x + g.width / 2;
+    const gcy = g.y + g.height / 2;
+    const rotatedPoints = child.points.map((pt) => rotatePathPoint(pt, gcx, gcy, groupRot));
+
+    // Recompute AABB from rotated points
+    const xs = rotatedPoints.map((p) => p.x);
+    const ys = rotatedPoints.map((p) => p.y);
+    const minX = Math.min(...xs);
+    const minY = Math.min(...ys);
+    const maxX = Math.max(...xs);
+    const maxY = Math.max(...ys);
+
+    return {
+      ...child,
+      points: rotatedPoints,
+      transform: {
+        ...t,
+        x: minX,
+        y: minY,
+        width: maxX - minX,
+        height: maxY - minY,
+        rotation: t.rotation || 0, // r_c only — r_g is baked into points
+      },
+    };
+  }
+
+  // Primitive: delegate to shared AABB-center rotation helper
   const composed = composeGroupChildTransform(
     t.x, t.y, t.width, t.height, t.rotation || 0,
-    g.x, g.y, g.width, g.height, g.rotation || 0,
+    g.x, g.y, g.width, g.height, groupRot,
   );
   return {
     ...child,
