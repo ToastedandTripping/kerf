@@ -1444,3 +1444,7 @@ export function handleViewportKeyDown(e: KeyboardEvent): boolean {
 
   return false;
 }
+
+// Test-only exports — pure helpers exposed for unit testing without changing behavior.
+// Not imported anywhere in production code.
+export { pointToSegmentDist as _testPointToSegmentDist, hitTest as _testHitTest };
