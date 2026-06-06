@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../app/store";
 import type { DesignObject, Layer } from "../../app/types";
-import { offsetRingByDistance } from "../geometry";
+import { offsetRingByDistance, composeGroupChildTransform } from "../geometry";
 
 export interface GcodeMove {
   x: number;
@@ -105,7 +105,31 @@ function buildCutLayer(layer: Layer, sub?: { mode: string; power: number; powerM
 }
 
 
-/** Recursively flatten groups into leaf objects with parent offsets applied.
+/**
+ * D2: Compose group rotation onto a child's center position and rotation field.
+ * Delegates to the shared composeGroupChildTransform helper (lib/geometry/index.ts)
+ * so that this logic stays in sync with Viewport.tsx's child-render path.
+ */
+function applyGroupRotationToChild(child: DesignObject, group: DesignObject): DesignObject {
+  const t = child.transform;
+  const g = group.transform;
+  const composed = composeGroupChildTransform(
+    t.x, t.y, t.width, t.height, t.rotation || 0,
+    g.x, g.y, g.width, g.height, g.rotation || 0,
+  );
+  return {
+    ...child,
+    transform: {
+      ...t,
+      x: composed.x,
+      y: composed.y,
+      rotation: composed.rotation,
+    },
+  };
+}
+
+/** Recursively flatten groups into leaf objects with parent transform applied.
+ *  Composes group rotation onto each child's center and rotation field.
  *  Sets groupId on each child to the nearest parent group's id for cut-planner affinity. */
 function flattenObjects(objects: DesignObject[], parentGroupId?: string): DesignObject[] {
   const result: DesignObject[] = [];
@@ -113,12 +137,7 @@ function flattenObjects(objects: DesignObject[], parentGroupId?: string): Design
     if (obj.type === "group" && obj.children) {
       for (const child of obj.children) {
         const expanded = {
-          ...child,
-          transform: {
-            ...child.transform,
-            x: child.transform.x + obj.transform.x,
-            y: child.transform.y + obj.transform.y,
-          },
+          ...applyGroupRotationToChild(child, obj),
           groupId: obj.id,
         };
         result.push(...flattenObjects([expanded], obj.id));
@@ -129,6 +148,9 @@ function flattenObjects(objects: DesignObject[], parentGroupId?: string): Design
   }
   return result;
 }
+
+/** Exported for unit testing — do not use in production code outside this module. */
+export { flattenObjects as flattenObjectsForTest };
 
 /** Convert store objects to CutObjects for the Rust engine, sorted by layer order */
 function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutObject[]; warnings: string[] } {

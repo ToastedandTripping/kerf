@@ -1,7 +1,68 @@
 /**
- * Shared geometry utilities for polygon offset operations.
- * Used by both gcodeGen.ts (kerf offset) and geometryActions.ts (path offset tool).
+ * Shared geometry utilities for polygon offset operations and group transform composition.
+ * Used by gcodeGen.ts, geometryActions.ts, and Viewport.tsx.
  */
+
+/**
+ * D2: Apply a group's rotation to a child's transform, composing center position and
+ * rotation angle so that G-code and Viewport render agree.
+ *
+ * The child's AABB center is rotated around the group's center by r_g.
+ * The child's own rotation r_c is combined: emitted rotation = r_g + r_c (normalized).
+ * Local point clouds are NOT modified — callers (Rust gcode_gen.rs) rotate using the
+ * rotation field, so leaving local points unchanged avoids double-rotation.
+ *
+ * scaleX/scaleY are sign-only flip flags and are not composited here.
+ *
+ * @param childX   child.transform.x (relative to group top-left)
+ * @param childY   child.transform.y (relative to group top-left)
+ * @param childW   child.transform.width
+ * @param childH   child.transform.height
+ * @param childRot child.transform.rotation (degrees)
+ * @param groupX   group.transform.x (workspace coords)
+ * @param groupY   group.transform.y (workspace coords)
+ * @param groupW   group.transform.width
+ * @param groupH   group.transform.height
+ * @param groupRot group.transform.rotation (degrees)
+ * @returns { x, y, rotation } for the flattened/composed child transform
+ */
+export function composeGroupChildTransform(
+  childX: number, childY: number, childW: number, childH: number, childRot: number,
+  groupX: number, groupY: number, groupW: number, groupH: number, groupRot: number,
+): { x: number; y: number; rotation: number } {
+  if (groupRot === 0) {
+    // Fast path: no rotation — only apply translation
+    return {
+      x: childX + groupX,
+      y: childY + groupY,
+      rotation: childRot,
+    };
+  }
+
+  // Group center in workspace coords
+  const gcx = groupX + groupW / 2;
+  const gcy = groupY + groupH / 2;
+
+  // Child center in workspace coords (before group rotation)
+  const childCx = groupX + childX + childW / 2;
+  const childCy = groupY + childY + childH / 2;
+
+  // Rotate child center around group center by groupRot degrees
+  const rad = groupRot * Math.PI / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const rotCx = gcx + (childCx - gcx) * cos - (childCy - gcy) * sin;
+  const rotCy = gcy + (childCx - gcx) * sin + (childCy - gcy) * cos;
+
+  // Combined rotation angle normalized to [0, 360)
+  const combined = ((groupRot + childRot) % 360 + 360) % 360;
+
+  return {
+    x: rotCx - childW / 2,
+    y: rotCy - childH / 2,
+    rotation: combined,
+  };
+}
 
 /**
  * Offset a closed ring of points by a distance using vertex-normal averaging.

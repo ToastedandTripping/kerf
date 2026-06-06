@@ -8,6 +8,7 @@ import { hasPlaceholders } from "../../lib/variableText";
 import { handleViewportPointerDown, handleViewportPointerMove, handleViewportPointerUp, getMarqueeState, getSelectionBBox, handleViewportDoubleClick } from "../../lib/tools/toolHandler";
 
 import { PX_PER_MM } from "../../lib/constants";
+import { composeGroupChildTransform } from "../../lib/geometry";
 
 // Cache for GPU textures keyed by object ID (avoids retaining megabyte-sized base64 strings as Map keys)
 const textureCache = new Map<string, Texture>();
@@ -257,12 +258,20 @@ export function Viewport() {
       if (objLayer && !objLayer.visible) continue;
       if (obj.type === "group" && obj.children) {
         for (const child of obj.children) {
+          // D2: compose group rotation onto child center and combine rotation angles
+          const ct = child.transform;
+          const gt = obj.transform;
+          const composed = composeGroupChildTransform(
+            ct.x, ct.y, ct.width, ct.height, ct.rotation || 0,
+            gt.x, gt.y, gt.width, gt.height, gt.rotation || 0,
+          );
           const offsetChild = {
             ...child,
             transform: {
-              ...child.transform,
-              x: child.transform.x + obj.transform.x,
-              y: child.transform.y + obj.transform.y,
+              ...ct,
+              x: composed.x,
+              y: composed.y,
+              rotation: composed.rotation,
             },
           };
           ensureDisplayObject(renderKey(child, obj.id), offsetChild);
