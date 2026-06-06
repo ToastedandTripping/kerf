@@ -5,6 +5,8 @@ next: v0.8 — Profiles, Text & Community
 testing: null
 pinned: true
 shipped:
+  - date: 2026-06-06
+    item: "Code-refresh Phase 1 — correctness + safety net (relay kerf-refresh-p1-correctness): D4 loadProject leaked the prior project's undo stack / G-code / path; D5 convertToPath distorted rounded-rect corners (spurious bezier handles on straight edges); D6 svgExport dropped rotation; D7 parsePathD smooth-curve reflection used a stale control point. Plus first-ever regression coverage for the two biggest untested files (gcode_gen.rs Y-flip/perforation/tabs/lead-in, toolHandler geometry helpers), connection.ts GRBL parsing/auto-disconnect/e-stop, and the undo image-strip invariant. 46 new tests (111 JS + 25 Rust)."
   - date: 2026-06-05
     item: "Bugfix (code-refresh audit, relay kerf-bugfix-d1-d3) — D2 group rotation now composed into children in G-code AND preview (was silently dropped; cut-affecting); D1 selectedSet kept in sync with selectedIds (was stale, broke hit-testing); D3 group children re-render live during transform. Known limitations: asymmetric path with its OWN rotation inside a rotated group has a bounded few-mm pivot offset (preview==cut, not a mismatch); group RESIZE not propagating to children is a separate deferred bug."
   - date: 2026-06-01
