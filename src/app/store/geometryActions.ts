@@ -350,7 +350,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
 
         const byId = new Map<string, import("../types").DesignObject>();
         for (const o of newObjects) byId.set(o.id, o);
-        set({ objects: newObjects, objectsById: byId, selectedIds: [groupId], isDirty: true });
+        set({ objects: newObjects, objectsById: byId, selectedIds: [groupId], selectedSet: new Set([groupId]), isDirty: true });
       });
     },
 
@@ -384,7 +384,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
 
         const byId = new Map<string, import("../types").DesignObject>();
         for (const o of newObjects) byId.set(o.id, o);
-        set({ objects: newObjects, objectsById: byId, selectedIds: newSelectedIds, isDirty: true });
+        set({ objects: newObjects, objectsById: byId, selectedIds: newSelectedIds, selectedSet: new Set(newSelectedIds), isDirty: true });
       });
     },
 

@@ -15,6 +15,11 @@ let dirtyObjectIds: Set<string> = new Set();
 export const getDirtyObjectIds = () => dirtyObjectIds;
 export const clearDirtyObjectIds = () => { dirtyObjectIds = new Set(); };
 
+// --- D1: Selection patch helper — keeps selectedIds and selectedSet in sync as one unit ---
+function selectionPatch(ids: string[]) {
+  return { selectedIds: ids, selectedSet: new Set(ids) };
+}
+
 // --- P4: Module-level cursor position (removed from Zustand to avoid 60 set() calls/sec) ---
 let _cursorPosition = { x: 0, y: 0 };
 let _cursorListeners: Array<() => void> = [];
@@ -56,6 +61,16 @@ export const useStore = create<AppState>((set, get) => ({
     }),
   updateObject: (id, partial) => {
     dirtyObjectIds.add(id);
+    // D3: if the target is a group, mark all its children dirty too so the Viewport re-renders them
+    const existing = get().objectsById.get(id);
+    if (existing && existing.type === "group" && existing.children) {
+      for (const child of existing.children) {
+        dirtyObjectIds.add(child.id);
+        if (child.type === "group" && child.children) {
+          for (const gc of child.children) dirtyObjectIds.add(gc.id);
+        }
+      }
+    }
     set((state) => {
       const newObjects = state.objects.map((o) =>
         o.id === id ? { ...o, ...partial } : o
@@ -69,7 +84,19 @@ export const useStore = create<AppState>((set, get) => ({
     });
   },
   updateObjects: (updates) => {
-    for (const u of updates) dirtyObjectIds.add(u.id);
+    for (const u of updates) {
+      dirtyObjectIds.add(u.id);
+      // D3: mark group children dirty
+      const existing = get().objectsById.get(u.id);
+      if (existing && existing.type === "group" && existing.children) {
+        for (const child of existing.children) {
+          dirtyObjectIds.add(child.id);
+          if (child.type === "group" && child.children) {
+            for (const gc of child.children) dirtyObjectIds.add(gc.id);
+          }
+        }
+      }
+    }
     set((state) => {
       const updateMap = new Map(updates.map((u) => [u.id, u.partial]));
       const newObjects = state.objects.map((o) => {
@@ -102,7 +129,7 @@ export const useStore = create<AppState>((set, get) => ({
   // Selection
   selectedIds: [],
   selectedSet: new Set(),
-  setSelectedIds: (ids) => set({ selectedIds: ids, selectedSet: new Set(ids) }),
+  setSelectedIds: (ids) => set(selectionPatch(ids)),
   addToSelection: (id) =>
     set((state) => {
       if (state.selectedSet.has(id)) return state;
@@ -277,11 +304,11 @@ export const useStore = create<AppState>((set, get) => ({
         type,
         undo: () => {
           const restored = restoreImageData(beforeSnapshot);
-          set({ objects: restored, objectsById: buildObjectsById(restored), selectedIds: beforeSelectedIds, isDirty: true });
+          set({ objects: restored, objectsById: buildObjectsById(restored), ...selectionPatch(beforeSelectedIds), isDirty: true });
         },
         redo: () => {
           const restored = restoreImageData(afterSnapshot);
-          set({ objects: restored, objectsById: buildObjectsById(restored), selectedIds: afterSelectedIds, isDirty: true });
+          set({ objects: restored, objectsById: buildObjectsById(restored), ...selectionPatch(afterSelectedIds), isDirty: true });
         },
       });
     }
@@ -316,11 +343,11 @@ export const useStore = create<AppState>((set, get) => ({
         type: "property-edit",
         undo: () => {
           const restored = restoreImageData(beforeSnapshot);
-          set({ objects: restored, objectsById: buildObjectsById(restored), selectedIds: snapshot.selectedIds, isDirty: true });
+          set({ objects: restored, objectsById: buildObjectsById(restored), ...selectionPatch(snapshot.selectedIds), isDirty: true });
         },
         redo: () => {
           const restored = restoreImageData(afterSnapshot);
-          set({ objects: restored, objectsById: buildObjectsById(restored), selectedIds: afterSelectedIds, isDirty: true });
+          set({ objects: restored, objectsById: buildObjectsById(restored), ...selectionPatch(afterSelectedIds), isDirty: true });
         },
       });
     }
@@ -471,35 +498,35 @@ export const useStore = create<AppState>((set, get) => ({
   // Selection helpers
   invertSelection: () => {
     const { objects, selectedIds } = get();
-    set({ selectedIds: objects.filter((o) => !selectedIds.includes(o.id) && o.visible && !o.locked).map((o) => o.id) });
+    set(selectionPatch(objects.filter((o) => !selectedIds.includes(o.id) && o.visible && !o.locked).map((o) => o.id)));
   },
   selectByLayer: (layerIndex) => {
     const { objects } = get();
-    set({ selectedIds: objects.filter((o) => o.layerIndex === layerIndex && o.visible && !o.locked).map((o) => o.id) });
+    set(selectionPatch(objects.filter((o) => o.layerIndex === layerIndex && o.visible && !o.locked).map((o) => o.id)));
   },
   selectNext: () => {
     const { objects, selectedIds } = get();
     const visible = objects.filter((o) => o.visible && !o.locked);
     if (visible.length === 0) return;
     if (selectedIds.length === 0) {
-      set({ selectedIds: [visible[0].id] });
+      set(selectionPatch([visible[0].id]));
       return;
     }
     const currentIdx = visible.findIndex((o) => o.id === selectedIds[selectedIds.length - 1]);
     const nextIdx = (currentIdx + 1) % visible.length;
-    set({ selectedIds: [visible[nextIdx].id] });
+    set(selectionPatch([visible[nextIdx].id]));
   },
   selectPrev: () => {
     const { objects, selectedIds } = get();
     const visible = objects.filter((o) => o.visible && !o.locked);
     if (visible.length === 0) return;
     if (selectedIds.length === 0) {
-      set({ selectedIds: [visible[visible.length - 1].id] });
+      set(selectionPatch([visible[visible.length - 1].id]));
       return;
     }
     const currentIdx = visible.findIndex((o) => o.id === selectedIds[selectedIds.length - 1]);
     const prevIdx = (currentIdx - 1 + visible.length) % visible.length;
-    set({ selectedIds: [visible[prevIdx].id] });
+    set(selectionPatch([visible[prevIdx].id]));
   },
   duplicateInPlace: () => {
     if (get().selectedIds.length === 0) return;
@@ -512,7 +539,7 @@ export const useStore = create<AppState>((set, get) => ({
         addObject({ ...obj, id: newId, name: obj.name + " copy" });
         newIds.push(newId);
       }
-      set({ selectedIds: newIds });
+      set(selectionPatch(newIds));
     });
   },
 
