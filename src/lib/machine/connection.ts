@@ -330,3 +330,9 @@ function categorizeConnectionError(raw: string): ConnectionError {
     ],
   };
 }
+
+// Test-only reset for the module-level failure counter.
+// Not imported anywhere in production code.
+export function _testResetPollFailures(): void {
+  consecutivePollFailures = 0;
+}
