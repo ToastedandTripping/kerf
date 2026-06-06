@@ -104,4 +104,51 @@ describe("Geometry Actions", () => {
       expect(objects[0].type).toBe("path");
     });
   });
+
+  // D5 — convertToPath rounded-rect corners: TR/BR arc-end anchors must have no handleOut
+  describe("convertToPath", () => {
+    it("D5: arc-end anchors that begin straight edges have no handleOut; arc handles are intact", () => {
+      // Rounded rect 100×80 corner-radius 10, origin at (0,0)
+      const obj: DesignObject = {
+        id: "rr1",
+        type: "rectangle",
+        name: "RR",
+        transform: { x: 0, y: 0, width: 100, height: 80, rotation: 0, scaleX: 1, scaleY: 1 },
+        layerIndex: 0,
+        visible: true,
+        locked: false,
+        fill: null,
+        stroke: "#4a90e2",
+        strokeWidth: 1,
+        opacity: 1,
+        cornerRadius: 10,
+      };
+      useStore.getState().addObject(obj);
+      useStore.getState().convertToPath("rr1");
+
+      const result = useStore.getState().objects.find((o) => o.id === "rr1")!;
+      expect(result.type).toBe("path");
+      const pts = result.points!;
+      // 8-anchor ring: indices 0-7 in absolute coords (origin 0,0)
+      // Index 2 = TR arc-end {w,cr} = (100,10) — begins right straight edge
+      // Index 4 = BR arc-end {w-cr,h} = (90,80) — begins bottom straight edge
+      const tr = pts[2]; // top-right arc-end
+      const br = pts[4]; // bottom-right arc-end
+      expect(tr.handleOut).toBeUndefined();
+      expect(br.handleOut).toBeUndefined();
+
+      // Arc handles on adjacent corners should use k-offset (non-zero, no NaN)
+      const k = 0.5522847498;
+      const cr = 10;
+      // Index 1 = top-right arc-start {w-cr,0} — handleOut should be (w-cr+cr*k, 0)
+      const trStart = pts[1];
+      expect(trStart.handleOut).toBeDefined();
+      expect(trStart.handleOut!.x).toBeCloseTo(100 - cr + cr * k, 5);
+      expect(trStart.handleOut!.y).toBeCloseTo(0, 5);
+      // Index 2 = TR arc-end — handleIn should be (w, cr-cr*k)
+      expect(tr.handleIn).toBeDefined();
+      expect(tr.handleIn!.x).toBeCloseTo(100, 5);
+      expect(tr.handleIn!.y).toBeCloseTo(cr - cr * k, 5);
+    });
+  });
 });

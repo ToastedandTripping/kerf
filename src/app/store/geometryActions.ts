@@ -408,9 +408,9 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
               points = [
                 { x: cr, y: 0, handleIn: { x: cr - cr * k, y: 0 } },
                 { x: w - cr, y: 0, handleOut: { x: w - cr + cr * k, y: 0 } },
-                { x: w, y: cr, handleIn: { x: w, y: cr - cr * k }, handleOut: { x: w, y: cr + (h - 2 * cr) > 0 ? cr : cr } },
+                { x: w, y: cr, handleIn: { x: w, y: cr - cr * k } },
                 { x: w, y: h - cr, handleOut: { x: w, y: h - cr + cr * k } },
-                { x: w - cr, y: h, handleIn: { x: w - cr + cr * k, y: h }, handleOut: { x: w - cr - (w - 2 * cr > 0 ? 0 : 0), y: h } },
+                { x: w - cr, y: h, handleIn: { x: w - cr + cr * k, y: h } },
                 { x: cr, y: h, handleIn: undefined, handleOut: { x: cr - cr * k, y: h } },
                 { x: 0, y: h - cr, handleIn: { x: 0, y: h - cr + cr * k } },
                 { x: 0, y: cr, handleOut: { x: 0, y: cr - cr * k } },
