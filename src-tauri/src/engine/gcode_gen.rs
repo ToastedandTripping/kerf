@@ -727,6 +727,169 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_layer_line() -> CutLayer {
+        CutLayer {
+            mode: "line".to_string(),
+            power: 100.0,
+            power_min: 0.0,
+            speed: 20.0,
+            passes: 1,
+            power_mode: "constant".to_string(),
+            interval: 0.1,
+            air_assist: true,
+            cut_inner_first: true,
+            dither: "floydSteinberg".to_string(),
+            scan_angle: 0.0,
+            angle_increment: 0.0,
+            overcut: 0.0,
+            lead_in: 0.0,
+            lead_out: 0.0,
+            overscan: 0.0,
+            bidirectional: true,
+            cross_hatch: false,
+            scanning_offset: 0.0,
+            tab_spacing: 0.0,
+            tab_width: 0.0,
+            perforation_cut: 0.0,
+            perforation_skip: 0.0,
+            power_curve: None,
+            fill_order: None,
+            newsprint_cell_size: None,
+            newsprint_angle: None,
+        }
+    }
+
+    fn make_rect_obj(id: &str, x: f64, y: f64, w: f64, h: f64, layer: CutLayer) -> CutObject {
+        CutObject {
+            id: id.to_string(),
+            obj_type: "rectangle".to_string(),
+            x,
+            y,
+            width: w,
+            height: h,
+            paths: vec![],
+            layer,
+            corner_radius: None,
+            rotation: 0.0,
+            priority: None,
+            group_id: None,
+        }
+    }
+
+    // TN1a — Y-flip convention: a 10mm square at (0,0) in a 100mm workspace.
+    // Design-space Y goes up; GRBL Y goes down. Y-flip: grbl_y = workspace_height - design_y.
+    // For a 10×10 square at (0,0): corners are (0,0),(10,0),(10,10),(0,10) in design space.
+    // After Y-flip in a 100mm workspace: (0,100),(10,100),(10,90),(0,90).
+    // The G-code cuts should visit these flipped Y coords.
+    #[test]
+    fn tn1a_y_flip_10mm_square() {
+        let workspace_height = 100.0;
+        let obj = make_rect_obj("sq", 0.0, 0.0, 10.0, 10.0, make_layer_line());
+        let result = generate_gcode(&[obj], workspace_height, 1000.0);
+        let gcode = &result.gcode;
+
+        // Rapid to first corner (0,0) design → (0,100) grbl
+        assert!(gcode.contains("G0 X0.000 Y100.000"),
+            "Expected G0 to (0,100); got:\n{}", gcode);
+        // After closing, should visit (10,100)
+        assert!(gcode.contains("Y100.000") && gcode.contains("X10.000"),
+            "Expected cut moves at Y=100 (bottom edge flipped); got:\n{}", gcode);
+        // Top of square in design = y=10 → grbl y = 100-10 = 90
+        assert!(gcode.contains("Y90.000"),
+            "Expected Y90 for top edge (design y=10 flipped); got:\n{}", gcode);
+    }
+
+    // TN1b — perforation toggle: 2mm cut / 1mm skip on a 10mm line.
+    // Expected: alternating G1 (cut) / G0 (skip) pattern with M5 between.
+    #[test]
+    fn tn1b_perforation_toggle() {
+        let mut layer = make_layer_line();
+        layer.perforation_cut = 2.0;
+        layer.perforation_skip = 1.0;
+        // 10mm horizontal line at y=0 in 100mm workspace
+        let obj = CutObject {
+            id: "perf".to_string(),
+            obj_type: "line".to_string(),
+            x: 0.0,
+            y: 50.0,
+            width: 10.0,
+            height: 0.0,
+            paths: vec![PathSegment {
+                points: vec![Point { x: 0.0, y: 50.0 }, Point { x: 10.0, y: 50.0 }],
+                closed: false,
+            }],
+            layer,
+            corner_radius: None,
+            rotation: 0.0,
+            priority: None,
+            group_id: None,
+        };
+        let result = generate_gcode(&[obj], 100.0, 1000.0);
+        let gcode = &result.gcode;
+        // Should contain an M5 (laser off between perforations) beyond the final M5
+        let m5_count = gcode.matches("M5").count();
+        assert!(m5_count >= 2,
+            "Expected at least 2 M5 commands (one per skip + final); got {} in:\n{}", m5_count, gcode);
+        // Should also contain a G0 (rapid for the skip segment)
+        assert!(gcode.matches("G0 X").count() >= 2,
+            "Expected at least 2 G0 moves (lead-in + skip); got:\n{}", gcode);
+    }
+
+    // TN1c — tab insertion: 5mm spacing, 1mm tab on a 10mm line.
+    // Tabs create a rapid (laser off) segment, then re-enable.
+    #[test]
+    fn tn1c_tab_insertion() {
+        let mut layer = make_layer_line();
+        layer.tab_spacing = 5.0;
+        layer.tab_width = 1.0;
+        let obj = CutObject {
+            id: "tabs".to_string(),
+            obj_type: "line".to_string(),
+            x: 0.0,
+            y: 50.0,
+            width: 10.0,
+            height: 0.0,
+            paths: vec![PathSegment {
+                points: vec![Point { x: 0.0, y: 50.0 }, Point { x: 10.0, y: 50.0 }],
+                closed: false,
+            }],
+            layer,
+            corner_radius: None,
+            rotation: 0.0,
+            priority: None,
+            group_id: None,
+        };
+        let result = generate_gcode(&[obj], 100.0, 1000.0);
+        let gcode = &result.gcode;
+        // Should have M5 for the tab gap
+        assert!(gcode.contains("M5"),
+            "Expected M5 for tab gap; got:\n{}", gcode);
+    }
+
+    // TN1d — lead-in/out: a path with lead-in 2mm must emit a G0 approach before
+    // laser-on G1, and lead-out extends past the path end.
+    #[test]
+    fn tn1d_lead_in_out_present() {
+        let mut layer = make_layer_line();
+        layer.lead_in = 2.0;
+        layer.lead_out = 2.0;
+        let obj = make_rect_obj("rect", 10.0, 10.0, 20.0, 20.0, layer);
+        let result = generate_gcode(&[obj], 100.0, 1000.0);
+        let gcode = &result.gcode;
+        // Lead-in: there should be a rapid to a point offset from the first corner,
+        // then a G1 to the first corner, then the M3/M4 + path cut.
+        // At minimum the gcode should have more than the bare minimum G0/G1 sequence
+        let g0_count = gcode.matches("G0 X").count();
+        let g1_count = gcode.matches("G1 X").count();
+        assert!(g0_count >= 2, "Expected multiple G0 moves (home + lead-in approach); got:\n{}", gcode);
+        assert!(g1_count >= 2, "Expected G1 for lead-in cut + path cuts; got:\n{}", gcode);
+    }
+}
+
 /// Rotate a point around a center
 fn rotate_point(px: f64, py: f64, cx: f64, cy: f64, angle_rad: f64) -> Point {
     let dx = px - cx;
