@@ -5,6 +5,8 @@ next: v0.8 — Profiles, Text & Community
 testing: null
 pinned: true
 shipped:
+  - date: 2026-06-05
+    item: "Bugfix (code-refresh audit, relay kerf-bugfix-d1-d3) — D2 group rotation now composed into children in G-code AND preview (was silently dropped; cut-affecting); D1 selectedSet kept in sync with selectedIds (was stale, broke hit-testing); D3 group children re-render live during transform. Known limitations: asymmetric path with its OWN rotation inside a rotated group has a bounded few-mm pivot offset (preview==cut, not a mismatch); group RESIZE not propagating to children is a separate deferred bug."
   - date: 2026-06-01
     item: v0.6 — Variable Text + Auto-Nesting — template serialization, CSV merge, skyline bin-packing; plus perf pass (drag/pan/render loop), competitive polish (preset quick-apply, connection state, frame promotion, job timer, layer shortcuts, error guidance), code-health refactor (released as v0.6.0)
   - date: 2026-05-19
