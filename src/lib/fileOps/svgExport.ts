@@ -14,16 +14,25 @@ export function exportSvgContent(): string {
     const fill = obj.fill || "none";
     const opacity = obj.opacity < 1 ? ` opacity="${obj.opacity}"` : "";
 
+    // Emit rotate transform for rotated primitives (rect, ellipse, text, image).
+    // Center = AABB center (x+w/2, y+h/2), consistent with D2 rotation-center convention.
+    // path/line emit raw points — standalone rotated path/line still exports unrotated
+    // (pre-existing limitation; tracked as a separate issue).
+    const rotation = t.rotation || 0;
+    const rotTransform = Math.abs(rotation) > 0.001
+      ? ` transform="rotate(${rotation}, ${t.x + t.width / 2}, ${t.y + t.height / 2})"`
+      : "";
+
     switch (obj.type) {
       case "rectangle": {
         const rx = obj.cornerRadius ? ` rx="${obj.cornerRadius}"` : "";
-        elements += `  <rect x="${t.x}" y="${t.y}" width="${t.width}" height="${t.height}"${rx} fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${opacity}/>\n`;
+        elements += `  <rect x="${t.x}" y="${t.y}" width="${t.width}" height="${t.height}"${rx} fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${opacity}${rotTransform}/>\n`;
         break;
       }
       case "ellipse": {
         const cx = t.x + t.width / 2;
         const cy = t.y + t.height / 2;
-        elements += `  <ellipse cx="${cx}" cy="${cy}" rx="${t.width / 2}" ry="${t.height / 2}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${opacity}/>\n`;
+        elements += `  <ellipse cx="${cx}" cy="${cy}" rx="${t.width / 2}" ry="${t.height / 2}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${opacity}${rotTransform}/>\n`;
         break;
       }
       case "line": {
@@ -56,13 +65,13 @@ export function exportSvgContent(): string {
           const textFill = obj.fill || obj.stroke || "#e8e8e8";
           const textY = t.y + fs;
           const escaped = obj.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-          elements += `  <text x="${t.x}" y="${textY}" font-size="${fs}" font-family="${ff}" fill="${textFill}"${opacity}>${escaped}</text>\n`;
+          elements += `  <text x="${t.x}" y="${textY}" font-size="${fs}" font-family="${ff}" fill="${textFill}"${opacity}${rotTransform}>${escaped}</text>\n`;
         }
         break;
       }
       case "image": {
         if (obj.imageData) {
-          elements += `  <image x="${t.x}" y="${t.y}" width="${t.width}" height="${t.height}" href="${obj.imageData}"${opacity}/>\n`;
+          elements += `  <image x="${t.x}" y="${t.y}" width="${t.width}" height="${t.height}" href="${obj.imageData}"${opacity}${rotTransform}/>\n`;
         }
         break;
       }
