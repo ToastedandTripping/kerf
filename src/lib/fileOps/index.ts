@@ -8,7 +8,7 @@ import { importDxfDirect } from "./dxfImport";
 import { importImageData } from "./imageImport";
 import { exportSvgContent } from "./svgExport";
 
-export { importSvgContent, parsePathD } from "./svgImport";
+export { parsePathD } from "./svgImport";
 export { importDxfDirect } from "./dxfImport";
 
 let dialogModule: typeof import("@tauri-apps/plugin-dialog") | null = null;
