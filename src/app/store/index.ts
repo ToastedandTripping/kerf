@@ -5,6 +5,7 @@ import { DEFAULT_MATERIALS } from "../../lib/materials";
 import { createGeometryActions } from "./geometryActions";
 import type { AppState } from "./storeTypes";
 import { generateId } from "./storeTypes";
+import { buildObjectsById, selectionPatch } from "./storeHelpers";
 import { PX_PER_MM } from "../../lib/constants";
 
 export type { AppState } from "./storeTypes";
@@ -14,11 +15,6 @@ export { generateId } from "./storeTypes";
 let dirtyObjectIds: Set<string> = new Set();
 export const getDirtyObjectIds = () => dirtyObjectIds;
 export const clearDirtyObjectIds = () => { dirtyObjectIds = new Set(); };
-
-// --- D1: Selection patch helper — keeps selectedIds and selectedSet in sync as one unit ---
-function selectionPatch(ids: string[]) {
-  return { selectedIds: ids, selectedSet: new Set(ids) };
-}
 
 // --- P4: Module-level cursor position (removed from Zustand to avoid 60 set() calls/sec) ---
 let _cursorPosition = { x: 0, y: 0 };
@@ -32,13 +28,6 @@ export function getCursorPosition() { return _cursorPosition; }
 export function subscribeCursorPosition(fn: () => void) {
   _cursorListeners.push(fn);
   return () => { _cursorListeners = _cursorListeners.filter((f) => f !== fn); };
-}
-
-// --- P6: Helper to build objectsById map ---
-function buildObjectsById(objects: DesignObject[]): Map<string, DesignObject> {
-  const map = new Map<string, DesignObject>();
-  for (const o of objects) map.set(o.id, o);
-  return map;
 }
 
 export const useStore = create<AppState>((set, get) => ({

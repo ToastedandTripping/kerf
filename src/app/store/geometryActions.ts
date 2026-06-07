@@ -3,6 +3,7 @@ import opentype from "opentype.js";
 import type { DesignObject, VariableTextConfig, NestConfig, NestResult } from "../types";
 import type { StoreSet, StoreGet } from "./storeTypes";
 import { generateId } from "./storeTypes";
+import { applyObjects } from "./storeHelpers";
 import { hasPlaceholders, extractPlaceholders, substitutePlaceholders, generateSerialValues } from "../../lib/variableText";
 import { computeAABB, nestItems } from "../../lib/nesting";
 import { offsetRingByDistance } from "../../lib/geometry";
@@ -348,9 +349,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
         const newObjects = [...remaining];
         newObjects.splice(Math.min(insertIdx, newObjects.length), 0, group);
 
-        const byId = new Map<string, import("../types").DesignObject>();
-        for (const o of newObjects) byId.set(o.id, o);
-        set({ objects: newObjects, objectsById: byId, selectedIds: [groupId], selectedSet: new Set([groupId]), isDirty: true });
+        set(applyObjects(newObjects, [groupId]));
       });
     },
 
@@ -382,9 +381,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
           }
         }
 
-        const byId = new Map<string, import("../types").DesignObject>();
-        for (const o of newObjects) byId.set(o.id, o);
-        set({ objects: newObjects, objectsById: byId, selectedIds: newSelectedIds, selectedSet: new Set(newSelectedIds), isDirty: true });
+        set(applyObjects(newObjects, newSelectedIds));
       });
     },
 
