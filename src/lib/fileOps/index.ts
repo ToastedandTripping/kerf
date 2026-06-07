@@ -198,7 +198,7 @@ export const fileOperations = {
       if (!path) return;
       const pathStr = typeof path === "string" ? path : (path as any).path ?? String(path);
       const content = await fsModule.readTextFile(pathStr);
-      importDxfContent(content);
+      importDxfDirect(content);
     }
   },
 

@@ -122,6 +122,7 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
     async function renderPreview() {
       try {
         const doc = pdfDocRef.current;
+        if (!doc) return;
         const page = await doc.getPage(selectedPage);
         const pdfWidth = page.getViewport({ scale: 1 }).width;
         const scale = (dpi / 72) * (pdfWidth > 0 ? 1 : 1);
