@@ -34,22 +34,22 @@ export function subscribeCursorPosition(fn: () => void) {
 // Callers resolve their own before/after; this helper owns strip/capture/restore/push.
 function pushObjectsUndo(
   type: string,
-  beforeObjects: import("../types").DesignObject[],
+  beforeObjects: DesignObject[],
   beforeSelectedIds: string[],
-  afterObjects: import("../types").DesignObject[],
+  afterObjects: DesignObject[],
   afterSelectedIds: string[],
   pushCmd: (cmd: import("./storeTypes").Command) => void,
-  getObjects: () => import("../types").DesignObject[],
+  getObjects: () => DesignObject[],
   setState: (patch: object) => void,
 ) {
-  const stripImageData = (objects: import("../types").DesignObject[]): import("../types").DesignObject[] =>
+  const stripImageData = (objects: DesignObject[]): DesignObject[] =>
     objects.map((o) => o.imageData ? { ...o, imageData: "__UNDO_REF__" } : o);
   const beforeSnapshot = stripImageData(beforeObjects);
   const afterSnapshot = stripImageData(afterObjects);
   const capturedImages = new Map<string, string>();
   for (const o of beforeObjects) { if (o.imageData && o.imageData !== "__UNDO_REF__") capturedImages.set(o.id, o.imageData); }
   for (const o of afterObjects) { if (o.imageData && o.imageData !== "__UNDO_REF__") capturedImages.set(o.id, o.imageData); }
-  const restoreImageData = (snapshot: import("../types").DesignObject[]): import("../types").DesignObject[] => {
+  const restoreImageData = (snapshot: DesignObject[]): DesignObject[] => {
     const live = getObjects();
     const imageMap = new Map<string, string>(capturedImages);
     for (const o of live) { if (o.imageData && o.imageData !== "__UNDO_REF__") imageMap.set(o.id, o.imageData); }
@@ -65,6 +65,25 @@ function pushObjectsUndo(
       const restored = restoreImageData(afterSnapshot);
       setState({ objects: restored, objectsById: buildObjectsById(restored), ...selectionPatch(afterSelectedIds), isDirty: true });
     },
+  });
+}
+
+// --- B4.3: Shared z-order wrapper ---
+// Owns withUndo + findIndex + applyObjects bundle; caller supplies 1-2 lines of index math.
+// mutate returns new array or null (null = no-op, withUndo guard ensures no command pushed).
+function withZOrder(
+  id: string,
+  get: import("./storeTypes").StoreGet,
+  set: import("./storeTypes").StoreSet,
+  mutate: (objs: DesignObject[], idx: number) => DesignObject[] | null,
+) {
+  get().withUndo("z-order", () => {
+    set((state) => {
+      const idx = state.objects.findIndex((o) => o.id === id);
+      const result = mutate([...state.objects], idx);
+      if (result === null) return state;
+      return { objects: result, objectsById: buildObjectsById(result), isDirty: true };
+    });
   });
 }
 
@@ -426,52 +445,28 @@ export const useStore = create<AppState>((set, get) => ({
   setJobProgress: (p) => set({ jobProgress: p }),
 
   // Z-Order
-  moveObjectForward: (id) => {
-    get().withUndo("z-order", () => {
-      set((state) => {
-        const idx = state.objects.findIndex((o) => o.id === id);
-        if (idx < 0 || idx >= state.objects.length - 1) return state;
-        const objs = [...state.objects];
-        [objs[idx], objs[idx + 1]] = [objs[idx + 1], objs[idx]];
-        return { objects: objs, objectsById: buildObjectsById(objs), isDirty: true };
-      });
-    });
-  },
-  moveObjectBackward: (id) => {
-    get().withUndo("z-order", () => {
-      set((state) => {
-        const idx = state.objects.findIndex((o) => o.id === id);
-        if (idx <= 0) return state;
-        const objs = [...state.objects];
-        [objs[idx - 1], objs[idx]] = [objs[idx], objs[idx - 1]];
-        return { objects: objs, objectsById: buildObjectsById(objs), isDirty: true };
-      });
-    });
-  },
-  moveObjectToFront: (id) => {
-    get().withUndo("z-order", () => {
-      set((state) => {
-        const idx = state.objects.findIndex((o) => o.id === id);
-        if (idx < 0) return state;
-        const objs = [...state.objects];
-        const [obj] = objs.splice(idx, 1);
-        objs.push(obj);
-        return { objects: objs, objectsById: buildObjectsById(objs), isDirty: true };
-      });
-    });
-  },
-  moveObjectToBack: (id) => {
-    get().withUndo("z-order", () => {
-      set((state) => {
-        const idx = state.objects.findIndex((o) => o.id === id);
-        if (idx < 0) return state;
-        const objs = [...state.objects];
-        const [obj] = objs.splice(idx, 1);
-        objs.unshift(obj);
-        return { objects: objs, objectsById: buildObjectsById(objs), isDirty: true };
-      });
-    });
-  },
+  moveObjectForward: (id) => withZOrder(id, get, set, (objs, idx) => {
+    if (idx < 0 || idx >= objs.length - 1) return null;
+    [objs[idx], objs[idx + 1]] = [objs[idx + 1], objs[idx]];
+    return objs;
+  }),
+  moveObjectBackward: (id) => withZOrder(id, get, set, (objs, idx) => {
+    if (idx <= 0) return null;
+    [objs[idx - 1], objs[idx]] = [objs[idx], objs[idx - 1]];
+    return objs;
+  }),
+  moveObjectToFront: (id) => withZOrder(id, get, set, (objs, idx) => {
+    if (idx < 0) return null;
+    const [obj] = objs.splice(idx, 1);
+    objs.push(obj);
+    return objs;
+  }),
+  moveObjectToBack: (id) => withZOrder(id, get, set, (objs, idx) => {
+    if (idx < 0) return null;
+    const [obj] = objs.splice(idx, 1);
+    objs.unshift(obj);
+    return objs;
+  }),
 
   // Geometry actions (align, flip, group, boolean, array, convert, offset)
   ...createGeometryActions(set, get),
