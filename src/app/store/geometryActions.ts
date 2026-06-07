@@ -147,6 +147,25 @@ export async function textObjectToPaths(obj: DesignObject): Promise<DesignObject
   return prepared;
 }
 
+// B4.2: single shared boolean implementation; four public actions are thin wrappers.
+// clip signature matches polygonClipping.*: (subject, ...clippers) — preserves polys[0],...rest
+// order so difference/xor (order-sensitive) behave identically to before.
+type ClipFn = (subject: polygonClipping.Polygon, ...clippers: polygonClipping.Polygon[]) => polygonClipping.MultiPolygon;
+
+function runBoolean(get: StoreGet, clip: ClipFn) {
+  if (get().selectedIds.length < 2) return;
+  get().withUndo("boolean", () => {
+    const { selectedIds, objects, removeObjects, addObject, setSelectedIds } = get();
+    const selected = objects.filter((o) => selectedIds.includes(o.id));
+    const polys = selected.map(objectToPolygon).filter(Boolean) as polygonClipping.Polygon[];
+    if (polys.length < 2) return;
+    const result = clip(polys[0], ...polys.slice(1));
+    removeObjects(selectedIds);
+    const newIds = multiPolygonToObjects(result, selected[0]).map((obj) => { addObject(obj); return obj.id; });
+    setSelectedIds(newIds);
+  });
+}
+
 export function createGeometryActions(set: StoreSet, get: StoreGet) {
   return {
     alignObjects: (alignment: "left" | "right" | "top" | "bottom" | "hcenter" | "vcenter") => {
@@ -568,61 +587,10 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
       });
     },
 
-    booleanUnion: () => {
-      if (get().selectedIds.length < 2) return;
-      get().withUndo("boolean", () => {
-        const { selectedIds, objects, removeObjects, addObject, setSelectedIds } = get();
-        const selected = objects.filter((o) => selectedIds.includes(o.id));
-        const polys = selected.map(objectToPolygon).filter(Boolean) as polygonClipping.Polygon[];
-        if (polys.length < 2) return;
-        const result = polygonClipping.union(polys[0], ...polys.slice(1));
-        removeObjects(selectedIds);
-        const newIds = multiPolygonToObjects(result, selected[0]).map((obj) => { addObject(obj); return obj.id; });
-        setSelectedIds(newIds);
-      });
-    },
-
-    booleanDifference: () => {
-      if (get().selectedIds.length < 2) return;
-      get().withUndo("boolean", () => {
-        const { selectedIds, objects, removeObjects, addObject, setSelectedIds } = get();
-        const selected = objects.filter((o) => selectedIds.includes(o.id));
-        const polys = selected.map(objectToPolygon).filter(Boolean) as polygonClipping.Polygon[];
-        if (polys.length < 2) return;
-        const result = polygonClipping.difference(polys[0], ...polys.slice(1));
-        removeObjects(selectedIds);
-        const newIds = multiPolygonToObjects(result, selected[0]).map((obj) => { addObject(obj); return obj.id; });
-        setSelectedIds(newIds);
-      });
-    },
-
-    booleanIntersection: () => {
-      if (get().selectedIds.length < 2) return;
-      get().withUndo("boolean", () => {
-        const { selectedIds, objects, removeObjects, addObject, setSelectedIds } = get();
-        const selected = objects.filter((o) => selectedIds.includes(o.id));
-        const polys = selected.map(objectToPolygon).filter(Boolean) as polygonClipping.Polygon[];
-        if (polys.length < 2) return;
-        const result = polygonClipping.intersection(polys[0], ...polys.slice(1));
-        removeObjects(selectedIds);
-        const newIds = multiPolygonToObjects(result, selected[0]).map((obj) => { addObject(obj); return obj.id; });
-        setSelectedIds(newIds);
-      });
-    },
-
-    booleanXor: () => {
-      if (get().selectedIds.length < 2) return;
-      get().withUndo("boolean", () => {
-        const { selectedIds, objects, removeObjects, addObject, setSelectedIds } = get();
-        const selected = objects.filter((o) => selectedIds.includes(o.id));
-        const polys = selected.map(objectToPolygon).filter(Boolean) as polygonClipping.Polygon[];
-        if (polys.length < 2) return;
-        const result = polygonClipping.xor(polys[0], ...polys.slice(1));
-        removeObjects(selectedIds);
-        const newIds = multiPolygonToObjects(result, selected[0]).map((obj) => { addObject(obj); return obj.id; });
-        setSelectedIds(newIds);
-      });
-    },
+    booleanUnion: () => runBoolean(get, polygonClipping.union),
+    booleanDifference: () => runBoolean(get, polygonClipping.difference),
+    booleanIntersection: () => runBoolean(get, polygonClipping.intersection),
+    booleanXor: () => runBoolean(get, polygonClipping.xor),
 
     offsetPaths: (distance: number) => {
       if (get().selectedIds.length === 0) return;
