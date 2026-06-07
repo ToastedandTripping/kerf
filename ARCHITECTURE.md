@@ -55,6 +55,7 @@ src/
       dxfImport.ts           — DXF LINE/CIRCLE/ARC/LWPOLYLINE parser
       imageImport.ts         — Image byte→base64→canvas import
       svgExport.ts           — Design objects→SVG XML export
+      pdfImport.ts           — PDF vector extraction via pdf.js (paths, lines, rectangles)
       __tests__/             — SVG and DXF import tests
     machine/
       connection.ts          — Serial port connect/disconnect, GRBL status polling,
@@ -85,7 +86,8 @@ src-tauri/src/
   engine/
     gcode_gen.rs             — G-code generation: line mode (vector cut with lead-in/out,
                                tabs, perforation, overcut) + fill mode (scan lines with
-                               overscan, bidirectional, cross-hatch, scan angle)
+                               overscan, bidirectional, cross-hatch, scan angle) +
+                               offsetFill mode (inward polygon rings for area engraving)
     image_gcode_gen.rs       — Image→G-code: dither then scan lines
     dither.rs                — 8 dithering algorithms (threshold, ordered, Floyd-Steinberg,
                                Jarvis, Stucki, Atkinson, grayscale, newsprint halftone)
@@ -126,10 +128,10 @@ src-tauri/src/
 
 ### State Architecture
 
-Single Zustand store with ~45 state fields and ~70 actions. Dialog state managed via
-`openDialogs: Set<string>` with `openDialog`/`closeDialog` actions (no module-level state). The `geometryActions.ts`
-slice is extracted as a factory function (`createGeometryActions(set, get)`) that
-spreads into the main `create()` call. All cross-slice references use lazy `get()`.
+Single Zustand store with 55 state fields and ~70 actions. Dialog state managed via
+`openDialogs: Set<string>` with `openDialog`/`closeDialog` actions (no module-level state).
+The `geometryActions.ts` slice is the only factory extracted as `createGeometryActions(set, get)`;
+all other actions are inline in the main `create()` call. All cross-slice references use lazy `get()`.
 
 Undo/redo uses a command pattern with snapshot capture. Image data (base64) is
 stripped from undo snapshots and restored from live objects. Stack capped at 50.
