@@ -1,30 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { useStore } from "../../app/store";
 import { subscribeCursorPosition, getCursorPosition } from "../../app/store";
-
-const stateColors: Record<string, string> = {
-  idle: "var(--success)",
-  run: "var(--accent)",
-  hold: "var(--accent-warm)",
-  alarm: "var(--danger)",
-  check: "var(--accent)",
-  door: "var(--accent-warm)",
-  home: "var(--accent)",
-  sleep: "var(--text-muted)",
-  disconnected: "var(--text-muted)",
-};
-
-const stateLabels: Record<string, string> = {
-  idle: "Ready",
-  run: "Running",
-  hold: "Paused",
-  alarm: "Error",
-  check: "Check Mode",
-  door: "Door Open",
-  home: "Homing",
-  sleep: "Sleep",
-  disconnected: "Disconnected",
-};
+import { MACHINE_STATE_COLORS, MACHINE_STATE_LABELS } from "../../lib/machine/machineStateDisplay";
 
 export function StatusBar() {
   // P4: Cursor position via useSyncExternalStore (removed from Zustand)
@@ -59,10 +36,10 @@ export function StatusBar() {
         <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
           <span style={{
             width: "6px", height: "6px", borderRadius: "50%",
-            background: stateColors[machineState] ?? "var(--text-muted)",
+            background: MACHINE_STATE_COLORS[machineState] ?? "var(--text-muted)",
           }} />
-          <span style={{ color: stateColors[machineState] ?? "var(--text-muted)" }}>
-            {stateLabels[machineState] ?? machineState}
+          <span style={{ color: MACHINE_STATE_COLORS[machineState] ?? "var(--text-muted)" }}>
+            {MACHINE_STATE_LABELS[machineState] ?? machineState}
           </span>
         </span>
 

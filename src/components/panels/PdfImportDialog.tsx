@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.mjs?url";
+import type { PDFDocumentProxy } from "pdfjs-dist";
 import type { DesignObject } from "../../app/types";
 import { useStore } from "../../app/store";
 import { extractVectorPaths } from "../../lib/fileOps/pdfImport";
@@ -34,7 +35,7 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
   const [preview, setPreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const pdfDocRef = useRef<any>(null);
+  const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
 
   // Load PDF when data changes

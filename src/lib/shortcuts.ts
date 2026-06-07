@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useStore } from "../app/store";
+import { useStore, generateId } from "../app/store";
 import { fileOperations } from "./fileOps";
 import { handleViewportKeyDown, handleToolChange } from "./tools/toolHandler";
 import type { ToolType } from "../app/types";
@@ -90,7 +90,7 @@ export function useKeyboardShortcuts() {
         s.withUndo("paste", () => {
           const newObjects = s.clipboard.map((o) => ({
             ...o,
-            id: `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            id: generateId(),
             transform: { ...o.transform, x: o.transform.x + 10, y: o.transform.y + 10 },
           }));
           newObjects.forEach(s.addObject);
@@ -106,7 +106,7 @@ export function useKeyboardShortcuts() {
         s.withUndo("paste", () => {
           const newObjects = s.clipboard.map((o) => ({
             ...o,
-            id: `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            id: generateId(),
           }));
           newObjects.forEach(s.addObject);
           s.setSelectedIds(newObjects.map((o) => o.id));

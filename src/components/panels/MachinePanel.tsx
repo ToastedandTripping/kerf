@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useStore } from "../../app/store";
 import { machineConnection, type ConnectionError } from "../../lib/machine/connection";
 import { generateGcode } from "../../lib/machine/gcodeGen";
+import { MACHINE_STATE_COLORS } from "../../lib/machine/machineStateDisplay";
 import type { DesignObject, StartCorner } from "../../app/types";
 
 /** Compute bounding box of all visible, unlocked design objects */
@@ -238,14 +239,6 @@ export function MachinePanel() {
     await machineConnection.emergencyStop();
   }
 
-  const stateColors: Record<string, string> = {
-    idle: "var(--success)",
-    run: "var(--accent)",
-    hold: "var(--accent-warm)",
-    alarm: "var(--danger)",
-    disconnected: "var(--text-muted)",
-  };
-
   return (
     <div style={{ borderBottom: "1px solid var(--border)" }}>
       <div
@@ -277,11 +270,11 @@ export function MachinePanel() {
             width: "6px",
             height: "6px",
             borderRadius: "50%",
-            background: stateColors[machineState],
+            background: MACHINE_STATE_COLORS[machineState],
             marginLeft: "auto",
           }}
         />
-        <span style={{ fontSize: "9px", color: stateColors[machineState], fontWeight: 400, textTransform: "capitalize" }}>
+        <span style={{ fontSize: "9px", color: MACHINE_STATE_COLORS[machineState], fontWeight: 400, textTransform: "capitalize" }}>
           {machineState}
         </span>
       </div>

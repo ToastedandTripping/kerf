@@ -743,7 +743,6 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
         }
       });
 
-      console.log(`Generated ${rows.length} instances (${allNewObjects.length} objects total)`);
     },
 
     nestObjects: async (config: NestConfig): Promise<NestResult> => {
@@ -810,10 +809,6 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
           }
         });
       }
-
-      console.log(
-        `Nested ${result.placed.length}/${candidates.length} objects at ${Math.round(result.efficiency * 100)}% efficiency`
-      );
 
       return result;
     },
