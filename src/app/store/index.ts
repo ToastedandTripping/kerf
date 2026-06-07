@@ -30,6 +30,44 @@ export function subscribeCursorPosition(fn: () => void) {
   return () => { _cursorListeners = _cursorListeners.filter((f) => f !== fn); };
 }
 
+// --- B4.1: Shared undo-strip machinery ---
+// Callers resolve their own before/after; this helper owns strip/capture/restore/push.
+function pushObjectsUndo(
+  type: string,
+  beforeObjects: import("../types").DesignObject[],
+  beforeSelectedIds: string[],
+  afterObjects: import("../types").DesignObject[],
+  afterSelectedIds: string[],
+  pushCmd: (cmd: import("./storeTypes").Command) => void,
+  getObjects: () => import("../types").DesignObject[],
+  setState: (patch: object) => void,
+) {
+  const stripImageData = (objects: import("../types").DesignObject[]): import("../types").DesignObject[] =>
+    objects.map((o) => o.imageData ? { ...o, imageData: "__UNDO_REF__" } : o);
+  const beforeSnapshot = stripImageData(beforeObjects);
+  const afterSnapshot = stripImageData(afterObjects);
+  const capturedImages = new Map<string, string>();
+  for (const o of beforeObjects) { if (o.imageData && o.imageData !== "__UNDO_REF__") capturedImages.set(o.id, o.imageData); }
+  for (const o of afterObjects) { if (o.imageData && o.imageData !== "__UNDO_REF__") capturedImages.set(o.id, o.imageData); }
+  const restoreImageData = (snapshot: import("../types").DesignObject[]): import("../types").DesignObject[] => {
+    const live = getObjects();
+    const imageMap = new Map<string, string>(capturedImages);
+    for (const o of live) { if (o.imageData && o.imageData !== "__UNDO_REF__") imageMap.set(o.id, o.imageData); }
+    return snapshot.map((o) => o.imageData === "__UNDO_REF__" ? { ...o, imageData: imageMap.get(o.id) } : o);
+  };
+  pushCmd({
+    type,
+    undo: () => {
+      const restored = restoreImageData(beforeSnapshot);
+      setState({ objects: restored, objectsById: buildObjectsById(restored), ...selectionPatch(beforeSelectedIds), isDirty: true });
+    },
+    redo: () => {
+      const restored = restoreImageData(afterSnapshot);
+      setState({ objects: restored, objectsById: buildObjectsById(restored), ...selectionPatch(afterSelectedIds), isDirty: true });
+    },
+  });
+}
+
 export const useStore = create<AppState>((set, get) => ({
   // Tool
   activeTool: "select",
@@ -266,39 +304,14 @@ export const useStore = create<AppState>((set, get) => ({
     });
   },
   withUndo: (type, fn) => {
-    // Strip imageData from snapshots to avoid duplicating large base64 strings in undo history
-    const stripImageData = (objects: import("../types").DesignObject[]): import("../types").DesignObject[] =>
-      objects.map((o) => o.imageData ? { ...o, imageData: "__UNDO_REF__" } : o);
     const beforeObjects = get().objects;
     const beforeSelectedIds = get().selectedIds;
-    const beforeSnapshot = stripImageData(beforeObjects);
     fn();
     const afterObjects = get().objects;
     const afterSelectedIds = get().selectedIds;
     if (beforeObjects !== afterObjects) {
-      const afterSnapshot = stripImageData(afterObjects);
-      // Capture only the id->imageData entries from both arrays (not the full object arrays)
-      const capturedImages = new Map<string, string>();
-      for (const o of beforeObjects) { if (o.imageData && o.imageData !== "__UNDO_REF__") capturedImages.set(o.id, o.imageData); }
-      for (const o of afterObjects) { if (o.imageData && o.imageData !== "__UNDO_REF__") capturedImages.set(o.id, o.imageData); }
-      // Restore imageData from captured map + live state (closure captures capturedImages, not beforeObjects/afterObjects)
-      const restoreImageData = (snapshot: import("../types").DesignObject[]): import("../types").DesignObject[] => {
-        const live = get().objects;
-        const imageMap = new Map<string, string>(capturedImages);
-        for (const o of live) { if (o.imageData && o.imageData !== "__UNDO_REF__") imageMap.set(o.id, o.imageData); }
-        return snapshot.map((o) => o.imageData === "__UNDO_REF__" ? { ...o, imageData: imageMap.get(o.id) } : o);
-      };
-      get().pushCommand({
-        type,
-        undo: () => {
-          const restored = restoreImageData(beforeSnapshot);
-          set({ objects: restored, objectsById: buildObjectsById(restored), ...selectionPatch(beforeSelectedIds), isDirty: true });
-        },
-        redo: () => {
-          const restored = restoreImageData(afterSnapshot);
-          set({ objects: restored, objectsById: buildObjectsById(restored), ...selectionPatch(afterSelectedIds), isDirty: true });
-        },
-      });
+      pushObjectsUndo(type, beforeObjects, beforeSelectedIds, afterObjects, afterSelectedIds,
+        get().pushCommand, () => get().objects, set);
     }
   },
   _propertyEditSnapshot: null,
@@ -312,32 +325,8 @@ export const useStore = create<AppState>((set, get) => ({
     if (snapshot && snapshot.objects !== get().objects) {
       const afterObjects = get().objects;
       const afterSelectedIds = get().selectedIds;
-      // Strip imageData from snapshots to avoid duplicating large base64 strings in undo history
-      const stripImageData = (objects: import("../types").DesignObject[]): import("../types").DesignObject[] =>
-        objects.map((o) => o.imageData ? { ...o, imageData: "__UNDO_REF__" } : o);
-      const beforeSnapshot = stripImageData(snapshot.objects);
-      const afterSnapshot = stripImageData(afterObjects);
-      // Capture only the id->imageData entries (not full object arrays)
-      const capturedImages = new Map<string, string>();
-      for (const o of snapshot.objects) { if (o.imageData && o.imageData !== "__UNDO_REF__") capturedImages.set(o.id, o.imageData); }
-      for (const o of afterObjects) { if (o.imageData && o.imageData !== "__UNDO_REF__") capturedImages.set(o.id, o.imageData); }
-      const restoreImageData = (snap: import("../types").DesignObject[]): import("../types").DesignObject[] => {
-        const live = get().objects;
-        const imageMap = new Map<string, string>(capturedImages);
-        for (const o of live) { if (o.imageData && o.imageData !== "__UNDO_REF__") imageMap.set(o.id, o.imageData); }
-        return snap.map((o) => o.imageData === "__UNDO_REF__" ? { ...o, imageData: imageMap.get(o.id) } : o);
-      };
-      get().pushCommand({
-        type: "property-edit",
-        undo: () => {
-          const restored = restoreImageData(beforeSnapshot);
-          set({ objects: restored, objectsById: buildObjectsById(restored), ...selectionPatch(snapshot.selectedIds), isDirty: true });
-        },
-        redo: () => {
-          const restored = restoreImageData(afterSnapshot);
-          set({ objects: restored, objectsById: buildObjectsById(restored), ...selectionPatch(afterSelectedIds), isDirty: true });
-        },
-      });
+      pushObjectsUndo("property-edit", snapshot.objects, snapshot.selectedIds, afterObjects, afterSelectedIds,
+        get().pushCommand, () => get().objects, set);
     }
     set({ _propertyEditSnapshot: null });
   },
