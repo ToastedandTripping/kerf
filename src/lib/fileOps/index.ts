@@ -4,7 +4,7 @@ import { DEFAULT_LAYERS } from "../../app/types";
 import { DEFAULT_MATERIALS } from "../materials";
 import { addRecentFile } from "../recentFiles";
 import { clearRecoveryFile } from "../autoSave";
-import { importDxfContent } from "./dxfImport";
+import { importDxfDirect } from "./dxfImport";
 import { importImageData } from "./imageImport";
 import { exportSvgContent } from "./svgExport";
 
@@ -95,7 +95,7 @@ export const fileOperations = {
         openSvgImport(content);
       } else if (ext === "dxf") {
         const content = await fsModule.readTextFile(pathStr);
-        importDxfContent(content);
+        importDxfDirect(content);
       } else if (ext === "pdf") {
         const data = await fsModule.readFile(pathStr);
         const { pdfBytesToArrayBuffer } = await import("./pdfImport");

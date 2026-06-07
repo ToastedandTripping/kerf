@@ -124,7 +124,6 @@ export const useStore = create<AppState>((set, get) => ({
         gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
       };
     }),
-  setObjects: (objects) => set({ objects, objectsById: buildObjectsById(objects) }),
 
   // Selection
   selectedIds: [],
@@ -443,8 +442,6 @@ export const useStore = create<AppState>((set, get) => ({
   setGcodeResult: (result) => set({ gcodeResult: result, gcodeStale: false }),
   previewVisible: false,
   setPreviewVisible: (v) => set({ previewVisible: v }),
-  previewProgress: 0,
-  setPreviewProgress: (p) => set({ previewProgress: p }),
   jobRunning: false,
   jobProgress: 0,
   setJobRunning: (running) => set({ jobRunning: running }),

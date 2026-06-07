@@ -1,14 +1,14 @@
 import { useStore } from "../../app/store";
 import type { ToolType } from "../../app/types";
 
-const tools: { type: ToolType; label: string; shortcut: string; icon: string }[] = [
-  { type: "select", label: "Select", shortcut: "V", icon: "M6 2L2 8l4 6h2L4.5 8 8 2H6z" },
-  { type: "rectangle", label: "Rectangle", shortcut: "R", icon: "" },
-  { type: "ellipse", label: "Ellipse", shortcut: "E", icon: "" },
-  { type: "line", label: "Line", shortcut: "L", icon: "" },
-  { type: "pen", label: "Pen", shortcut: "P", icon: "" },
-  { type: "text", label: "Text", shortcut: "T", icon: "" },
-  { type: "node", label: "Node Edit", shortcut: "N", icon: "" },
+const tools: { type: ToolType; label: string; shortcut: string }[] = [
+  { type: "select", label: "Select", shortcut: "V" },
+  { type: "rectangle", label: "Rectangle", shortcut: "R" },
+  { type: "ellipse", label: "Ellipse", shortcut: "E" },
+  { type: "line", label: "Line", shortcut: "L" },
+  { type: "pen", label: "Pen", shortcut: "P" },
+  { type: "text", label: "Text", shortcut: "T" },
+  { type: "node", label: "Node Edit", shortcut: "N" },
 ];
 
 export function Toolbar() {

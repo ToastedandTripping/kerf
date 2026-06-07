@@ -72,10 +72,6 @@ export function getMarqueeState() {
   };
 }
 
-// Expose active handle for cursor changes
-export function getActiveHandle(): HandleType {
-  return drag.activeHandle;
-}
 
 export function handleViewportPointerDown(
   worldX: number,
@@ -242,7 +238,7 @@ function hitTest(worldX: number, worldY: number): string | null {
 }
 
 // Hit test for resize/rotate handles around selected objects
-export function hitTestHandle(worldX: number, worldY: number, zoom: number): HandleType {
+function hitTestHandle(worldX: number, worldY: number, zoom: number): HandleType {
   const store = useStore.getState();
   if (store.selectedIds.length === 0) return null;
 

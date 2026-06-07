@@ -5,10 +5,6 @@ export function importDxfDirect(content: string) {
   parseDxfManual(content);
 }
 
-export function importDxfContent(content: string) {
-  parseDxfManual(content);
-}
-
 function parseDxfManual(content: string) {
   const store = useStore.getState();
   const layerColor = store.layers[store.activeLayerIndex]?.color || "#4a90e2";

@@ -34,7 +34,6 @@ export interface AppState {
   updateObject: (id: string, partial: Partial<DesignObject>) => void;
   updateObjects: (updates: Array<{ id: string; partial: Partial<DesignObject> }>) => void;
   removeObjects: (ids: string[]) => void;
-  setObjects: (objects: DesignObject[]) => void;
 
   // Selection
   selectedIds: string[];
@@ -139,8 +138,6 @@ export interface AppState {
   setGcodeResult: (result: AppState["gcodeResult"]) => void;
   previewVisible: boolean;
   setPreviewVisible: (v: boolean) => void;
-  previewProgress: number;
-  setPreviewProgress: (p: number) => void;
   jobRunning: boolean;
   jobProgress: number;
   setJobRunning: (running: boolean) => void;

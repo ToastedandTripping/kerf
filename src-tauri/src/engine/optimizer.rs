@@ -43,12 +43,6 @@ pub fn optimize_cut_order_from(objects: &[CutObject], start_x: f64, start_y: f64
     order
 }
 
-/// Optimize cut order using nearest-neighbor heuristic starting from (0, 0).
-/// Returns indices into the original objects vec in optimized order.
-#[allow(dead_code)]
-pub fn optimize_cut_order(objects: &[CutObject]) -> Vec<usize> {
-    optimize_cut_order_from(objects, 0.0, 0.0)
-}
 
 /// Sort objects so inner shapes come before outer shapes
 /// (smaller bounding box area = more inner)
