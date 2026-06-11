@@ -8,6 +8,9 @@
  *    already de-energized; the volley earns a confusing error:9)
  *  - abort volley GUARDED by jobRunning: STOP already ran emergencyStop — a
  *    second M5+0x18 would push another banner into the buffer
+ *  - STOP while PAUSED: the hold-wait un-parks (whether or not the e-stop
+ *    re-poll moved the state out of "hold") and flows into the cancel path —
+ *    never a stray post-reset send (W1 Razor WARNING 1)
  *  - START disabled by the canStartJob gate (stale G-code surfaced as hint)
  *  - FRAME uses machine-frame moves extents (Y-flip DELETED), requires fresh
  *    G-code, and no-ops on empty moves instead of sending G0 XInfinity
@@ -180,6 +183,51 @@ describe("MachinePanel job loop (F13/F17)", () => {
     // No second volley: emergencyStop already ran its own sequence.
     expect(sentCommands()).not.toContain("M5");
     expect(sentBytes()).not.toContain(0x18);
+  });
+
+  it("STOP while PAUSED sends NO further line (e-stop re-poll leaves hold)", async () => {
+    // PAUSE arrives right after line 1 acks: the mock parks the loop in hold.
+    mockSerial((cmd) => {
+      if (cmd === "G1 X10 Y20") {
+        useStore.setState({ machineState: "hold" });
+      }
+      return { responses: ["ok"], drained: [] };
+    });
+    const { getByText } = render(<MachinePanel />);
+
+    fireEvent.click(getByText("START"));
+    await waitFor(() => expect(sentCommands()).toContain("G1 X10 Y20"));
+    // The loop is now parked in the hold-wait. STOP: emergencyStop flips
+    // jobRunning false and its re-poll writes a fresh NON-hold state — the
+    // exact sequence that used to un-park the wait straight into send().
+    useStore.setState({ jobRunning: false, machineState: "idle" });
+
+    await waitFor(() => expect(consoleTexts()).toContain("Job cancelled"));
+    // The stray line must NEVER fire after the reset.
+    expect(sentCommands().filter((c) => c.startsWith("G1"))).toEqual(["G1 X10 Y20"]);
+    // emergencyStop owns the abort volley — jobRunning false skips a second one.
+    expect(sentCommands()).not.toContain("M5");
+    expect(sentBytes()).not.toContain(0x18);
+  });
+
+  it("STOP while PAUSED un-parks the wait even when the state STAYS hold", async () => {
+    // Mutation guard: remove the jobRunning clause from the hold-wait and this
+    // test hangs forever (the e-stop re-poll returned nothing, so the state
+    // never leaves "hold") — waitFor times out and the test fails.
+    mockSerial((cmd) => {
+      if (cmd === "G1 X10 Y20") {
+        useStore.setState({ machineState: "hold" });
+      }
+      return { responses: ["ok"], drained: [] };
+    });
+    const { getByText } = render(<MachinePanel />);
+
+    fireEvent.click(getByText("START"));
+    await waitFor(() => expect(sentCommands()).toContain("G1 X10 Y20"));
+    useStore.setState({ jobRunning: false }); // state remains "hold"
+
+    await waitFor(() => expect(consoleTexts()).toContain("Job cancelled"));
+    expect(sentCommands().filter((c) => c.startsWith("G1"))).toEqual(["G1 X10 Y20"]);
   });
 
   it("stops on error:N through the existing abort path (volley fires)", async () => {

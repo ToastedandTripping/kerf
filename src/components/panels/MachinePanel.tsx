@@ -139,14 +139,22 @@ export function MachinePanel() {
     let endState: "complete" | "cancelled" | "aborted" | "alarm" | "error" = "complete";
 
     for (let i = 0; i < lines.length; i++) {
+      // Wait while paused. The wait ALSO exits when jobRunning goes false
+      // (STOP-while-PAUSED): emergencyStop's re-poll may write a fresh
+      // non-hold state, or the state may stay "hold" if the re-poll got
+      // nothing — either way the loop must un-park. The wait sits ABOVE the
+      // cancel check so every exit flows through it before any send; a stray
+      // post-reset line can never fire.
+      while (
+        useStore.getState().machineState === "hold" &&
+        useStore.getState().jobRunning
+      ) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
       if (!useStore.getState().jobRunning) {
         addConsoleLine("Job cancelled", "error");
         endState = "cancelled";
         break;
-      }
-      // Wait while paused
-      while (useStore.getState().machineState === "hold") {
-        await new Promise((r) => setTimeout(r, 100));
       }
       const responses = await machineConnection.send(lines[i]);
       setJobProgress((i + 1) / lines.length);
