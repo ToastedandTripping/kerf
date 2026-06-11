@@ -249,28 +249,33 @@ pub async fn serial_connect(
 #[tauri::command]
 pub async fn serial_disconnect(state: State<'_, SerialState>) -> Result<(), String> {
     let inner = state.0.clone();
-    tokio::task::spawn_blocking(move || {
-        if inner.pump_in_flight.load(Ordering::SeqCst) {
-            if let Ok(mut rt) = inner.realtime.lock() {
-                if let Some(port) = rt.as_mut() {
-                    let _ = port.write_all(&[0x18]);
-                    let _ = port.flush();
-                }
+    tokio::task::spawn_blocking(move || disconnect_inner(&inner))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// Disconnect body. The realtime `0x18` happens BEFORE any wait on the command
+/// lock (pinned by `disconnect_aborts_in_flight_pump_via_realtime_reset`), and
+/// ONLY when a pump is in flight (pinned by `clean_disconnect_sends_no_reset`).
+pub(crate) fn disconnect_inner(inner: &SerialInner) -> Result<(), String> {
+    if inner.pump_in_flight.load(Ordering::SeqCst) {
+        if let Ok(mut rt) = inner.realtime.lock() {
+            if let Some(port) = rt.as_mut() {
+                let _ = port.write_all(&[0x18]);
+                let _ = port.flush();
             }
         }
-        *inner
-            .command
-            .lock()
-            .map_err(|e| format!("Lock failed: {}", e))? = None;
-        *inner
-            .realtime
-            .lock()
-            .map_err(|e| format!("Lock failed: {}", e))? = None;
-        inner.connected.store(false, Ordering::SeqCst);
-        Ok(())
-    })
-    .await
-    .map_err(|e| format!("Task join error: {}", e))?
+    }
+    *inner
+        .command
+        .lock()
+        .map_err(|e| format!("Lock failed: {}", e))? = None;
+    *inner
+        .realtime
+        .lock()
+        .map_err(|e| format!("Lock failed: {}", e))? = None;
+    inner.connected.store(false, Ordering::SeqCst);
+    Ok(())
 }
 
 /// Send a command line and pump until a terminal response (`ok` / `error:N` /
@@ -411,14 +416,19 @@ mod tests {
     use std::sync::mpsc;
     use std::thread;
 
-    /// Minimal in-memory SerialPort for lock-structure tests.
+    /// Minimal in-memory SerialPort for lock-structure tests. The write buffer
+    /// is shared across `try_clone`s so tests can observe writes from outside.
     struct MockPort {
-        written: Vec<u8>,
+        written: Arc<Mutex<Vec<u8>>>,
     }
 
     impl MockPort {
         fn new() -> Self {
-            Self { written: Vec::new() }
+            Self { written: Arc::new(Mutex::new(Vec::new())) }
+        }
+
+        fn shared(written: Arc<Mutex<Vec<u8>>>) -> Self {
+            Self { written }
         }
     }
 
@@ -430,7 +440,7 @@ mod tests {
 
     impl std::io::Write for MockPort {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.written.extend_from_slice(buf);
+            self.written.lock().unwrap().extend_from_slice(buf);
             Ok(buf.len())
         }
         fn flush(&mut self) -> std::io::Result<()> {
@@ -506,7 +516,7 @@ mod tests {
             Ok(())
         }
         fn try_clone(&self) -> serialport::Result<Box<dyn SerialPort>> {
-            Ok(Box::new(MockPort::new()))
+            Ok(Box::new(MockPort::shared(self.written.clone())))
         }
         fn set_break(&self) -> serialport::Result<()> {
             Ok(())
@@ -543,6 +553,66 @@ mod tests {
             .recv_timeout(Duration::from_millis(500))
             .expect("realtime write blocked behind the command lock — e-stop would freeze");
         assert!(result.is_ok());
+    }
+
+    /// Acceptance criterion 5: a mid-job Disconnect terminates the in-flight
+    /// line PROMPTLY — the realtime 0x18 hits the wire while the command lock
+    /// is still held by the pump (the banner then aborts the pump and frees
+    /// the lock for the actual teardown).
+    #[test]
+    fn disconnect_aborts_in_flight_pump_via_realtime_reset() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let inner = Arc::new(SerialInner {
+            command: Mutex::new(None),
+            realtime: Mutex::new(Some(
+                Box::new(MockPort::shared(written.clone())) as Box<dyn SerialPort>
+            )),
+            connected: AtomicBool::new(true),
+            pump_in_flight: AtomicBool::new(true),
+        });
+
+        // Simulate an in-flight pump holding the command lock.
+        let command_guard = inner.command.lock().unwrap();
+
+        let inner2 = inner.clone();
+        let handle = thread::spawn(move || disconnect_inner(&inner2));
+
+        // The 0x18 must arrive while the command lock is STILL held.
+        let deadline = std::time::Instant::now() + Duration::from_millis(500);
+        while written.lock().unwrap().is_empty() && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            *written.lock().unwrap(),
+            vec![0x18],
+            "realtime 0x18 must reach the wire before disconnect waits on the command lock"
+        );
+
+        // Release the "pump" (in production the banner terminal does this);
+        // disconnect then completes its teardown.
+        drop(command_guard);
+        handle.join().unwrap().unwrap();
+        assert!(!inner.connected.load(Ordering::SeqCst));
+    }
+
+    /// The disconnect reset is GATED on pump-in-flight: a clean disconnect must
+    /// not reset the controller — on stock GRBL 1.1 that wipes volatile G92
+    /// work origins (Set Origin → Disconnect → origin gone).
+    #[test]
+    fn clean_disconnect_sends_no_reset() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let inner = SerialInner {
+            command: Mutex::new(None),
+            realtime: Mutex::new(Some(
+                Box::new(MockPort::shared(written.clone())) as Box<dyn SerialPort>
+            )),
+            connected: AtomicBool::new(true),
+            pump_in_flight: AtomicBool::new(false),
+        };
+
+        disconnect_inner(&inner).unwrap();
+        assert!(written.lock().unwrap().is_empty(), "clean disconnect must not write 0x18");
+        assert!(!inner.connected.load(Ordering::SeqCst));
     }
 
     /// PumpFlight clears the in-flight flag on drop, including panic unwinds —
