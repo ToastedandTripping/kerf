@@ -2,46 +2,9 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useStore } from "../../app/store";
 import { machineConnection, type ConnectionError } from "../../lib/machine/connection";
 import { generateGcode } from "../../lib/machine/gcodeGen";
+import { canStartJob, frameTargets } from "../../lib/machine/canStartJob";
 import { MACHINE_STATE_COLORS } from "../../lib/machine/machineStateDisplay";
-import type { DesignObject, StartCorner } from "../../app/types";
-
-/** Compute bounding box of all visible, unlocked design objects */
-function getDesignBounds(objects: DesignObject[]): { minX: number; minY: number; maxX: number; maxY: number } | null {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  let count = 0;
-  for (const obj of flattenAll(objects)) {
-    if (!obj.visible || obj.locked) continue;
-    if (obj.type === "group") continue;
-    minX = Math.min(minX, obj.transform.x);
-    minY = Math.min(minY, obj.transform.y);
-    maxX = Math.max(maxX, obj.transform.x + obj.transform.width);
-    maxY = Math.max(maxY, obj.transform.y + obj.transform.height);
-    count++;
-  }
-  return count > 0 ? { minX, minY, maxX, maxY } : null;
-}
-
-/** Recursively flatten groups */
-function flattenAll(objects: DesignObject[]): DesignObject[] {
-  const result: DesignObject[] = [];
-  for (const obj of objects) {
-    if (obj.type === "group" && obj.children) {
-      for (const child of obj.children) {
-        result.push(...flattenAll([{
-          ...child,
-          transform: {
-            ...child.transform,
-            x: child.transform.x + obj.transform.x,
-            y: child.transform.y + obj.transform.y,
-          },
-        }]));
-      }
-    } else {
-      result.push(obj);
-    }
-  }
-  return result;
-}
+import type { StartCorner } from "../../app/types";
 
 export function MachinePanel() {
   const machineConnected = useStore((s) => s.machineConnected);
@@ -60,6 +23,8 @@ export function MachinePanel() {
   const startCorner = useStore((s) => s.startCorner);
   const setStartCorner = useStore((s) => s.setStartCorner);
   const gcodeStale = useStore((s) => s.gcodeStale);
+  const workspaceWidth = useStore((s) => s.workspaceWidth);
+  const workspaceHeight = useStore((s) => s.workspaceHeight);
   const consoleLines = useStore((s) => s.consoleLines);
   const setStatusMessage = useStore((s) => s.setStatusMessage);
 
@@ -116,16 +81,10 @@ export function MachinePanel() {
       }
       try {
         setConnectionError(null);
+        // F14: connect() owns the settings query + $32/unverified warnings so
+        // manual and auto connect produce identical output. Only UI-state
+        // concerns live here.
         await machineConnection.connect(selectedPort);
-        await machineConnection.queryGrblSettings();
-        await machineConnection.pollStatus();
-        // Warn if laser mode is disabled
-        if (!useStore.getState().grblLaserMode) {
-          addConsoleLine(
-            "GRBL laser mode ($32) is disabled. Laser will not auto-zero at speed changes. Run $32=1 in the console to enable.",
-            "warning",
-          );
-        }
       } catch (e) {
         // Display structured error with suggestions
         const err = e as ConnectionError;
@@ -157,38 +116,32 @@ export function MachinePanel() {
   }
 
   async function handleStartJob() {
-    if (!gcodeResult) {
-      addConsoleLine("Generate G-code first", "error");
+    // F15: pure pre-flight gate — bounds come from gcodeResult.moves (the true
+    // machine-frame extents), not rotation-blind object AABBs.
+    const gate = canStartJob(useStore.getState());
+    if (!gate.ok) {
+      addConsoleLine(gate.reason!, "error");
       return;
     }
-
-    // Pre-flight bounds check
-    const { objects, workspaceWidth, workspaceHeight } = useStore.getState();
-    const bounds = getDesignBounds(objects);
-    if (bounds) {
-      if (bounds.minX < 0 || bounds.minY < 0 || bounds.maxX > workspaceWidth || bounds.maxY > workspaceHeight) {
-        addConsoleLine(
-          "Design extends outside workspace bounds. Move or resize objects to fit.",
-          "error",
-        );
-        return;
-      }
-    }
+    const job = useStore.getState().gcodeResult!;
 
     setJobRunning(true);
     setJobProgress(0);
     addConsoleLine("Sending job...", "info");
 
-    const lines = gcodeResult.gcode
+    const lines = job.gcode
       .split("\n")
       .filter((l) => l.trim() && !l.startsWith(";"));
 
-    let jobError = false;
+    // F13/F17 line-response protocol: empty response or reset banner = the line
+    // was ABORTED, not acked; ALARM = controller locked, laser already
+    // de-energized by firmware.
+    let endState: "complete" | "cancelled" | "aborted" | "alarm" | "error" = "complete";
 
     for (let i = 0; i < lines.length; i++) {
       if (!useStore.getState().jobRunning) {
         addConsoleLine("Job cancelled", "error");
-        jobError = true;
+        endState = "cancelled";
         break;
       }
       // Wait while paused
@@ -198,10 +151,20 @@ export function MachinePanel() {
       const responses = await machineConnection.send(lines[i]);
       setJobProgress((i + 1) / lines.length);
 
-      // Check for errors
+      if (responses.length === 0 || responses.some((r) => r.startsWith("Grbl "))) {
+        addConsoleLine("Job aborted -- machine was reset mid-line", "error");
+        endState = "aborted";
+        break;
+      }
+      if (responses.some((r) => r.startsWith("ALARM"))) {
+        // NO M5+reset volley here: GRBL is locked and the laser is already off;
+        // the volley would only earn a confusing error:9.
+        endState = "alarm";
+        break;
+      }
       if (responses.some((r) => r.startsWith("error:"))) {
         addConsoleLine("Job stopped due to error", "error");
-        jobError = true;
+        endState = "error";
         // Detect disconnect
         if (responses.some((r) => r === "error:disconnected")) {
           useStore.getState().setMachineConnected(false);
@@ -211,15 +174,24 @@ export function MachinePanel() {
       }
     }
 
-    // Safety: ensure laser is off on abort/error
-    const elapsed = gcodeResult ? gcodeResult.estimatedTimeSecs * (jobProgress || 1) : 0;
-    if (jobError) {
-      try { await machineConnection.send("M5"); } catch { /* port may be gone */ }
-      try { await machineConnection.softReset(); } catch { /* port may be gone */ }
-      addConsoleLine("Job aborted", "error");
-    } else {
+    const elapsed = job.estimatedTimeSecs * (jobProgress || 1);
+    if (endState === "complete") {
       addConsoleLine("Job complete", "info");
       setStatusMessage(`Job complete -- ${formatTime(elapsed)}`);
+    } else if (endState === "alarm") {
+      addConsoleLine(
+        "Job stopped -- machine alarm (laser already off; unlock to continue)",
+        "error",
+      );
+    } else {
+      // Safety volley: ensure laser is off. SKIPPED when jobRunning is already
+      // false — the user pressed STOP and emergencyStop ran its own sequence; a
+      // second M5+0x18 would push another reset banner into the buffer.
+      if (useStore.getState().jobRunning) {
+        try { await machineConnection.send("M5"); } catch { /* port may be gone */ }
+        try { await machineConnection.softReset(); } catch { /* port may be gone */ }
+      }
+      addConsoleLine("Job aborted", "error");
     }
 
     setJobRunning(false);
@@ -467,7 +439,12 @@ export function MachinePanel() {
               disabled={!machineConnected || machineState !== "idle" || jobRunning}
               onClick={async () => {
                 const sVal = Math.round(5 / 1000 * useStore.getState().grblSValueMax);
-                await machineConnection.send(`M3 S${sVal}\nG4 P0.5\nM5`);
+                // F17 Fix 2.3: three awaited sends. A single 3-line send's pump
+                // stops at the FIRST ok, leaving two unread acks to misattribute
+                // to later commands.
+                await machineConnection.send(`M3 S${sVal}`);
+                await machineConnection.send("G4 P0.5");
+                await machineConnection.send("M5");
               }}
             />
             <ActionButton label="Set Origin" color="var(--text-secondary)" onClick={() => machineConnection.setOrigin()} />
@@ -613,10 +590,28 @@ export function MachinePanel() {
           )}
 
           {/* Start / Frame / Stop controls */}
+          {(() => {
+            const startGate = canStartJob({
+              machineConnected, jobRunning, gcodeResult, gcodeStale,
+              workspaceWidth, workspaceHeight,
+            });
+            // FRAME contract change (F15): framing traces the true G-code
+            // extents, so generated, non-stale G-code is now a prerequisite
+            // (it used to work from design bounds alone).
+            const frameDisabled =
+              !machineConnected || machineState !== "idle" || jobRunning ||
+              !gcodeResult || gcodeStale;
+            const frameHint = !gcodeResult
+              ? "Generate G-code first"
+              : gcodeStale
+                ? "Design changed -- regenerate G-code"
+                : undefined;
+            return (
           <div style={{ display: "flex", gap: "4px" }}>
             <button
               onClick={handleStartJob}
-              disabled={!machineConnected || jobRunning || !gcodeResult}
+              disabled={!startGate.ok}
+              title={startGate.reason}
               style={{
                 flex: 1,
                 padding: "6px",
@@ -624,31 +619,31 @@ export function MachinePanel() {
                 border: "none",
                 fontSize: "11px",
                 fontWeight: 700,
-                cursor: machineConnected && gcodeResult && !jobRunning ? "pointer" : "not-allowed",
+                cursor: startGate.ok ? "pointer" : "not-allowed",
                 background: "rgba(74,226,138,0.2)",
                 color: "var(--success)",
-                opacity: !machineConnected || jobRunning || !gcodeResult ? 0.4 : 1,
+                opacity: startGate.ok ? 1 : 0.4,
               }}
             >
               START
             </button>
             <button
               onClick={async () => {
-                const bounds = getDesignBounds(useStore.getState().objects);
-                if (!bounds) {
-                  addConsoleLine("No objects to frame", "error");
+                // Machine-frame moves extents — the old design→machine Y-flip
+                // is deliberately DELETED, not ported: moves[] is already
+                // machine-frame, flipping again would trace a mirrored rect.
+                const moves = useStore.getState().gcodeResult?.moves ?? [];
+                const targets = frameTargets(moves);
+                if (!targets) {
+                  addConsoleLine("Nothing to cut -- no moves in the generated G-code", "error");
                   return;
                 }
-                const { workspaceHeight } = useStore.getState();
-                const y0 = workspaceHeight - bounds.maxY;
-                const y1 = workspaceHeight - bounds.minY;
-                await machineConnection.send(`G0 X${bounds.minX.toFixed(3)} Y${y0.toFixed(3)}`);
-                await machineConnection.send(`G0 X${bounds.maxX.toFixed(3)} Y${y0.toFixed(3)}`);
-                await machineConnection.send(`G0 X${bounds.maxX.toFixed(3)} Y${y1.toFixed(3)}`);
-                await machineConnection.send(`G0 X${bounds.minX.toFixed(3)} Y${y1.toFixed(3)}`);
-                await machineConnection.send(`G0 X${bounds.minX.toFixed(3)} Y${y0.toFixed(3)}`);
+                for (const t of targets) {
+                  await machineConnection.send(`G0 X${t.x.toFixed(3)} Y${t.y.toFixed(3)}`);
+                }
               }}
-              disabled={!machineConnected || machineState !== "idle" || jobRunning}
+              disabled={frameDisabled}
+              title={frameHint}
               style={{
                 flex: 1,
                 padding: "6px",
@@ -656,10 +651,10 @@ export function MachinePanel() {
                 border: "1px solid var(--accent)",
                 fontSize: "11px",
                 fontWeight: 700,
-                cursor: machineConnected && machineState === "idle" && !jobRunning ? "pointer" : "not-allowed",
+                cursor: frameDisabled ? "not-allowed" : "pointer",
                 background: "rgba(74,144,226,0.15)",
                 color: "var(--accent)",
-                opacity: !machineConnected || machineState !== "idle" || jobRunning ? 0.4 : 1,
+                opacity: frameDisabled ? 0.4 : 1,
               }}
             >
               FRAME
@@ -699,6 +694,8 @@ export function MachinePanel() {
               STOP
             </button>
           </div>
+            );
+          })()}
         </div>
       )}
     </div>
