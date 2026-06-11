@@ -11,6 +11,32 @@ interface PortInfo {
   product: string | null;
 }
 
+/** Mirror of Rust `SendOutcome`: the command's own response lines plus
+ * console-meaningful lines drained from the buffer BEFORE the command was
+ * written (stale banner/ALARM debris — never attributed to this command). */
+interface SendOutcome {
+  responses: string[];
+  drained: string[];
+}
+
+/** Mirror of Rust `StatusOutcome`: `status` is `""` when the command lock was
+ * busy (a pump is mid-line) or the bounded read expired — an Ok-typed sentinel,
+ * not a failure. `events` carries ALARM/[MSG:] lines skipped on the way. */
+interface StatusOutcome {
+  status: string;
+  events: string[];
+}
+
+/** Surface an unsolicited protocol line (drained debris or status junk-skip)
+ * with honest styling: an idle-time hard-limit ALARM must reach the console
+ * (and thus the alarm panel's code parser) — never silently vanish. */
+function surfaceUnsolicited(line: string): void {
+  const store = useStore.getState();
+  if (line.startsWith("ALARM")) store.addConsoleLine(line, "error");
+  else if (line.startsWith("[MSG:")) store.addConsoleLine(line, "info");
+  else store.addConsoleLine(line, "received");
+}
+
 const LAST_PORT_KEY = "kerf-last-port";
 const LAST_BAUD_KEY = "kerf-last-baud";
 let statusPollInterval: ReturnType<typeof setInterval> | null = null;
@@ -78,6 +104,28 @@ export const machineConnection = {
         jobPollingSuspended = state.jobRunning;
       });
 
+      // F14: the post-connect settings sequence lives HERE so it is structurally
+      // impossible to connect without it. autoConnect used to skip it entirely:
+      // sValueMax stayed 1000 on a $30=255 machine (4x overpower), no laser-mode
+      // warning, default workspace. Both entry paths now produce identical output.
+      const settingsVerified = await this.queryGrblSettings();
+      if (settingsVerified) {
+        // $32 warning ONLY on a successful $$ parse: grblLaserMode defaults
+        // false, so warning off the default after a failed query would be a
+        // spurious alarm.
+        if (!useStore.getState().grblLaserMode) {
+          store.addConsoleLine(
+            "GRBL laser mode ($32) is disabled. Laser will not auto-zero at speed changes. Run $32=1 in the console to enable.",
+            "warning",
+          );
+        }
+      } else {
+        store.addConsoleLine(
+          "Machine settings unverified -- using defaults. Run $$ in the console to retry.",
+          "warning",
+        );
+      }
+
       return response;
     } catch (e) {
       const msg = String(e);
@@ -111,12 +159,36 @@ export const machineConnection = {
     const store = useStore.getState();
     try {
       store.addConsoleLine(command, "sent");
-      const responses = await invoke<string[]>("serial_send", { command });
-      for (const r of responses) {
-        const type = r.startsWith("error:") ? "error" as const : "received" as const;
+      const outcome = await invoke<SendOutcome>("serial_send", { command });
+      for (const d of outcome.drained) surfaceUnsolicited(d);
+      let lastStatusReport: string | null = null;
+      for (const r of outcome.responses) {
+        if (r.startsWith("<")) {
+          // In-pump status reports: filter from console (a 60s segment would
+          // flood it at ~1/sec) — keep the most recent for the DRO below.
+          lastStatusReport = r;
+          continue;
+        }
+        // F17 Fix 2.2: ALARM lines are protocol errors, not "received" chatter.
+        const type = r.startsWith("error:") || r.startsWith("ALARM")
+          ? "error" as const
+          : "received" as const;
         store.addConsoleLine(r, type);
       }
-      return responses;
+      // In-pump reports refresh POSITION ONLY — never machineState: a stale
+      // <Hold…> consumed after resume would re-arm the job loop's pause-wait
+      // with polling suspended (permanently wedged job).
+      if (lastStatusReport) {
+        const m = lastStatusReport.match(/MPos:([-\d.]+),([-\d.]+),([-\d.]+)/);
+        if (m) {
+          store.setMachinePosition({
+            x: parseFloat(m[1]),
+            y: parseFloat(m[2]),
+            z: parseFloat(m[3]),
+          });
+        }
+      }
+      return outcome.responses;
     } catch (e) {
       const msg = String(e);
       store.addConsoleLine(`Send failed: ${msg}`, "error");
@@ -132,14 +204,27 @@ export const machineConnection = {
     }
   },
 
+  /** One bounded status query. Returns the raw `<…>` report, or `""` when the
+   * command lock was busy or the bounded read expired (Ok-typed sentinel from
+   * Rust — never a thrown error, so it can never feed the 3-strike counter). */
+  async getStatusReport(): Promise<string> {
+    const outcome = await invoke<StatusOutcome>("serial_get_status");
+    for (const e of outcome.events) surfaceUnsolicited(e);
+    return outcome.status;
+  },
+
   async pollStatus(): Promise<void> {
     const store = useStore.getState();
     if (!store.machineConnected) return;
     if (jobPollingSuspended) return;
 
     try {
-      const status = await invoke<string>("serial_get_status");
+      const status = await this.getStatusReport();
+      // Busy/none sentinel included: the strike counter RESETS on it — the
+      // command lock being held (e.g. a 30s $H pump) proves the port path is
+      // alive; a genuinely dead port surfaces as a write failure (rejection).
       consecutivePollFailures = 0;
+      if (!status) return;
       // Parse GRBL status: <Idle|MPos:0.000,0.000,0.000|FS:0,0>
       const match = status.match(/<(\w+)\|MPos:([-\d.]+),([-\d.]+),([-\d.]+)/);
       if (match) {
@@ -201,38 +286,89 @@ export const machineConnection = {
     useStore.getState().setMachineState("run");
   },
 
+  /**
+   * Emergency stop — F13 resequenced (safety-critical).
+   *
+   * Sequence: `!` → ~100ms settle → `0x18` → bounded re-poll → conditional M5.
+   * The OLD order (`!` → M5 → `0x18`) deadlocks under the read pump: feed hold
+   * freezes the planner, the in-flight line's `ok` never arrives, M5 queues on
+   * the command lock forever, `0x18` never sends — laser stays on under
+   * M3/$32=0. Both bytes go via the REALTIME handle so they reach the wire
+   * while a pump holds the command lock; the reset banner terminates the pump.
+   *
+   * M5 fires ONLY when the re-poll RETURNED an actual non-alarm `<…>` report.
+   * Busy sentinel, no report, or alarm ⇒ skip it: the reset already
+   * de-energized the laser at firmware level, and M5 into a post-reset alarm
+   * earns a confusing error:9. Never key this off store.machineState — it is
+   * stale ("idle") during jobs because polling is suspended.
+   */
   async emergencyStop(): Promise<void> {
     const store = useStore.getState();
     store.addConsoleLine("Emergency stop initiated", "warning");
 
-    // 1. Feed hold -- decelerates and auto-zeros laser under M4
+    // 1. Feed hold -- bring motion to a controlled stop first (resetting during
+    //    active motion makes ALARM:3 + lost position the routine outcome).
     try { await this.sendByte(0x21); } catch { /* continue regardless */ }
 
-    // 2. Wait for deceleration
+    // 2. Deceleration settle.
     await new Promise((r) => setTimeout(r, 100));
 
-    // 3. Explicit M5 -- kills laser in both M3 and M4 modes
-    try { await this.send("M5"); } catch { /* continue regardless */ }
+    // 3. Soft reset -- de-energizes the laser at firmware level and aborts any
+    //    in-flight pump (banner terminal frees the command lock).
+    try { await this.sendByte(0x18); } catch { /* continue regardless */ }
 
-    // 4. Soft reset -- reinitialize controller
-    try {
-      await this.sendByte(0x18);
-      await this.pollStatus();
-    } catch { /* continue regardless */ }
+    // 4. Let GRBL's reboot window pass (it drops RX bytes while resetting),
+    //    then re-poll. Bounded in Rust -- can never hang mid-emergency.
+    await new Promise((r) => setTimeout(r, 200));
+    let report = "";
+    try { report = await this.getStatusReport(); } catch { /* port may be gone */ }
 
-    store.addConsoleLine("Emergency stop complete", "warning");
+    // Refresh DRO/state from the fresh post-reset report, if any.
+    const match = report.match(/<(\w+)\|MPos:([-\d.]+),([-\d.]+),([-\d.]+)/);
+    if (match) {
+      store.setMachineState(match[1].toLowerCase() as "idle" | "run" | "hold" | "alarm");
+      store.setMachinePosition({
+        x: parseFloat(match[2]),
+        y: parseFloat(match[3]),
+        z: parseFloat(match[4]),
+      });
+    }
+
+    // 5. Conditional M5, keyed ONLY off the returned report.
+    const reportedState = report.match(/^<(\w+)/)?.[1]?.toLowerCase();
+    if (reportedState && reportedState !== "alarm") {
+      try { await this.send("M5"); } catch { /* port may be gone */ }
+      store.addConsoleLine("Emergency stop complete", "warning");
+    } else if (reportedState === "alarm") {
+      // Expected aftermath of a mid-motion reset; the alarm panel takes over.
+      store.addConsoleLine(
+        "Machine in alarm after stop -- laser off, unlock to continue",
+        "warning",
+      );
+    } else {
+      store.addConsoleLine(
+        "Emergency stop complete -- machine reset, laser de-energized",
+        "warning",
+      );
+    }
   },
 
-  async queryGrblSettings(): Promise<void> {
+  /** Query $$ and apply $30/$32/$120-131. Returns true when the response
+   * parsed as settings (at least one `$N=V` line) — the $32 warning and the
+   * "unverified" fallback in connect() key off this. */
+  async queryGrblSettings(): Promise<boolean> {
     const store = useStore.getState();
     try {
       store.addConsoleLine("$$", "sent");
-      const responses = await invoke<string[]>("serial_send", { command: "$$" });
+      const outcome = await invoke<SendOutcome>("serial_send", { command: "$$" });
+      for (const d of outcome.drained) surfaceUnsolicited(d);
+      let parsedAny = false;
       let accelX = 0, accelY = 0;
       let maxTravelX = 0, maxTravelY = 0;
-      for (const line of responses) {
+      for (const line of outcome.responses) {
         const match = line.match(/^\$(\d+)=([\d.]+)/);
         if (match) {
+          parsedAny = true;
           const key = parseInt(match[1], 10);
           const value = parseFloat(match[2]);
           if (key === 30) {
@@ -260,8 +396,10 @@ export const machineConnection = {
         store.setWorkspaceSize(maxTravelX, maxTravelY);
         store.addConsoleLine(`Workspace set to ${maxTravelX}×${maxTravelY}mm from machine settings`, "info");
       }
+      return parsedAny;
     } catch (e) {
       store.addConsoleLine(`Failed to query GRBL settings: ${e}`, "error");
+      return false;
     }
   },
 };
