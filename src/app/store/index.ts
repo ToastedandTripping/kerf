@@ -40,7 +40,7 @@ function pushObjectsUndo(
   afterSelectedIds: string[],
   pushCmd: (cmd: import("./storeTypes").Command) => void,
   getObjects: () => DesignObject[],
-  setState: (patch: object) => void,
+  setState: import("./storeTypes").StoreSet,
 ) {
   const stripImageData = (objects: DesignObject[]): DesignObject[] =>
     objects.map((o) => o.imageData ? { ...o, imageData: "__UNDO_REF__" } : o);
@@ -55,22 +55,39 @@ function pushObjectsUndo(
     for (const o of live) { if (o.imageData && o.imageData !== "__UNDO_REF__") imageMap.set(o.id, o.imageData); }
     return snapshot.map((o) => o.imageData === "__UNDO_REF__" ? { ...o, imageData: imageMap.get(o.id) } : o);
   };
+  // F15: undo/redo restores must re-stale G-code — generate → undo a move →
+  // START would otherwise cut the pre-undo design through a green gate.
   pushCmd({
     type,
     undo: () => {
       const restored = restoreImageData(beforeSnapshot);
-      setState({ objects: restored, objectsById: buildObjectsById(restored), ...selectionPatch(beforeSelectedIds), isDirty: true });
+      setState((state) => ({
+        objects: restored,
+        objectsById: buildObjectsById(restored),
+        ...selectionPatch(beforeSelectedIds),
+        isDirty: true,
+        gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
+      }));
     },
     redo: () => {
       const restored = restoreImageData(afterSnapshot);
-      setState({ objects: restored, objectsById: buildObjectsById(restored), ...selectionPatch(afterSelectedIds), isDirty: true });
+      setState((state) => ({
+        objects: restored,
+        objectsById: buildObjectsById(restored),
+        ...selectionPatch(afterSelectedIds),
+        isDirty: true,
+        gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
+      }));
     },
   });
 }
 
 // --- B4.3: Shared z-order wrapper ---
-// Owns withUndo + findIndex + applyObjects bundle; caller supplies 1-2 lines of index math.
+// Owns withUndo + findIndex + its own INLINE objects patch (it does NOT route
+// through applyObjects); caller supplies 1-2 lines of index math.
 // mutate returns new array or null (null = no-op, withUndo guard ensures no command pushed).
+// F15: z-order stales G-code via the explicit ternary below — array order feeds
+// within-layer emission order (toCutObjects' stable sort), so reordering changes the cut.
 function withZOrder(
   id: string,
   get: import("./storeTypes").StoreGet,
@@ -82,7 +99,12 @@ function withZOrder(
       const idx = state.objects.findIndex((o) => o.id === id);
       const result = mutate([...state.objects], idx);
       if (result === null) return state;
-      return { objects: result, objectsById: buildObjectsById(result), isDirty: true };
+      return {
+        objects: result,
+        objectsById: buildObjectsById(result),
+        isDirty: true,
+        gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
+      };
     });
   });
 }
@@ -192,11 +214,15 @@ export const useStore = create<AppState>((set, get) => ({
   layers: DEFAULT_LAYERS,
   activeLayerIndex: 0,
   setActiveLayerIndex: (index) => set({ activeLayerIndex: index }),
+  // F15: layer params (power/speed/mode/passes…) feed G-code, so every layer
+  // write stales it. Name/color edits over-trigger; accepted — safe direction,
+  // not worth a field carve-out.
   updateLayer: (index, partial) =>
     set((state) => ({
       layers: state.layers.map((l) =>
         l.index === index ? { ...l, ...partial } : l
       ),
+      gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
     })),
   reorderLayers: (fromIndex, toIndex) =>
     set((state) => {
@@ -216,8 +242,17 @@ export const useStore = create<AppState>((set, get) => ({
         layerIndex: indexMap.get(o.layerIndex) ?? o.layerIndex,
       }));
       const activeLayerIndex = indexMap.get(state.activeLayerIndex) ?? state.activeLayerIndex;
-      return { layers: reindexed, objects, objectsById: buildObjectsById(objects), activeLayerIndex, isDirty: true };
+      return {
+        layers: reindexed,
+        objects,
+        objectsById: buildObjectsById(objects),
+        activeLayerIndex,
+        isDirty: true,
+        gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
+      };
     }),
+  // F15: sub-layer writers do NOT route through updateLayer — each is a direct
+  // generation-input writer and stales G-code itself.
   addSubLayer: (layerIndex) =>
     set((state) => ({
       layers: state.layers.map((l) => {
@@ -234,6 +269,7 @@ export const useStore = create<AppState>((set, get) => ({
         };
         return { ...l, subLayers: [...(l.subLayers || []), newSub] };
       }),
+      gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
     })),
   addSubLayers: (layerIndex, subs) =>
     set((state) => ({
@@ -251,6 +287,7 @@ export const useStore = create<AppState>((set, get) => ({
         }));
         return { ...l, subLayers: [...(l.subLayers || []), ...newSubs] };
       }),
+      gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
     })),
   removeSubLayer: (layerIndex, subLayerId) =>
     set((state) => ({
@@ -259,6 +296,7 @@ export const useStore = create<AppState>((set, get) => ({
         const filtered = (l.subLayers || []).filter((s) => s.id !== subLayerId);
         return { ...l, subLayers: filtered.length > 0 ? filtered : undefined };
       }),
+      gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
     })),
   updateSubLayer: (layerIndex, subLayerId, changes) =>
     set((state) => ({
@@ -271,6 +309,7 @@ export const useStore = create<AppState>((set, get) => ({
           ),
         };
       }),
+      gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
     })),
 
   // Camera
@@ -281,8 +320,18 @@ export const useStore = create<AppState>((set, get) => ({
   // Workspace
   workspaceWidth: 500,
   workspaceHeight: 300,
+  // F15: workspace size is the Y-flip basis for G-code. Stales on VALUE CHANGE
+  // only — queryGrblSettings re-sets it on every connect, and a same-value
+  // write must not force a pointless regenerate.
   setWorkspaceSize: (w, h) =>
-    set({ workspaceWidth: w, workspaceHeight: h }),
+    set((state) => ({
+      workspaceWidth: w,
+      workspaceHeight: h,
+      gcodeStale:
+        (w !== state.workspaceWidth || h !== state.workspaceHeight) && state.gcodeResult !== null
+          ? true
+          : state.gcodeStale,
+    })),
   gridVisible: true,
   setGridVisible: (v) => set({ gridVisible: v }),
   snapToGrid: true,
@@ -422,7 +471,14 @@ export const useStore = create<AppState>((set, get) => ({
   setMachineConnected: (connected) => set({ machineConnected: connected }),
   setMachineState: (state) => set({ machineState: state }),
   setMachinePosition: (pos) => set({ machinePosition: pos }),
-  setGrblSValueMax: (v) => set({ grblSValueMax: v }),
+  // F15: S-values are baked into generated G-code (different $30 machine =
+  // stale). Value-change only — re-set on every connect by queryGrblSettings.
+  setGrblSValueMax: (v) =>
+    set((state) => ({
+      grblSValueMax: v,
+      gcodeStale:
+        v !== state.grblSValueMax && state.gcodeResult !== null ? true : state.gcodeStale,
+    })),
   setGrblLaserMode: (v) => set({ grblLaserMode: v }),
   setGrblAccel: (x, y) => set({ grblAccelX: x, grblAccelY: y }),
 
@@ -577,7 +633,13 @@ export const useStore = create<AppState>((set, get) => ({
 
   // Start corner
   startCorner: "bottomLeft",
-  setStartCorner: (corner) => set({ startCorner: corner, isDirty: true }),
+  // F15: start corner feeds the G-code optimizer (cut order), so it stales.
+  setStartCorner: (corner) =>
+    set((state) => ({
+      startCorner: corner,
+      isDirty: true,
+      gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
+    })),
 
   // Project notes
   projectNotes: "",
