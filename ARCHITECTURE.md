@@ -61,7 +61,9 @@ src/
       connection.ts          — Serial port connect/disconnect, GRBL status polling,
                                settings query ($30/$32/$120-131), jog, e-stop
       gcodeGen.ts            — Frontend G-code orchestrator, calls Rust backend via
-                               Tauri invoke, JS fallback, layer-order sorting
+                               Tauri invoke (hard-fail on engine error — no JS
+                               fallback), bezier sampling at serialization,
+                               layer-order sorting
       knownDevices.ts        — USB VID/PID table for auto-detect priority sorting
       __tests__/             — G-code generation tests
     tools/
@@ -70,7 +72,10 @@ src/
     constants.ts             — Shared constants (PX_PER_MM)
     fileDrop.ts              — Drag-and-drop file handler (SVG/DXF/image/PDF detection)
     geometry/
-      index.ts               — Shared geometry utilities (offsetRingByDistance)
+      index.ts               — Shared geometry utilities (offsetRingByDistance,
+                               adaptive bezier sampler + CURVE_CHORD_TOLERANCE_MM,
+                               points/transform invariant helpers, composeGroupChild,
+                               buildGroupObject)
     materials.ts             — 18 default MaterialPreset entries
     nesting.ts               — Skyline Bottom-Left-Fill bin-packing algorithm
     recentFiles.ts           — localStorage-backed recent file list
