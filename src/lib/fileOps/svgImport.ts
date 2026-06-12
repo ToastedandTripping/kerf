@@ -1,7 +1,54 @@
 import type { PathPoint } from "../../app/types";
 
-export function parsePathD(d: string): PathPoint[] {
-  const points: PathPoint[] = [];
+/** One subpath of a parsed `d` attribute: own points, own closed flag (W1c/F20). */
+export interface ParsedSubpath {
+  points: PathPoint[];
+  closed: boolean;
+}
+
+/**
+ * Parse an SVG path `d` into SUBPATHS (W1c / F20). Pre-fix, every subpath was
+ * concatenated into one points array, so `M..Z M..Z` (donut, glyph, compound
+ * path) became one connected polyline — render and cut drew a spurious bridge
+ * segment from each subpath's end to the next's start, CUT through the
+ * workpiece.
+ *
+ * The split is IN-PARSER and STATE-PRESERVING (critic-pinned): SVG pen state
+ * crosses subpath boundaries — `Z` resets the pen to the CURRENT subpath's
+ * start, so a relative `m` after `Z` chains off the PREVIOUS subpath's start
+ * point. A stateless split-on-M wrapper would scatter relative-coordinate
+ * subpaths while absolute-M tests stayed green. Only the points-array
+ * segmentation changes here; the existing pen/reflection state machine is
+ * untouched (S/T reflection deliberately re-anchors at every M/m and
+ * non-curve command — that is spec behavior, NOT state to carry across).
+ *
+ * Pinned behaviors:
+ *  - Z closes the CURRENT subpath only and flushes it.
+ *  - A drawing command after Z without an intervening M starts a NEW subpath
+ *    anchored at the just-closed subpath's start point (sx,sy) — matching the
+ *    pen-state semantics; it never reopens the closed subpath.
+ *  - Leading non-M commands parse from (0,0) without pushing an origin point
+ *    (pre-existing behavior, preserved).
+ *  - Degenerate subpaths (single stray M point) are returned as-is; callers
+ *    apply their own ≥2-point filter.
+ *
+ * LEGACY objects cannot be migrated: pre-fix imports concatenated subpaths
+ * into one stored points[] — the M-boundaries are destroyed at import and a
+ * large jump between points is not provably a boundary (glyphs legitimately
+ * contain long straight segments). Pre-fix imported compound paths keep the
+ * bridge defect; RE-IMPORT to repair.
+ */
+export function parsePathD(d: string): ParsedSubpath[] {
+  const subpaths: ParsedSubpath[] = [];
+  let points: PathPoint[] = [];
+  let closed = false;
+  /** Set by Z; a following drawing command without M anchors a new subpath at (sx,sy). */
+  let justClosed = false;
+  const flush = (): void => {
+    if (points.length > 0) subpaths.push({ points, closed });
+    points = [];
+    closed = false;
+  };
   const tokens = tokenizePath(d);
   let cx = 0, cy = 0;
   let sx = 0, sy = 0;
@@ -20,8 +67,16 @@ export function parsePathD(d: string): PathPoint[] {
       i++;
     }
 
+    // Post-Z continuation: a drawing command (not M/m/Z/z) after Z starts a
+    // new subpath anchored at the closed subpath's start point.
+    if (justClosed && points.length === 0 && cmd.length === 1 && "LlHhVvCcSsQqTtAa".indexOf(cmd) !== -1) {
+      points.push({ x: sx, y: sy });
+    }
+
     switch (cmd) {
       case "M": {
+        flush();
+        justClosed = false;
         cx = numT(tokens, i); cy = numT(tokens, i + 1); i += 2;
         sx = cx; sy = cy;
         lastCx2 = cx; lastCy2 = cy; // SVG spec: S/T after non-curve reflects through current point
@@ -30,6 +85,8 @@ export function parsePathD(d: string): PathPoint[] {
         break;
       }
       case "m": {
+        flush();
+        justClosed = false;
         cx += numT(tokens, i); cy += numT(tokens, i + 1); i += 2;
         sx = cx; sy = cy;
         lastCx2 = cx; lastCy2 = cy;
@@ -218,6 +275,9 @@ export function parsePathD(d: string): PathPoint[] {
       case "z": {
         cx = sx; cy = sy;
         lastCx2 = cx; lastCy2 = cy; // non-curve: reset S/T reflection anchor
+        closed = true;
+        flush();
+        justClosed = true;
         lastCmd = cmd;
         break;
       }
@@ -226,7 +286,8 @@ export function parsePathD(d: string): PathPoint[] {
     }
   }
 
-  return points;
+  flush();
+  return subpaths;
 }
 
 function tokenizePath(d: string): string[] {

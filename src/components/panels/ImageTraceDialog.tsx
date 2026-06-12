@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useStore, generateId } from "../../app/store";
 import { parsePathD } from "../../lib/fileOps";
-import { pointsBBox } from "../../lib/geometry";
+import { pointsBBox, buildGroupObject } from "../../lib/geometry";
 import type { DesignObject, PathPoint, Transform } from "../../app/types";
 
 interface Props {
@@ -32,8 +32,6 @@ export function buildTracedPathObjects(
   for (const pathEl of pathElements) {
     const d = pathEl.getAttribute("d");
     if (!d) continue;
-    const rawPoints = parsePathD(d);
-    if (rawPoints.length < 2) continue;
 
     let offsetX = 0, offsetY = 0;
     const transformAttr = pathEl.getAttribute("transform");
@@ -42,36 +40,51 @@ export function buildTracedPathObjects(
       if (m) { offsetX = parseFloat(m[1]) || 0; offsetY = parseFloat(m[2]) || 0; }
     }
 
-    const scaledPoints: PathPoint[] = rawPoints.map((p) => {
-      const px = p.x + offsetX, py = p.y + offsetY;
-      const scaled: PathPoint = {
-        x: imgT.x + (px / widthPx) * imgT.width,
-        y: imgT.y + (py / heightPx) * imgT.height,
-      };
-      if (p.handleIn) {
-        scaled.handleIn = {
-          x: imgT.x + ((p.handleIn.x + offsetX) / widthPx) * imgT.width,
-          y: imgT.y + ((p.handleIn.y + offsetY) / heightPx) * imgT.height,
+    // W1c (F20): vtracer emits compound `d` per cluster (M..Z M..Z for shapes
+    // with holes) — split into per-contour objects; group ONLY when more than
+    // one survives (detailed traces produce many single-subpath paths — don't
+    // wrap each in a one-child group). Per-subpath closed flags replace the
+    // old trailing-Z regex.
+    const contourObjects: DesignObject[] = [];
+    for (const sub of parsePathD(d)) {
+      if (sub.points.length < 2) continue;
+      const scaledPoints: PathPoint[] = sub.points.map((p) => {
+        const px = p.x + offsetX, py = p.y + offsetY;
+        const scaled: PathPoint = {
+          x: imgT.x + (px / widthPx) * imgT.width,
+          y: imgT.y + (py / heightPx) * imgT.height,
         };
-      }
-      if (p.handleOut) {
-        scaled.handleOut = {
-          x: imgT.x + ((p.handleOut.x + offsetX) / widthPx) * imgT.width,
-          y: imgT.y + ((p.handleOut.y + offsetY) / heightPx) * imgT.height,
-        };
-      }
-      return scaled;
-    });
+        if (p.handleIn) {
+          scaled.handleIn = {
+            x: imgT.x + ((p.handleIn.x + offsetX) / widthPx) * imgT.width,
+            y: imgT.y + ((p.handleIn.y + offsetY) / heightPx) * imgT.height,
+          };
+        }
+        if (p.handleOut) {
+          scaled.handleOut = {
+            x: imgT.x + ((p.handleOut.x + offsetX) / widthPx) * imgT.width,
+            y: imgT.y + ((p.handleOut.y + offsetY) / heightPx) * imgT.height,
+          };
+        }
+        return scaled;
+      });
 
-    const bb = pointsBBox(scaledPoints);
+      const bb = pointsBBox(scaledPoints);
 
-    prepared.push({
-      id: generateId(), type: "path", name: "Traced path",
-      transform: { x: bb.x, y: bb.y, width: bb.width, height: bb.height, rotation: 0, scaleX: 1, scaleY: 1 },
-      layerIndex, visible: true, locked: false,
-      fill: null, stroke: layerColor, strokeWidth: 1, opacity: 1,
-      points: scaledPoints, closed: /[Zz]\s*$/.test(d.trim()),
-    });
+      contourObjects.push({
+        id: generateId(), type: "path", name: "Traced path",
+        transform: { x: bb.x, y: bb.y, width: bb.width, height: bb.height, rotation: 0, scaleX: 1, scaleY: 1 },
+        layerIndex, visible: true, locked: false,
+        fill: null, stroke: layerColor, strokeWidth: 1, opacity: 1,
+        points: scaledPoints, closed: sub.closed,
+      });
+    }
+
+    if (contourObjects.length === 1) {
+      prepared.push(contourObjects[0]);
+    } else if (contourObjects.length > 1) {
+      prepared.push(buildGroupObject(contourObjects, generateId(), "Traced path", layerIndex));
+    }
   }
   return prepared;
 }

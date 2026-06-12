@@ -338,6 +338,60 @@ export function composeGroupChild(child: DesignObject, group: DesignObject): Des
   };
 }
 
+/**
+ * Build a group DesignObject from world-frame children (W1c — the ONE group
+ * construction, extracted from groupSelected's rebase so importers share it).
+ *
+ * W1b convention: child POINTS become group-local alongside the transform
+ * re-base. movePartial is PURE (fresh points arrays) — an in-place re-base
+ * would corrupt undo before-snapshots that alias the same arrays. A child
+ * that is itself a group only re-bases its own transform — its children are
+ * already local to it.
+ *
+ * Importers must call THIS (never groupSelected — selection-coupled and
+ * withUndo-wrapped, which would push a second undo entry — and never a
+ * hand-rolled world-frame-children group, which flatten would
+ * double-translate while every per-child invariant stays green).
+ *
+ * The id is a parameter so this module stays store-free (generateId lives in
+ * the store layer); name and layerIndex are parameters because groupSelected's
+ * `Group ${n}` naming needs caller context importers lack. PURE.
+ */
+export function buildGroupObject(
+  children: DesignObject[],
+  id: string,
+  name: string,
+  layerIndex: number,
+): DesignObject {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const obj of children) {
+    minX = Math.min(minX, obj.transform.x);
+    minY = Math.min(minY, obj.transform.y);
+    maxX = Math.max(maxX, obj.transform.x + obj.transform.width);
+    maxY = Math.max(maxY, obj.transform.y + obj.transform.height);
+  }
+
+  const rebased = children.map((o) => ({
+    ...o,
+    ...movePartial(o, o.transform.x - minX, o.transform.y - minY),
+  }));
+
+  return {
+    id,
+    type: "group",
+    name,
+    transform: {
+      x: minX, y: minY,
+      width: maxX - minX, height: maxY - minY,
+      rotation: 0, scaleX: 1, scaleY: 1,
+    },
+    layerIndex,
+    visible: true, locked: false,
+    fill: null, stroke: "#ffffff", strokeWidth: 0, opacity: 1,
+    children: rebased,
+  };
+}
+
 // --- W1c (F2): adaptive bezier sampling for G-code serialization ---
 
 /** Chord tolerance (mm) for adaptive bezier flattening at G-code time.
