@@ -306,7 +306,12 @@ async function saveToPath(path: string) {
  *    the depth-1 rebase silently shifts every deeper grandchild on load).
  *    No extra bake is needed for legacy ROTATED groups: the flatten rotates
  *    about the group's world center at render time either way, so the plain
- *    rebase alone preserves rendered truth.
+ *    rebase alone preserves rendered truth. That equivalence is exact only at
+ *    depth 1 — for a grandchild at depth ≥ 2 under a ROTATED outer group, this
+ *    translation-only ancestor-origin accumulation is an approximation, because
+ *    the new flatten composes inner-group origins THROUGH the outer rotation
+ *    (mitigated: nested groups are invisible in today's Viewport, so the legacy
+ *    population is near-nil; a fixture lands in a later wave).
  *  - rotation == 0: transform := pointsBBox (zero visual change; repairs the
  *    desync every failed legacy move left behind). Idempotent.
  *  - rotation ≠ 0 AND desynced beyond ε: bake the rotation into the points
