@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useStore, generateId } from "../../app/store";
 import { parsePathD } from "../../lib/fileOps";
+import { pointsBBox } from "../../lib/geometry";
 import type { DesignObject, PathPoint } from "../../app/types";
 
 interface Props {
@@ -302,6 +303,10 @@ export function SvgImportDialog({ open, svgContent, onClose }: Props) {
   );
 }
 
+// Test-only export — exercises the production SVG import pipeline (parse →
+// walk → create objects in the store) without driving the dialog UI.
+export { importSvgWithLayers as _testImportSvgWithLayers };
+
 // SVG import with layer assignment based on color mapping
 function getViewBoxOffset(svg: SVGSVGElement): { x: number; y: number } {
   const vb = svg.getAttribute("viewBox");
@@ -531,9 +536,10 @@ function parseSvgElementForImport(
         if (p.handleOut) { const ho = applyMatrix(matrix, p.handleOut.x, p.handleOut.y); result.handleOut = { x: ho.x*scale, y: ho.y*scale }; }
         return result;
       });
-      const xs = points.map(p => p.x), ys = points.map(p => p.y);
-      const minX = Math.min(...xs), minY = Math.min(...ys), maxX = Math.max(...xs), maxY = Math.max(...ys);
-      return { ...base, type: "path", transform: { x: minX, y: minY, width: (maxX-minX)||1, height: (maxY-minY)||1, rotation: 0, scaleX: 1, scaleY: 1 }, points, closed: /[Zz]\s*$/.test(d.trim()) };
+      // W1b: anchors-only loop bbox; no ||1 clamp (true bbox at birth — the
+      // hitTest ε band keeps collinear imports clickable)
+      const bb = pointsBBox(points);
+      return { ...base, type: "path", transform: { x: bb.x, y: bb.y, width: bb.width, height: bb.height, rotation: 0, scaleX: 1, scaleY: 1 }, points, closed: /[Zz]\s*$/.test(d.trim()) };
     }
     case "text": {
       const x = n(el, "x"), y = n(el, "y");

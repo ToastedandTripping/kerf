@@ -2,11 +2,78 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useStore, generateId } from "../../app/store";
 import { parsePathD } from "../../lib/fileOps";
-import type { DesignObject, PathPoint } from "../../app/types";
+import { pointsBBox } from "../../lib/geometry";
+import type { DesignObject, PathPoint, Transform } from "../../app/types";
 
 interface Props {
   open: boolean;
   onClose: () => void;
+}
+
+/**
+ * Build path DesignObjects from a trace result's SVG — the production object
+ * construction for the trace creator (exported so the W1b invariant sweep can
+ * exercise it without the Rust tracer). Anchors-only loop bbox, no ||1 clamp:
+ * traced objects are born with transform ≡ pointsBBox.
+ */
+export function buildTracedPathObjects(
+  svg: string,
+  imgT: Transform,
+  widthPx: number,
+  heightPx: number,
+  layerIndex: number,
+  layerColor: string,
+): DesignObject[] {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(svg, "image/svg+xml");
+  const pathElements = doc.querySelectorAll("path");
+
+  const prepared: DesignObject[] = [];
+  for (const pathEl of pathElements) {
+    const d = pathEl.getAttribute("d");
+    if (!d) continue;
+    const rawPoints = parsePathD(d);
+    if (rawPoints.length < 2) continue;
+
+    let offsetX = 0, offsetY = 0;
+    const transformAttr = pathEl.getAttribute("transform");
+    if (transformAttr) {
+      const m = transformAttr.match(/translate\(\s*([^,\s]+)\s*[,\s]\s*([^)]+)\)/);
+      if (m) { offsetX = parseFloat(m[1]) || 0; offsetY = parseFloat(m[2]) || 0; }
+    }
+
+    const scaledPoints: PathPoint[] = rawPoints.map((p) => {
+      const px = p.x + offsetX, py = p.y + offsetY;
+      const scaled: PathPoint = {
+        x: imgT.x + (px / widthPx) * imgT.width,
+        y: imgT.y + (py / heightPx) * imgT.height,
+      };
+      if (p.handleIn) {
+        scaled.handleIn = {
+          x: imgT.x + ((p.handleIn.x + offsetX) / widthPx) * imgT.width,
+          y: imgT.y + ((p.handleIn.y + offsetY) / heightPx) * imgT.height,
+        };
+      }
+      if (p.handleOut) {
+        scaled.handleOut = {
+          x: imgT.x + ((p.handleOut.x + offsetX) / widthPx) * imgT.width,
+          y: imgT.y + ((p.handleOut.y + offsetY) / heightPx) * imgT.height,
+        };
+      }
+      return scaled;
+    });
+
+    const bb = pointsBBox(scaledPoints);
+
+    prepared.push({
+      id: generateId(), type: "path", name: "Traced path",
+      transform: { x: bb.x, y: bb.y, width: bb.width, height: bb.height, rotation: 0, scaleX: 1, scaleY: 1 },
+      layerIndex, visible: true, locked: false,
+      fill: null, stroke: layerColor, strokeWidth: 1, opacity: 1,
+      points: scaledPoints, closed: /[Zz]\s*$/.test(d.trim()),
+    });
+  }
+  return prepared;
 }
 
 type TraceMode = "standard" | "sketch";
@@ -150,61 +217,17 @@ export function ImageTraceDialog({ open, onClose }: Props) {
     setCommitting(true);
     try {
       const result = await invoke<TraceResult>("trace_image_command", { params: buildParams(1.0) });
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(result.svg, "image/svg+xml");
-      const pathElements = doc.querySelectorAll("path");
-
       const store = useStore.getState();
       const layerColor = store.layers[store.activeLayerIndex]?.color || "#4a90e2";
-      const imgT = selectedImage.transform;
 
-      const prepared: DesignObject[] = [];
-      for (const pathEl of pathElements) {
-        const d = pathEl.getAttribute("d");
-        if (!d) continue;
-        const rawPoints = parsePathD(d);
-        if (rawPoints.length < 2) continue;
-
-        let offsetX = 0, offsetY = 0;
-        const transformAttr = pathEl.getAttribute("transform");
-        if (transformAttr) {
-          const m = transformAttr.match(/translate\(\s*([^,\s]+)\s*[,\s]\s*([^)]+)\)/);
-          if (m) { offsetX = parseFloat(m[1]) || 0; offsetY = parseFloat(m[2]) || 0; }
-        }
-
-        const scaledPoints: PathPoint[] = rawPoints.map((p) => {
-          const px = p.x + offsetX, py = p.y + offsetY;
-          const scaled: PathPoint = {
-            x: imgT.x + (px / result.widthPx) * imgT.width,
-            y: imgT.y + (py / result.heightPx) * imgT.height,
-          };
-          if (p.handleIn) {
-            scaled.handleIn = {
-              x: imgT.x + ((p.handleIn.x + offsetX) / result.widthPx) * imgT.width,
-              y: imgT.y + ((p.handleIn.y + offsetY) / result.heightPx) * imgT.height,
-            };
-          }
-          if (p.handleOut) {
-            scaled.handleOut = {
-              x: imgT.x + ((p.handleOut.x + offsetX) / result.widthPx) * imgT.width,
-              y: imgT.y + ((p.handleOut.y + offsetY) / result.heightPx) * imgT.height,
-            };
-          }
-          return scaled;
-        });
-
-        const xs = scaledPoints.map((p) => p.x), ys = scaledPoints.map((p) => p.y);
-        const minX = Math.min(...xs), minY = Math.min(...ys);
-        const maxX = Math.max(...xs), maxY = Math.max(...ys);
-
-        prepared.push({
-          id: generateId(), type: "path", name: "Traced path",
-          transform: { x: minX, y: minY, width: maxX - minX || 1, height: maxY - minY || 1, rotation: 0, scaleX: 1, scaleY: 1 },
-          layerIndex: store.activeLayerIndex, visible: true, locked: false,
-          fill: null, stroke: layerColor, strokeWidth: 1, opacity: 1,
-          points: scaledPoints, closed: /[Zz]\s*$/.test(d.trim()),
-        });
-      }
+      const prepared = buildTracedPathObjects(
+        result.svg,
+        selectedImage.transform,
+        result.widthPx,
+        result.heightPx,
+        store.activeLayerIndex,
+        layerColor,
+      );
 
       store.withUndo("trace", () => {
         const newIds: string[] = [];

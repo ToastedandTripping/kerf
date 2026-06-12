@@ -1,7 +1,7 @@
 import { useStore, generateId } from "../../app/store";
 import type { DesignObject, PathPoint, ToolType } from "../../app/types";
 import { machineConnection } from "../machine/connection";
-import { movePartial, scalePartial } from "../geometry";
+import { movePartial, scalePartial, pointsPartial, pointsBBox, POINTS_EPSILON } from "../geometry";
 
 // Handle types for resize/rotate
 export type HandleType =
@@ -44,6 +44,12 @@ const drag: DragState = {
 // --- PEN TOOL STATE ---
 const PEN_CLOSE_RADIUS = 8; // screen pixels
 const NODE_HIT_RADIUS = 6; // screen pixels
+
+// Click tolerance (mm): line segment distance AND the hit-band that keeps
+// degenerate (zero-width/height collinear) paths click-selectable — without
+// it, a pure AABB containment test on a 0-height path hits only at the exact
+// float y, i.e. never. Same constant on purpose.
+const SEGMENT_HIT_TOLERANCE_MM = 3;
 
 const penState = {
   isDrawing: false,
@@ -206,10 +212,10 @@ function hitTest(worldX: number, worldY: number): string | null {
         const rp1 = { x: cx + (p1.x - cx) * cos - (p1.y - cy) * sin, y: cy + (p1.x - cx) * sin + (p1.y - cy) * cos };
         const rp2 = { x: cx + (p2.x - cx) * cos - (p2.y - cy) * sin, y: cy + (p2.x - cx) * sin + (p2.y - cy) * cos };
         const dist = pointToSegmentDist(worldX, worldY, rp1.x, rp1.y, rp2.x, rp2.y);
-        if (dist < 3) return obj.id;
+        if (dist < SEGMENT_HIT_TOLERANCE_MM) return obj.id;
       } else {
         const dist = pointToSegmentDist(worldX, worldY, p1.x, p1.y, p2.x, p2.y);
-        if (dist < 3) return obj.id;
+        if (dist < SEGMENT_HIT_TOLERANCE_MM) return obj.id;
       }
     } else {
       // Transform click point by inverse rotation before AABB test
@@ -225,11 +231,16 @@ function hitTest(worldX: number, worldY: number): string | null {
         testX = cx + dx * cos - dy * sin;
         testY = cy + dx * sin + dy * cos;
       }
+      // W1b: sub-ε-dim paths (collinear imports — common in DXF/PDF) get a hit
+      // band on the degenerate axis; their true bbox is 0-thick now that the
+      // ||1 creator clamps are gone, and exact containment would never hit.
+      const bandX = obj.type === "path" && t.width < POINTS_EPSILON ? SEGMENT_HIT_TOLERANCE_MM : 0;
+      const bandY = obj.type === "path" && t.height < POINTS_EPSILON ? SEGMENT_HIT_TOLERANCE_MM : 0;
       if (
-        testX >= t.x &&
-        testX <= t.x + t.width &&
-        testY >= t.y &&
-        testY <= t.y + t.height
+        testX >= t.x - bandX &&
+        testX <= t.x + t.width + bandX &&
+        testY >= t.y - bandY &&
+        testY <= t.y + t.height + bandY
       ) {
         return obj.id;
       }
@@ -970,23 +981,19 @@ function updatePenPreview() {
     previewPoints.push({ x: penState.currentMouse.x, y: penState.currentMouse.y });
   }
 
-  // Compute bounding box from all points
-  const xs = previewPoints.map((p) => p.x);
-  const ys = previewPoints.map((p) => p.y);
-  const minX = Math.min(...xs);
-  const minY = Math.min(...ys);
-  const maxX = Math.max(...xs);
-  const maxY = Math.max(...ys);
+  // W1b: anchors-only loop bbox; no ||1 clamp — a collinear pen path is born
+  // with its true (zero-thickness) bbox and the invariant holds at birth.
+  const bb = pointsBBox(previewPoints);
 
   const drawObj: DesignObject = {
     id: penState.objectId,
     type: "path",
     name: "Drawing path",
     transform: {
-      x: minX,
-      y: minY,
-      width: maxX - minX || 1,
-      height: maxY - minY || 1,
+      x: bb.x,
+      y: bb.y,
+      width: bb.width,
+      height: bb.height,
       rotation: 0,
       scaleX: 1,
       scaleY: 1,
@@ -1015,23 +1022,18 @@ function commitPen(closed: boolean) {
   const layerColor = store.layers[store.activeLayerIndex]?.color || "#4a90e2";
   const points = [...penState.points];
 
-  // Compute bounding box
-  const xs = points.map((p) => p.x);
-  const ys = points.map((p) => p.y);
-  const minX = Math.min(...xs);
-  const minY = Math.min(...ys);
-  const maxX = Math.max(...xs);
-  const maxY = Math.max(...ys);
+  // W1b: anchors-only loop bbox; no ||1 clamp (see updatePenPreview)
+  const bb = pointsBBox(points);
 
   const obj: DesignObject = {
     id: penState.objectId,
     type: "path",
     name: `Path ${store.objects.length + 1}`,
     transform: {
-      x: minX,
-      y: minY,
-      width: maxX - minX || 1,
-      height: maxY - minY || 1,
+      x: bb.x,
+      y: bb.y,
+      width: bb.width,
+      height: bb.height,
       rotation: 0,
       scaleX: 1,
       scaleY: 1,
@@ -1223,7 +1225,8 @@ function handleNodeMove(worldX: number, worldY: number) {
     };
   }
 
-  store.updateObject(pathId, { points: newPoints });
+  // W1b: pointsPartial keeps transform ≡ pointsBBox while nodes move
+  store.updateObject(pathId, pointsPartial(obj, newPoints));
 }
 
 function handleNodeUp() {
@@ -1257,7 +1260,8 @@ export function deleteSelectedNode() {
   const newSelectedIdx = selectedNodeIndex >= newPoints.length ? newPoints.length - 1 : selectedNodeIndex;
 
   store.withUndo("delete-node", () => {
-    store.updateObject(pathId, { points: newPoints });
+    // W1b: deleting a node can shrink the bbox — keep the transform synced
+    store.updateObject(pathId, pointsPartial(obj, newPoints));
   });
   store.setNodeEditState({ pathId, selectedNodeIndex: newSelectedIdx });
 }
@@ -1317,7 +1321,10 @@ export function handleViewportDoubleClick(worldX: number, worldY: number) {
       }
 
       store.withUndo("toggle-smooth", () => {
-        store.updateObject(store.nodeEditState.pathId!, { points: newPoints });
+        // W1b: handle changes don't move anchors, but pointsPartial keeps the
+        // invariant maintained at every points writer uniformly (anchors-only
+        // bbox — handle overshoot never changes the transform).
+        store.updateObject(store.nodeEditState.pathId!, pointsPartial(obj, newPoints));
       });
       return;
     }
