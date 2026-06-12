@@ -1,4 +1,6 @@
 import { useStore } from "../../app/store";
+import { composeGroupChild } from "../geometry";
+import type { DesignObject } from "../../app/types";
 
 export function exportSvgContent(): string {
   const store = useStore.getState();
@@ -6,8 +8,22 @@ export function exportSvgContent(): string {
 
   let elements = "";
 
-  for (const obj of objects) {
-    if (!obj.visible) continue;
+  function emitObject(obj: DesignObject): void {
+    if (!obj.visible) return;
+
+    // W1c (Fix 4): groups flatten through the ONE shared composition
+    // (composeGroupChild — same function as the Viewport and gcodeGen) so
+    // children export world-frame instead of silently vanishing. Child
+    // `visible` is honored per child. Group semantics themselves do NOT
+    // survive the round-trip (children come back top-level unless a
+    // multi-subpath re-import re-groups them) — by design, minimal fix.
+    if (obj.type === "group" && obj.children) {
+      for (const child of obj.children) {
+        emitObject(composeGroupChild(child, obj));
+      }
+      return;
+    }
+
     const t = obj.transform;
     const stroke = obj.stroke;
     const sw = obj.strokeWidth;
@@ -17,7 +33,9 @@ export function exportSvgContent(): string {
     // Emit rotate transform for rotated primitives (rect, ellipse, text, image).
     // Center = AABB center (x+w/2, y+h/2), consistent with D2 rotation-center convention.
     // path/line emit raw points — standalone rotated path/line still exports unrotated
-    // (pre-existing limitation; tracked as a separate issue).
+    // (pre-existing limitation; tracked as a separate issue). Flattened group
+    // children of type path/line inherit the same limitation for their OWN
+    // r_c (the group's rotation r_g IS baked into the composed points).
     const rotation = t.rotation || 0;
     const rotTransform = Math.abs(rotation) > 0.001
       ? ` transform="rotate(${rotation}, ${t.x + t.width / 2}, ${t.y + t.height / 2})"`
@@ -53,7 +71,18 @@ export function exportSvgContent(): string {
               d += ` L${pt.x},${pt.y}`;
             }
           }
-          if (obj.closed) d += " Z";
+          if (obj.closed) {
+            // W1c (Fix 4): serialize the CLOSING curve's handles — Z alone
+            // closes with a straight chord, silently degrading the closing
+            // curve the cut pipeline now (F2) executes faithfully. Same
+            // condition as the Viewport's closing-segment render.
+            const last = obj.points[obj.points.length - 1];
+            const first = obj.points[0];
+            if (last.handleOut && first.handleIn) {
+              d += ` C${last.handleOut.x},${last.handleOut.y} ${first.handleIn.x},${first.handleIn.y} ${first.x},${first.y}`;
+            }
+            d += " Z";
+          }
           elements += `  <path d="${d}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${opacity}/>\n`;
         }
         break;
@@ -77,6 +106,8 @@ export function exportSvgContent(): string {
       }
     }
   }
+
+  for (const obj of objects) emitObject(obj);
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${workspaceWidth}mm" height="${workspaceHeight}mm" viewBox="0 0 ${workspaceWidth} ${workspaceHeight}">
