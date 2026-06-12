@@ -83,8 +83,8 @@ export function composeGroupChildTransform(
 
 /**
  * Rotate a PathPoint (and its optional bezier handles) around a center by degrees.
- * Used when composing group rotation onto path/line children whose geometry is
- * stored as absolute workspace coordinates in points[], not derived from transform.
+ * Used by composeGroupChild (group rotation onto path/line children) and the
+ * load-time rotation bake in the W1b migration.
  */
 export function rotatePathPoint(
   pt: { x: number; y: number; handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } },

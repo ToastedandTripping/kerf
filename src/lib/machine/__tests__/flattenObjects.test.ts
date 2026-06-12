@@ -209,13 +209,14 @@ describe("D2 — flattenObjects composes group rotation onto children", () => {
   });
 });
 
-describe("D2 — flattenObjects composes group rotation onto PATH/LINE children (points are absolute)", () => {
+describe("D2 — flattenObjects composes group rotation onto PATH/LINE children (group-local points)", () => {
   /**
    * Razor's empirical case:
    *   path with points (0,0)-(10,10), stored inside a group rotated 90°.
    *   Group: x=0, y=0, w=10, h=10, rotation=90
    *   Path child: transform={x:0, y:0, w:10, h:10, rotation:0}
-   *               points=[{x:0,y:0},{x:10,y:10}]  (absolute workspace coords)
+   *               points=[{x:0,y:0},{x:10,y:10}]  (group-local — the group
+   *               sits at the origin, so local == world here)
    *
    *   Group center: (5, 5)
    *   Rotate (0,0) around (5,5) by 90°:  rx=5+(0-5)*0-(0-5)*1=10,  ry=5+(0-5)*1+(0-5)*0=0  → (10,0)
