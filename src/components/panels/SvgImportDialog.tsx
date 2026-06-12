@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useStore, generateId } from "../../app/store";
 import { parsePathD } from "../../lib/fileOps";
-import { pointsBBox } from "../../lib/geometry";
+import { pointsBBox, buildGroupObject } from "../../lib/geometry";
 import type { DesignObject, PathPoint } from "../../app/types";
 
 interface Props {
@@ -527,19 +527,32 @@ function parseSvgElementForImport(
     }
     case "path": {
       const d = el.getAttribute("d") || "";
-      const rawPoints = parsePathD(d);
-      if (rawPoints.length < 2) return null;
-      const points: PathPoint[] = rawPoints.map(p => {
-        const tp = applyMatrix(matrix, p.x, p.y);
-        const result: PathPoint = { x: tp.x*scale, y: tp.y*scale };
-        if (p.handleIn) { const hi = applyMatrix(matrix, p.handleIn.x, p.handleIn.y); result.handleIn = { x: hi.x*scale, y: hi.y*scale }; }
-        if (p.handleOut) { const ho = applyMatrix(matrix, p.handleOut.x, p.handleOut.y); result.handleOut = { x: ho.x*scale, y: ho.y*scale }; }
-        return result;
-      });
-      // W1b: anchors-only loop bbox; no ||1 clamp (true bbox at birth — the
-      // hitTest ε band keeps collinear imports clickable)
-      const bb = pointsBBox(points);
-      return { ...base, type: "path", transform: { x: bb.x, y: bb.y, width: bb.width, height: bb.height, rotation: 0, scaleX: 1, scaleY: 1 }, points, closed: /[Zz]\s*$/.test(d.trim()) };
+      // W1c (F20): parsePathD returns SUBPATHS — a compound path (donut,
+      // glyph, stroke-to-path output) becomes one path object per surviving
+      // (≥2-point) contour, GROUPED when there is more than one, so the cut
+      // contains no bridge segment through the workpiece. Per-subpath closed
+      // flags replace the old whole-string trailing-Z regex.
+      const pathObjects: DesignObject[] = [];
+      for (const sub of parsePathD(d)) {
+        if (sub.points.length < 2) continue;
+        const points: PathPoint[] = sub.points.map(p => {
+          const tp = applyMatrix(matrix, p.x, p.y);
+          const result: PathPoint = { x: tp.x*scale, y: tp.y*scale };
+          if (p.handleIn) { const hi = applyMatrix(matrix, p.handleIn.x, p.handleIn.y); result.handleIn = { x: hi.x*scale, y: hi.y*scale }; }
+          if (p.handleOut) { const ho = applyMatrix(matrix, p.handleOut.x, p.handleOut.y); result.handleOut = { x: ho.x*scale, y: ho.y*scale }; }
+          return result;
+        });
+        // W1b: anchors-only loop bbox; no ||1 clamp (true bbox at birth — the
+        // hitTest ε band keeps collinear imports clickable)
+        const bb = pointsBBox(points);
+        pathObjects.push({ ...base, id: generateId(), type: "path", transform: { x: bb.x, y: bb.y, width: bb.width, height: bb.height, rotation: 0, scaleX: 1, scaleY: 1 }, points, closed: sub.closed });
+      }
+      if (pathObjects.length === 0) return null;
+      if (pathObjects.length === 1) return pathObjects[0];
+      // Group via the ONE shared builder (group-local child re-base) — never
+      // hand-rolled world-frame children, never groupSelected (undo/selection
+      // coupled).
+      return buildGroupObject(pathObjects, generateId(), base.name, layerIndex);
     }
     case "text": {
       const x = n(el, "x"), y = n(el, "y");

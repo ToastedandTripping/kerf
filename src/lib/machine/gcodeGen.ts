@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../app/store";
 import type { DesignObject, Layer } from "../../app/types";
-import { offsetRingByDistance, composeGroupChild } from "../geometry";
+import { offsetRingByDistance, composeGroupChild, sampleBezierPath } from "../geometry";
 
 export interface GcodeMove {
   x: number;
@@ -141,6 +141,11 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
   flat.sort((a, b) => (layerOrder.get(a.layerIndex) ?? 0) - (layerOrder.get(b.layerIndex) ?? 0));
   const result: CutObject[] = [];
   const warnings: string[] = [];
+  // W1c rider (F3 interim): fill mode scans each object's raw bbox, so ≥2
+  // grouped objects on a fill layer put 2× energy into overlapping regions
+  // (a split compound shape's hole bbox burns twice) until hole-aware fill
+  // ships. Counted per SOURCE object (pre-sub-layer expansion).
+  const fillGroupCounts = new Map<string, number>();
 
   for (const obj of flat) {
     if (!obj.visible || obj.locked) continue;
@@ -152,11 +157,19 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
     }
     if (obj.type === "image") continue;
 
+    if (obj.groupId && layer.mode !== "line") {
+      fillGroupCounts.set(obj.groupId, (fillGroupCounts.get(obj.groupId) || 0) + 1);
+    }
+
     const paths: CutObject["paths"] = [];
 
     if (obj.points && obj.points.length >= 2) {
+      // W1c (F2): adaptive bezier sampling — handles no longer stripped; the
+      // laser cuts the rendered curve to CURVE_CHORD_TOLERANCE_MM. Sampling
+      // happens BEFORE the kerf block below so the ring offset operates on
+      // the dense polyline (a faithful curve-offset approximation).
       paths.push({
-        points: obj.points.map((p) => ({ x: p.x, y: p.y })),
+        points: sampleBezierPath(obj.points, obj.closed || false),
         closed: obj.closed || false,
       });
     }
@@ -204,8 +217,20 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
     }
   }
 
+  for (const count of fillGroupCounts.values()) {
+    if (count >= 2) {
+      warnings.push(
+        "Fill warning: overlapping fill regions in a group receive double energy until hole-aware fill ships -- a compound shape's hole area is scanned twice (char risk on thin stock)",
+      );
+      break; // One warning is enough
+    }
+  }
+
   return { objects: result, warnings };
 }
+
+/** Exported for unit testing — do not use in production code outside this module. */
+export { toCutObjects as toCutObjectsForTest };
 
 /** Generate G-code for image objects using the dedicated Rust image pipeline */
 async function generateImageGcode(sValueMax: number = 1000): Promise<GcodeResult | null> {
@@ -222,36 +247,45 @@ async function generateImageGcode(sValueMax: number = 1000): Promise<GcodeResult
     if (!layer.visible || layer.output === false) continue;
     const adj = obj.imageAdjustments || { brightness: 0, contrast: 0, gamma: 1, invert: false };
 
-    const result = await invoke<GcodeResult>("generate_image_gcode", {
-      request: {
-        imageData: obj.imageData,
-        x: obj.transform.x,
-        y: obj.transform.y,
-        width: obj.transform.width,
-        height: obj.transform.height,
-        rotation: obj.transform.rotation || 0,
-        power: layer.power,
-        powerMin: layer.powerMin,
-        speed: layer.speed,
-        passes: layer.passes,
-        powerMode: layer.powerMode,
-        interval: layer.interval,
-        dither: layer.dither,
-        overscan: layer.overscan,
-        bidirectional: layer.bidirectional,
-        scanningOffset: layer.scanningOffset,
-        brightness: adj.brightness,
-        contrast: adj.contrast,
-        gamma: adj.gamma,
-        invert: adj.invert,
-        workspaceHeight: store.workspaceHeight,
-        sValueMax,
-        powerCurve: layer.powerCurve?.map((p) => [p.x, p.y] as [number, number]),
-        newsprintCellSize: layer.newsprintCellSize,
-        newsprintAngle: layer.newsprintAngle,
-      },
-    });
-    results.push(result);
+    try {
+      const result = await invoke<GcodeResult>("generate_image_gcode", {
+        request: {
+          imageData: obj.imageData,
+          x: obj.transform.x,
+          y: obj.transform.y,
+          width: obj.transform.width,
+          height: obj.transform.height,
+          rotation: obj.transform.rotation || 0,
+          power: layer.power,
+          powerMin: layer.powerMin,
+          speed: layer.speed,
+          passes: layer.passes,
+          powerMode: layer.powerMode,
+          interval: layer.interval,
+          dither: layer.dither,
+          overscan: layer.overscan,
+          bidirectional: layer.bidirectional,
+          scanningOffset: layer.scanningOffset,
+          brightness: adj.brightness,
+          contrast: adj.contrast,
+          gamma: adj.gamma,
+          invert: adj.invert,
+          workspaceHeight: store.workspaceHeight,
+          sValueMax,
+          powerCurve: layer.powerCurve?.map((p) => [p.x, p.y] as [number, number]),
+          newsprintCellSize: layer.newsprintCellSize,
+          newsprintAngle: layer.newsprintAngle,
+        },
+      });
+      results.push(result);
+    } catch (e) {
+      // Multi-image jobs: which image broke matters — wrap with the object
+      // name. cause is set post-construction: the ErrorOptions constructor
+      // argument is ES2022, above this project's ES2021 lib target.
+      const wrapped = new Error(`Image "${obj.name}": ${e}`);
+      (wrapped as Error & { cause?: unknown }).cause = e;
+      throw wrapped;
+    }
   }
 
   return mergeGcodeResults(results);
@@ -271,7 +305,15 @@ function mergeGcodeResults(results: GcodeResult[]): GcodeResult {
   };
 }
 
-/** Generate G-code from the current design using Rust backend */
+/** Generate G-code from the current design using the Rust backend.
+ *
+ *  THROWS on engine failure — there is no JS fallback (deleted by decision:
+ *  under Tauri the Rust engine is always present, so any failure means the
+ *  REAL generator is broken; the old silent fallback lacked lead-in/out, tabs,
+ *  perforation, overscan, offsetFill and scan-angle and let users run
+ *  materially degraded cuts indefinitely). Callers MUST surface the error
+ *  (the single caller, MachinePanel.handleGenerateGcode, logs to console and
+ *  sets a status line). */
 export async function generateGcode(): Promise<GcodeResult> {
   const store = useStore.getState();
   const { objects: cutObjects, warnings } = toCutObjects(store.objects, store.layers);
@@ -294,146 +336,25 @@ export async function generateGcode(): Promise<GcodeResult> {
 
   const sValueMax = store.grblSValueMax;
 
-  try {
-    // Image engraving first (runs before vector cuts)
-    const imageResult = await generateImageGcode(sValueMax);
+  // No try/catch: a failure here is a broken engine, and it must propagate
+  // loudly to the caller (rethrow-only semantics; an actual catch{throw}
+  // would only add a useless-catch lint warning). Nothing soft lives below —
+  // toCutObjects warnings already emitted above.
+  // Image engraving first (runs before vector cuts)
+  const imageResult = await generateImageGcode(sValueMax);
 
-    const vectorResult = await invoke<GcodeResult>("generate_gcode", {
-      objects: cutObjects,
-      workspaceHeight: store.workspaceHeight,
-      sValueMax,
-      startCorner: store.startCorner || "bottomLeft",
-      workspaceWidth: store.workspaceWidth,
-    });
+  const vectorResult = await invoke<GcodeResult>("generate_gcode", {
+    objects: cutObjects,
+    workspaceHeight: store.workspaceHeight,
+    sValueMax,
+    startCorner: store.startCorner || "bottomLeft",
+    workspaceWidth: store.workspaceWidth,
+  });
 
-    if (imageResult) {
-      return mergeGcodeResults([imageResult, vectorResult]);
-    }
-    return vectorResult;
-  } catch (e) {
-    // Fallback: generate G-code in JS if Rust isn't available
-    console.warn("Rust G-code gen failed, using JS fallback:", e);
-    return generateGcodeFallback(cutObjects, store.workspaceHeight, sValueMax);
+  if (imageResult) {
+    return mergeGcodeResults([imageResult, vectorResult]);
   }
-}
-
-/** Pure JS fallback G-code generator */
-function generateGcodeFallback(objects: CutObject[], workspaceHeight: number, sValueMax: number = 1000): GcodeResult {
-  const lines: string[] = [];
-  const moves: GcodeMove[] = [];
-  let cutDist = 0;
-  let travelDist = 0;
-  let cx = 0, cy = 0;
-
-  lines.push("; Generated by Kerf");
-  lines.push("G21 ; mm mode");
-  lines.push("G90 ; absolute positioning");
-  lines.push("M5 ; laser off");
-  lines.push("G0 X0 Y0");
-  lines.push("");
-
-  for (const obj of objects) {
-    const speed = obj.layer.speed * 60; // mm/s to mm/min
-    const sMax = Math.round(obj.layer.power / 100 * sValueMax);
-    const powerCmd = obj.layer.powerMode === "variable" ? "M4" : "M3";
-
-    for (let pass = 0; pass < obj.layer.passes; pass++) {
-      if (obj.layer.mode === "line") {
-        let pts = obj.paths.length > 0 ? obj.paths[0].points : objectToPoints(obj);
-        const closed = obj.paths.length > 0 ? obj.paths[0].closed : (obj.objType !== "line");
-
-        // Rotate explicit path points if needed
-        if (obj.paths.length > 0 && obj.rotation && Math.abs(obj.rotation) > 0.001) {
-          pts = rotatePoints(pts, obj.x + obj.width / 2, obj.y + obj.height / 2,
-            obj.rotation * Math.PI / 180);
-        }
-
-        if (pts.length < 2) continue;
-
-        // Rapid to start
-        const sy = workspaceHeight - pts[0].y;
-        const d = Math.hypot(pts[0].x - cx, sy - cy);
-        travelDist += d;
-        lines.push(`G0 X${pts[0].x.toFixed(3)} Y${sy.toFixed(3)}`);
-        moves.push({ x: pts[0].x, y: sy, moveType: "rapid", speed: 3000, power: 0 });
-        cx = pts[0].x; cy = sy;
-
-        lines.push(`${powerCmd} S${sMax}`);
-
-        for (let i = 1; i < pts.length; i++) {
-          const py = workspaceHeight - pts[i].y;
-          const dd = Math.hypot(pts[i].x - cx, py - cy);
-          cutDist += dd;
-          lines.push(`G1 X${pts[i].x.toFixed(3)} Y${py.toFixed(3)} F${speed} S${sMax}`);
-          moves.push({ x: pts[i].x, y: py, moveType: "cut", speed, power: sMax });
-          cx = pts[i].x; cy = py;
-        }
-
-        if (closed && pts.length > 2) {
-          const fy = workspaceHeight - pts[0].y;
-          const dd = Math.hypot(pts[0].x - cx, fy - cy);
-          cutDist += dd;
-          lines.push(`G1 X${pts[0].x.toFixed(3)} Y${fy.toFixed(3)} F${speed} S${sMax}`);
-          moves.push({ x: pts[0].x, y: fy, moveType: "cut", speed, power: sMax });
-          cx = pts[0].x; cy = fy;
-        }
-
-        lines.push("M5");
-      } else {
-        // Fill mode
-        const interval = obj.layer.interval || 0.1;
-        let y = obj.y;
-        let ltr = true;
-
-        while (y <= obj.y + obj.height) {
-          const gy = workspaceHeight - y;
-          const sx = ltr ? obj.x : obj.x + obj.width;
-          const ex = ltr ? obj.x + obj.width : obj.x;
-
-          travelDist += Math.hypot(sx - cx, gy - cy);
-          lines.push(`G0 X${sx.toFixed(3)} Y${gy.toFixed(3)}`);
-          moves.push({ x: sx, y: gy, moveType: "rapid", speed: 3000, power: 0 });
-
-          lines.push(`${powerCmd} S${sMax}`);
-          cutDist += Math.abs(ex - sx);
-          lines.push(`G1 X${ex.toFixed(3)} Y${gy.toFixed(3)} F${speed} S${sMax}`);
-          moves.push({ x: ex, y: gy, moveType: "engrave", speed, power: sMax });
-          lines.push("M5");
-
-          cx = ex; cy = gy;
-          y += interval;
-          ltr = !ltr;
-        }
-      }
-      lines.push("");
-    }
-  }
-
-  lines.push("M5 ; laser off");
-  lines.push("G0 X0 Y0 ; return home");
-  lines.push("M2 ; program end");
-
-  const totalDist = cutDist + travelDist;
-
-  // Basic time estimate
-  let time = 0;
-  let prevX = 0, prevY = 0;
-  for (const m of moves) {
-    const d = Math.hypot(m.x - prevX, m.y - prevY);
-    time += d / (m.speed / 60); // speed is mm/min
-    prevX = m.x;
-    prevY = m.y;
-  }
-
-  return {
-    gcode: lines.join("\n"),
-    moves,
-    totalDistance: totalDist,
-    cutDistance: cutDist,
-    travelDistance: travelDist,
-    estimatedTimeSecs: time,
-    lineCount: lines.length,
-  };
+  return vectorResult;
 }
 
 /** Preview dithered image for a specific image object */
@@ -477,55 +398,3 @@ export async function previewImageDither(objectId: string): Promise<PreviewDithe
   });
 }
 
-function rotatePoints(
-  pts: Array<{ x: number; y: number }>,
-  cx: number, cy: number, rad: number
-): Array<{ x: number; y: number }> {
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
-  return pts.map((p) => {
-    const dx = p.x - cx;
-    const dy = p.y - cy;
-    return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos };
-  });
-}
-
-function objectToPoints(obj: CutObject): Array<{ x: number; y: number }> {
-  let pts: Array<{ x: number; y: number }>;
-  switch (obj.objType) {
-    case "rectangle":
-      pts = [
-        { x: obj.x, y: obj.y },
-        { x: obj.x + obj.width, y: obj.y },
-        { x: obj.x + obj.width, y: obj.y + obj.height },
-        { x: obj.x, y: obj.y + obj.height },
-      ];
-      break;
-    case "ellipse": {
-      const cxe = obj.x + obj.width / 2;
-      const cye = obj.y + obj.height / 2;
-      const rx = obj.width / 2;
-      const ry = obj.height / 2;
-      pts = [];
-      for (let i = 0; i < 64; i++) {
-        const a = (2 * Math.PI * i) / 64;
-        pts.push({ x: cxe + rx * Math.cos(a), y: cye + ry * Math.sin(a) });
-      }
-      break;
-    }
-    case "line":
-      pts = [
-        { x: obj.x, y: obj.y },
-        { x: obj.x + obj.width, y: obj.y + obj.height },
-      ];
-      break;
-    default:
-      pts = [];
-  }
-
-  if (obj.rotation && Math.abs(obj.rotation) > 0.001) {
-    pts = rotatePoints(pts, obj.x + obj.width / 2, obj.y + obj.height / 2,
-      obj.rotation * Math.PI / 180);
-  }
-  return pts;
-}

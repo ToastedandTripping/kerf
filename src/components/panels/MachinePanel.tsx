@@ -100,7 +100,12 @@ export function MachinePanel() {
     }
   }
 
-  async function handleGenerateGcode() {
+  /** Returns true on success so callers (the preview button) can gate on it.
+   *  The single loud-failure site for generateGcode: console line is the
+   *  durable record; the status line is the 3s transient pointer to it.
+   *  gcodeResult is left untouched on failure — the null/stale gates keep
+   *  START and FRAME blocked on every failure path. */
+  async function handleGenerateGcode(): Promise<boolean> {
     setGenerating(true);
     try {
       const result = await generateGcode();
@@ -109,10 +114,14 @@ export function MachinePanel() {
         `G-code generated: ${result.lineCount} lines, ${result.cutDistance.toFixed(1)}mm cut, ~${Math.ceil(result.estimatedTimeSecs)}s`,
         "info"
       );
+      return true;
     } catch (e) {
       addConsoleLine(`G-code generation failed: ${e}`, "error");
+      setStatusMessage("G-code generation failed — see console");
+      return false;
+    } finally {
+      setGenerating(false);
     }
-    setGenerating(false);
   }
 
   async function handleStartJob() {
@@ -531,7 +540,9 @@ export function MachinePanel() {
             </button>
             <button
               onClick={() => {
-                if (!gcodeResult) handleGenerateGcode().then(() => setPreviewVisible(true));
+                // Gate the preview open on generation success — a failed
+                // first generation must not open an empty preview.
+                if (!gcodeResult) handleGenerateGcode().then((ok) => { if (ok) setPreviewVisible(true); });
                 else setPreviewVisible(true);
               }}
               disabled={generating}

@@ -6,7 +6,7 @@ import { generateId } from "./storeTypes";
 import { applyObjects } from "./storeHelpers";
 import { hasPlaceholders, extractPlaceholders, substitutePlaceholders, generateSerialValues } from "../../lib/variableText";
 import { computeAABB, nestItems } from "../../lib/nesting";
-import { offsetRingByDistance, movePartial } from "../../lib/geometry";
+import { offsetRingByDistance, movePartial, pointsBBox, buildGroupObject } from "../../lib/geometry";
 
 // Module-level font cache to avoid reloading on every conversion
 let cachedFont: opentype.Font | null = null;
@@ -49,12 +49,18 @@ export async function textObjectToPaths(obj: DesignObject): Promise<DesignObject
       continue;
     }
 
-    const pathPoints: Array<{ x: number; y: number; handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } }> = [];
+    // W1c (F20): split glyph CONTOURS at M commands — pre-fix they were
+    // concatenated into one points array, so a glyph "O" bridged its hole
+    // to its outline and the bridge was CUT through the workpiece.
+    const contours: Array<Array<{ x: number; y: number; handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } }>> = [];
+    let pathPoints: Array<{ x: number; y: number; handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } }> = [];
     let currentX = 0, currentY = 0;
 
     for (const cmd of commands) {
       switch (cmd.type) {
         case "M":
+          if (pathPoints.length > 0) contours.push(pathPoints);
+          pathPoints = [];
           currentX = cmd.x! * scale;
           currentY = cmd.y! * scale;
           pathPoints.push({ x: obj.transform.x + xOffset + currentX, y: obj.transform.y + fontSize + currentY });
@@ -115,30 +121,37 @@ export async function textObjectToPaths(obj: DesignObject): Promise<DesignObject
       }
     }
 
-    if (pathPoints.length > 1) {
-      const xs = pathPoints.map(p => p.x);
-      const ys = pathPoints.map(p => p.y);
-      const minX = Math.min(...xs);
-      const minY = Math.min(...ys);
-      const maxX = Math.max(...xs);
-      const maxY = Math.max(...ys);
+    if (pathPoints.length > 0) contours.push(pathPoints);
 
-      prepared.push({
-        ...obj,
-        id: generateId(),
-        type: "path",
-        text: undefined,
-        fontSize: undefined,
-        fontFamily: undefined,
-        isTemplate: undefined,
-        points: pathPoints,
-        closed: true,
-        transform: {
-          ...obj.transform,
-          x: minX, y: minY,
-          width: maxX - minX, height: maxY - minY,
-        },
+    // Surviving (≥2-point) contours become path objects; a multi-contour
+    // glyph (O, A, B) groups per glyph so flatten cuts the hole as its own
+    // ring (no bridge); single-contour glyphs stay FLAT — no behavior change.
+    const contourObjects: DesignObject[] = contours
+      .filter((pts) => pts.length > 1)
+      .map((pts) => {
+        const bb = pointsBBox(pts);
+        return {
+          ...obj,
+          id: generateId(),
+          type: "path" as const,
+          text: undefined,
+          fontSize: undefined,
+          fontFamily: undefined,
+          isTemplate: undefined,
+          points: pts,
+          closed: true,
+          transform: {
+            ...obj.transform,
+            x: bb.x, y: bb.y,
+            width: bb.width, height: bb.height,
+          },
+        };
       });
+
+    if (contourObjects.length === 1) {
+      prepared.push(contourObjects[0]);
+    } else if (contourObjects.length > 1) {
+      prepared.push(buildGroupObject(contourObjects, generateId(), obj.name, obj.layerIndex));
     }
 
     xOffset += (glyph.advanceWidth || 0) * scale;
@@ -336,40 +349,13 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
         const selected = objects.filter((o) => selectedIds.includes(o.id));
         const remaining = objects.filter((o) => !selectedIds.includes(o.id));
 
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const obj of selected) {
-          minX = Math.min(minX, obj.transform.x);
-          minY = Math.min(minY, obj.transform.y);
-          maxX = Math.max(maxX, obj.transform.x + obj.transform.width);
-          maxY = Math.max(maxY, obj.transform.y + obj.transform.height);
-        }
-
-        // W1b: child POINTS become group-local alongside the transform re-base.
-        // movePartial is PURE (fresh points arrays) — an in-place re-base would
-        // corrupt the withUndo before-snapshot, which aliases the same arrays
-        // (Ctrl+Z after grouping would teleport children to group-local coords).
-        // A child that is itself a group only re-bases its own transform — its
-        // children are already local to it.
-        const children = selected.map((o) => ({
-          ...o,
-          ...movePartial(o, o.transform.x - minX, o.transform.y - minY),
-        }));
-
+        // W1c: group construction (bbox + W1b group-local points re-base via
+        // pure movePartial) lives in lib/geometry's buildGroupObject — the ONE
+        // builder shared with the compound-path importers.
         const groupId = generateId();
-        const group: DesignObject = {
-          id: groupId,
-          type: "group",
-          name: `Group ${remaining.length + 1}`,
-          transform: {
-            x: minX, y: minY,
-            width: maxX - minX, height: maxY - minY,
-            rotation: 0, scaleX: 1, scaleY: 1,
-          },
-          layerIndex: selected[0].layerIndex,
-          visible: true, locked: false,
-          fill: null, stroke: "#ffffff", strokeWidth: 0, opacity: 1,
-          children,
-        };
+        const group = buildGroupObject(
+          selected, groupId, `Group ${remaining.length + 1}`, selected[0].layerIndex,
+        );
 
         const insertIdx = objects.findIndex((o) => o.id === selected[0].id);
         const newObjects = [...remaining];
