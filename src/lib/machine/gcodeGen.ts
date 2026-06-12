@@ -279,8 +279,12 @@ async function generateImageGcode(sValueMax: number = 1000): Promise<GcodeResult
       });
       results.push(result);
     } catch (e) {
-      // Multi-image jobs: which image broke matters — wrap with the object name.
-      throw new Error(`Image "${obj.name}": ${e}`, { cause: e });
+      // Multi-image jobs: which image broke matters — wrap with the object
+      // name. cause is set post-construction: the ErrorOptions constructor
+      // argument is ES2022, above this project's ES2021 lib target.
+      const wrapped = new Error(`Image "${obj.name}": ${e}`);
+      (wrapped as Error & { cause?: unknown }).cause = e;
+      throw wrapped;
     }
   }
 
