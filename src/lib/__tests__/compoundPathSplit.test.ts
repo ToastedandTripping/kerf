@@ -65,8 +65,13 @@ import { textObjectToPaths } from "../../app/store/geometryActions";
 import { flattenObjectsForTest, toCutObjectsForTest } from "../machine/gcodeGen";
 import { DEFAULT_LAYERS } from "../../app/types";
 
+// Donut deliberately AWAY from the origin: the group origin lands at (5,7),
+// so a hand-rolled world-frame-children group (the double-translate failure
+// mode the flatten assertions exist to catch) shifts every point by (5,7)
+// and FAILS. At M0 0 the origin was (0,0) — a (0,0) double-translate is a
+// no-op and the mutation stayed green (Razor WARNING 2).
 const DONUT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100mm" height="100mm">
-  <path d="M0 0 H10 V10 H0 Z M2 2 H8 V8 H2 Z" stroke="#000"/>
+  <path d="M5 7 H15 V17 H5 Z M7 9 H13 V15 H7 Z" stroke="#000"/>
 </svg>`;
 
 function pts(o: DesignObject): Array<{ x: number; y: number }> {
@@ -101,10 +106,10 @@ describe("SVG import: compound path → grouped per-contour objects", () => {
     const flat = flattenObjectsForTest(objects);
     expect(flat).toHaveLength(2);
     expect(pts(flat[0])).toEqual([
-      { x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 },
+      { x: 5, y: 7 }, { x: 15, y: 7 }, { x: 15, y: 17 }, { x: 5, y: 17 },
     ]);
     expect(pts(flat[1])).toEqual([
-      { x: 2, y: 2 }, { x: 8, y: 2 }, { x: 8, y: 8 }, { x: 2, y: 8 },
+      { x: 7, y: 9 }, { x: 13, y: 9 }, { x: 13, y: 15 }, { x: 7, y: 15 },
     ]);
     expect(flat[0].closed).toBe(true);
     expect(flat[1].closed).toBe(true);
@@ -116,7 +121,7 @@ describe("SVG import: compound path → grouped per-contour objects", () => {
     expect(useStore.getState().selectedIds).toEqual([group.id]);
 
     // Serialization level: two 4-point rings — the pre-fix bridge pair
-    // (0,10) → (2,2) exists in NO serialized path.
+    // (5,17) → (7,9) exists in NO serialized path.
     const { objects: cut } = toCutObjectsForTest(objects, DEFAULT_LAYERS);
     expect(cut).toHaveLength(2);
     for (const c of cut) {
@@ -125,7 +130,7 @@ describe("SVG import: compound path → grouped per-contour objects", () => {
       for (let i = 1; i < c.paths[0].points.length; i++) {
         const a = c.paths[0].points[i - 1];
         const b = c.paths[0].points[i];
-        expect(a.x === 0 && a.y === 10 && b.x === 2 && b.y === 2).toBe(false);
+        expect(a.x === 5 && a.y === 17 && b.x === 7 && b.y === 9).toBe(false);
       }
     }
     expect(cut[0].groupId).toBe(group.id);
