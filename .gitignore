@@ -22,3 +22,6 @@ Thumbs.db
 # Tauri
 src-tauri/target/
 .playwright-mcp/
+
+# Local session-lifecycle symlinks (machine-specific, point outside the repo)
+.claude/commands/

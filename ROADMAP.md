@@ -1,7 +1,7 @@
 ---
 status: active
-current: v0.7 — Camera & Rotary
-next: v0.8 — Profiles, Text & Community
+current: fortification (v0.7.0 released 2026-06-12 = Wave 1; Waves 2-4 next)
+next: v0.8 — Camera & Rotary
 testing: null
 pinned: true
 shipped:
@@ -328,7 +328,28 @@ guided error recovery), plus a code-health refactor.
 
 ---
 
-## v0.7 — Camera & Rotary (Current)
+## v0.7 — Fortification (Current; v0.7.0 = Wave 1, released 2026-06-12)
+
+*Reliability over features: the 2026-06-09 cut-path audit found 31 defects between
+"design on screen" and "laser moves." Four waves, each critic-looped + Razor-gated.*
+
+- [x] Wave 1 — trust spine: streaming protocol, e-stop isolation, autoConnect settings,
+      stale-G-code gate (W1a); path positioning + corrupt-file migration (W1b); curve
+      sampling, compound-path splitting, JS-fallback deletion (W1c) — **v0.7.0**
+- [ ] Wave 2 — wrong-cuts: fill-shape interim (F3), kerf direction/winding/primitives (F6),
+      cut ordering (F7), grayscale-bidi (F4), image rotation/mirror (F5), SVG rotated
+      primitives (F22), DXF Y-flip/units/bulge (F23), PDF/image DPI (F21); + Z-after-number
+      tokenizer loop, sampler flatness hardening (F25 revisit)
+- [ ] Wave 3 — fail-safe + work-loss: laser-off interlocks (F8/F9/F16), single-sender
+      gate (F18), work-loss cluster (F26), state truth (F19), DTR banner-grace, export
+      groups remainder (F27)
+- [ ] Wave 4 — editing correctness: booleans (F28), flip (F29), rotated-frame mixups (F30),
+      F12 remainder (incl. Min Power hide per decision), import polish (F24/F25)
+- [ ] Re-audit + /production pass after Wave 3
+
+---
+
+## v0.8 — Camera & Rotary (Next)
 
 - [ ] Camera alignment (USB webcam, calibration wizard, overlay)
 - [ ] Print-and-cut registration (two-point alignment)
@@ -336,7 +357,7 @@ guided error recovery), plus a code-health refactor.
 
 ---
 
-## v0.8 — Profiles, Text & Community (Next)
+## v0.9 — Profiles, Text & Community
 
 - [ ] Multiple machine profiles (switch between setups)
 - [ ] Text on path (arbitrary curve following)
