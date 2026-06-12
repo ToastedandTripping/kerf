@@ -19,6 +19,7 @@ import {
   assertPointsInvariant,
   composeGroupChild,
   POINTS_EPSILON,
+  MIN_SCALE_TARGET,
 } from "../index";
 
 function makePath(id: string, points: PathPoint[], rotation = 0): DesignObject {
@@ -156,11 +157,16 @@ describe("scalePartial", () => {
     assertPointsInvariant({ ...obj, ...partial });
   });
 
-  it("tolerates zero targets (scale to zero, not NaN)", () => {
+  it("clamps zero targets to MIN_SCALE_TARGET (no NaN, no irreversible collapse)", () => {
     const obj = makePath("p1", bezierPoints());
     const partial = scalePartial(obj, { x: 10, y: 10, width: 0, height: 20 });
     expect(partial.points!.every((p) => Number.isFinite(p.x))).toBe(true);
-    expect(partial.points![1].x).toBeCloseTo(10, 9);
+    // anchors compress to the ε-width state, NOT onto a single x — relative
+    // proportions survive so the next keystroke can rescale the axis
+    const bb = pointsBBox(partial.points!);
+    expect(bb.width).toBeCloseTo(MIN_SCALE_TARGET, 9);
+    expect(bb.width).toBeGreaterThan(POINTS_EPSILON);
+    assertPointsInvariant({ ...obj, ...partial });
   });
 
   it("is PURE: never mutates the source points", () => {
@@ -187,6 +193,99 @@ describe("scalePartial", () => {
     const partial = scalePartial(obj, { x: 5, y: 5, width: 40, height: 40 });
     expect(partial.points).toBeUndefined();
     expect(partial.transform).toMatchObject({ x: 5, y: 5, width: 40, height: 40, rotation: 45 });
+  });
+});
+
+describe("scalePartial zero-target trapdoor (Properties W/H per-keystroke entry)", () => {
+  // Razor W2: NumberField fires onChange per keystroke — typing "0.5" into W
+  // fires v=0 first. Without the MIN_SCALE_TARGET clamp, the 0-width target
+  // collapses every anchor onto one x; the degenerate-SOURCE guard then pins
+  // scale 1 for every later keystroke, permanently flattening the axis for the
+  // rest of the edit. These tests simulate the exact keystroke sequences the
+  // panel produces (target = current transform with one dimension replaced) and
+  // MUST fail if the clamp in scalePartial is removed (mutation check).
+
+  /** One W keystroke as the panel fires it: width := max(0, v), rest from current. */
+  const typeW = (obj: DesignObject, v: number): DesignObject => ({
+    ...obj,
+    ...scalePartial(obj, {
+      x: obj.transform.x, y: obj.transform.y,
+      width: Math.max(0, v), height: obj.transform.height,
+    }),
+  });
+  /** One H keystroke as the panel fires it. */
+  const typeH = (obj: DesignObject, v: number): DesignObject => ({
+    ...obj,
+    ...scalePartial(obj, {
+      x: obj.transform.x, y: obj.transform.y,
+      width: obj.transform.width, height: Math.max(0, v),
+    }),
+  });
+
+  const expectSameGeometry = (a: DesignObject, b: DesignObject) => {
+    expect(a.points!.length).toBe(b.points!.length);
+    for (let i = 0; i < a.points!.length; i++) {
+      expect(a.points![i].x).toBeCloseTo(b.points![i].x, 9);
+      expect(a.points![i].y).toBeCloseTo(b.points![i].y, 9);
+      expect(!!a.points![i].handleOut).toBe(!!b.points![i].handleOut);
+      if (a.points![i].handleOut) {
+        expect(a.points![i].handleOut!.x).toBeCloseTo(b.points![i].handleOut!.x, 9);
+        expect(a.points![i].handleOut!.y).toBeCloseTo(b.points![i].handleOut!.y, 9);
+      }
+      if (a.points![i].handleIn) {
+        expect(a.points![i].handleIn!.x).toBeCloseTo(b.points![i].handleIn!.x, 9);
+        expect(a.points![i].handleIn!.y).toBeCloseTo(b.points![i].handleIn!.y, 9);
+      }
+    }
+  };
+
+  it('typing "0" then "0.5" into W ends at the same geometry as direct "0.5"', () => {
+    const obj = makePath("p1", bezierPoints()); // bbox 10,10 20×20
+    let cur = typeW(obj, 0); // leading-zero keystroke of "0.5"
+    assertPointsInvariant(cur);
+    cur = typeW(cur, 0.5);
+    const direct = typeW(makePath("p1", bezierPoints()), 0.5);
+    expectSameGeometry(cur, direct);
+    expect(cur.transform.width).toBeCloseTo(0.5, 9);
+    assertPointsInvariant(cur);
+  });
+
+  it('typing "0" then "5" into W ends at the same geometry as direct "5"', () => {
+    const obj = makePath("p1", bezierPoints());
+    let cur = typeW(obj, 0);
+    cur = typeW(cur, 5);
+    const direct = typeW(makePath("p1", bezierPoints()), 5);
+    expectSameGeometry(cur, direct);
+    expect(cur.transform.width).toBeCloseTo(5, 9);
+    assertPointsInvariant(cur);
+  });
+
+  it('H axis: typing "0" then "0.5" matches direct entry too', () => {
+    const obj = makePath("p1", bezierPoints());
+    let cur = typeH(obj, 0);
+    cur = typeH(cur, 0.5);
+    const direct = typeH(makePath("p1", bezierPoints()), 0.5);
+    expectSameGeometry(cur, direct);
+    expect(cur.transform.height).toBeCloseTo(0.5, 9);
+    assertPointsInvariant(cur);
+  });
+
+  it("no keystroke sequence can permanently flatten an axis", () => {
+    const obj = makePath("p1", bezierPoints());
+    let cur = obj;
+    // hammer W with zeros — the axis must never go degenerate-by-guard
+    for (let i = 0; i < 3; i++) {
+      cur = typeW(cur, 0);
+      expect(pointsBBox(cur.points!).width).toBeGreaterThan(POINTS_EPSILON);
+    }
+    // and H as well, interleaved
+    cur = typeH(cur, 0);
+    expect(pointsBBox(cur.points!).height).toBeGreaterThan(POINTS_EPSILON);
+    // both axes recover to the original geometry within float noise
+    cur = typeW(cur, 20);
+    cur = typeH(cur, 20);
+    expectSameGeometry(cur, obj);
+    assertPointsInvariant(cur);
   });
 });
 

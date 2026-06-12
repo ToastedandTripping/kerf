@@ -117,6 +117,18 @@ export function rotatePathPoint(
  *  accumulate float drift, so exact equality is never asserted. */
 export const POINTS_EPSILON = 1e-6;
 
+/** Minimum scale TARGET dimension (mm) for points-bearing objects in scalePartial.
+ *  Per-keystroke numeric entry (Properties W/H) calls scalePartial with transient
+ *  targets — typing "0.5" fires width 0 on the first keystroke. An exact-zero
+ *  target collapses every anchor onto one coordinate, and the degenerate-SOURCE
+ *  guard then pins scale 1 for every later keystroke: the axis geometry is
+ *  unrecoverable for the rest of the edit. Clamping the target to this floor keeps
+ *  relative anchor proportions, so the next keystroke rescales losslessly.
+ *  MUST be comfortably above POINTS_EPSILON — clamping to the comparison epsilon
+ *  itself would leave the clamped state degenerate-by-guard and re-open the
+ *  trapdoor. 0.01mm is far below laser kerf, so the transient state is invisible. */
+export const MIN_SCALE_TARGET = 0.01;
+
 /** A partial object update produced by the invariant-maintaining helpers. */
 export interface GeometryPartial {
   points?: PathPoint[];
@@ -187,9 +199,12 @@ export function movePartial(obj: DesignObject, newX: number, newY: number): Geom
  * untouched; skipping points-scaling on rotated paths would re-manufacture the
  * transform/points desync at the one writer left unpinned). Degenerate guards:
  * a zero/near-zero source dimension maps with scale 1 on that axis (offsets
- * preserved, anchors land on the target origin); zero targets simply collapse —
- * never a divide-by-zero. The new transform derives from the mapped anchors bbox
- * (self-healing, same as movePartial). PURE.
+ * preserved, anchors land on the target origin); zero/sub-ε TARGET dimensions
+ * clamp to MIN_SCALE_TARGET — never a divide-by-zero, and never an irreversible
+ * anchor collapse (the per-keystroke W/H entry fires width 0 while typing "0.5";
+ * the clamp lives HERE so every present and future caller is protected). The new
+ * transform derives from the mapped anchors bbox (self-healing, same as
+ * movePartial). PURE.
  */
 export function scalePartial(
   obj: DesignObject,
@@ -204,8 +219,14 @@ export function scalePartial(
     };
   }
   const t = obj.transform;
-  const sx = t.width > POINTS_EPSILON ? target.width / t.width : 1;
-  const sy = t.height > POINTS_EPSILON ? target.height / t.height : 1;
+  // Clamp the TARGET (points-bearing only): a zero/sub-ε target would collapse
+  // anchors onto one coordinate, which the degenerate-SOURCE guard below then
+  // freezes for the rest of the edit. The ε-state retains relative proportions,
+  // so the next keystroke recovers the axis losslessly. See MIN_SCALE_TARGET.
+  const tw = Math.max(target.width, MIN_SCALE_TARGET);
+  const th = Math.max(target.height, MIN_SCALE_TARGET);
+  const sx = t.width > POINTS_EPSILON ? tw / t.width : 1;
+  const sy = t.height > POINTS_EPSILON ? th / t.height : 1;
   const mapX = (x: number) => target.x + (x - t.x) * sx;
   const mapY = (y: number) => target.y + (y - t.y) * sy;
   const src = obj.points!;
