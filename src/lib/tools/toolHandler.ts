@@ -1,6 +1,7 @@
 import { useStore, generateId } from "../../app/store";
 import type { DesignObject, PathPoint, ToolType } from "../../app/types";
 import { machineConnection } from "../machine/connection";
+import { movePartial, scalePartial } from "../geometry";
 
 // Handle types for resize/rotate
 export type HandleType =
@@ -516,12 +517,9 @@ function handleSelectMove(worldX: number, worldY: number, e: React.PointerEvent)
       newY = Math.round(newY / store.gridSize) * store.gridSize;
     }
 
-    updates.push({
-      id,
-      partial: {
-        transform: { ...obj.transform, x: newX, y: newY },
-      },
-    });
+    // W1b: route through movePartial so path/line points move WITH the transform
+    // (a raw transform x/y write here is exactly the F1 defect).
+    updates.push({ id, partial: movePartial(obj, newX, newY) });
   }
   if (updates.length > 0) store.updateObjects(updates);
 }
@@ -618,17 +616,18 @@ function handleResizeMove(worldX: number, worldY: number, e: React.PointerEvent)
     const relW = objOrig.width / (orig.width || 1);
     const relH = objOrig.height / (orig.height || 1);
 
+    // W1b: scalePartial maps path/line anchors+handles through the bbox→bbox
+    // affine alongside the transform write — REGARDLESS of rotation (a rotation
+    // guard here would re-manufacture the transform/points desync; the rotated-
+    // resize cursor-frame UX quirk is F30 and applies to primitives identically).
     scaleUpdates.push({
       id,
-      partial: {
-        transform: {
-          ...obj.transform,
-          x: newX + relX * newW,
-          y: newY + relY * newH,
-          width: Math.max(1, relW * newW),
-          height: Math.max(1, relH * newH),
-        },
-      },
+      partial: scalePartial(obj, {
+        x: newX + relX * newW,
+        y: newY + relY * newH,
+        width: Math.max(1, relW * newW),
+        height: Math.max(1, relH * newH),
+      }),
     });
   }
   if (scaleUpdates.length > 0) store.updateObjects(scaleUpdates);
@@ -701,28 +700,27 @@ function handleSelectUp(_worldX: number, _worldY: number) {
     }
 
     if (changed) {
+      // W1b: delta-restore through scalePartial — restoring TRANSFORM-ONLY
+      // snapshots would snap the transform back while path points stay put
+      // (visual no-op + re-manufactured desync). Whole-object snapshots are
+      // not used here on purpose: they'd bypass pushObjectsUndo's image-strip
+      // machinery and balloon the undo stack on image-bearing selections.
+      const restoreTo = (positions: Map<string, { x: number; y: number; width: number; height: number; rotation: number }>) => {
+        for (const [id, pos] of positions) {
+          const obj = useStore.getState().objectsById.get(id);
+          if (obj) {
+            const partial = scalePartial(obj, pos);
+            useStore.getState().updateObject(id, {
+              ...partial,
+              transform: { ...partial.transform, rotation: pos.rotation },
+            });
+          }
+        }
+      };
       store.pushCommand({
         type: "resize",
-        undo: () => {
-          for (const [id, pos] of originalPositions) {
-            const obj = useStore.getState().objectsById.get(id);
-            if (obj) {
-              useStore.getState().updateObject(id, {
-                transform: { ...obj.transform, ...pos },
-              });
-            }
-          }
-        },
-        redo: () => {
-          for (const [id, pos] of finalPositions) {
-            const obj = useStore.getState().objectsById.get(id);
-            if (obj) {
-              useStore.getState().updateObject(id, {
-                transform: { ...obj.transform, ...pos },
-              });
-            }
-          }
-        },
+        undo: () => restoreTo(originalPositions),
+        redo: () => restoreTo(finalPositions),
       });
     }
     return;
@@ -759,28 +757,20 @@ function handleSelectUp(_worldX: number, _worldY: number) {
     }
 
     if (moved) {
+      // W1b: delta-restore through movePartial (transform + points partials) —
+      // see the resize closure above for why transform-only restore is wrong.
+      const restoreTo = (positions: Map<string, { x: number; y: number }>) => {
+        for (const [id, pos] of positions) {
+          const obj = useStore.getState().objectsById.get(id);
+          if (obj) {
+            useStore.getState().updateObject(id, movePartial(obj, pos.x, pos.y));
+          }
+        }
+      };
       store.pushCommand({
         type: "move",
-        undo: () => {
-          for (const [id, pos] of originalPositions) {
-            const obj = useStore.getState().objectsById.get(id);
-            if (obj) {
-              useStore.getState().updateObject(id, {
-                transform: { ...obj.transform, x: pos.x, y: pos.y },
-              });
-            }
-          }
-        },
-        redo: () => {
-          for (const [id, pos] of finalPositions) {
-            const obj = useStore.getState().objectsById.get(id);
-            if (obj) {
-              useStore.getState().updateObject(id, {
-                transform: { ...obj.transform, x: pos.x, y: pos.y },
-              });
-            }
-          }
-        },
+        undo: () => restoreTo(originalPositions),
+        redo: () => restoreTo(finalPositions),
       });
     }
   }

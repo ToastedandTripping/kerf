@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useStore, generateId } from "../app/store";
 import { fileOperations } from "./fileOps";
 import { handleViewportKeyDown, handleToolChange } from "./tools/toolHandler";
+import { movePartial } from "./geometry";
 import type { ToolType } from "../app/types";
 
 const toolShortcuts: Record<string, ToolType> = {
@@ -88,10 +89,13 @@ export function useKeyboardShortcuts() {
         e.preventDefault();
         const s = useStore.getState();
         s.withUndo("paste", () => {
+          // W1b: movePartial shifts path points with the +10 offset AND returns
+          // fresh points arrays (the clipboard holds live references — a shared
+          // array here would couple the copy to the original).
           const newObjects = s.clipboard.map((o) => ({
             ...o,
             id: generateId(),
-            transform: { ...o.transform, x: o.transform.x + 10, y: o.transform.y + 10 },
+            ...movePartial(o, o.transform.x + 10, o.transform.y + 10),
           }));
           newObjects.forEach(s.addObject);
           s.setSelectedIds(newObjects.map((o) => o.id));
@@ -258,13 +262,8 @@ export function useKeyboardShortcuts() {
           for (const id of s.selectedIds) {
             const obj = s.objects.find((o) => o.id === id);
             if (obj) {
-              s.updateObject(id, {
-                transform: {
-                  ...obj.transform,
-                  x: obj.transform.x + dx,
-                  y: obj.transform.y + dy,
-                },
-              });
+              // W1b: path/line points must move with the nudge
+              s.updateObject(id, movePartial(obj, obj.transform.x + dx, obj.transform.y + dy));
             }
           }
         });

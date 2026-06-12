@@ -1,6 +1,7 @@
 import { useStore } from "../../app/store";
 import type { ImageAdjustments } from "../../app/types";
 import { openDitherPreview } from "../../app/App";
+import { movePartial, scalePartial } from "../../lib/geometry";
 
 export function PropertiesPanel() {
   const selectedIds = useStore((s) => s.selectedIds);
@@ -75,16 +76,12 @@ export function PropertiesPanel() {
             />
           </PropertyRow>
 
-          {/* Position */}
+          {/* Position — W1b: movePartial/scalePartial keep path points synced */}
           <PropertyGroup label="Position">
             <NumberField
               label="X"
               value={obj.transform.x}
-              onChange={(v) =>
-                updateObject(obj.id, {
-                  transform: { ...obj.transform, x: v },
-                })
-              }
+              onChange={(v) => updateObject(obj.id, movePartial(obj, v, obj.transform.y))}
               unit="mm"
               onFocus={beginEdit}
               onBlur={commitEdit}
@@ -92,11 +89,7 @@ export function PropertiesPanel() {
             <NumberField
               label="Y"
               value={obj.transform.y}
-              onChange={(v) =>
-                updateObject(obj.id, {
-                  transform: { ...obj.transform, y: v },
-                })
-              }
+              onChange={(v) => updateObject(obj.id, movePartial(obj, obj.transform.x, v))}
               unit="mm"
               onFocus={beginEdit}
               onBlur={commitEdit}
@@ -109,9 +102,10 @@ export function PropertiesPanel() {
               label="W"
               value={obj.transform.width}
               onChange={(v) =>
-                updateObject(obj.id, {
-                  transform: { ...obj.transform, width: Math.max(0, v) },
-                })
+                updateObject(obj.id, scalePartial(obj, {
+                  x: obj.transform.x, y: obj.transform.y,
+                  width: Math.max(0, v), height: obj.transform.height,
+                }))
               }
               unit="mm"
               onFocus={beginEdit}
@@ -121,9 +115,10 @@ export function PropertiesPanel() {
               label="H"
               value={obj.transform.height}
               onChange={(v) =>
-                updateObject(obj.id, {
-                  transform: { ...obj.transform, height: Math.max(0, v) },
-                })
+                updateObject(obj.id, scalePartial(obj, {
+                  x: obj.transform.x, y: obj.transform.y,
+                  width: obj.transform.width, height: Math.max(0, v),
+                }))
               }
               unit="mm"
               onFocus={beginEdit}
