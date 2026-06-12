@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../app/store";
 import type { DesignObject, Layer } from "../../app/types";
-import { offsetRingByDistance, composeGroupChild } from "../geometry";
+import { offsetRingByDistance, composeGroupChild, sampleBezierPath } from "../geometry";
 
 export interface GcodeMove {
   x: number;
@@ -141,6 +141,11 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
   flat.sort((a, b) => (layerOrder.get(a.layerIndex) ?? 0) - (layerOrder.get(b.layerIndex) ?? 0));
   const result: CutObject[] = [];
   const warnings: string[] = [];
+  // W1c rider (F3 interim): fill mode scans each object's raw bbox, so ≥2
+  // grouped objects on a fill layer put 2× energy into overlapping regions
+  // (a split compound shape's hole bbox burns twice) until hole-aware fill
+  // ships. Counted per SOURCE object (pre-sub-layer expansion).
+  const fillGroupCounts = new Map<string, number>();
 
   for (const obj of flat) {
     if (!obj.visible || obj.locked) continue;
@@ -152,11 +157,19 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
     }
     if (obj.type === "image") continue;
 
+    if (obj.groupId && layer.mode !== "line") {
+      fillGroupCounts.set(obj.groupId, (fillGroupCounts.get(obj.groupId) || 0) + 1);
+    }
+
     const paths: CutObject["paths"] = [];
 
     if (obj.points && obj.points.length >= 2) {
+      // W1c (F2): adaptive bezier sampling — handles no longer stripped; the
+      // laser cuts the rendered curve to CURVE_CHORD_TOLERANCE_MM. Sampling
+      // happens BEFORE the kerf block below so the ring offset operates on
+      // the dense polyline (a faithful curve-offset approximation).
       paths.push({
-        points: obj.points.map((p) => ({ x: p.x, y: p.y })),
+        points: sampleBezierPath(obj.points, obj.closed || false),
         closed: obj.closed || false,
       });
     }
@@ -204,8 +217,20 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
     }
   }
 
+  for (const count of fillGroupCounts.values()) {
+    if (count >= 2) {
+      warnings.push(
+        "Fill warning: overlapping fill regions in a group receive double energy until hole-aware fill ships -- a compound shape's hole area is scanned twice (char risk on thin stock)",
+      );
+      break; // One warning is enough
+    }
+  }
+
   return { objects: result, warnings };
 }
+
+/** Exported for unit testing — do not use in production code outside this module. */
+export { toCutObjects as toCutObjectsForTest };
 
 /** Generate G-code for image objects using the dedicated Rust image pipeline */
 async function generateImageGcode(sValueMax: number = 1000): Promise<GcodeResult | null> {
@@ -255,7 +280,7 @@ async function generateImageGcode(sValueMax: number = 1000): Promise<GcodeResult
       results.push(result);
     } catch (e) {
       // Multi-image jobs: which image broke matters — wrap with the object name.
-      throw new Error(`Image "${obj.name}": ${e}`);
+      throw new Error(`Image "${obj.name}": ${e}`, { cause: e });
     }
   }
 

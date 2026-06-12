@@ -338,6 +338,140 @@ export function composeGroupChild(child: DesignObject, group: DesignObject): Des
   };
 }
 
+// --- W1c (F2): adaptive bezier sampling for G-code serialization ---
+
+/** Chord tolerance (mm) for adaptive bezier flattening at G-code time.
+ *  0.05mm sits below typical laser kerf (0.05-0.2mm) and below one screen
+ *  pixel at zoom 1 — the cut polyline is visually and physically faithful to
+ *  the rendered curve. Exported so future adopters (booleans/F28, arcs/F25)
+ *  share the one constant. */
+export const CURVE_CHORD_TOLERANCE_MM = 0.05;
+
+/** Recursion depth cap for the adaptive subdivision — a backstop for
+ *  pathological-but-finite geometry. Non-finite coordinates are rejected
+ *  up front (they never satisfy the flatness test and would otherwise
+ *  expand the full 2^depth tree). */
+const MAX_SAMPLING_DEPTH = 24;
+
+/** Perpendicular distance from (px,py) to the chord (ax,ay)-(bx,by);
+ *  falls back to point distance when the chord is degenerate. */
+function chordDistance(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) return Math.hypot(px - ax, py - ay);
+  return Math.abs(dx * (py - ay) - dy * (px - ax)) / Math.sqrt(len2);
+}
+
+/** Adaptive de Casteljau flattening of one cubic segment. Emits sample points
+ *  EXCLUDING p0 (the caller already emitted it) and INCLUDING p3 — the final
+ *  emission of the top-level call is always exactly p3. Throws on non-finite
+ *  input (malformed imports must error loudly, not hang Generate). */
+function flattenCubicInto(
+  emit: (x: number, y: number) => void,
+  p0x: number, p0y: number, p1x: number, p1y: number,
+  p2x: number, p2y: number, p3x: number, p3y: number,
+  tolerance: number, depth: number,
+): void {
+  if (depth === 0 && !Number.isFinite(p0x + p0y + p1x + p1y + p2x + p2y + p3x + p3y)) {
+    throw new Error("Path contains non-finite curve coordinates -- repair or re-import the geometry");
+  }
+  if (
+    depth >= MAX_SAMPLING_DEPTH ||
+    (chordDistance(p1x, p1y, p0x, p0y, p3x, p3y) <= tolerance &&
+      chordDistance(p2x, p2y, p0x, p0y, p3x, p3y) <= tolerance)
+  ) {
+    emit(p3x, p3y);
+    return;
+  }
+  // de Casteljau split at t = 0.5
+  const q0x = (p0x + p1x) / 2, q0y = (p0y + p1y) / 2;
+  const q1x = (p1x + p2x) / 2, q1y = (p1y + p2y) / 2;
+  const q2x = (p2x + p3x) / 2, q2y = (p2y + p3y) / 2;
+  const r0x = (q0x + q1x) / 2, r0y = (q0y + q1y) / 2;
+  const r1x = (q1x + q2x) / 2, r1y = (q1y + q2y) / 2;
+  const sx = (r0x + r1x) / 2, sy = (r0y + r1y) / 2;
+  flattenCubicInto(emit, p0x, p0y, q0x, q0y, r0x, r0y, sx, sy, tolerance, depth + 1);
+  flattenCubicInto(emit, sx, sy, r1x, r1y, q2x, q2y, p3x, p3y, tolerance, depth + 1);
+}
+
+/**
+ * Sample a points[]-convention path into a dense polyline for G-code
+ * serialization (W1c / F2). Segment semantics MIRROR the Viewport renderer
+ * exactly: a segment is a cubic when `prev.handleOut && pt.handleIn`
+ * (anchor.handleOut → next.handleIn), a straight chord otherwise; the
+ * CLOSING segment is a cubic when `closed && last.handleOut && first.handleIn`.
+ *
+ * Contracts (critic-pinned):
+ *  - Closing curve emits INTERIOR samples only — never a terminal point equal
+ *    to the first anchor. Rust closes the ring by appending gpts[0]
+ *    (gcode_gen.rs); emitting the terminal would create a degenerate
+ *    zero-length G1 at the seam and corrupt offsetRingByDistance's
+ *    vertex-normal math. Callers keep `closed: true`.
+ *  - No consecutive duplicate points, enforced ON EMIT with POINTS_EPSILON
+ *    (1e-6mm — NOT the chord tolerance: real anchors 0.001mm apart must both
+ *    survive). For closed paths the explicit return-to-start duplicate
+ *    (last ≈ first) is also dropped, since Rust's close-append would
+ *    recreate the seam duplicate.
+ *  - Straight-segment paths pass through as their anchors, unchanged.
+ *  - PURE; fresh point objects.
+ */
+export function sampleBezierPath(
+  points: ReadonlyArray<PathPoint>,
+  closed: boolean,
+  tolerance: number = CURVE_CHORD_TOLERANCE_MM,
+): Array<{ x: number; y: number }> {
+  const out: Array<{ x: number; y: number }> = [];
+  if (points.length === 0) return out;
+
+  const emit = (x: number, y: number): void => {
+    const last = out[out.length - 1];
+    if (last && Math.abs(last.x - x) <= POINTS_EPSILON && Math.abs(last.y - y) <= POINTS_EPSILON) return;
+    out.push({ x, y });
+  };
+
+  emit(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1];
+    const pt = points[i];
+    if (prev.handleOut && pt.handleIn) {
+      flattenCubicInto(
+        emit,
+        prev.x, prev.y, prev.handleOut.x, prev.handleOut.y,
+        pt.handleIn.x, pt.handleIn.y, pt.x, pt.y,
+        tolerance, 0,
+      );
+    } else {
+      emit(pt.x, pt.y);
+    }
+  }
+
+  if (closed && points.length >= 2) {
+    const last = points[points.length - 1];
+    const first = points[0];
+    if (last.handleOut && first.handleIn) {
+      // Interior samples only: collect raw, drop the terminal (= first anchor
+      // — the top-level call's final emission is exactly p3), then dedup-emit.
+      const raw: Array<{ x: number; y: number }> = [];
+      flattenCubicInto(
+        (x, y) => raw.push({ x, y }),
+        last.x, last.y, last.handleOut.x, last.handleOut.y,
+        first.handleIn.x, first.handleIn.y, first.x, first.y,
+        tolerance, 0,
+      );
+      raw.pop();
+      for (const p of raw) emit(p.x, p.y);
+    }
+    // Return-to-start dedup: many real files close with an explicit duplicate
+    // of the start point before Z — Rust's close-append would double it.
+    if (out.length >= 2) {
+      const a = out[0], b = out[out.length - 1];
+      if (Math.abs(a.x - b.x) <= POINTS_EPSILON && Math.abs(a.y - b.y) <= POINTS_EPSILON) out.pop();
+    }
+  }
+
+  return out;
+}
+
 /**
  * Offset a closed ring of points by a distance using vertex-normal averaging.
  * Positive distance offsets outward (assuming CCW winding), negative inward.
