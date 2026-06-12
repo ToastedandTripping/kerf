@@ -205,8 +205,19 @@ export const DEFAULT_LAYERS: Layer[] = [
 
 export type StartCorner = "bottomLeft" | "bottomRight" | "topLeft" | "topRight" | "center";
 
+/**
+ * Geometry-convention version of saved project/recovery files (W1b).
+ * Absent ⇒ legacy file ⇒ load-time migrations run (flip bake, then
+ * points/transform sync + group-local re-base). Distinct from the semver-ish
+ * `version` field, which tracks the app release, not the data convention.
+ * Files saved with formatVersion 1 render group children wrong in pre-W1b
+ * binaries — forward-incompat is inherent to the convention fix.
+ */
+export const KERF_FORMAT_VERSION = 1;
+
 export interface KerfProject {
   version: string;
+  formatVersion?: number;
   name: string;
   objects: DesignObject[];
   layers: Layer[];

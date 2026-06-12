@@ -26,6 +26,7 @@ import { VariableTextDialog } from "../components/panels/VariableTextDialog";
 import { NestingDialog } from "../components/panels/NestingDialog";
 import { useKeyboardShortcuts } from "../lib/shortcuts";
 import { handleFileDrop } from "../lib/fileDrop";
+import { loadProjectWithMigrations } from "../lib/fileOps";
 import { startAutoSave, checkRecoveryFile, clearRecoveryFile } from "../lib/autoSave";
 import { OnboardingOverlay, shouldShowOnboarding } from "../components/panels/OnboardingOverlay";
 import { useStore } from "./store";
@@ -250,7 +251,11 @@ export default function App() {
                 onClick={async () => {
                   const result = await checkRecoveryFile();
                   if (result) {
-                    useStore.getState().loadProject(result.project);
+                    // W1b: recovery files load through the SAME migration
+                    // wrapper as every other loader — old recovery files are
+                    // legacy-convention and were previously the one loader
+                    // that bypassed migrations entirely.
+                    loadProjectWithMigrations(result.project);
                   }
                   setRecoveryOffer(null);
                 }}
