@@ -2,6 +2,7 @@ import { useState, useRef } from "react";
 import { useStore } from "../../app/store";
 import { fileOperations } from "../../lib/fileOps";
 import { getRecentFiles, clearRecentFiles } from "../../lib/recentFiles";
+import { movePartial } from "../../lib/geometry";
 import { resetOnboarding } from "../panels/OnboardingOverlay";
 import { openMaterialTest, openImageTrace, openQrCode, openVariableText, openNesting, openGrblSettings, openSettings, openProjectNotes } from "../../app/App";
 
@@ -227,6 +228,10 @@ export function MenuBar() {
   );
 }
 
+// Test-only export — exercises the production paste/duplicate offset writer
+// without driving the menu UI. Not imported by production code.
+export { clipboardOp as _testClipboardOp };
+
 function clipboardOp(op: "cut" | "copy" | "paste" | "pasteInPlace") {
   const s = useStore.getState();
   if (op === "copy" || op === "cut") {
@@ -241,10 +246,12 @@ function clipboardOp(op: "cut" | "copy" | "paste" | "pasteInPlace") {
     s.withUndo("paste", () => {
       const { clipboard, addObject } = s;
       const offset = op === "pasteInPlace" ? 0 : 10;
+      // W1b: movePartial shifts path points with the offset and returns fresh
+      // points arrays (clipboard objects hold live references to store points).
       const newObjects = clipboard.map((o) => ({
         ...o,
         id: `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        transform: { ...o.transform, x: o.transform.x + offset, y: o.transform.y + offset },
+        ...movePartial(o, o.transform.x + offset, o.transform.y + offset),
       }));
       newObjects.forEach(addObject);
       s.setSelectedIds(newObjects.map((o) => o.id));

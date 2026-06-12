@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { DesignObject, SubLayer } from "../types";
-import { DEFAULT_LAYERS } from "../types";
+import { DEFAULT_LAYERS, KERF_FORMAT_VERSION } from "../types";
 import { DEFAULT_MATERIALS } from "../../lib/materials";
 import { createGeometryActions } from "./geometryActions";
 import type { AppState } from "./storeTypes";
@@ -436,6 +436,7 @@ export const useStore = create<AppState>((set, get) => ({
     const state = get();
     return {
       version: "0.6.0",
+      formatVersion: KERF_FORMAT_VERSION,
       name: state.projectName,
       objects: state.objects,
       layers: state.layers,

@@ -1,11 +1,12 @@
 /**
  * D2 regression: group rotation must be composed onto children in flattenObjects.
  * Tests assert on flattenObjects OUTPUT (flattened coords + rotation field).
- * These tests must FAIL on original code and PASS after the fix.
  *
- * Coordinate convention:
+ * Coordinate convention (W1b — group-LOCAL child points):
  *   - Child transform.x/y is child's top-left corner relative to GROUP top-left
  *   - Group transform.x/y is group's top-left in workspace coords
+ *   - PATH/LINE child points[] are GROUP-LOCAL (same frame as the child
+ *     transform); transform x/y/w/h ≡ anchors-only points bbox at all times
  *   - AABB center of child in group-local space = (childX + w/2, childY + h/2)
  *   - Rotating point (px, py) around (cx, cy) by angle θ:
  *       rx = cx + (px - cx)*cos(θ) - (py - cy)*sin(θ)
@@ -13,17 +14,20 @@
  *
  * For a group with rotation r_g:
  *   - group center = (gx + gw/2, gy + gh/2)
- *   - child center in group-local space = (gx + cx + cw/2, gy + cy + ch/2)
- *     (where cx/cy are child.transform.x/y relative to group top-left)
- *   - flattened child center = rotate (gx+cx+cw/2, gy+cy+ch/2) around (gx+gw/2, gy+gh/2) by r_g
+ *   - flattened child center = rotate (gx+cx+cw/2, gy+cy+ch/2) around the group
+ *     center by r_g
  *   - flattened rotation = r_g + r_c (normalized) for PRIMITIVES
  *
- * For PATH/LINE children (points[] stores absolute workspace coords):
- *   - group rotation r_g must be physically applied to each point (and handle)
- *     by rotating around the group center
- *   - the rotation field is kept as r_c (child's own rotation) — r_g is already baked
- *     into the points so downstream does not double-apply it
- *   - transform.x/y/width/height are recomputed from the rotated points' AABB
+ * For PATH/LINE children:
+ *   - points translate to world by (gx, gy), THEN r_g is physically applied to
+ *     each point (and handle) by rotating around the group's world center
+ *   - the rotation field is kept as r_c (child's own rotation) — r_g is already
+ *     baked into the points so downstream does not double-apply it
+ *   - transform.x/y/width/height are recomputed from the composed points' AABB
+ *
+ * Flatten composition lives in ONE shared function (lib/geometry's
+ * composeGroupChild) consumed by BOTH gcodeGen and the Viewport renderer, so
+ * these tests cover the screen and the cut simultaneously.
  */
 import { describe, it, expect } from "vitest";
 import { flattenObjectsForTest } from "../gcodeGen";
@@ -70,7 +74,7 @@ function makeGroup(id: string, x: number, y: number, w: number, h: number, rotat
 
 /**
  * Make a path child as it would appear when stored inside a group.
- * points[] are absolute workspace coords (NOT relative to group).
+ * points[] are GROUP-LOCAL (W1b convention — same frame as the child transform).
  * transform.x/y is child top-left relative to GROUP top-left.
  * transform.width/height is the AABB of the points.
  */
@@ -205,13 +209,14 @@ describe("D2 — flattenObjects composes group rotation onto children", () => {
   });
 });
 
-describe("D2 — flattenObjects composes group rotation onto PATH/LINE children (points are absolute)", () => {
+describe("D2 — flattenObjects composes group rotation onto PATH/LINE children (group-local points)", () => {
   /**
    * Razor's empirical case:
    *   path with points (0,0)-(10,10), stored inside a group rotated 90°.
    *   Group: x=0, y=0, w=10, h=10, rotation=90
    *   Path child: transform={x:0, y:0, w:10, h:10, rotation:0}
-   *               points=[{x:0,y:0},{x:10,y:10}]  (absolute workspace coords)
+   *               points=[{x:0,y:0},{x:10,y:10}]  (group-local — the group
+   *               sits at the origin, so local == world here)
    *
    *   Group center: (5, 5)
    *   Rotate (0,0) around (5,5) by 90°:  rx=5+(0-5)*0-(0-5)*1=10,  ry=5+(0-5)*1+(0-5)*0=0  → (10,0)
@@ -225,7 +230,7 @@ describe("D2 — flattenObjects composes group rotation onto PATH/LINE children 
    *   This test MUST be RED before the fix and GREEN after.
    */
   it("(path-a) Razor case: path (0,0)-(10,10) in group rotated 90° — points physically rotated, rotation stays r_c", () => {
-    // Points are absolute workspace coords matching the group's AABB (group at 0,0 10×10)
+    // Group sits at the origin, so group-local == world for this fixture
     const pathChild = makePath("p1", [{ x: 0, y: 0 }, { x: 10, y: 10 }], 0, 0, 0);
     const group = makeGroup("g-path-a", 0, 0, 10, 10, 90, [pathChild]);
     const result = flattenObjectsForTest([group]);
@@ -254,8 +259,11 @@ describe("D2 — flattenObjects composes group rotation onto PATH/LINE children 
   it("(path-b) path child with own rotation r_c in group rotated r_g — points get r_g baked, rotation stays r_c", () => {
     // Group at (10,10), 20×20, rotated 45°
     // Path child: transform={x:5,y:5,w:10,h:10,rotation:30}
-    // Points absolute: (15,15),(25,25)  (= group.x + child.transform.x + corners)
-    const pathChild = makePath("p2", [{ x: 15, y: 15 }, { x: 25, y: 25 }], 5, 5, 30);
+    // Points GROUP-LOCAL: (5,5),(15,15) — world meaning identical to the original
+    // absolute fixture (15,15),(25,25): world = local + group origin (10,10).
+    // (Fixture re-based for the W1b group-local convention — pre-authorized;
+    // the world-frame assertions below are UNCHANGED.)
+    const pathChild = makePath("p2", [{ x: 5, y: 5 }, { x: 15, y: 15 }], 5, 5, 30);
     const group = makeGroup("g-path-b", 10, 10, 20, 20, 45, [pathChild]);
     const result = flattenObjectsForTest([group]);
     expect(result).toHaveLength(1);
@@ -278,21 +286,103 @@ describe("D2 — flattenObjects composes group rotation onto PATH/LINE children 
     expect(approx(flat.transform.rotation, 30)).toBe(true);
   });
 
-  it("(path-c) group with rotation=0 — path points unchanged, only transform.x/y gets group translation rebased", () => {
+  it("(path-c) group with rotation=0 — path points get the group translation applied", () => {
     // Group at (100,200), no rotation
-    // Path child: transform={x:0,y:0,...}, points absolute at (100,200),(110,210)
-    const pathChild = makePath("p3", [{ x: 100, y: 200 }, { x: 110, y: 210 }], 0, 0, 0);
+    // Path child: transform={x:0,y:0,...}, points GROUP-LOCAL at (0,0),(10,10) —
+    // world meaning identical to the original absolute fixture (100,200),(110,210).
+    // (Fixture re-based for the W1b group-local convention — pre-authorized;
+    // the world-frame assertions below are UNCHANGED.)
+    const pathChild = makePath("p3", [{ x: 0, y: 0 }, { x: 10, y: 10 }], 0, 0, 0);
     const group = makeGroup("g-path-c", 100, 200, 10, 10, 0, [pathChild]);
     const result = flattenObjectsForTest([group]);
     expect(result).toHaveLength(1);
     const flat = result[0];
 
-    // Points should be unchanged (no rotation to apply)
+    // World points = local + group origin
     expect(flat.points).toBeDefined();
     expect(approx(flat.points![0].x, 100)).toBe(true);
     expect(approx(flat.points![0].y, 200)).toBe(true);
     expect(approx(flat.points![1].x, 110)).toBe(true);
     expect(approx(flat.points![1].y, 210)).toBe(true);
     expect(approx(flat.transform.rotation, 0)).toBe(true);
+  });
+});
+
+describe("W1b — group MOVE flows into the flatten output (the F1 group-move fix)", () => {
+  it("moving a group moves path AND rect children equally in the flatten output", () => {
+    const pathChild = makePath("pm", [{ x: 0, y: 0 }, { x: 10, y: 10 }], 0, 0, 0);
+    const rectChild = makeRect("rm", 15, 0, 10, 10, 0);
+    const group = makeGroup("g-move", 0, 0, 25, 10, 0, [pathChild, rectChild]);
+
+    const before = flattenObjectsForTest([group]);
+    const moved = { ...group, transform: { ...group.transform, x: 40, y: 70 } };
+    const after = flattenObjectsForTest([moved]);
+
+    const pb = before.find((o) => o.id === "pm")!;
+    const pa = after.find((o) => o.id === "pm")!;
+    const rb = before.find((o) => o.id === "rm")!;
+    const ra = after.find((o) => o.id === "rm")!;
+
+    // Path child: POINTS moved by the group delta (this is what the laser cuts)
+    expect(approx(pa.points![0].x - pb.points![0].x, 40)).toBe(true);
+    expect(approx(pa.points![0].y - pb.points![0].y, 70)).toBe(true);
+    expect(approx(pa.points![1].x - pb.points![1].x, 40)).toBe(true);
+    // Path transform follows the points
+    expect(approx(pa.transform.x - pb.transform.x, 40)).toBe(true);
+    expect(approx(pa.transform.y - pb.transform.y, 70)).toBe(true);
+    // Rect child moved by the same delta (characterization)
+    expect(approx(ra.transform.x - rb.transform.x, 40)).toBe(true);
+    expect(approx(ra.transform.y - rb.transform.y, 70)).toBe(true);
+  });
+
+  it("rotating a MOVED group rotates path children about the group's CURRENT world center", () => {
+    const pathChild = makePath("pr", [{ x: 0, y: 0 }, { x: 10, y: 10 }], 0, 0, 0);
+    // group moved to (20, 30), then rotated 90° — pivot must be the moved center (25, 35)
+    const group = makeGroup("g-rot-moved", 20, 30, 10, 10, 90, [pathChild]);
+    const result = flattenObjectsForTest([group]);
+    const flat = result[0];
+
+    const p0 = rotatePoint(20, 30, 25, 35, 90); // world (20,30) about moved center
+    const p1 = rotatePoint(30, 40, 25, 35, 90);
+    expect(approx(flat.points![0].x, p0.x)).toBe(true);
+    expect(approx(flat.points![0].y, p0.y)).toBe(true);
+    expect(approx(flat.points![1].x, p1.x)).toBe(true);
+    expect(approx(flat.points![1].y, p1.y)).toBe(true);
+    expect(approx(flat.transform.rotation, 0)).toBe(true);
+  });
+
+  it("nested groups: grandchild path points translate by BOTH group origins", () => {
+    // inner group local to outer at (5, 5); path local to inner at (0,0)-(10,10)
+    const grandchild = makePath("gc", [{ x: 0, y: 0 }, { x: 10, y: 10 }], 0, 0, 0);
+    const inner = makeGroup("g-inner", 5, 5, 10, 10, 0, [grandchild]);
+    const outer = makeGroup("g-outer", 100, 200, 15, 15, 0, [inner]);
+
+    const result = flattenObjectsForTest([outer]);
+    expect(result).toHaveLength(1);
+    const flat = result[0];
+    // world = local + inner origin (5,5) + outer origin (100,200)
+    expect(approx(flat.points![0].x, 105)).toBe(true);
+    expect(approx(flat.points![0].y, 205)).toBe(true);
+    expect(approx(flat.points![1].x, 115)).toBe(true);
+    expect(approx(flat.points![1].y, 215)).toBe(true);
+    expect(approx(flat.transform.x, 105)).toBe(true);
+    expect(approx(flat.transform.y, 205)).toBe(true);
+  });
+
+  it("bezier handles travel with the group move", () => {
+    const pathChild: DesignObject = {
+      ...makePath("ph", [{ x: 0, y: 0 }, { x: 10, y: 10 }], 0, 0, 0),
+      points: [
+        { x: 0, y: 0, handleOut: { x: 5, y: -2 } },
+        { x: 10, y: 10, handleIn: { x: 5, y: 12 } },
+      ],
+    };
+    const group = makeGroup("g-bez", 30, 40, 10, 10, 0, [pathChild]);
+    const result = flattenObjectsForTest([group]);
+    const flat = result[0];
+    expect(approx(flat.points![0].handleOut!.x, 35)).toBe(true);
+    expect(approx(flat.points![0].handleOut!.y, 38)).toBe(true);
+    expect(approx(flat.points![1].handleIn!.x, 35)).toBe(true);
+    expect(approx(flat.points![1].handleIn!.y, 52)).toBe(true);
   });
 });

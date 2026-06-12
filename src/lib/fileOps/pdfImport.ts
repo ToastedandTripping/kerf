@@ -6,6 +6,7 @@
  */
 
 import type { DesignObject, PathPoint } from "../../app/types";
+import { pointsBBox } from "../geometry";
 
 /** Read a PDF file into an ArrayBuffer suitable for pdfjs-dist */
 export async function loadPdfFile(file: File): Promise<ArrayBuffer> {
@@ -126,36 +127,22 @@ export async function extractVectorPaths(
     for (const sub of pathList) {
       if (sub.points.length < 2) continue;
 
-      // Compute bounding box (include bezier control points which can extend beyond endpoints)
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const pt of sub.points) {
-        minX = Math.min(minX, pt.x);
-        minY = Math.min(minY, pt.y);
-        maxX = Math.max(maxX, pt.x);
-        maxY = Math.max(maxY, pt.y);
-        if (pt.handleIn) {
-          minX = Math.min(minX, pt.handleIn.x);
-          minY = Math.min(minY, pt.handleIn.y);
-          maxX = Math.max(maxX, pt.handleIn.x);
-          maxY = Math.max(maxY, pt.handleIn.y);
-        }
-        if (pt.handleOut) {
-          minX = Math.min(minX, pt.handleOut.x);
-          minY = Math.min(minY, pt.handleOut.y);
-          maxX = Math.max(maxX, pt.handleOut.x);
-          maxY = Math.max(maxY, pt.handleOut.y);
-        }
-      }
+      // W1b: ANCHORS-ONLY bbox (the app-wide invariant definition — a curve
+      // may overshoot the anchor bbox; accepted and consistent: the bbox is a
+      // selection/handle frame, not a render bound). No ||1 clamp — axis-
+      // parallel PDF segments get their true zero-thickness bbox; hit-testing
+      // carries the ε band for them.
+      const bb = pointsBBox(sub.points);
 
       const obj: DesignObject = {
         id: generateId(),
         type: "path",
         name: `PDF Path`,
         transform: {
-          x: minX,
-          y: minY,
-          width: maxX - minX || 1,
-          height: maxY - minY || 1,
+          x: bb.x,
+          y: bb.y,
+          width: bb.width,
+          height: bb.height,
           rotation: 0,
           scaleX: 1,
           scaleY: 1,

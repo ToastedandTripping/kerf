@@ -6,7 +6,7 @@ import { generateId } from "./storeTypes";
 import { applyObjects } from "./storeHelpers";
 import { hasPlaceholders, extractPlaceholders, substitutePlaceholders, generateSerialValues } from "../../lib/variableText";
 import { computeAABB, nestItems } from "../../lib/nesting";
-import { offsetRingByDistance } from "../../lib/geometry";
+import { offsetRingByDistance, movePartial } from "../../lib/geometry";
 
 // Module-level font cache to avoid reloading on every conversion
 let cachedFont: opentype.Font | null = null;
@@ -183,34 +183,36 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
           cy: o.transform.y + o.transform.height / 2,
         }));
 
+        // W1b: every position write routes through movePartial so path/line
+        // points travel with the transform.
         let target: number;
         switch (alignment) {
           case "left":
             target = Math.min(...bounds.map((b) => b.left));
             for (const b of bounds) {
               const obj = objects.find((o) => o.id === b.id)!;
-              updateObject(b.id, { transform: { ...obj.transform, x: target } });
+              updateObject(b.id, movePartial(obj, target, obj.transform.y));
             }
             break;
           case "right":
             target = Math.max(...bounds.map((b) => b.right));
             for (const b of bounds) {
               const obj = objects.find((o) => o.id === b.id)!;
-              updateObject(b.id, { transform: { ...obj.transform, x: target - obj.transform.width } });
+              updateObject(b.id, movePartial(obj, target - obj.transform.width, obj.transform.y));
             }
             break;
           case "top":
             target = Math.min(...bounds.map((b) => b.top));
             for (const b of bounds) {
               const obj = objects.find((o) => o.id === b.id)!;
-              updateObject(b.id, { transform: { ...obj.transform, y: target } });
+              updateObject(b.id, movePartial(obj, obj.transform.x, target));
             }
             break;
           case "bottom":
             target = Math.max(...bounds.map((b) => b.bottom));
             for (const b of bounds) {
               const obj = objects.find((o) => o.id === b.id)!;
-              updateObject(b.id, { transform: { ...obj.transform, y: target - obj.transform.height } });
+              updateObject(b.id, movePartial(obj, obj.transform.x, target - obj.transform.height));
             }
             break;
           case "hcenter": {
@@ -219,7 +221,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
             const center = (allLeft + allRight) / 2;
             for (const b of bounds) {
               const obj = objects.find((o) => o.id === b.id)!;
-              updateObject(b.id, { transform: { ...obj.transform, x: center - obj.transform.width / 2 } });
+              updateObject(b.id, movePartial(obj, center - obj.transform.width / 2, obj.transform.y));
             }
             break;
           }
@@ -229,7 +231,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
             const center = (allTop + allBottom) / 2;
             for (const b of bounds) {
               const obj = objects.find((o) => o.id === b.id)!;
-              updateObject(b.id, { transform: { ...obj.transform, y: center - obj.transform.height / 2 } });
+              updateObject(b.id, movePartial(obj, obj.transform.x, center - obj.transform.height / 2));
             }
             break;
           }
@@ -251,7 +253,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
           const gap = (last - first - totalWidth) / (sorted.length - 1);
           let x = first;
           for (const obj of sorted) {
-            updateObject(obj.id, { transform: { ...obj.transform, x } });
+            updateObject(obj.id, movePartial(obj, x, obj.transform.y));
             x += obj.transform.width + gap;
           }
         } else {
@@ -262,7 +264,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
           const gap = (last - first - totalHeight) / (sorted.length - 1);
           let y = first;
           for (const obj of sorted) {
-            updateObject(obj.id, { transform: { ...obj.transform, y } });
+            updateObject(obj.id, movePartial(obj, obj.transform.x, y));
             y += obj.transform.height + gap;
           }
         }
@@ -311,13 +313,16 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
           const allTop = Math.min(...selected.map((o) => o.transform.y));
           const allBottom = Math.max(...selected.map((o) => o.transform.y + o.transform.height));
 
+          // W1b: position-mirroring writes route through movePartial so paths
+          // actually move. The geometry-mirroring defect itself (children are
+          // repositioned but not mirrored) is F29 — Wave 4, scope-locked out.
           for (const obj of selected) {
             if (axis === "horizontal") {
               const newX = allRight - (obj.transform.x - allLeft) - obj.transform.width;
-              updateObject(obj.id, { transform: { ...obj.transform, x: newX } });
+              updateObject(obj.id, movePartial(obj, newX, obj.transform.y));
             } else {
               const newY = allBottom - (obj.transform.y - allTop) - obj.transform.height;
-              updateObject(obj.id, { transform: { ...obj.transform, y: newY } });
+              updateObject(obj.id, movePartial(obj, obj.transform.x, newY));
             }
           }
         }
@@ -339,13 +344,15 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
           maxY = Math.max(maxY, obj.transform.y + obj.transform.height);
         }
 
+        // W1b: child POINTS become group-local alongside the transform re-base.
+        // movePartial is PURE (fresh points arrays) — an in-place re-base would
+        // corrupt the withUndo before-snapshot, which aliases the same arrays
+        // (Ctrl+Z after grouping would teleport children to group-local coords).
+        // A child that is itself a group only re-bases its own transform — its
+        // children are already local to it.
         const children = selected.map((o) => ({
           ...o,
-          transform: {
-            ...o.transform,
-            x: o.transform.x - minX,
-            y: o.transform.y - minY,
-          },
+          ...movePartial(o, o.transform.x - minX, o.transform.y - minY),
         }));
 
         const groupId = generateId();
@@ -381,13 +388,13 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
         for (const obj of objects) {
           if (selectedIds.includes(obj.id) && obj.type === "group" && obj.children) {
             for (const child of obj.children) {
+              // W1b: add the group origin back to child POINTS alongside the
+              // transform (pure — see groupSelected). Known pre-existing
+              // limitation, unchanged here: ungrouping a ROTATED group drops
+              // r_g (children land unrotated at their stored offsets).
               const expanded = {
                 ...child,
-                transform: {
-                  ...child.transform,
-                  x: child.transform.x + obj.transform.x,
-                  y: child.transform.y + obj.transform.y,
-                },
+                ...movePartial(child, child.transform.x + obj.transform.x, child.transform.y + obj.transform.y),
               };
               newObjects.push(expanded);
               newSelectedIds.push(expanded.id);
@@ -529,15 +536,17 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
             for (let c = 0; c < cols; c++) {
               if (r === 0 && c === 0) continue;
               const newId = generateId();
+              // W1b: movePartial offsets path points with the cell AND breaks
+              // the points-array aliasing between array copies.
               addObject({
                 ...obj,
                 id: newId,
                 name: obj.name + ` [${r},${c}]`,
-                transform: {
-                  ...obj.transform,
-                  x: obj.transform.x + c * (obj.transform.width + spacingX),
-                  y: obj.transform.y + r * (obj.transform.height + spacingY),
-                },
+                ...movePartial(
+                  obj,
+                  obj.transform.x + c * (obj.transform.width + spacingX),
+                  obj.transform.y + r * (obj.transform.height + spacingY),
+                ),
               });
               newIds.push(newId);
             }
@@ -569,14 +578,16 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
             const newCx = cx + radius * Math.cos(angle);
             const newCy = cy + radius * Math.sin(angle);
             const newId = generateId();
+            // W1b: movePartial for the position write (points move, aliasing
+            // broken); the rotation field merges on top of the synced transform.
+            const moved = movePartial(obj, newCx - obj.transform.width / 2, newCy - obj.transform.height / 2);
             addObject({
               ...obj,
               id: newId,
               name: obj.name + ` [${i}]`,
+              ...moved,
               transform: {
-                ...obj.transform,
-                x: newCx - obj.transform.width / 2,
-                y: newCy - obj.transform.height / 2,
+                ...moved.transform,
                 rotation: ((obj.transform.rotation + angleStep * i) % 360 + 360) % 360,
               },
             });
@@ -763,11 +774,16 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
               transform: { ...obj.transform, rotation: newRotation },
             });
 
+            // W1b: movePartial for the placement write; rotation merges on top.
+            const moved = movePartial(
+              obj,
+              placement.x + (newAABB.w - obj.transform.width) / 2,
+              placement.y + (newAABB.h - obj.transform.height) / 2,
+            );
             updateObject(placement.objectId, {
+              ...moved,
               transform: {
-                ...obj.transform,
-                x: placement.x + (newAABB.w - obj.transform.width) / 2,
-                y: placement.y + (newAABB.h - obj.transform.height) / 2,
+                ...moved.transform,
                 rotation: ((newRotation % 360) + 360) % 360,
               },
             });

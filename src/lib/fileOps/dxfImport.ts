@@ -131,7 +131,9 @@ function parseDxfManual(content: string) {
           }
           newObjects.push({
             id: generateId(), type: "path", name: `DXF Arc ${newObjects.length + 1}`,
-            transform: { x: minX, y: minY, width: (maxX - minX) || 1, height: (maxY - minY) || 1, rotation: 0, scaleX: 1, scaleY: 1 },
+            // W1b: no ||1 clamp — true bbox at birth (invariant), degenerate
+            // axis-parallel geometry stays clickable via the hitTest ε band
+            transform: { x: minX, y: minY, width: maxX - minX, height: maxY - minY, rotation: 0, scaleX: 1, scaleY: 1 },
             layerIndex: store.activeLayerIndex, visible: true, locked: false,
             fill: null, stroke: layerColor, strokeWidth: 1, opacity: 1,
             points: pts, closed: false,
