@@ -27,6 +27,8 @@ jobs:
     strategy:
       matrix:
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '10.13'
     steps:
       - uses: actions/checkout@v4
 
