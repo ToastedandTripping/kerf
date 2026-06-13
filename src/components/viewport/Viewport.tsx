@@ -58,12 +58,12 @@ export function Viewport() {
   const setNodeEditState = useStore((s) => s.setNodeEditState);
   const guides = useStore((s) => s.guides);
 
-  // P7: Derived slice -- only re-renders selection overlay when selected objects' transforms change
+  // P7: Derived slice -- re-renders selection overlay when selected objects change.
+  // Returns original store references so useShallow's === comparison is stable.
   const selectedTransforms = useStore(useShallow((s) => {
-    return s.selectedIds.map((id) => {
-      const obj = s.objectsById.get(id);
-      return obj ? { id: obj.id, transform: obj.transform, type: obj.type, layerIndex: obj.layerIndex, locked: obj.locked, points: obj.points } : null;
-    }).filter((x): x is NonNullable<typeof x> => x != null);
+    return s.selectedIds
+      .map((id) => s.objectsById.get(id))
+      .filter((x): x is DesignObject => x != null);
   }));
 
   // Initialize Pixi.js
