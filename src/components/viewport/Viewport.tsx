@@ -72,6 +72,7 @@ export function Viewport() {
 
     const app = new Application();
     const initPromise = app.init({
+      preference: 'webgl',
       resizeTo: canvasRef.current,
       background: 0x1a1a1a,
       antialias: true,

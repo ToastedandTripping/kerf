@@ -1,4 +1,5 @@
-import { useState, useCallback, useEffect } from "react";
+import { Component, useState, useCallback, useEffect } from "react";
+import type { ReactNode, ErrorInfo } from "react";
 import { MenuBar } from "../components/topbar/MenuBar";
 import { Toolbar } from "../components/toolbar/Toolbar";
 import { Viewport } from "../components/viewport/Viewport";
@@ -31,6 +32,26 @@ import { startAutoSave, checkRecoveryFile, clearRecoveryFile } from "../lib/auto
 import { OnboardingOverlay, shouldShowOnboarding } from "../components/panels/OnboardingOverlay";
 import { useStore } from "./store";
 import { generateId } from "./store/storeTypes";
+
+class ViewportErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error, info: ErrorInfo) { console.error("Viewport crashed:", error, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "#1a1a1a", color: "#888", flexDirection: "column", gap: "12px" }}>
+          <div style={{ fontSize: "14px" }}>Canvas failed to render</div>
+          <div style={{ fontSize: "11px", color: "#555", maxWidth: "300px", textAlign: "center" }}>{this.state.error.message}</div>
+          <button onClick={() => this.setState({ error: null })} style={{ padding: "6px 16px", fontSize: "12px", background: "var(--accent, #4a90e2)", border: "none", borderRadius: "4px", color: "#fff", cursor: "pointer" }}>
+            Retry
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // Dialog helpers — open dialogs via Zustand store
 export function openGrblSettings() { useStore.getState().openDialog("grbl"); }
@@ -138,7 +159,9 @@ export default function App() {
         <Toolbar />
         <div style={{ flex: 1, position: "relative", overflow: "hidden", display: "flex", flexDirection: "column" }}>
           <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
-            <Viewport />
+            <ViewportErrorBoundary>
+              <Viewport />
+            </ViewportErrorBoundary>
             <Rulers />
             <JobPreview />
           </div>
