@@ -287,13 +287,7 @@ export function useKeyboardShortcuts() {
         const s = useStore.getState();
         if (s.selectedIds.length > 0) {
           const layerIndex = parseInt(key) - 1;
-          const layerName = s.layers[layerIndex]?.name ?? `Layer ${key}`;
-          s.withUndo("layer-assign", () => {
-            s.updateObjects(
-              s.selectedIds.map((id) => ({ id, partial: { layerIndex } }))
-            );
-          });
-          s.setStatusMessage(`Moved ${s.selectedIds.length} object${s.selectedIds.length > 1 ? "s" : ""} to ${layerName}`);
+          s.moveObjectsToLayer(s.selectedIds, layerIndex);
           return;
         }
       }

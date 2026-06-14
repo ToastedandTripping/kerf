@@ -33,6 +33,7 @@ export interface AppState {
   addObject: (obj: DesignObject) => void;
   updateObject: (id: string, partial: Partial<DesignObject>) => void;
   updateObjects: (updates: Array<{ id: string; partial: Partial<DesignObject> }>) => void;
+  moveObjectsToLayer: (ids: string[], layerIndex: number) => void;
   removeObjects: (ids: string[]) => void;
 
   // Selection
@@ -192,6 +193,10 @@ export interface AppState {
   // Start corner for cut ordering
   startCorner: StartCorner;
   setStartCorner: (corner: StartCorner) => void;
+
+  // Device origin: true = Y=0 at top (common for diode/CO2 lasers), false = Y=0 at bottom (standard GRBL)
+  originTop: boolean;
+  setOriginTop: (v: boolean) => void;
 
   // Project notes
   projectNotes: string;

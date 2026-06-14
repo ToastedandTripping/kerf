@@ -58,12 +58,12 @@ export function Viewport() {
   const setNodeEditState = useStore((s) => s.setNodeEditState);
   const guides = useStore((s) => s.guides);
 
-  // P7: Derived slice -- only re-renders selection overlay when selected objects' transforms change
+  // P7: Derived slice -- re-renders selection overlay when selected objects change.
+  // Returns original store references so useShallow's === comparison is stable.
   const selectedTransforms = useStore(useShallow((s) => {
-    return s.selectedIds.map((id) => {
-      const obj = s.objectsById.get(id);
-      return obj ? { id: obj.id, transform: obj.transform, type: obj.type, layerIndex: obj.layerIndex, locked: obj.locked, points: obj.points } : null;
-    }).filter((x): x is NonNullable<typeof x> => x != null);
+    return s.selectedIds
+      .map((id) => s.objectsById.get(id))
+      .filter((x): x is DesignObject => x != null);
   }));
 
   // Initialize Pixi.js
@@ -72,6 +72,7 @@ export function Viewport() {
 
     const app = new Application();
     const initPromise = app.init({
+      preference: 'webgl',
       resizeTo: canvasRef.current,
       background: 0x1a1a1a,
       antialias: true,
@@ -941,18 +942,7 @@ function ContextMenuContent({ x, y, onClose }: { x: number; y: number; onClose: 
   const selectedIds = useStore((s) => s.selectedIds);
 
   function moveToLayer(layerIndex: number) {
-    const store = useStore.getState();
-    store.withUndo("move-to-layer", () => {
-      for (const id of selectedIds) {
-        store.updateObject(id, { layerIndex });
-        const layerColor = layers[layerIndex]?.color || "#4a90e2";
-        store.updateObject(id, { stroke: layerColor });
-      }
-    });
-    store.addConsoleLine(
-      `Moved ${selectedIds.length} object${selectedIds.length !== 1 ? "s" : ""} to ${layers[layerIndex]?.name}`,
-      "info",
-    );
+    useStore.getState().moveObjectsToLayer(selectedIds, layerIndex);
     onClose();
   }
 

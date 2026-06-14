@@ -349,6 +349,7 @@ export async function generateGcode(): Promise<GcodeResult> {
     sValueMax,
     startCorner: store.startCorner || "bottomLeft",
     workspaceWidth: store.workspaceWidth,
+    originTop: store.originTop,
   });
 
   if (imageResult) {

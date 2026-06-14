@@ -100,6 +100,7 @@ struct ScanLineParams {
     s_max: f64,
     power_cmd: String,
     workspace_height: f64,
+    origin_top: bool,
     rotation_rad: f64,
     center_x: f64,
     center_y: f64,
@@ -127,7 +128,7 @@ fn transform_to_grbl(x: f64, y: f64, params: &ScanLineParams) -> (f64, f64) {
     } else {
         (x, y)
     };
-    (rx, params.workspace_height - ry)
+    (rx, if params.origin_top { -ry } else { params.workspace_height - ry })
 }
 
 /// Collect scan segments for fill mode (horizontal or vertical) without emitting G-code.
@@ -292,7 +293,8 @@ fn generate_scan_lines(
 }
 
 /// Generate G-code from a list of objects with their layer settings
-pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max: f64) -> GcodeResult {
+pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max: f64, origin_top: bool) -> GcodeResult {
+    let fy = |y: f64| -> f64 { if origin_top { -y } else { workspace_height - y } };
     let mut lines: Vec<String> = Vec::new();
     let mut moves: Vec<GcodeMove> = Vec::new();
     let mut total_distance = 0.0_f64;
@@ -344,7 +346,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
 
                         // Build flattened point list in G-code coords (Y-flipped)
                         let mut gpts: Vec<(f64, f64)> = path.points.iter()
-                            .map(|p| (p.x, workspace_height - p.y))
+                            .map(|p| (p.x, fy(p.y)))
                             .collect();
                         if path.closed && gpts.len() > 2 {
                             gpts.push(gpts[0]);
@@ -603,6 +605,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                         s_max,
                         power_cmd: power_cmd.to_string(),
                         workspace_height,
+                        origin_top,
                         rotation_rad,
                         center_x,
                         center_y,
@@ -662,7 +665,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                             if ring.len() < 2 { continue; }
 
                             // Rapid to ring start
-                            let (rsx, rsy) = (ring[0].x, workspace_height - ring[0].y);
+                            let (rsx, rsy) = (ring[0].x, fy(ring[0].y));
                             let dist = ((rsx - cur_x).powi(2) + (rsy - cur_y).powi(2)).sqrt();
                             travel_distance += dist;
                             total_distance += dist;
@@ -673,7 +676,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
 
                             // Cut along ring
                             for pt in ring.iter().skip(1) {
-                                let (px, py) = (pt.x, workspace_height - pt.y);
+                                let (px, py) = (pt.x, fy(pt.y));
                                 let d = ((px - cur_x).powi(2) + (py - cur_y).powi(2)).sqrt();
                                 cut_distance += d;
                                 total_distance += d;
@@ -684,15 +687,15 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                             }
 
                             // Close the ring
-                            let (fx, fy) = (ring[0].x, workspace_height - ring[0].y);
-                            let d = ((fx - cur_x).powi(2) + (fy - cur_y).powi(2)).sqrt();
+                            let (cfx, cfy) = (ring[0].x, fy(ring[0].y));
+                            let d = ((cfx - cur_x).powi(2) + (cfy - cur_y).powi(2)).sqrt();
                             if d > 0.001 {
                                 cut_distance += d;
                                 total_distance += d;
-                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", fx, fy, speed_mm_min, s_max));
-                                moves.push(GcodeMove { x: fx, y: fy, move_type: "cut".to_string(), speed: speed_mm_min, power: s_max });
-                                cur_x = fx;
-                                cur_y = fy;
+                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", cfx, cfy, speed_mm_min, s_max));
+                                moves.push(GcodeMove { x: cfx, y: cfy, move_type: "cut".to_string(), speed: speed_mm_min, power: s_max });
+                                cur_x = cfx;
+                                cur_y = cfy;
                             }
                         }
                     }
@@ -789,7 +792,7 @@ mod tests {
     fn tn1a_y_flip_10mm_square() {
         let workspace_height = 100.0;
         let obj = make_rect_obj("sq", 0.0, 0.0, 10.0, 10.0, make_layer_line());
-        let result = generate_gcode(&[obj], workspace_height, 1000.0);
+        let result = generate_gcode(&[obj], workspace_height, 1000.0, false);
         let gcode = &result.gcode;
 
         // Rapid to first corner (0,0) design → (0,100) grbl
@@ -828,7 +831,7 @@ mod tests {
             priority: None,
             group_id: None,
         };
-        let result = generate_gcode(&[obj], 100.0, 1000.0);
+        let result = generate_gcode(&[obj], 100.0, 1000.0, false);
         let gcode = &result.gcode;
         // Should contain an M5 (laser off between perforations) beyond the final M5
         let m5_count = gcode.matches("M5").count();
@@ -863,7 +866,7 @@ mod tests {
             priority: None,
             group_id: None,
         };
-        let result = generate_gcode(&[obj], 100.0, 1000.0);
+        let result = generate_gcode(&[obj], 100.0, 1000.0, false);
         let gcode = &result.gcode;
         // Should have M5 for the tab gap
         assert!(gcode.contains("M5"),
@@ -878,7 +881,7 @@ mod tests {
         layer.lead_in = 2.0;
         layer.lead_out = 2.0;
         let obj = make_rect_obj("rect", 10.0, 10.0, 20.0, 20.0, layer);
-        let result = generate_gcode(&[obj], 100.0, 1000.0);
+        let result = generate_gcode(&[obj], 100.0, 1000.0, false);
         let gcode = &result.gcode;
         // Lead-in: there should be a rapid to a point offset from the first corner,
         // then a G1 to the first corner, then the M3/M4 + path cut.

@@ -26,6 +26,7 @@ export function JobPreview() {
   const camera = useStore((s) => s.camera);
   const workspaceWidth = useStore((s) => s.workspaceWidth);
   const workspaceHeight = useStore((s) => s.workspaceHeight);
+  const originTop = useStore((s) => s.originTop);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animFrameRef = useRef<number>(0);
@@ -126,11 +127,12 @@ export function JobPreview() {
     ctx.lineWidth = 1 / camera.zoom;
     ctx.strokeRect(0, 0, wsW, wsH);
 
-    // Coordinate transform: workspace origin at bottom-left
-    // G-code Y=0 is bottom, screen Y=0 is top
+    // Coordinate transform: G-code coords to screen coords.
+    // Standard GRBL (origin bottom): G-code Y=0 at bottom → screen Y = (wsH - y).
+    // Origin top: G-code Y is negative (0 at top, -wsH at bottom) → screen Y = -y.
     const toScreen = (mx: number, my: number) => ({
       sx: mx * PX_PER_MM,
-      sy: (workspaceHeight - my) * PX_PER_MM,
+      sy: originTop ? (-my) * PX_PER_MM : (workspaceHeight - my) * PX_PER_MM,
     });
 
     const currentMoveIdx = getMoveIndex(currentProgress);
@@ -222,7 +224,7 @@ export function JobPreview() {
     ctx.fill();
 
     ctx.restore();
-  }, [moves, camera, workspaceWidth, workspaceHeight, getMoveIndex, getPositionAtProgress]);
+  }, [moves, camera, workspaceWidth, workspaceHeight, originTop, getMoveIndex, getPositionAtProgress]);
 
   // Animation loop
   useEffect(() => {

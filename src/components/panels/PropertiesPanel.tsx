@@ -6,7 +6,9 @@ import { movePartial, scalePartial } from "../../lib/geometry";
 export function PropertiesPanel() {
   const selectedIds = useStore((s) => s.selectedIds);
   const objects = useStore((s) => s.objects);
+  const layers = useStore((s) => s.layers);
   const updateObject = useStore((s) => s.updateObject);
+  const moveObjectsToLayer = useStore((s) => s.moveObjectsToLayer);
   const beginEdit = useStore((s) => s.beginPropertyEdit);
   const commitEdit = useStore((s) => s.commitPropertyEdit);
 
@@ -62,6 +64,41 @@ export function PropertiesPanel() {
       >
         Properties {multi ? `(${selected.length})` : ""}
       </div>
+
+      {/* Layer indicator + selector (works for single and multi-select) */}
+      {(() => {
+        const layerIndices = new Set(selected.map((o) => o.layerIndex));
+        const isMixed = layerIndices.size > 1;
+        const currentIndex = isMixed ? -1 : [...layerIndices][0];
+        const currentLayer = isMixed ? null : layers[currentIndex];
+        return (
+          <div style={{ padding: "0 12px 8px", display: "flex", alignItems: "center", gap: "8px" }}>
+            <div style={{
+              width: "10px", height: "10px", borderRadius: "2px", flexShrink: 0,
+              background: currentLayer?.color || "transparent",
+              border: isMixed ? "1px dashed var(--text-muted)" : "none",
+            }} />
+            <select
+              value={currentIndex}
+              onChange={(e) => moveObjectsToLayer(selectedIds, Number(e.target.value))}
+              style={{
+                flex: 1, background: "var(--bg-input)", border: "1px solid var(--border)",
+                color: "var(--text-primary)", padding: "3px 6px", borderRadius: "var(--radius-sm)",
+                fontSize: "11px", cursor: "pointer",
+                appearance: "none", WebkitAppearance: "none",
+                backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath d='M0 2l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.5'/%3E%3C/svg%3E")`,
+                backgroundRepeat: "no-repeat", backgroundPosition: "right 6px center",
+                paddingRight: "20px",
+              }}
+            >
+              {isMixed && <option value={-1} disabled>Mixed</option>}
+              {layers.map((l) => (
+                <option key={l.index} value={l.index}>{l.name}</option>
+              ))}
+            </select>
+          </div>
+        );
+      })()}
 
       {!multi && (
         <div style={{ padding: "0 12px 12px" }}>

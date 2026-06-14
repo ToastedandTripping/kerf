@@ -134,7 +134,7 @@ export function ImageImportDialog({ open, imageData, fileName, imageWidth, image
           fontSize: "10px", color: "var(--text-muted)", marginBottom: "16px",
           padding: "8px", background: "rgba(74,144,226,0.06)", borderRadius: "var(--radius-sm)",
         }}>
-          After tracing, right-click any path to move it to a different layer. Each traced element can be on its own layer for separate cut/engrave settings.
+          After tracing, select any path and use the Layer dropdown in Properties to reassign it, or press 1-6. Each traced element can be on its own layer for separate cut/engrave settings.
         </div>
 
         {/* Buttons */}

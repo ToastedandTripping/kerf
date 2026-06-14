@@ -5,14 +5,25 @@ use crate::engine::gcode_gen::{self, CutObject, GcodeResult};
 use crate::engine::image_gcode_gen::{self, ImageEngraveRequest};
 use crate::engine::optimizer;
 
-/// Compute the start point for nearest-neighbor from a corner name + workspace dims
-fn start_point_from_corner(corner: &str, width: f64, height: f64) -> (f64, f64) {
-    match corner {
-        "bottomRight" => (width, 0.0),
-        "topLeft" => (0.0, height),
-        "topRight" => (width, height),
-        "center" => (width / 2.0, height / 2.0),
-        _ => (0.0, 0.0), // "bottomLeft" or default
+/// Compute the start point for nearest-neighbor from a corner name + workspace dims.
+/// When origin_top is true, Y=0 is at the top (no Y-flip), so the mapping inverts.
+fn start_point_from_corner(corner: &str, width: f64, height: f64, origin_top: bool) -> (f64, f64) {
+    if origin_top {
+        match corner {
+            "bottomRight" => (width, -height),
+            "topLeft" => (0.0, 0.0),
+            "topRight" => (width, 0.0),
+            "center" => (width / 2.0, -height / 2.0),
+            _ => (0.0, -height), // "bottomLeft" or default
+        }
+    } else {
+        match corner {
+            "bottomRight" => (width, 0.0),
+            "topLeft" => (0.0, height),
+            "topRight" => (width, height),
+            "center" => (width / 2.0, height / 2.0),
+            _ => (0.0, 0.0), // "bottomLeft" or default
+        }
     }
 }
 
@@ -25,12 +36,14 @@ pub async fn generate_gcode(
     s_value_max: Option<f64>,
     start_corner: Option<String>,
     workspace_width: Option<f64>,
+    origin_top: Option<bool>,
 ) -> Result<GcodeResult, String> {
     tokio::task::spawn_blocking(move || {
         let s_value_max = s_value_max.unwrap_or(1000.0);
         let ws_width = workspace_width.unwrap_or(500.0);
+        let origin_top = origin_top.unwrap_or(false);
         let corner = start_corner.as_deref().unwrap_or("bottomLeft");
-        let (start_x, start_y) = start_point_from_corner(corner, ws_width, workspace_height);
+        let (start_x, start_y) = start_point_from_corner(corner, ws_width, workspace_height, origin_top);
 
         let mut sorted = objects;
 
@@ -70,7 +83,7 @@ pub async fn generate_gcode(
             final_objects.push(line_objects[idx].clone());
         }
 
-        let result = gcode_gen::generate_gcode(&final_objects, workspace_height, s_value_max);
+        let result = gcode_gen::generate_gcode(&final_objects, workspace_height, s_value_max, origin_top);
         Ok(result)
     })
     .await

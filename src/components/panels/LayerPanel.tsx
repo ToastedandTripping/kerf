@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { useShallow } from "zustand/shallow";
 import { useStore } from "../../app/store";
 import type { Layer, CutMode, SubLayer, MaterialPreset } from "../../app/types";
 import { PowerCurveEditor, PowerCurveThumbnail } from "./PowerCurveEditor";
@@ -112,6 +113,10 @@ function LayerRow({
   const addSubLayers = useStore((s) => s.addSubLayers);
   const removeSubLayer = useStore((s) => s.removeSubLayer);
   const updateSubLayer = useStore((s) => s.updateSubLayer);
+  const layerObjects = useStore(useShallow((s) => s.objects.filter((o) => o.layerIndex === layer.index)));
+  const selectedSet = useStore((s) => s.selectedSet);
+  const setSelectedIds = useStore((s) => s.setSelectedIds);
+  const addToSelection = useStore((s) => s.addToSelection);
 
   // Clear activePreset when user manually changes cut settings
   const onManualUpdate = (partial: Partial<Layer>) => {
@@ -191,6 +196,12 @@ function LayerRow({
           {layer.name}
         </span>
 
+        {layerObjects.length > 0 && (
+          <span style={{ fontSize: "9px", color: "var(--text-muted)", fontFamily: "var(--font-mono)", minWidth: "14px", textAlign: "center" }}>
+            {layerObjects.length}
+          </span>
+        )}
+
         {/* Mode badge -- show sub-layer count if present, otherwise current mode */}
         {hasSubLayers ? (
           <span style={{
@@ -263,6 +274,37 @@ function LayerRow({
           background: active ? "var(--bg-active)" : "rgba(0,0,0,0.15)",
           display: "flex", flexDirection: "column", gap: "6px",
         }}>
+          {/* Objects on this layer */}
+          {layerObjects.length > 0 && (
+            <div style={{ marginBottom: "2px" }}>
+              <div style={{ fontSize: "9px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.3px", marginBottom: "4px" }}>
+                Objects ({layerObjects.length})
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
+                {layerObjects.map((obj) => (
+                  <button
+                    key={obj.id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (e.shiftKey) { addToSelection(obj.id); } else { setSelectedIds([obj.id]); }
+                    }}
+                    style={{
+                      display: "flex", alignItems: "center", gap: "6px",
+                      padding: "3px 6px", fontSize: "10px",
+                      background: selectedSet.has(obj.id) ? "rgba(74,144,226,0.15)" : "transparent",
+                      border: "none", color: selectedSet.has(obj.id) ? "var(--text-primary)" : "var(--text-secondary)",
+                      cursor: "pointer", borderRadius: "var(--radius-sm)",
+                      textAlign: "left", width: "100%",
+                    }}
+                  >
+                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{obj.name}</span>
+                    <span style={{ fontSize: "8px", color: "var(--text-muted)", textTransform: "uppercase" }}>{obj.type}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Material Preset Quick-Apply */}
           <PresetQuickApply layer={layer} onUpdate={onManualUpdate} />
 
