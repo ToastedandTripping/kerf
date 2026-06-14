@@ -132,6 +132,7 @@ export const MIN_SCALE_TARGET = 0.01;
 /** A partial object update produced by the invariant-maintaining helpers. */
 export interface GeometryPartial {
   points?: PathPoint[];
+  children?: DesignObject[];
   transform: Transform;
 }
 
@@ -210,6 +211,26 @@ export function scalePartial(
   obj: DesignObject,
   target: { x: number; y: number; width: number; height: number },
 ): GeometryPartial {
+  if (obj.type === "group" && obj.children && obj.children.length > 0) {
+    const t = obj.transform;
+    const sx = t.width > POINTS_EPSILON ? target.width / t.width : 1;
+    const sy = t.height > POINTS_EPSILON ? target.height / t.height : 1;
+    const children = obj.children.map((child) => {
+      const ct = child.transform;
+      const childTarget = {
+        x: ct.x * sx,
+        y: ct.y * sy,
+        width: Math.max(MIN_SCALE_TARGET, ct.width * sx),
+        height: Math.max(MIN_SCALE_TARGET, ct.height * sy),
+      };
+      const partial = scalePartial(child, childTarget);
+      return { ...child, ...partial };
+    });
+    return {
+      children,
+      transform: { ...t, x: target.x, y: target.y, width: target.width, height: target.height },
+    };
+  }
   if (!isPointsBearing(obj)) {
     return {
       transform: {
