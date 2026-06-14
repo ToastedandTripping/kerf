@@ -63,6 +63,7 @@ export interface JobGateState {
   gcodeStale: boolean;
   workspaceWidth: number;
   workspaceHeight: number;
+  originTop?: boolean;
 }
 
 export interface JobGate {
@@ -78,10 +79,10 @@ export function canStartJob(state: JobGateState): JobGate {
   if (state.gcodeStale) return { ok: false, reason: "Design changed -- regenerate G-code" };
   const ext = movesExtents(state.gcodeResult.moves);
   if (!ext) return { ok: false, reason: "Nothing to cut -- no moves in the generated G-code" };
-  if (
-    ext.minX < 0 || ext.minY < 0 ||
-    ext.maxX > state.workspaceWidth || ext.maxY > state.workspaceHeight
-  ) {
+  const outOfBounds = state.originTop
+    ? (ext.minX < 0 || ext.maxX > state.workspaceWidth || ext.maxY > 0 || ext.minY < -state.workspaceHeight)
+    : (ext.minX < 0 || ext.minY < 0 || ext.maxX > state.workspaceWidth || ext.maxY > state.workspaceHeight);
+  if (outOfBounds) {
     return {
       ok: false,
       reason: "G-code extends outside workspace bounds. Move or resize the design to fit.",

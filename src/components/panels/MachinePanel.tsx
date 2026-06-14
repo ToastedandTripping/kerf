@@ -621,7 +621,7 @@ export function MachinePanel() {
           {(() => {
             const startGate = canStartJob({
               machineConnected, jobRunning, gcodeResult, gcodeStale,
-              workspaceWidth, workspaceHeight,
+              workspaceWidth, workspaceHeight, originTop,
             });
             // FRAME contract change (F15): framing traces the true G-code
             // extents, so generated, non-stale G-code is now a prerequisite
