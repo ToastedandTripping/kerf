@@ -942,18 +942,7 @@ function ContextMenuContent({ x, y, onClose }: { x: number; y: number; onClose: 
   const selectedIds = useStore((s) => s.selectedIds);
 
   function moveToLayer(layerIndex: number) {
-    const store = useStore.getState();
-    store.withUndo("move-to-layer", () => {
-      for (const id of selectedIds) {
-        store.updateObject(id, { layerIndex });
-        const layerColor = layers[layerIndex]?.color || "#4a90e2";
-        store.updateObject(id, { stroke: layerColor });
-      }
-    });
-    store.addConsoleLine(
-      `Moved ${selectedIds.length} object${selectedIds.length !== 1 ? "s" : ""} to ${layers[layerIndex]?.name}`,
-      "info",
-    );
+    useStore.getState().moveObjectsToLayer(selectedIds, layerIndex);
     onClose();
   }
 

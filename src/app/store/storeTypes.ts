@@ -33,6 +33,7 @@ export interface AppState {
   addObject: (obj: DesignObject) => void;
   updateObject: (id: string, partial: Partial<DesignObject>) => void;
   updateObjects: (updates: Array<{ id: string; partial: Partial<DesignObject> }>) => void;
+  moveObjectsToLayer: (ids: string[], layerIndex: number) => void;
   removeObjects: (ids: string[]) => void;
 
   // Selection

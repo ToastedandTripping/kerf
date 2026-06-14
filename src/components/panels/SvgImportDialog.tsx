@@ -271,7 +271,7 @@ export function SvgImportDialog({ open, svgContent, onClose }: Props) {
             fontSize: "10px", color: "var(--text-muted)",
             padding: "8px", background: "rgba(74,144,226,0.06)", borderRadius: "var(--radius-sm)",
           }}>
-            After import, right-click any element to move it to a different layer. Each path, shape, or line can have its own layer for separate cut/engrave settings.
+            Select any object and use the Layer dropdown in Properties to reassign it, or press 1-6 to assign layers. Each element can have its own layer for separate cut/engrave settings.
           </div>
         </div>
 

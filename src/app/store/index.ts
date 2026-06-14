@@ -179,6 +179,15 @@ export const useStore = create<AppState>((set, get) => ({
       };
     });
   },
+  moveObjectsToLayer: (ids, layerIndex) => {
+    const state = get();
+    const layerColor = state.layers[layerIndex]?.color || "#4a90e2";
+    state.withUndo("move-to-layer", () => {
+      get().updateObjects(ids.map((id) => ({ id, partial: { layerIndex, stroke: layerColor } })));
+    });
+    const layerName = state.layers[layerIndex]?.name ?? `Layer ${layerIndex + 1}`;
+    state.addConsoleLine(`Moved ${ids.length} object${ids.length !== 1 ? "s" : ""} to ${layerName}`, "info");
+  },
   removeObjects: (ids) =>
     set((state) => {
       const newObjects = state.objects.filter((o) => !ids.includes(o.id));
