@@ -651,6 +651,15 @@ export const useStore = create<AppState>((set, get) => ({
       gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
     })),
 
+  // Device origin
+  originTop: false,
+  setOriginTop: (v) =>
+    set((state) => ({
+      originTop: v,
+      isDirty: true,
+      gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
+    })),
+
   // Project notes
   projectNotes: "",
   setProjectNotes: (notes) => set({ projectNotes: notes, isDirty: true }),

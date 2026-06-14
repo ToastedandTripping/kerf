@@ -194,6 +194,10 @@ export interface AppState {
   startCorner: StartCorner;
   setStartCorner: (corner: StartCorner) => void;
 
+  // Device origin: true = Y=0 at top (common for diode/CO2 lasers), false = Y=0 at bottom (standard GRBL)
+  originTop: boolean;
+  setOriginTop: (v: boolean) => void;
+
   // Project notes
   projectNotes: string;
   setProjectNotes: (notes: string) => void;

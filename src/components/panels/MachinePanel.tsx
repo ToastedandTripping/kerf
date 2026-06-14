@@ -22,6 +22,8 @@ export function MachinePanel() {
   const setActiveTool = useStore((s) => s.setActiveTool);
   const startCorner = useStore((s) => s.startCorner);
   const setStartCorner = useStore((s) => s.setStartCorner);
+  const originTop = useStore((s) => s.originTop);
+  const setOriginTop = useStore((s) => s.setOriginTop);
   const gcodeStale = useStore((s) => s.gcodeStale);
   const workspaceWidth = useStore((s) => s.workspaceWidth);
   const workspaceHeight = useStore((s) => s.workspaceHeight);
@@ -496,6 +498,13 @@ export function MachinePanel() {
             }}>
               Start Corner
             </div>
+            <label style={{
+              display: "flex", alignItems: "center", gap: "6px", marginBottom: "6px",
+              fontSize: "10px", color: "var(--text-secondary)", cursor: "pointer",
+            }}>
+              <input type="checkbox" checked={originTop} onChange={(e) => setOriginTop(e.target.checked)} />
+              Origin top-left (Y=0 at top)
+            </label>
             <div style={{
               display: "grid",
               gridTemplateColumns: "repeat(3, 32px)",
