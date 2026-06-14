@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { useShallow } from "zustand/shallow";
 import { useStore } from "../../app/store";
 import type { Layer, CutMode, SubLayer, MaterialPreset } from "../../app/types";
 import { PowerCurveEditor, PowerCurveThumbnail } from "./PowerCurveEditor";
@@ -112,8 +113,7 @@ function LayerRow({
   const addSubLayers = useStore((s) => s.addSubLayers);
   const removeSubLayer = useStore((s) => s.removeSubLayer);
   const updateSubLayer = useStore((s) => s.updateSubLayer);
-  const objectCount = useStore((s) => s.objects.filter((o) => o.layerIndex === layer.index).length);
-  const layerObjects = useStore((s) => s.objects.filter((o) => o.layerIndex === layer.index));
+  const layerObjects = useStore(useShallow((s) => s.objects.filter((o) => o.layerIndex === layer.index)));
   const selectedSet = useStore((s) => s.selectedSet);
   const setSelectedIds = useStore((s) => s.setSelectedIds);
   const addToSelection = useStore((s) => s.addToSelection);
@@ -196,9 +196,9 @@ function LayerRow({
           {layer.name}
         </span>
 
-        {objectCount > 0 && (
+        {layerObjects.length > 0 && (
           <span style={{ fontSize: "9px", color: "var(--text-muted)", fontFamily: "var(--font-mono)", minWidth: "14px", textAlign: "center" }}>
-            {objectCount}
+            {layerObjects.length}
           </span>
         )}
 
