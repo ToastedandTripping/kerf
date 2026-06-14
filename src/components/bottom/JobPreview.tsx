@@ -128,11 +128,11 @@ export function JobPreview() {
     ctx.strokeRect(0, 0, wsW, wsH);
 
     // Coordinate transform: G-code coords to screen coords.
-    // When origin is at bottom (standard GRBL): Y-flip needed (G-code Y=0 is bottom, screen Y=0 is top).
-    // When origin is at top: no flip (both Y=0 at top).
+    // Standard GRBL (origin bottom): G-code Y=0 at bottom → screen Y = (wsH - y).
+    // Origin top: G-code Y is negative (0 at top, -wsH at bottom) → screen Y = -y.
     const toScreen = (mx: number, my: number) => ({
       sx: mx * PX_PER_MM,
-      sy: originTop ? my * PX_PER_MM : (workspaceHeight - my) * PX_PER_MM,
+      sy: originTop ? (-my) * PX_PER_MM : (workspaceHeight - my) * PX_PER_MM,
     });
 
     const currentMoveIdx = getMoveIndex(currentProgress);

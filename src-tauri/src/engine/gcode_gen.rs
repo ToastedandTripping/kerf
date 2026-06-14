@@ -128,7 +128,7 @@ fn transform_to_grbl(x: f64, y: f64, params: &ScanLineParams) -> (f64, f64) {
     } else {
         (x, y)
     };
-    (rx, if params.origin_top { ry } else { params.workspace_height - ry })
+    (rx, if params.origin_top { -ry } else { params.workspace_height - ry })
 }
 
 /// Collect scan segments for fill mode (horizontal or vertical) without emitting G-code.
@@ -294,7 +294,7 @@ fn generate_scan_lines(
 
 /// Generate G-code from a list of objects with their layer settings
 pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max: f64, origin_top: bool) -> GcodeResult {
-    let fy = |y: f64| -> f64 { if origin_top { y } else { workspace_height - y } };
+    let fy = |y: f64| -> f64 { if origin_top { -y } else { workspace_height - y } };
     let mut lines: Vec<String> = Vec::new();
     let mut moves: Vec<GcodeMove> = Vec::new();
     let mut total_distance = 0.0_f64;

@@ -10,11 +10,11 @@ use crate::engine::optimizer;
 fn start_point_from_corner(corner: &str, width: f64, height: f64, origin_top: bool) -> (f64, f64) {
     if origin_top {
         match corner {
-            "bottomRight" => (width, height),
+            "bottomRight" => (width, -height),
             "topLeft" => (0.0, 0.0),
             "topRight" => (width, 0.0),
-            "center" => (width / 2.0, height / 2.0),
-            _ => (0.0, height), // "bottomLeft" or default
+            "center" => (width / 2.0, -height / 2.0),
+            _ => (0.0, -height), // "bottomLeft" or default
         }
     } else {
         match corner {
