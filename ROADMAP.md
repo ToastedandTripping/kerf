@@ -1,10 +1,12 @@
 ---
 status: active
-current: fortification (v0.7.1 released 2026-06-14; Wave 2 + W3a complete; W3b + Wave 4 next)
+current: fortification (v0.7.1 released 2026-06-14; Waves 2-3 complete; Wave 4 + re-audit next)
 next: v0.8 — Camera & Rotary
 testing: null
 pinned: true
 shipped:
+  - date: 2026-06-14
+    item: "Fortification W3b — machine robustness + work-loss prevention (relay kerf-fortify-w3b-robustness, F18/F19/F26 from the cut-path audit): serial port gated to one sender during active jobs — Console, Set Origin, and Material Test blocked while streaming (was: unguarded concurrent sends including G92 mid-job); job-complete now waits for machine Idle state, status regex handles WPos/$10=0 machines and Hold/Door substates, poll interval cleanup prevents stacking on disconnect (was: complete on last-ack with head still moving, WPos machines showed no position, poll leaked); Open-Recent checks unsaved changes, crash recovery has no arbitrary 24h expiry, corrupt project files surface errors (was: one-click work loss, overnight recovery deleted, corrupt files silent no-op). Tests 340→351 JS. Razor PASS."
   - date: 2026-06-14
     item: "Fortification W3a — G-code safety + machine interlocks (relay kerf-fortify-w3a-safety, F8/F9/F10/F11/F16 from the cut-path audit): offsetFill turns laser off between concentric rings (was: single M3 before all rings — G0 rapids fired the laser with $32=0); image G-code includes its own G21/G90/M5 preamble (was: emitted before the vector preamble, inheriting stale modal state); scan angle rotates the scan direction within the shape with full corner coverage (was: rotated the AABB — 45° on a square missed corners); locked objects now included in G-code with info message (was: silently excluded); pause sends M5 to prevent beam dwell, Frame prepends M5, e-stop reports honestly on send failure. Tests 338→340 JS, 53→56 Rust. Razor PASS_WITH_WARNINGS (0 CRITICAL, 2 WARNING: M3/M4 resume awareness, missing F16 unit tests)."
   - date: 2026-06-14
@@ -352,8 +354,8 @@ guided error recovery), plus a code-health refactor.
 - [x] Wave 3a — G-code safety + interlocks: offsetFill per-ring M5 (F8), image preamble (F9),
       scan angle rotated boundaries (F10), locked objects included (F11), pause/frame/e-stop
       safety (F16)
-- [ ] Wave 3b — robustness + work-loss: single-sender gate (F18), state truth (F19),
-      work-loss cluster (F26), DTR banner-grace
+- [x] Wave 3b — robustness + work-loss: single-sender gate (F18), state truth (F19),
+      work-loss cluster (F26)
 - [ ] Wave 4 — editing correctness: booleans (F28), flip (F29), rotated-frame mixups (F30),
       F12 remainder (incl. Min Power hide per decision), import polish (F24/F25)
 - [ ] Re-audit + /production pass after Wave 3
