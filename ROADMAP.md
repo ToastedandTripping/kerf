@@ -1,7 +1,7 @@
 ---
 status: active
-current: fortification complete, production-ready (v0.7.2 — Waves 1-4 shipped, final audit PASSED 2026-06-15)
-next: v0.8 — Camera & Rotary
+current: v0.8.0 released 2026-06-15 — Fortification (31 audit defects + 5 re-audit findings fixed, production audit PASSED)
+next: v0.9 — Camera & Rotary
 testing: null
 pinned: true
 shipped:
@@ -365,7 +365,15 @@ guided error recovery), plus a code-health refactor.
 
 ---
 
-## v0.8 — Camera & Rotary (Next)
+## v0.8 — Fortification (Released 2026-06-15)
+
+*Reliability over features: the 2026-06-09 cut-path audit found 31 defects between
+"design on screen" and "laser moves." Four waves, 9 relays, 36 total fixes.
+Final production audit PASSED with 0 blockers. Tests 127→369 JS, 25→56 Rust.*
+
+---
+
+## v0.9 — Camera & Rotary (Next)
 
 - [ ] Camera alignment (USB webcam, calibration wizard, overlay)
 - [ ] Print-and-cut registration (two-point alignment)
@@ -373,7 +381,7 @@ guided error recovery), plus a code-health refactor.
 
 ---
 
-## v0.9 — Profiles, Text & Community
+## v1.0 — Profiles, Text & Community
 
 - [ ] Multiple machine profiles (switch between setups)
 - [ ] Text on path (arbitrary curve following)
