@@ -1,10 +1,12 @@
 ---
 status: active
-current: fortification (v0.7.0 released 2026-06-12 = Wave 1; Waves 2-4 next)
+current: fortification (v0.7.1 released 2026-06-14; Waves 2-4 next)
 next: v0.8 — Camera & Rotary
 testing: null
 pinned: true
 shipped:
+  - date: 2026-06-14
+    item: "v0.7.1 — macOS 12 compatibility (deployment target 10.13, WebGL force, CSP unsafe-eval, safari15 build target, error boundary), layer-object discoverability (Properties panel layer dropdown, LayerPanel object counts + objects list, shared moveObjectsToLayer action, keyboard 1-6 stroke fix), group resize (scalePartial recurses into children), device origin top-left (negated G-code Y for machines homing top-left, preview match, bounds check). Tested on physical laser — cutting confirmed. Two Zustand useShallow selector infinite-loop fixes (React Error 185)."
   - date: 2026-06-12
     item: "Fortification W1c — cut geometry fidelity (relay kerf-fortify-w1-geometry, F2/F20/F12 from the cut-path audit): curves now cut as curves — bezier paths adaptively sampled to a 0.05mm chord tolerance at G-code time, closing segments included (was: handles stripped, every curve cut as straight chords — a 4-anchor circle cut as a diamond); compound SVG paths (donuts, text glyphs, traced shapes) import as grouped per-contour objects via an in-parser state-preserving subpath split, so cuts contain no bridge segments through the workpiece (legacy concatenated imports: re-import to repair — boundaries aren't recoverable); the silent JS G-code fallback is deleted per decision — Rust-engine failure now surfaces loudly and blocks START/FRAME instead of cutting degraded physics; svgExport flattens groups (compound imports no longer vanish on export) and serializes closing curves. Known Wave-2 handoffs: fill mode scans per-object bboxes, so split compound shapes receive 2x energy in hole regions (warned at generation) until hole-aware fill (F3); kerf direction on split hole rings is winding-dependent until F6. Tests 270→308 JS. Plan critic-looped 3 rounds; Razor PASS, fixture tripwire mutation-verified."
   - date: 2026-06-11
