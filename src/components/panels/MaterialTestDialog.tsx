@@ -127,6 +127,7 @@ export function MaterialTestDialog({ open, onClose }: Props) {
   const [cellHeight, setCellHeight] = useState(10);
   const [cellGap, setCellGap] = useState(2);
   const [mode, setMode] = useState<"cut" | "fill">("cut");
+  const jobRunning = useStore((s) => s.jobRunning);
 
   if (!open) return null;
 
@@ -155,18 +156,26 @@ export function MaterialTestDialog({ open, onClose }: Props) {
         store.addConsoleLine("Machine not connected", "error");
         return;
       }
+      // F18: block if a job is already running
+      if (useStore.getState().jobRunning) {
+        store.addConsoleLine("Cannot start material test while a job is running", "error");
+        return;
+      }
       // Send line by line
       const lines = gcode.split("\n").filter((l) => l.trim() && !l.startsWith(";"));
       store.addConsoleLine(`Sending material test (${lines.length} commands)...`, "info");
       store.setJobRunning(true);
+      store.setSerialBusy(true);
       store.setJobProgress(0);
 
       (async () => {
         for (let i = 0; i < lines.length; i++) {
+          // F18: abort if jobRunning was cleared externally (e.g. emergency stop)
           if (!useStore.getState().jobRunning) break;
           await machineConnection.send(lines[i]);
           store.setJobProgress((i + 1) / lines.length);
         }
+        store.setSerialBusy(false);
         store.setJobRunning(false);
         store.setJobProgress(0);
         store.addConsoleLine("Material test complete", "info");
@@ -317,6 +326,8 @@ export function MaterialTestDialog({ open, onClose }: Props) {
         <div style={{ display: "flex", gap: "8px" }}>
           <button
             onClick={() => handleGenerate("send")}
+            disabled={jobRunning}
+            title={jobRunning ? "Cannot start while a job is running" : undefined}
             style={{
               flex: 1,
               padding: "6px 12px",
@@ -324,9 +335,10 @@ export function MaterialTestDialog({ open, onClose }: Props) {
               border: "none",
               fontSize: "11px",
               fontWeight: 600,
-              cursor: "pointer",
+              cursor: jobRunning ? "not-allowed" : "pointer",
               background: "rgba(74,226,138,0.2)",
               color: "var(--success)",
+              opacity: jobRunning ? 0.4 : 1,
             }}
           >
             Send to Machine

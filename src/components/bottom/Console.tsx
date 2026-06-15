@@ -7,6 +7,7 @@ export function Console() {
   const clearConsole = useStore((s) => s.clearConsole);
   const showConsole = useStore((s) => s.showConsole);
   const machineConnected = useStore((s) => s.machineConnected);
+  const jobRunning = useStore((s) => s.jobRunning);
 
   const [input, setInput] = useState("");
   const [history, setHistory] = useState<string[]>([]);
@@ -43,7 +44,7 @@ export function Console() {
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter") {
       e.preventDefault();
-      handleSend();
+      if (!jobRunning) handleSend();
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       if (history.length > 0) {
@@ -168,17 +169,35 @@ export function Console() {
           value={input}
           onChange={(e) => setInput(e.target.value.toUpperCase())}
           onKeyDown={handleKeyDown}
-          placeholder="Enter G-code command..."
+          placeholder={jobRunning ? "Cannot send during active job" : "Enter G-code command..."}
+          disabled={jobRunning}
           style={{
             flex: 1,
             background: "transparent",
             border: "none",
-            color: "var(--text-primary)",
+            color: jobRunning ? "var(--text-muted)" : "var(--text-primary)",
             fontFamily: "var(--font-mono)",
             fontSize: "12px",
             padding: "4px 0",
           }}
         />
+        <button
+          onClick={handleSend}
+          disabled={jobRunning || !input.trim()}
+          title={jobRunning ? "Cannot send during active job" : "Send command"}
+          style={{
+            padding: "2px 8px",
+            background: "none",
+            border: "none",
+            color: jobRunning ? "var(--text-muted)" : "var(--accent)",
+            fontSize: "10px",
+            cursor: jobRunning || !input.trim() ? "not-allowed" : "pointer",
+            opacity: jobRunning || !input.trim() ? 0.4 : 1,
+            fontWeight: 600,
+          }}
+        >
+          Send
+        </button>
       </div>
     </div>
   );

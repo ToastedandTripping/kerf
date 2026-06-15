@@ -509,6 +509,9 @@ export const useStore = create<AppState>((set, get) => ({
   jobProgress: 0,
   setJobRunning: (running) => set({ jobRunning: running }),
   setJobProgress: (p) => set({ jobProgress: p }),
+  // F18: serialBusy — tracks material test loop; UI gates check before sending
+  serialBusy: false,
+  setSerialBusy: (busy) => set({ serialBusy: busy }),
 
   // Z-Order
   moveObjectForward: (id) => withZOrder(id, get, set, (objs, idx) => {
