@@ -161,6 +161,31 @@ describe("G-code generation (Rust contract + hard-fail)", () => {
     await expect(generateGcode()).rejects.toThrow("engine exploded");
   });
 
+  // F11: locked objects are included in G-code output; only visibility and
+  // layer.output control exclusion. Lock is "protect from edits", not "exclude from cut".
+  it("F11: locked object is included in G-code (lock ≠ exclude)", async () => {
+    mockRustEngine();
+    const lockedRect = { ...makeRect("r1", 0, 0, 10, 10), locked: true };
+    useStore.getState().addObject(lockedRect);
+
+    await generateGcode();
+
+    const objects = sentCutObjects();
+    expect(objects).toHaveLength(1);
+    expect(objects[0]).toMatchObject({ id: "r1" });
+  });
+
+  // F11: invisible objects are still excluded
+  it("F11: invisible object is excluded from G-code (visible=false ≠ locked)", async () => {
+    mockRustEngine();
+    const invisRect = { ...makeRect("r1", 0, 0, 10, 10), visible: false };
+    useStore.getState().addObject(invisRect);
+
+    await generateGcode();
+
+    expect(sentCutObjects()).toHaveLength(0);
+  });
+
   // NEW (fallback deletion): an image-pipeline failure no longer falls into a
   // vector-only fallback that silently drops image content — it rejects, and
   // the error names the failing image object.

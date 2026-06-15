@@ -353,6 +353,11 @@ fn generate_scan_gcode(
     let cx = req.x + req.width / 2.0;
     let cy = req.y + req.height / 2.0;
 
+    // F9: self-contained preamble so image G-code is safe regardless of merge order.
+    // These are idempotent modal commands — harmless if the vector preamble follows.
+    lines.push("G21 ; mm mode".to_string());
+    lines.push("G90 ; absolute positioning".to_string());
+    lines.push("M5 ; laser off".to_string());
     lines.push(format!("; Image engrave: {}x{} px, interval {}mm", width, height, interval));
 
     for pass in 0..req.passes {
@@ -858,5 +863,37 @@ mod tests {
         let (rx, ry) = image_to_grbl(10.0, 20.0, 0.0, 0.0, 0.0, 100.0, true);
         assert!((rx - 10.0).abs() < 1e-9);
         assert!((ry - (-20.0)).abs() < 1e-9, "origin_top: expected -y, got {}", ry);
+    }
+
+    // ─── F9: image G-code preamble ───────────────────────────────────────────
+
+    /// F9: generate_scan_gcode must emit G21/G90/M5 before any scan-line moves
+    /// so image G-code is self-contained regardless of merge order.
+    #[test]
+    fn f9_image_gcode_starts_with_preamble() {
+        let req = base_req();
+        let pixels = vec![0u8; 10]; // 10 black pixels, 1 row
+        let result = generate_scan_gcode(&req, &pixels, 10, 1, false)
+            .expect("generate_scan_gcode should succeed");
+
+        let gcode = &result.gcode;
+        let lines: Vec<&str> = gcode.lines().collect();
+
+        // The first non-empty line must be G21
+        let first = lines.iter().find(|l| !l.is_empty() && !l.starts_with(";"))
+            .copied().unwrap_or("");
+        assert_eq!(first, "G21 ; mm mode",
+            "F9: expected G21 as first non-comment line; got '{first}'\nFull G-code:\n{gcode}");
+
+        // G90 and M5 must appear before the first G0/G1
+        let first_move_idx = lines.iter().position(|l| l.starts_with("G0 X") || l.starts_with("G1 X"));
+        let preamble_lines: Vec<&str> = match first_move_idx {
+            Some(idx) => lines[..idx].to_vec(),
+            None => lines.clone(),
+        };
+        assert!(preamble_lines.iter().any(|l| l.starts_with("G90")),
+            "F9: expected G90 in preamble before first move; preamble:\n{}", preamble_lines.join("\n"));
+        assert!(preamble_lines.iter().any(|l| l.starts_with("M5")),
+            "F9: expected M5 in preamble before first move; preamble:\n{}", preamble_lines.join("\n"));
     }
 }

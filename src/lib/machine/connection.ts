@@ -306,16 +306,32 @@ export const machineConnection = {
     const store = useStore.getState();
     store.addConsoleLine("Emergency stop initiated", "warning");
 
+    // F16: track whether the stop bytes were actually sent. If both writes fail,
+    // the port is dead — set alarm state and report honestly instead of logging
+    // "Emergency stop complete" when nothing reached the machine.
+    let feedHoldSent = false;
+    let resetSent = false;
+
     // 1. Feed hold -- bring motion to a controlled stop first (resetting during
     //    active motion makes ALARM:3 + lost position the routine outcome).
-    try { await this.sendByte(0x21); } catch { /* continue regardless */ }
+    try { await invoke("serial_send_byte", { byte: 0x21 }); feedHoldSent = true; } catch { /* continue regardless */ }
 
     // 2. Deceleration settle.
     await new Promise((r) => setTimeout(r, 100));
 
     // 3. Soft reset -- de-energizes the laser at firmware level and aborts any
     //    in-flight pump (banner terminal frees the command lock).
-    try { await this.sendByte(0x18); } catch { /* continue regardless */ }
+    try { await invoke("serial_send_byte", { byte: 0x18 }); resetSent = true; } catch { /* continue regardless */ }
+
+    // F16: if neither byte was delivered, the port is gone — go to alarm state.
+    if (!feedHoldSent && !resetSent) {
+      store.setMachineState("alarm");
+      store.addConsoleLine(
+        "E-stop send failed — port may be disconnected. Machine state unknown — treat as unsafe.",
+        "error",
+      );
+      return;
+    }
 
     // 4. Let GRBL's reboot window pass (it drops RX bytes while resetting),
     //    then re-poll. Bounded in Rust -- can never hang mid-emergency.

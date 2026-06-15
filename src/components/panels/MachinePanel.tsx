@@ -219,9 +219,15 @@ export function MachinePanel() {
 
   async function handlePauseResume() {
     if (machineState === "hold") {
+      // F16: re-enable laser power before resuming so $32=0 machines don't
+      // start cutting with the laser off.
+      try { await machineConnection.send("M3"); } catch { /* port may be gone */ }
       await machineConnection.cycleResume();
     } else {
       await machineConnection.feedHold();
+      // F16: immediately send M5 after feed hold to prevent beam dwell under
+      // $32=0 (constant power mode keeps laser on at zero speed).
+      try { await machineConnection.send("M5"); } catch { /* port may be gone */ }
     }
   }
 
@@ -666,9 +672,14 @@ export function MachinePanel() {
                   addConsoleLine("Nothing to cut -- no moves in the generated G-code", "error");
                   return;
                 }
+                // F16: M5 guard before framing clears any stale M3 from a
+                // previous operation so bare G0 moves can't trace-cut.
+                await machineConnection.send("M5");
                 for (const t of targets) {
                   await machineConnection.send(`G0 X${t.x.toFixed(3)} Y${t.y.toFixed(3)}`);
                 }
+                // F16: belt-and-suspenders M5 after final frame move.
+                await machineConnection.send("M5");
               }}
               disabled={frameDisabled}
               title={frameHint}

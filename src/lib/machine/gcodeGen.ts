@@ -148,8 +148,13 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
   // ships. Counted per SOURCE object (pre-sub-layer expansion).
   const fillGroupCounts = new Map<string, number>();
 
+  // F11: locked objects are included in G-code. Locking protects position from
+  // accidental edits — it is not an exclusion from the cut job. Use the layer
+  // Output toggle to exclude objects from cutting.
+  let lockedCount = 0;
   for (const obj of flat) {
-    if (!obj.visible || obj.locked) continue;
+    if (!obj.visible) continue;
+    if (obj.locked) lockedCount++;
     const layer = layers.find((l) => l.index === obj.layerIndex) || layers[0];
     if (!layer.visible || layer.output === false) continue;
     if (obj.type === "text") {
@@ -290,6 +295,13 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
       if (effectiveMode !== layer.mode) cl.mode = effectiveMode;
       result.push({ ...base, layer: cl });
     }
+  }
+
+  // F11: emit info message when locked objects are present in the output
+  if (lockedCount > 0) {
+    console.info(
+      `Note: ${lockedCount} locked object(s) included in G-code — use layer Output toggle to exclude from cut`,
+    );
   }
 
   for (const count of fillGroupCounts.values()) {

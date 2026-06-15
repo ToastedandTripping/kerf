@@ -1,10 +1,12 @@
 ---
 status: active
-current: fortification (v0.7.1 released 2026-06-14; Wave 2 complete; Waves 3-4 next)
+current: fortification (v0.7.1 released 2026-06-14; Wave 2 + W3a complete; W3b + Wave 4 next)
 next: v0.8 — Camera & Rotary
 testing: null
 pinned: true
 shipped:
+  - date: 2026-06-14
+    item: "Fortification W3a — G-code safety + machine interlocks (relay kerf-fortify-w3a-safety, F8/F9/F10/F11/F16 from the cut-path audit): offsetFill turns laser off between concentric rings (was: single M3 before all rings — G0 rapids fired the laser with $32=0); image G-code includes its own G21/G90/M5 preamble (was: emitted before the vector preamble, inheriting stale modal state); scan angle rotates the scan direction within the shape with full corner coverage (was: rotated the AABB — 45° on a square missed corners); locked objects now included in G-code with info message (was: silently excluded); pause sends M5 to prevent beam dwell, Frame prepends M5, e-stop reports honestly on send failure. Tests 338→340 JS, 53→56 Rust. Razor PASS_WITH_WARNINGS (0 CRITICAL, 2 WARNING: M3/M4 resume awareness, missing F16 unit tests)."
   - date: 2026-06-14
     item: "Fortification W2b — import fidelity (relay kerf-fortify-w2b-imports, F21/F22/F23/F25/tokenizer/F7-carryover from the cut-path audit): PDF imports at correct physical size regardless of render DPI (was: 156% at 150 DPI); PNG reads embedded pHYs DPI metadata (was: hardcoded 96 DPI — 300 DPI scans imported 3.1× too large); rotated SVG rect/ellipse import as path objects preserving their geometry (was: collapsed to axis-aligned AABB — 45° rect became a square); DXF Y-axis flipped to match screen coordinates, $INSUNITS scaling applied, LWPOLYLINE bulge converted to arc points, unsupported entities surfaced (was: mirrored, unscaled, chords, silent drops); SVG arc tessellation adapts to radius for smooth curves at any scale (was: fixed 11.25°/seg); SVGO concatenated arc-flag parsing fixed; Z-after-number tokenizer infinite loop fixed; containment-based inner-first replaces area heuristic for cut ordering. Tests 319→338 JS, 49→53 Rust. Razor PASS_WITH_WARNINGS (0 CRITICAL, 2 WARNING)."
   - date: 2026-06-14
@@ -347,9 +349,11 @@ guided error recovery), plus a code-health refactor.
 - [x] Wave 2b — import fidelity: SVG rotated primitives (F22), DXF Y-flip/units/bulge (F23),
       PDF/image DPI (F21), sampler flatness hardening (F25), tokenizer loop,
       containment-based inner-first (F7 carryover)
-- [ ] Wave 3 — fail-safe + work-loss: laser-off interlocks (F8/F9/F16), single-sender
-      gate (F18), work-loss cluster (F26), state truth (F19), DTR banner-grace, export
-      groups remainder (F27)
+- [x] Wave 3a — G-code safety + interlocks: offsetFill per-ring M5 (F8), image preamble (F9),
+      scan angle rotated boundaries (F10), locked objects included (F11), pause/frame/e-stop
+      safety (F16)
+- [ ] Wave 3b — robustness + work-loss: single-sender gate (F18), state truth (F19),
+      work-loss cluster (F26), DTR banner-grace
 - [ ] Wave 4 — editing correctness: booleans (F28), flip (F29), rotated-frame mixups (F30),
       F12 remainder (incl. Min Power hide per decision), import polish (F24/F25)
 - [ ] Re-audit + /production pass after Wave 3
