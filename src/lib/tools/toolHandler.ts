@@ -2,6 +2,7 @@ import { useStore, generateId } from "../../app/store";
 import type { DesignObject, PathPoint, ToolType } from "../../app/types";
 import { machineConnection } from "../machine/connection";
 import { movePartial, scalePartial, pointsPartial, pointsBBox, POINTS_EPSILON } from "../geometry";
+import { computeAABB } from "../nesting";
 
 // Handle types for resize/rotate
 export type HandleType =
@@ -656,11 +657,12 @@ function updateMarqueeSelection(worldX: number, worldY: number) {
   const hitIds: string[] = [];
   for (const obj of store.objects) {
     if (!obj.visible || obj.locked) continue;
-    const t = obj.transform;
-    const objLeft = t.x;
-    const objRight = t.x + t.width;
-    const objTop = t.y;
-    const objBottom = t.y + t.height;
+    // F30: use rotation-aware AABB for marquee selection of rotated objects
+    const aabb = computeAABB(obj);
+    const objLeft = aabb.x;
+    const objRight = aabb.x + aabb.w;
+    const objTop = aabb.y;
+    const objBottom = aabb.y + aabb.h;
 
     if (isLTR) {
       // Left-to-right: fully contained

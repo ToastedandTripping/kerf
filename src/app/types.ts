@@ -227,4 +227,5 @@ export interface KerfProject {
   notes?: string;
   materials?: MaterialPreset[];
   startCorner?: StartCorner;
+  originTop?: boolean;
 }

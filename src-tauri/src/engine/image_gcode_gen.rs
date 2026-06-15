@@ -436,8 +436,7 @@ fn generate_scan_gcode(
                 } else {
                     (x_end_img, gy)
                 };
-                // For axis-aligned (no rotation), gy_start == gy_end == gy
-                let _ = gy_end; // used indirectly below via gy for axis-aligned case
+                // For axis-aligned (no rotation), gy_start == gy_end == gy.
 
                 // Overscan approach
                 let os_start = if forward { x_start - overscan } else { x_start + overscan };
@@ -505,28 +504,40 @@ fn generate_scan_gcode(
                         lines.push("M5".to_string());
                     }
                 } else {
-                    // Binary: single engrave line at full power
+                    // Binary: single engrave line at full power.
+                    // Fix 2: when rotated, the endpoint Y is gy_end (from image_to_grbl),
+                    // not gy_start (the start point's Y). For axis-aligned images gy_end == gy_start.
                     lines.push(format!("{} S{}", power_cmd, s_max));
                     let scan_dist = (x_end - x_start).abs();
                     cut_distance += scan_dist;
                     total_distance += scan_dist;
-                    lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", x_end, gy_start, speed_mm_min, s_max));
-                    moves.push(GcodeMove { x: x_end, y: gy_start, move_type: "engrave".to_string(), speed: speed_mm_min, power: s_max });
+                    lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", x_end, gy_end, speed_mm_min, s_max));
+                    moves.push(GcodeMove { x: x_end, y: gy_end, move_type: "engrave".to_string(), speed: speed_mm_min, power: s_max });
                     lines.push("M5".to_string());
                 }
 
-                // Deceleration overscan
+                // Deceleration overscan.
+                // Fix 2 (R3): when rotated, compute the decel endpoint in image space
+                // and transform through image_to_grbl so the overscan follows the
+                // scan direction rather than wandering off-axis.
                 if overscan > 0.0 {
-                    let os_end = if forward { x_end + overscan } else { x_end - overscan };
+                    let (os_end_x, os_end_y) = if has_rotation {
+                        let x_os_img = if forward { x_end_img + overscan } else { x_end_img - overscan };
+                        image_to_grbl(x_os_img, y_mm, cx, cy, rotation_rad, req.workspace_height, req.origin_top)
+                    } else {
+                        let x_os = if forward { x_end + overscan } else { x_end - overscan };
+                        (x_os, gy)
+                    };
                     travel_distance += overscan;
                     total_distance += overscan;
-                    lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S0", os_end, gy_start, speed_mm_min));
-                    moves.push(GcodeMove { x: os_end, y: gy_start, move_type: "rapid".to_string(), speed: speed_mm_min, power: 0.0 });
-                    cur_x = os_end;
+                    lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S0", os_end_x, os_end_y, speed_mm_min));
+                    moves.push(GcodeMove { x: os_end_x, y: os_end_y, move_type: "rapid".to_string(), speed: speed_mm_min, power: 0.0 });
+                    cur_x = os_end_x;
+                    cur_y = os_end_y;
                 } else {
                     cur_x = x_end;
+                    cur_y = gy_end;
                 }
-                cur_y = gy_start;
             }
 
             if req.bidirectional {

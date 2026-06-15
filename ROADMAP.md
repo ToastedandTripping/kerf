@@ -1,10 +1,12 @@
 ---
 status: active
-current: fortification (v0.7.1 released 2026-06-14; Waves 2-3 complete; Wave 4 + re-audit next)
+current: fortification complete (v0.7.1 released 2026-06-14; Waves 1-4 shipped; final re-audit + /production next)
 next: v0.8 — Camera & Rotary
 testing: null
 pinned: true
 shipped:
+  - date: 2026-06-14
+    item: "Fortification W4 — re-audit fixes + editing correctness (relay kerf-fortify-w4-editing, W4a: originTop serialization, rotated image binary Y, locked images, MaterialTest S-value/errors, powerScale images, power_min vector; W4b: F28/F29/F30 — booleans on rotated shapes with hole preservation, flip mirrors geometry, rotation-aware align/distribute/marquee). Tests 351→369 JS. Razor PASS_WITH_WARNINGS (0 CRITICAL)."
   - date: 2026-06-14
     item: "Fortification W3b — machine robustness + work-loss prevention (relay kerf-fortify-w3b-robustness, F18/F19/F26 from the cut-path audit): serial port gated to one sender during active jobs — Console, Set Origin, and Material Test blocked while streaming (was: unguarded concurrent sends including G92 mid-job); job-complete now waits for machine Idle state, status regex handles WPos/$10=0 machines and Hold/Door substates, poll interval cleanup prevents stacking on disconnect (was: complete on last-ack with head still moving, WPos machines showed no position, poll leaked); Open-Recent checks unsaved changes, crash recovery has no arbitrary 24h expiry, corrupt project files surface errors (was: one-click work loss, overnight recovery deleted, corrupt files silent no-op). Tests 340→351 JS. Razor PASS."
   - date: 2026-06-14
@@ -356,9 +358,10 @@ guided error recovery), plus a code-health refactor.
       safety (F16)
 - [x] Wave 3b — robustness + work-loss: single-sender gate (F18), state truth (F19),
       work-loss cluster (F26)
-- [ ] Wave 4 — editing correctness: booleans (F28), flip (F29), rotated-frame mixups (F30),
-      F12 remainder (incl. Min Power hide per decision), import polish (F24/F25)
-- [ ] Re-audit + /production pass after Wave 3
+- [x] Wave 4 — re-audit fixes (originTop, rotated image Y, locked images, MaterialTest,
+      powerScale images, power_min) + editing correctness: booleans (F28), flip (F29),
+      rotation-aware bounds (F30)
+- [ ] Final re-audit + /production pass
 
 ---
 
