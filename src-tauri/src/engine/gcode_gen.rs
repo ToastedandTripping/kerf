@@ -319,6 +319,8 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
         let layer = &obj.layer;
         let speed_mm_min = layer.speed * 60.0; // Convert mm/s to mm/min
         let s_max = (layer.power / 100.0 * s_value_max).round();
+        // Fix 6: compute s_min from power_min; used in M4 (variable) mode to floor S values.
+        let s_min = (layer.power_min / 100.0 * s_value_max).round();
 
         // Power mode command
         let power_cmd = if layer.power_mode == "variable" { "M4" } else { "M3" };
@@ -332,6 +334,14 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                 "line" => {
                     // Vector cut mode
                     lines.push(format!("; Cut: {} ({}% @ {}mm/s)", obj.id, layer.power, layer.speed));
+
+                    // Fix 6: in M4 (variable) mode, floor S values at s_min so the laser
+                    // doesn't drop below min power during GRBL's speed-compensation at corners.
+                    let effective_s_max = if layer.power_mode == "variable" {
+                        s_max.max(s_min)
+                    } else {
+                        s_max
+                    };
 
                     let paths = if obj.paths.is_empty() {
                         vec![object_to_path(obj)]
@@ -384,12 +394,12 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                 lines.push(format!("G0 X{:.3} Y{:.3}", lix, liy));
                                 moves.push(GcodeMove { x: lix, y: liy, move_type: "rapid".to_string(), speed: 3000.0, power: 0.0 });
                                 // Laser on, cut to first point
-                                lines.push(format!("{} S{}", power_cmd, s_max));
+                                lines.push(format!("{} S{}", power_cmd, effective_s_max));
                                 let d = ((gpts[0].0 - lix).powi(2) + (gpts[0].1 - liy).powi(2)).sqrt();
                                 cut_distance += d;
                                 total_distance += d;
-                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", gpts[0].0, gpts[0].1, speed_mm_min, s_max));
-                                moves.push(GcodeMove { x: gpts[0].0, y: gpts[0].1, move_type: "cut".to_string(), speed: speed_mm_min, power: s_max });
+                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", gpts[0].0, gpts[0].1, speed_mm_min, effective_s_max));
+                                moves.push(GcodeMove { x: gpts[0].0, y: gpts[0].1, move_type: "cut".to_string(), speed: speed_mm_min, power: effective_s_max });
                                 cur_x = gpts[0].0;
                                 cur_y = gpts[0].1;
                             }
@@ -404,7 +414,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                             moves.push(GcodeMove { x: gpts[0].0, y: gpts[0].1, move_type: "rapid".to_string(), speed: 3000.0, power: 0.0 });
                             cur_x = gpts[0].0;
                             cur_y = gpts[0].1;
-                            lines.push(format!("{} S{}", power_cmd, s_max));
+                            lines.push(format!("{} S{}", power_cmd, effective_s_max));
                         }
 
                         // Cut along path with perforation or tab support
@@ -449,8 +459,8 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                         // End of cut segment
                                         cut_distance += d;
                                         total_distance += d;
-                                        lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", tx, ty, speed_mm_min, s_max));
-                                        moves.push(GcodeMove { x: tx, y: ty, move_type: "cut".to_string(), speed: speed_mm_min, power: s_max });
+                                        lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", tx, ty, speed_mm_min, effective_s_max));
+                                        moves.push(GcodeMove { x: tx, y: ty, move_type: "cut".to_string(), speed: speed_mm_min, power: effective_s_max });
                                         lines.push("M5".to_string());
                                         laser_on = false;
                                         next_toggle_dist += perf_skip;
@@ -460,7 +470,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                         total_distance += d;
                                         lines.push(format!("G0 X{:.3} Y{:.3}", tx, ty));
                                         moves.push(GcodeMove { x: tx, y: ty, move_type: "rapid".to_string(), speed: 3000.0, power: 0.0 });
-                                        lines.push(format!("{} S{}", power_cmd, s_max));
+                                        lines.push(format!("{} S{}", power_cmd, effective_s_max));
                                         laser_on = true;
                                         next_toggle_dist += perf_cut;
                                     }
@@ -488,7 +498,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                         moves.push(GcodeMove { x: tx, y: ty, move_type: "rapid".to_string(), speed: 3000.0, power: 0.0 });
                                         cur_x = tx;
                                         cur_y = ty;
-                                        lines.push(format!("{} S{}", power_cmd, s_max));
+                                        lines.push(format!("{} S{}", power_cmd, effective_s_max));
                                         laser_on = true;
                                         next_toggle_dist = tab_end_dist + tab_spacing;
                                         _cur_seg_dist = tab_end_dist;
@@ -500,8 +510,8 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                         let d = ((tx - cur_x).powi(2) + (ty - cur_y).powi(2)).sqrt();
                                         cut_distance += d;
                                         total_distance += d;
-                                        lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", tx, ty, speed_mm_min, s_max));
-                                        moves.push(GcodeMove { x: tx, y: ty, move_type: "cut".to_string(), speed: speed_mm_min, power: s_max });
+                                        lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", tx, ty, speed_mm_min, effective_s_max));
+                                        moves.push(GcodeMove { x: tx, y: ty, move_type: "cut".to_string(), speed: speed_mm_min, power: effective_s_max });
                                         cur_x = tx;
                                         cur_y = ty;
                                         lines.push("M5".to_string());
@@ -517,8 +527,8 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                 let d = ((px - cur_x).powi(2) + (py - cur_y).powi(2)).sqrt();
                                 cut_distance += d;
                                 total_distance += d;
-                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", px, py, speed_mm_min, s_max));
-                                moves.push(GcodeMove { x: px, y: py, move_type: "cut".to_string(), speed: speed_mm_min, power: s_max });
+                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", px, py, speed_mm_min, effective_s_max));
+                                moves.push(GcodeMove { x: px, y: py, move_type: "cut".to_string(), speed: speed_mm_min, power: effective_s_max });
                             } else {
                                 let d = ((px - cur_x).powi(2) + (py - cur_y).powi(2)).sqrt();
                                 travel_distance += d;
@@ -542,12 +552,12 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                 let ox = gpts[0].0 + dx / seg_len * ext;
                                 let oy = gpts[0].1 + dy / seg_len * ext;
                                 if !laser_on {
-                                    lines.push(format!("{} S{}", power_cmd, s_max));
+                                    lines.push(format!("{} S{}", power_cmd, effective_s_max));
                                 }
                                 cut_distance += ext;
                                 total_distance += ext;
-                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", ox, oy, speed_mm_min, s_max));
-                                moves.push(GcodeMove { x: ox, y: oy, move_type: "cut".to_string(), speed: speed_mm_min, power: s_max });
+                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", ox, oy, speed_mm_min, effective_s_max));
+                                moves.push(GcodeMove { x: ox, y: oy, move_type: "cut".to_string(), speed: speed_mm_min, power: effective_s_max });
                                 cur_x = ox;
                                 cur_y = oy;
                             }
@@ -564,12 +574,12 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                 let lox = gpts[n-1].0 + dx / seg_len * lead_out;
                                 let loy = gpts[n-1].1 + dy / seg_len * lead_out;
                                 if !laser_on {
-                                    lines.push(format!("{} S{}", power_cmd, s_max));
+                                    lines.push(format!("{} S{}", power_cmd, effective_s_max));
                                 }
                                 cut_distance += lead_out;
                                 total_distance += lead_out;
-                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", lox, loy, speed_mm_min, s_max));
-                                moves.push(GcodeMove { x: lox, y: loy, move_type: "cut".to_string(), speed: speed_mm_min, power: s_max });
+                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", lox, loy, speed_mm_min, effective_s_max));
+                                moves.push(GcodeMove { x: lox, y: loy, move_type: "cut".to_string(), speed: speed_mm_min, power: effective_s_max });
                                 cur_x = lox;
                                 cur_y = loy;
                             }

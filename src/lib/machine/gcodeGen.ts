@@ -322,17 +322,23 @@ export { toCutObjects as toCutObjectsForTest };
 /** Generate G-code for image objects using the dedicated Rust image pipeline */
 async function generateImageGcode(sValueMax: number = 1000): Promise<GcodeResult | null> {
   const store = useStore.getState();
+  // F11 parity: locked images are included in G-code (same as locked vectors).
+  // Locking protects position from accidental edits; use the layer Output toggle to exclude.
   const imageObjects = store.objects.filter(
-    (obj) => obj.type === "image" && obj.visible && !obj.locked && obj.imageData,
+    (obj) => obj.type === "image" && obj.visible && obj.imageData,
   );
 
   if (imageObjects.length === 0) return null;
 
+  let lockedImageCount = 0;
   const results: GcodeResult[] = [];
   for (const obj of imageObjects) {
+    if (obj.locked) lockedImageCount++;
     const layer = store.layers.find((l) => l.index === obj.layerIndex) || store.layers[0];
     if (!layer.visible || layer.output === false) continue;
     const adj = obj.imageAdjustments || { brightness: 0, contrast: 0, gamma: 1, invert: false };
+    // Fix 5: apply per-object powerScale (default 1) to image engraving power
+    const powerScale = obj.powerScale ?? 1;
 
     try {
       const result = await invoke<GcodeResult>("generate_image_gcode", {
@@ -345,8 +351,8 @@ async function generateImageGcode(sValueMax: number = 1000): Promise<GcodeResult
           rotation: obj.transform.rotation || 0,
           scaleX: obj.transform.scaleX ?? 1,
           scaleY: obj.transform.scaleY ?? 1,
-          power: layer.power,
-          powerMin: layer.powerMin,
+          power: layer.power * powerScale,
+          powerMin: layer.powerMin * powerScale,
           speed: layer.speed,
           passes: layer.passes,
           powerMode: layer.powerMode,
@@ -376,6 +382,12 @@ async function generateImageGcode(sValueMax: number = 1000): Promise<GcodeResult
       (wrapped as Error & { cause?: unknown }).cause = e;
       throw wrapped;
     }
+  }
+
+  if (lockedImageCount > 0) {
+    console.info(
+      `Note: ${lockedImageCount} locked image(s) included in G-code — use layer Output toggle to exclude from cut`,
+    );
   }
 
   return mergeGcodeResults(results);

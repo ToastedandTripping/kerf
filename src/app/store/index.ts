@@ -431,6 +431,7 @@ export const useStore = create<AppState>((set, get) => ({
       projectNotes: project.notes || "",
       materials: project.materials || DEFAULT_MATERIALS,
       startCorner: project.startCorner || "bottomLeft",
+      originTop: project.originTop ?? false,
       isDirty: false,
       selectedIds: [],
       selectedSet: new Set(),
@@ -455,6 +456,7 @@ export const useStore = create<AppState>((set, get) => ({
       notes: state.projectNotes,
       materials: state.materials,
       startCorner: state.startCorner,
+      originTop: state.originTop,
     };
   },
 
