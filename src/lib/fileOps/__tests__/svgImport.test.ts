@@ -180,3 +180,59 @@ describe("parsePathD subpath split (F20)", () => {
     expect(subpaths[0].points).toEqual([{ x: 10, y: 0 }, { x: 10, y: 10 }]);
   });
 });
+
+// Fix 5 — Z-after-number tokenizer infinite loop
+describe("parsePathD Z-after-number (Fix 5 / tokenizer)", () => {
+  it("Z followed by coordinates starts a new subpath (no infinite loop)", () => {
+    // SVG spec: numbers after Z are implicit M (start a new subpath).
+    // Pre-fix: lastCmd==="Z" set cmd="Z", i never advanced → infinite loop.
+    const subpaths = parsePathD("M0 0 L10 10 Z 20 20");
+    expect(subpaths).toHaveLength(2);
+    expect(subpaths[0].closed).toBe(true);
+    // Second subpath starts at implicit M 20,20
+    expect(subpaths[1].points[0]).toEqual({ x: 20, y: 20 });
+  });
+
+  it("M0 0 L10 10 Z 20 20 L30 30 produces two subpaths", () => {
+    const subpaths = parsePathD("M0 0 L10 10 Z 20 20 L30 30");
+    expect(subpaths).toHaveLength(2);
+    expect(subpaths[0].closed).toBe(true);
+    expect(subpaths[1].points).toHaveLength(2);
+    expect(subpaths[1].points[0]).toEqual({ x: 20, y: 20 });
+    expect(subpaths[1].points[1]).toEqual({ x: 30, y: 30 });
+  });
+});
+
+// Fix 4 — F25: Adaptive arc tessellation
+describe("approximateArc adaptive tessellation (F25)", () => {
+  it("large radius arc produces more segments than fixed 8", () => {
+    // A quarter-circle at r=50mm. Fixed 8 segs give 11.25° each, chord dev ~0.24mm.
+    // Adaptive at 0.05mm tolerance: θ = 2*acos(1 - 0.05/50) ≈ 2*acos(0.999) ≈ 2.56° → ~35 segs
+    const subpaths = parsePathD("M50 0 A50 50 0 0 1 0 50");
+    expect(subpaths).toHaveLength(1);
+    expect(subpaths[0].points.length).toBeGreaterThan(8);
+  });
+
+  it("very small radius falls back to reasonable minimum (>= 4 segments)", () => {
+    // r=0.01mm, very tiny: tolerance >= r → fallback = 8
+    const subpaths = parsePathD("M0.01 0 A0.01 0.01 0 0 1 0 0.01");
+    expect(subpaths).toHaveLength(1);
+    expect(subpaths[0].points.length).toBeGreaterThanOrEqual(4);
+  });
+});
+
+// Fix 4 — F25: SVGO arc-flag concatenation parsing
+describe("parsePathD SVGO arc-flag parsing (F25)", () => {
+  it("A30 30 0 0130 50 — SVGO concatenated flags parse as largeArc=0, sweep=1, x=30, y=50", () => {
+    // SVGO omits separators: "0130" = largeArc=0 + sweep=1 + x=30
+    // This is a quarter-circle arc from (0,0) to (30,50) area.
+    // We just verify it parses without error and produces a path with points.
+    const subpaths = parsePathD("M0 0 A30 30 0 0130 50");
+    expect(subpaths).toHaveLength(1);
+    expect(subpaths[0].points.length).toBeGreaterThanOrEqual(2);
+    // The endpoint should be near (30, 50)
+    const last = subpaths[0].points[subpaths[0].points.length - 1];
+    expect(last.x).toBeCloseTo(30, 0);
+    expect(last.y).toBeCloseTo(50, 0);
+  });
+});

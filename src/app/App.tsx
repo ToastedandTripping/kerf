@@ -67,9 +67,9 @@ export function openSvgImport(svgContent: string) {
   s.setDialogData({ svgContent });
   s.openDialog("svgImport");
 }
-export function openImageImport(data: string, name: string, width: number, height: number) {
+export function openImageImport(data: string, name: string, width: number, height: number, widthMm?: number, heightMm?: number) {
   const s = useStore.getState();
-  s.setDialogData({ pendingImage: { data, name, width, height } });
+  s.setDialogData({ pendingImage: { data, name, width, height, widthMm, heightMm } });
   s.openDialog("imageImport");
 }
 export function openDitherPreview(objectId: string) {
@@ -208,6 +208,8 @@ export default function App() {
         fileName={dialogData.pendingImage?.name ?? ""}
         imageWidth={dialogData.pendingImage?.width ?? 0}
         imageHeight={dialogData.pendingImage?.height ?? 0}
+        widthMmOverride={dialogData.pendingImage?.widthMm}
+        heightMmOverride={dialogData.pendingImage?.heightMm}
         onClose={() => { closeDialog("imageImport"); setDialogData({ pendingImage: null }); }}
         onImported={(autoTrace) => {
           if (dialogData.pendingImage && autoTrace) {
@@ -225,9 +227,10 @@ export default function App() {
         pdfData={dialogData.pendingPdf?.data ?? null}
         fileName={dialogData.pendingPdf?.name ?? ""}
         onClose={() => { closeDialog("pdfImport"); setDialogData({ pendingPdf: null }); }}
-        onImport={(imageData, width, height) => {
+        onImport={(imageData, widthMm, heightMm) => {
           closeDialog("pdfImport");
-          openImageImport(imageData, dialogData.pendingPdf?.name ?? "pdf-page.png", width, height);
+          // width/height here are mm (from PDF points); pass pixel dims as 0 (unused when mm provided)
+          openImageImport(imageData, dialogData.pendingPdf?.name ?? "pdf-page.png", 0, 0, widthMm, heightMm);
         }}
         onImportVector={(objects) => {
           closeDialog("pdfImport");

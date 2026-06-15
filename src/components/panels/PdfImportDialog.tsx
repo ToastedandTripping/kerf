@@ -10,7 +10,8 @@ interface PdfImportDialogProps {
   pdfData: ArrayBuffer | null;
   fileName: string;
   onClose: () => void;
-  onImport: (imageData: string, width: number, height: number) => void;
+  /** Called with raster imageData and TRUE mm dimensions (not pixel dimensions). */
+  onImport: (imageData: string, widthMm: number, heightMm: number) => void;
   onImportVector?: (objects: DesignObject[]) => void;
   generateId?: () => string;
   defaultLayerIndex?: number;
@@ -175,13 +176,17 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
           if (ctx) {
             await page.render({ canvasContext: ctx, viewport: rasterViewport, canvas }).promise;
             const imageData = canvas.toDataURL("image/png");
-            onImport(imageData, rasterViewport.width, rasterViewport.height);
+            // Pass physical mm dimensions (from PDF points at scale 1.0)
+            const baseViewport = page.getViewport({ scale: 1.0 });
+            const mmW = baseViewport.width * 25.4 / 72;
+            const mmH = baseViewport.height * 25.4 / 72;
+            onImport(imageData, mmW, mmH);
           }
         } else {
           onImportVector(vectorObjects);
         }
       } else {
-        // Raster mode (existing behavior)
+        // Raster mode: render at chosen DPI, but pass physical mm dimensions.
         const scale = dpi / 72;
         const viewport = page.getViewport({ scale });
         const canvas = document.createElement("canvas");
@@ -191,7 +196,11 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
         if (ctx) {
           await page.render({ canvasContext: ctx, viewport, canvas }).promise;
           const imageData = canvas.toDataURL("image/png");
-          onImport(imageData, viewport.width, viewport.height);
+          // Physical dimensions come from PDF points at scale 1.0, not from render DPI.
+          const baseViewport = page.getViewport({ scale: 1.0 });
+          const mmW = baseViewport.width * 25.4 / 72;
+          const mmH = baseViewport.height * 25.4 / 72;
+          onImport(imageData, mmW, mmH);
         }
       }
     } catch (e) {

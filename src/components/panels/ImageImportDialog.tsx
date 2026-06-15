@@ -8,17 +8,22 @@ interface Props {
   fileName: string;
   imageWidth: number;
   imageHeight: number;
+  /** Optional: physical mm dimensions override (used when caller knows the true DPI, e.g. PDF). */
+  widthMmOverride?: number;
+  heightMmOverride?: number;
   onClose: () => void;
   onImported: (autoTrace: boolean) => void;
 }
 
-export function ImageImportDialog({ open, imageData, fileName, imageWidth, imageHeight, onClose, onImported }: Props) {
+export function ImageImportDialog({ open, imageData, fileName, imageWidth, imageHeight, widthMmOverride, heightMmOverride, onClose, onImported }: Props) {
   const layers = useStore((s) => s.layers);
   const [selectedLayer, setSelectedLayer] = useState(0);
   const [autoTrace, setAutoTrace] = useState(true);
 
-  const widthMm = useMemo(() => (imageWidth / 96) * 25.4, [imageWidth]);
-  const heightMm = useMemo(() => (imageHeight / 96) * 25.4, [imageHeight]);
+  // Use caller-supplied mm dimensions when available (e.g. from PDF or PNG pHYs).
+  // Fall back to the legacy 96 DPI conversion for plain raster imports.
+  const widthMm = useMemo(() => widthMmOverride ?? (imageWidth / 96) * 25.4, [imageWidth, widthMmOverride]);
+  const heightMm = useMemo(() => heightMmOverride ?? (imageHeight / 96) * 25.4, [imageHeight, heightMmOverride]);
 
   if (!open || !imageData) return null;
 
@@ -43,12 +48,13 @@ export function ImageImportDialog({ open, imageData, fileName, imageWidth, image
 
     store.addObject(obj);
     store.setSelectedIds([obj.id]);
+    const dpiNote = widthMmOverride ? "from source DPI" : "at 96 dpi";
     store.addConsoleLine(
-      `Imported ${fileName} to ${layers[selectedLayer]?.name} (${imageWidth}x${imageHeight}px, ${widthMm.toFixed(0)}x${heightMm.toFixed(0)}mm)`,
+      `Imported ${fileName} to ${layers[selectedLayer]?.name}${imageWidth > 0 ? ` (${imageWidth}x${imageHeight}px)` : ""} ${widthMm.toFixed(0)}x${heightMm.toFixed(0)}mm ${dpiNote}`,
       "info"
     );
 
-    useStore.getState().setStatusMessage(`Imported ${fileName} -- ${imageWidth}x${imageHeight}px`);
+    useStore.getState().setStatusMessage(`Imported ${fileName}${imageWidth > 0 ? ` -- ${imageWidth}x${imageHeight}px` : ""} -- ${widthMm.toFixed(0)}x${heightMm.toFixed(0)}mm`);
     onImported(autoTrace);
     onClose();
   }
@@ -81,8 +87,8 @@ export function ImageImportDialog({ open, imageData, fileName, imageWidth, image
 
         {/* Info */}
         <div style={{ fontSize: "11px", color: "var(--text-muted)", marginBottom: "12px" }}>
-          {fileName} -- {imageWidth}x{imageHeight}px ({widthMm.toFixed(0)}x{heightMm.toFixed(0)}mm)
-          <span style={{ opacity: 0.6, marginLeft: "4px" }}>assuming 96 dpi</span>
+          {fileName}{imageWidth > 0 ? ` -- ${imageWidth}x${imageHeight}px` : ""} ({widthMm.toFixed(0)}x{heightMm.toFixed(0)}mm)
+          {!widthMmOverride && <span style={{ opacity: 0.6, marginLeft: "4px" }}>assuming 96 dpi</span>}
         </div>
 
         {/* Layer selection */}

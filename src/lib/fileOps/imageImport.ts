@@ -1,6 +1,42 @@
 import { useStore, generateId } from "../../app/store";
 import type { DesignObject } from "../../app/types";
 
+/**
+ * Parse PNG pHYs chunk to extract embedded DPI metadata.
+ * pHYs chunk: 4 bytes X-ppu, 4 bytes Y-ppu, 1 byte unit (1 = meter).
+ * Returns DPI or null if absent / unit is not meter.
+ */
+export function parsePngPhysDpi(data: Uint8Array): number | null {
+  // PNG signature: 8 bytes. Then chunks: 4-byte length, 4-byte type, data, 4-byte CRC.
+  if (data.length < 8) return null;
+  // Check PNG signature
+  const sig = [137, 80, 78, 71, 13, 10, 26, 10];
+  for (let s = 0; s < 8; s++) {
+    if (data[s] !== sig[s]) return null;
+  }
+  let offset = 8;
+  while (offset + 12 <= data.length) {
+    const chunkLen =
+      (data[offset] << 24) | (data[offset + 1] << 16) | (data[offset + 2] << 8) | data[offset + 3];
+    const type = String.fromCharCode(data[offset + 4], data[offset + 5], data[offset + 6], data[offset + 7]);
+    if (type === "pHYs" && chunkLen === 9 && offset + 12 + 9 <= data.length) {
+      const d = offset + 8;
+      const xppu =
+        ((data[d] << 24) | (data[d + 1] << 16) | (data[d + 2] << 8) | data[d + 3]) >>> 0;
+      const unit = data[d + 8];
+      if (unit === 1 && xppu > 0) {
+        const dpi = xppu / 39.3701; // pixels per meter → DPI
+        console.log(`[imageImport] PNG pHYs: ${xppu} ppm = ${dpi.toFixed(1)} DPI`);
+        return dpi;
+      }
+      return null;
+    }
+    if (type === "IDAT" || type === "IEND") break; // pHYs must come before IDAT
+    offset += 12 + chunkLen;
+  }
+  return null;
+}
+
 export function importImageData(data: Uint8Array, ext: string) {
   const store = useStore.getState();
   const mimeMap: Record<string, string> = {
@@ -8,6 +44,9 @@ export function importImageData(data: Uint8Array, ext: string) {
     bmp: "image/bmp", gif: "image/gif", webp: "image/webp",
   };
   const mime = mimeMap[ext] || "image/png";
+
+  // For PNG files, attempt to read embedded DPI from pHYs chunk before decoding.
+  const detectedDpi = ext === "png" ? parsePngPhysDpi(data) : null;
 
   let binary = "";
   for (let i = 0; i < data.length; i++) {
@@ -17,8 +56,9 @@ export function importImageData(data: Uint8Array, ext: string) {
 
   const img = new Image();
   img.onload = () => {
-    const widthMm = (img.width / 96) * 25.4;
-    const heightMm = (img.height / 96) * 25.4;
+    const dpi = detectedDpi ?? 96;
+    const widthMm = (img.width / dpi) * 25.4;
+    const heightMm = (img.height / dpi) * 25.4;
 
     const obj: DesignObject = {
       id: generateId(),
@@ -37,7 +77,8 @@ export function importImageData(data: Uint8Array, ext: string) {
 
     store.addObject(obj);
     store.setSelectedIds([obj.id]);
-    store.addConsoleLine(`Image imported: ${img.width}x${img.height}px (${widthMm.toFixed(0)}x${heightMm.toFixed(0)}mm)`, "info");
+    const dpiNote = detectedDpi ? ` at ${detectedDpi.toFixed(0)} DPI` : " (96 DPI fallback)";
+    store.addConsoleLine(`Image imported: ${img.width}x${img.height}px → ${widthMm.toFixed(0)}x${heightMm.toFixed(0)}mm${dpiNote}`, "info");
   };
   img.src = base64;
 }
