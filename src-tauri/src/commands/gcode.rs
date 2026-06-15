@@ -45,42 +45,52 @@ pub async fn generate_gcode(
         let corner = start_corner.as_deref().unwrap_or("bottomLeft");
         let (start_x, start_y) = start_point_from_corner(corner, ws_width, workspace_height, origin_top);
 
-        let mut sorted = objects;
+        let sorted = objects;
 
-        // Apply multi-criteria sort (priority, group, inner-first)
-        optimizer::multi_criteria_sort(&mut sorted, start_x, start_y);
+        // F7: Group by layer_index to preserve user-set layer order.
+        // Within each layer group:
+        //   - line mode: apply inner-first, then NN travel optimization
+        //   - fill/offsetFill: NN travel optimization only (inner-first irrelevant for fills)
+        // Emit groups in the order their layer_index values first appear.
 
-        // Separate by layer mode: cut inner first for line mode
-        let mut line_objects: Vec<CutObject> = Vec::new();
-        let mut fill_objects: Vec<CutObject> = Vec::new();
-        let mut offset_fill_objects: Vec<CutObject> = Vec::new();
-
-        for obj in sorted.drain(..) {
-            match obj.layer.mode.as_str() {
-                "fill" => fill_objects.push(obj),
-                "offsetFill" => offset_fill_objects.push(obj),
-                _ => line_objects.push(obj),
+        // Collect unique layer indices in arrival order
+        let mut layer_order: Vec<i32> = Vec::new();
+        for obj in &sorted {
+            let li = obj.layer_index.unwrap_or(0);
+            if !layer_order.contains(&li) {
+                layer_order.push(li);
             }
         }
 
-        // Sort inner first for line cuts
-        optimizer::sort_inner_first(&mut line_objects);
-
-        // Optimize travel order from the configured start point
-        let line_order = optimizer::optimize_cut_order_from(&line_objects, start_x, start_y);
-        let fill_order = optimizer::optimize_cut_order_from(&fill_objects, start_x, start_y);
-        let offset_order = optimizer::optimize_cut_order_from(&offset_fill_objects, start_x, start_y);
-
-        // Build final ordered list: engrave first, then offset fills, then cuts
         let mut final_objects: Vec<CutObject> = Vec::new();
-        for &idx in &fill_order {
-            final_objects.push(fill_objects[idx].clone());
-        }
-        for &idx in &offset_order {
-            final_objects.push(offset_fill_objects[idx].clone());
-        }
-        for &idx in &line_order {
-            final_objects.push(line_objects[idx].clone());
+        let mut cur_x = start_x;
+        let mut cur_y = start_y;
+
+        for &li in &layer_order {
+            let mut layer_objs: Vec<CutObject> = sorted.iter()
+                .filter(|o| o.layer_index.unwrap_or(0) == li)
+                .cloned()
+                .collect();
+
+            // Determine mode for this layer group (use first object's mode)
+            let is_line_mode = layer_objs.first()
+                .map(|o| o.layer.mode.as_str() == "line")
+                .unwrap_or(false);
+
+            if is_line_mode {
+                // Inner-first (smaller bbox area first) then NN
+                optimizer::sort_inner_first(&mut layer_objs);
+            }
+
+            let order = optimizer::optimize_cut_order_from(&layer_objs, cur_x, cur_y);
+
+            for &idx in &order {
+                let obj = &layer_objs[idx];
+                // Update current position to end of this object
+                cur_x = obj.x + obj.width;
+                cur_y = obj.y + obj.height;
+                final_objects.push(obj.clone());
+            }
         }
 
         let result = gcode_gen::generate_gcode(&final_objects, workspace_height, s_value_max, origin_top);

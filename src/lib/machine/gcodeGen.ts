@@ -69,6 +69,7 @@ interface CutObject {
   rotation: number;
   priority?: number;
   groupId?: string;
+  layerIndex?: number;
 }
 
 /** Build layer settings for a CutObject from a Layer (or SubLayer override) */
@@ -174,6 +175,19 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
       });
     }
 
+    // F3: fill mode burns the object's AABB — for non-rectangular shapes
+    // (ellipses and paths) redirect to offsetFill so the contour is respected.
+    // Rectangles are exempt: their AABB IS the shape.
+    const isNonRectShape = obj.type === "ellipse" || obj.type === "path" || obj.type === "line";
+
+    let effectiveMode = layer.mode;
+    if (layer.mode === "fill" && isNonRectShape) {
+      effectiveMode = "offsetFill";
+      warnings.push(
+        `Fill mode on non-rectangular object "${obj.name}" redirected to offsetFill -- fill mode only traces the bounding box`,
+      );
+    }
+
     // Apply kerf offset for closed paths in line mode
     if (layer.kerfOffset !== 0 && layer.mode === "line") {
       for (const path of paths) {
@@ -182,6 +196,62 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
         ring.push([ring[0][0], ring[0][1]]); // close
         const offset = offsetRingByDistance(ring, layer.kerfOffset);
         path.points = offset.slice(0, -1).map(([x, y]) => ({ x, y }));
+      }
+    }
+
+    // F6: kerf offset for rect/ellipse in line mode — generate path points first
+    if (layer.kerfOffset !== 0 && layer.mode === "line" && paths.length === 0) {
+      let rectPoints: Array<{ x: number; y: number }> | null = null;
+      const { x, y, width, height } = obj.transform;
+      if (obj.type === "rectangle") {
+        const cr = obj.cornerRadius || 0;
+        if (cr <= 0) {
+          // Simple 4-corner rectangle
+          rectPoints = [
+            { x, y },
+            { x: x + width, y },
+            { x: x + width, y: y + height },
+            { x, y: y + height },
+          ];
+        } else {
+          // Sample rounded rect as dense polyline (8 arcs, 16pts each)
+          const steps = 16;
+          const pts: Array<{ x: number; y: number }> = [];
+          const r = Math.min(cr, width / 2, height / 2);
+          const corners = [
+            { cx: x + r, cy: y + r, startAngle: Math.PI, endAngle: Math.PI * 1.5 },
+            { cx: x + width - r, cy: y + r, startAngle: Math.PI * 1.5, endAngle: Math.PI * 2 },
+            { cx: x + width - r, cy: y + height - r, startAngle: 0, endAngle: Math.PI * 0.5 },
+            { cx: x + r, cy: y + height - r, startAngle: Math.PI * 0.5, endAngle: Math.PI },
+          ];
+          for (const c of corners) {
+            for (let s = 0; s <= steps; s++) {
+              const angle = c.startAngle + (c.endAngle - c.startAngle) * s / steps;
+              pts.push({ x: c.cx + Math.cos(angle) * r, y: c.cy + Math.sin(angle) * r });
+            }
+          }
+          rectPoints = pts;
+        }
+      } else if (obj.type === "ellipse") {
+        // Sample ellipse as dense polyline
+        const steps = 64;
+        const cx = x + width / 2, cy = y + height / 2;
+        const rx = width / 2, ry = height / 2;
+        const pts: Array<{ x: number; y: number }> = [];
+        for (let s = 0; s < steps; s++) {
+          const angle = (2 * Math.PI * s) / steps;
+          pts.push({ x: cx + Math.cos(angle) * rx, y: cy + Math.sin(angle) * ry });
+        }
+        rectPoints = pts;
+      }
+      if (rectPoints && rectPoints.length >= 3) {
+        const ring: Array<[number, number]> = rectPoints.map((p) => [p.x, p.y]);
+        ring.push([ring[0][0], ring[0][1]]); // close
+        const offset = offsetRingByDistance(ring, layer.kerfOffset);
+        paths.push({
+          points: offset.slice(0, -1).map(([px, py]) => ({ x: px, y: py })),
+          closed: true,
+        });
       }
     }
 
@@ -197,6 +267,7 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
       rotation: obj.transform.rotation || 0,
       priority: obj.priority ?? 0,
       groupId: obj.groupId,
+      layerIndex: obj.layerIndex,
     };
 
     const scale = obj.powerScale ?? 1.0;
@@ -207,12 +278,16 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
         const cl = buildCutLayer(layer, sub);
         cl.power *= scale;
         cl.powerMin *= scale;
+        // Apply F3 mode override per sub-layer too
+        if (effectiveMode !== layer.mode && cl.mode === layer.mode) cl.mode = effectiveMode;
         result.push({ ...base, id: `${obj.id}_${sub.id}`, layer: cl });
       }
     } else {
       const cl = buildCutLayer(layer);
       cl.power *= scale;
       cl.powerMin *= scale;
+      // Apply F3 fill→offsetFill override
+      if (effectiveMode !== layer.mode) cl.mode = effectiveMode;
       result.push({ ...base, layer: cl });
     }
   }
@@ -256,6 +331,8 @@ async function generateImageGcode(sValueMax: number = 1000): Promise<GcodeResult
           width: obj.transform.width,
           height: obj.transform.height,
           rotation: obj.transform.rotation || 0,
+          scaleX: obj.transform.scaleX ?? 1,
+          scaleY: obj.transform.scaleY ?? 1,
           power: layer.power,
           powerMin: layer.powerMin,
           speed: layer.speed,
@@ -271,6 +348,7 @@ async function generateImageGcode(sValueMax: number = 1000): Promise<GcodeResult
           gamma: adj.gamma,
           invert: adj.invert,
           workspaceHeight: store.workspaceHeight,
+          originTop: store.originTop,
           sValueMax,
           powerCurve: layer.powerCurve?.map((p) => [p.x, p.y] as [number, number]),
           newsprintCellSize: layer.newsprintCellSize,
@@ -376,6 +454,8 @@ export async function previewImageDither(objectId: string): Promise<PreviewDithe
       width: obj.transform.width,
       height: obj.transform.height,
       rotation: obj.transform.rotation || 0,
+      scaleX: obj.transform.scaleX ?? 1,
+      scaleY: obj.transform.scaleY ?? 1,
       power: layer.power,
       powerMin: layer.powerMin,
       speed: layer.speed,
@@ -391,6 +471,7 @@ export async function previewImageDither(objectId: string): Promise<PreviewDithe
       gamma: adj.gamma,
       invert: adj.invert,
       workspaceHeight: store.workspaceHeight,
+      originTop: store.originTop,
       sValueMax: store.grblSValueMax,
       powerCurve: layer.powerCurve?.map((p) => [p.x, p.y] as [number, number]),
       newsprintCellSize: layer.newsprintCellSize,

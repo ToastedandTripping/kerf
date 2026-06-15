@@ -67,6 +67,8 @@ pub struct CutObject {
     pub priority: Option<i32>,
     #[serde(default)]
     pub group_id: Option<String>,
+    #[serde(default)]
+    pub layer_index: Option<i32>,  // F7: preserves TS layer position for cut ordering
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -780,6 +782,7 @@ mod tests {
             rotation: 0.0,
             priority: None,
             group_id: None,
+            layer_index: None,
         }
     }
 
@@ -830,6 +833,7 @@ mod tests {
             rotation: 0.0,
             priority: None,
             group_id: None,
+            layer_index: None,
         };
         let result = generate_gcode(&[obj], 100.0, 1000.0, false);
         let gcode = &result.gcode;
@@ -865,6 +869,7 @@ mod tests {
             rotation: 0.0,
             priority: None,
             group_id: None,
+            layer_index: None,
         };
         let result = generate_gcode(&[obj], 100.0, 1000.0, false);
         let gcode = &result.gcode;

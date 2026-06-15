@@ -548,8 +548,29 @@ export function sampleBezierPath(
 }
 
 /**
- * Offset a closed ring of points by a distance using vertex-normal averaging.
- * Positive distance offsets outward (assuming CCW winding), negative inward.
+ * Compute the signed area of a closed polygon (shoelace formula).
+ * Positive = CCW (standard screen Y-down convention), negative = CW.
+ * Exported for testing.
+ */
+export function signedArea(pts: ReadonlyArray<[number, number]>): number {
+  const n = pts.length;
+  let area = 0;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    area += pts[i][0] * pts[j][1];
+    area -= pts[j][0] * pts[i][1];
+  }
+  return area / 2;
+}
+
+/**
+ * Offset a closed ring of points by a distance using miter-scaled vertex normals.
+ * Positive distance always expands outward regardless of winding direction.
+ * The winding is detected via signed area: CW rings negate the distance internally
+ * so the caller never needs to know the winding direction.
+ *
+ * Miter scaling (distance / cos(halfAngle)) gives accurate offset at corners,
+ * clamped to 4× distance to avoid degenerate spikes at very acute angles.
  */
 export function offsetRingByDistance(
   ring: Array<[number, number]>,
@@ -560,6 +581,15 @@ export function offsetRingByDistance(
   const closed = ring[0][0] === ring[n - 1][0] && ring[0][1] === ring[n - 1][1];
   const pts = closed ? ring.slice(0, -1) : ring;
   const len = pts.length;
+
+  // F6: winding detection — ensure positive distance always expands outward.
+  // In screen coords (Y-down), left-hand normals point outward for CW rings
+  // (negative signed area). For CCW rings (positive area), left-hand normals
+  // point inward, so we negate to keep outward = positive.
+  const area = signedArea(pts as Array<[number, number]>);
+  const effectiveDist = area > 0 ? -distance : distance;
+
+  const MAX_MITER = 4;
   const result: Array<[number, number]> = [];
 
   for (let i = 0; i < len; i++) {
@@ -570,11 +600,23 @@ export function offsetRingByDistance(
     const dx2 = next[0] - curr[0], dy2 = next[1] - curr[1];
     const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1) || 1;
     const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2) || 1;
+    // Unit normals (left-hand normal of each edge)
     const nx1 = -dy1 / len1, ny1 = dx1 / len1;
     const nx2 = -dy2 / len2, ny2 = dx2 / len2;
-    const nx = nx1 + nx2, ny = ny1 + ny2;
-    const nlen = Math.sqrt(nx * nx + ny * ny) || 1;
-    result.push([curr[0] + (nx / nlen) * distance, curr[1] + (ny / nlen) * distance]);
+    // Bisector direction (average of the two edge normals)
+    const bx = nx1 + nx2, by = ny1 + ny2;
+    const blen = Math.sqrt(bx * bx + by * by);
+    if (blen < 1e-10) {
+      // Degenerate (180° turn): use either normal
+      result.push([curr[0] + nx1 * effectiveDist, curr[1] + ny1 * effectiveDist]);
+      continue;
+    }
+    // cos(halfAngle) = dot(bisector_unit, edge_normal_unit) = (bx/blen)·nx1 + (by/blen)·ny1
+    const cosHalf = (bx / blen) * nx1 + (by / blen) * ny1;
+    // Miter factor = 1/cos(halfAngle), clamped to MAX_MITER
+    const miter = cosHalf > 1e-6 ? Math.min(1 / cosHalf, MAX_MITER) : MAX_MITER;
+    const scale = effectiveDist * miter;
+    result.push([curr[0] + (bx / blen) * scale, curr[1] + (by / blen) * scale]);
   }
   if (result.length > 0) result.push([result[0][0], result[0][1]]);
   return result;

@@ -284,6 +284,7 @@ mod tests {
             rotation: 0.0,
             priority: pri,
             group_id: gid.map(|s| s.to_string()),
+            layer_index: None,
         }
     }
 
