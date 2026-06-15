@@ -222,7 +222,7 @@ export interface AppState {
   // Dialog data (payloads for dialogs that need them)
   dialogData: {
     svgContent: string | null;
-    pendingImage: { data: string; name: string; width: number; height: number } | null;
+    pendingImage: { data: string; name: string; width: number; height: number; widthMm?: number; heightMm?: number } | null;
     ditherPreviewObjectId: string | null;
     pendingPdf: { data: ArrayBuffer; name: string } | null;
   };

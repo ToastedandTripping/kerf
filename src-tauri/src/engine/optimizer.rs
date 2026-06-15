@@ -44,14 +44,59 @@ pub fn optimize_cut_order_from(objects: &[CutObject], start_x: f64, start_y: f64
 }
 
 
-/// Sort objects so inner shapes come before outer shapes
-/// (smaller bounding box area = more inner)
+/// Returns true if object A's bbox is fully contained within object B's bbox.
+fn bbox_contains(ax: f64, ay: f64, aw: f64, ah: f64, bx: f64, by: f64, bw: f64, bh: f64) -> bool {
+    ax >= bx && ay >= by && ax + aw <= bx + bw && ay + ah <= by + bh
+}
+
+/// Sort objects so inner shapes come before outer shapes.
+/// Uses bbox containment: if A is contained in B, A sorts first.
+/// Non-contained objects preserve their relative (stable) order.
+/// Falls back to area comparison at equal containment depth.
 pub fn sort_inner_first(objects: &mut [CutObject]) {
-    objects.sort_by(|a, b| {
-        let area_a = a.width * a.height;
-        let area_b = b.width * b.height;
-        area_a.partial_cmp(&area_b).unwrap_or(std::cmp::Ordering::Equal)
+    let n = objects.len();
+    if n <= 1 {
+        return;
+    }
+
+    // Build pairwise containment: contained_by[i] = set of j where objects[i] is inside objects[j]
+    // containment_depth[i] = number of objects that contain i
+    let mut depth = vec![0usize; n];
+    for i in 0..n {
+        for j in 0..n {
+            if i == j { continue; }
+            if bbox_contains(
+                objects[i].x, objects[i].y, objects[i].width, objects[i].height,
+                objects[j].x, objects[j].y, objects[j].width, objects[j].height,
+            ) {
+                depth[i] += 1;
+            }
+        }
+    }
+
+    // Sort: higher containment depth (more containers) = more inner = first.
+    // Stable sort preserves relative order for objects at the same depth;
+    // fall back to area comparison within same depth (smaller = more inner).
+    let mut indices: Vec<usize> = (0..n).collect();
+    indices.sort_by(|&a, &b| {
+        let da = depth[a];
+        let db = depth[b];
+        if da != db {
+            // Higher depth = more inner = comes first (descending depth)
+            db.cmp(&da)
+        } else {
+            // Same depth: smaller area first (area-based fallback)
+            let area_a = objects[a].width * objects[a].height;
+            let area_b = objects[b].width * objects[b].height;
+            area_a.partial_cmp(&area_b).unwrap_or(std::cmp::Ordering::Equal)
+        }
     });
+
+    // Apply the sorted order (in-place via a temporary clone)
+    let original: Vec<CutObject> = objects.to_vec();
+    for (new_pos, &old_pos) in indices.iter().enumerate() {
+        objects[new_pos] = original[old_pos].clone();
+    }
 }
 
 /// Multi-criteria cut ordering:
@@ -93,12 +138,8 @@ pub fn multi_criteria_sort(objects: &mut Vec<CutObject>, start_x: f64, start_y: 
     for (pri, _gid, indices) in &groups {
         let mut group_objs: Vec<CutObject> = indices.iter().map(|&i| original[i].clone()).collect();
 
-        // Sort inner-first within group
-        group_objs.sort_by(|a, b| {
-            let area_a = a.width * a.height;
-            let area_b = b.width * b.height;
-            area_a.partial_cmp(&area_b).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        // Sort inner-first within group using containment-based ordering
+        sort_inner_first(&mut group_objs);
 
         resolved_groups.push((*pri, group_objs));
     }
@@ -423,5 +464,64 @@ mod tests {
         // Inner-first within groupA: a2 (25 area) before a1 (100 area)
         assert_eq!(objs[0].id, "a2", "smaller groupA item first (inner-first)");
         assert_eq!(objs[1].id, "a1", "larger groupA item second");
+    }
+
+    // F7 carryover: containment-based inner-first
+    #[test]
+    fn containment_inner_before_outer() {
+        // "inner" is fully inside "outer". Inner must sort first.
+        let mut objs = vec![
+            make_obj("outer", 0.0, 0.0, 100.0, 100.0, None, None),
+            make_obj("inner", 10.0, 10.0, 20.0, 20.0, None, None),
+        ];
+        sort_inner_first(&mut objs);
+        assert_eq!(objs[0].id, "inner", "contained bbox must come first");
+        assert_eq!(objs[1].id, "outer");
+    }
+
+    #[test]
+    fn non_contained_stable_relative_order() {
+        // Two non-overlapping objects: neither contains the other.
+        // They have the same containment depth (0) so relative order
+        // is determined by area (smaller first).
+        let mut objs = vec![
+            make_obj("big",   0.0, 0.0, 100.0, 100.0, None, None),
+            make_obj("small", 200.0, 0.0, 5.0, 5.0, None, None),
+        ];
+        sort_inner_first(&mut objs);
+        // small has smaller area → sorts first at equal depth
+        assert_eq!(objs[0].id, "small");
+        assert_eq!(objs[1].id, "big");
+    }
+
+    #[test]
+    fn deeply_nested_containment_order() {
+        // Three levels: outer > middle > inner.
+        // Expected sort: inner, middle, outer.
+        let mut objs = vec![
+            make_obj("outer",  0.0, 0.0, 100.0, 100.0, None, None),
+            make_obj("inner", 30.0, 30.0, 20.0, 20.0, None, None),
+            make_obj("middle", 10.0, 10.0, 60.0, 60.0, None, None),
+        ];
+        sort_inner_first(&mut objs);
+        assert_eq!(objs[0].id, "inner",  "innermost bbox must cut first");
+        assert_eq!(objs[1].id, "middle");
+        assert_eq!(objs[2].id, "outer");
+    }
+
+    #[test]
+    fn tall_narrow_vs_short_wide_non_contained() {
+        // Old area heuristic bug: tall-narrow (1×200 = 200 area) would sort
+        // after short-wide (10×10 = 100 area) even though neither contains the other.
+        // With containment + area fallback: short-wide (100 area) < tall-narrow (200 area)
+        // at the same depth → short-wide first. This is correct for area-based tiebreak.
+        let mut objs = vec![
+            make_obj("tall_narrow",  0.0, 0.0, 1.0, 200.0, None, None),
+            make_obj("short_wide",  50.0, 50.0, 10.0, 10.0, None, None),
+        ];
+        sort_inner_first(&mut objs);
+        // Neither contains the other → same depth → area fallback: short_wide (100) < tall_narrow (200)
+        assert_eq!(objs[0].id, "short_wide");
+        assert_eq!(objs[1].id, "tall_narrow");
     }
 }

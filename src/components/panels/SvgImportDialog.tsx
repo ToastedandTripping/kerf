@@ -485,11 +485,21 @@ function parseSvgElementForImport(
     stroke: resolvedStroke, strokeWidth: Math.max(0.5, parseFloat(strokeWidthStr) * scale), opacity,
   };
 
+  // Detect rotation in matrix: angle = atan2(b, a) where matrix = [a, b, c, d, e, f]
+  const matrixRotation = Math.atan2(matrix[1], matrix[0]);
+  const isRotated = Math.abs(matrixRotation) > 0.001;
+
   switch (tag) {
     case "rect": {
       const x = n(el, "x"), y = n(el, "y"), w = n(el, "width"), h = n(el, "height"), rx = n(el, "rx");
       if (w === 0 && h === 0) return null;
       const corners = [[x,y],[x+w,y],[x+w,y+h],[x,y+h]].map(([px,py]) => applyMatrix(matrix, px, py));
+      if (isRotated) {
+        // Rotated rect → path preserving geometry in world space.
+        const pts = corners.map(c => ({ x: c.x * scale, y: c.y * scale }));
+        const bb = boundingBox(pts);
+        return { ...base, type: "path", transform: { x: bb.x, y: bb.y, width: bb.w, height: bb.h, rotation: 0, scaleX: 1, scaleY: 1 }, points: pts, closed: true };
+      }
       const bb = boundingBox(corners);
       return { ...base, type: "rectangle", transform: { x: bb.x*scale, y: bb.y*scale, width: bb.w*scale, height: bb.h*scale, rotation: 0, scaleX: 1, scaleY: 1 }, cornerRadius: rx * scale };
     }
@@ -505,6 +515,29 @@ function parseSvgElementForImport(
       if (erx === 0 && ery === 0) return null;
       const center = applyMatrix(matrix, cx, cy); const ms = getMatrixScale(matrix);
       const rrx = erx * ms.sx * scale, rry = ery * ms.sy * scale;
+      if (isRotated) {
+        // Rotated ellipse → 4-anchor bezier circle approximation in world space.
+        // kappa ≈ 0.5522847498 for a unit circle bezier approximation.
+        const K = 0.5522847498;
+        // Compute semi-axis vectors in world space (rotated by matrix)
+        const cosR = Math.cos(matrixRotation), sinR = Math.sin(matrixRotation);
+        const ax = erx * ms.sx * scale * cosR, ay = erx * ms.sx * scale * sinR;
+        const bx = -ery * ms.sy * scale * sinR, by = ery * ms.sy * scale * cosR;
+        const c = { x: center.x * scale, y: center.y * scale };
+        // 4 anchor points on ellipse at 0°, 90°, 180°, 270°
+        const p0 = { x: c.x + ax, y: c.y + ay };
+        const p1 = { x: c.x + bx, y: c.y + by };
+        const p2 = { x: c.x - ax, y: c.y - ay };
+        const p3 = { x: c.x - bx, y: c.y - by };
+        const pts = [
+          { x: p0.x, y: p0.y, handleIn: { x: p0.x - K*bx, y: p0.y - K*by }, handleOut: { x: p0.x + K*bx, y: p0.y + K*by } },
+          { x: p1.x, y: p1.y, handleIn: { x: p1.x + K*ax, y: p1.y + K*ay }, handleOut: { x: p1.x - K*ax, y: p1.y - K*ay } },
+          { x: p2.x, y: p2.y, handleIn: { x: p2.x + K*bx, y: p2.y + K*by }, handleOut: { x: p2.x - K*bx, y: p2.y - K*by } },
+          { x: p3.x, y: p3.y, handleIn: { x: p3.x - K*ax, y: p3.y - K*ay }, handleOut: { x: p3.x + K*ax, y: p3.y + K*ay } },
+        ];
+        const bb = boundingBox(pts);
+        return { ...base, type: "path", transform: { x: bb.x, y: bb.y, width: bb.w, height: bb.h, rotation: 0, scaleX: 1, scaleY: 1 }, points: pts, closed: true };
+      }
       return { ...base, type: "ellipse", transform: { x: center.x*scale-rrx, y: center.y*scale-rry, width: rrx*2, height: rry*2, rotation: 0, scaleX: 1, scaleY: 1 }};
     }
     case "line": {

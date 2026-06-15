@@ -1,4 +1,5 @@
 import type { PathPoint } from "../../app/types";
+import { CURVE_CHORD_TOLERANCE_MM } from "../geometry";
 
 /** One subpath of a parsed `d` attribute: own points, own closed flag (W1c/F20). */
 export interface ParsedSubpath {
@@ -60,8 +61,10 @@ export function parsePathD(d: string): ParsedSubpath[] {
     let cmd = tokens[i];
 
     if (!isNaN(Number(cmd))) {
-      if (lastCmd === "M") cmd = "L";
-      else if (lastCmd === "m") cmd = "l";
+      // SVG spec: numbers after Z/z start a new subpath (implicit M/m).
+      // Without this, lastCmd==="Z" would set cmd="Z" and i never advances → infinite loop.
+      if (lastCmd === "M" || lastCmd === "Z") cmd = "M";
+      else if (lastCmd === "m" || lastCmd === "z") cmd = "m";
       else cmd = lastCmd;
     } else {
       i++;
@@ -257,10 +260,47 @@ export function parsePathD(d: string): ParsedSubpath[] {
         const isRel = cmd === "a";
         const arx = numT(tokens, i), ary = numT(tokens, i + 1);
         const rotation = numT(tokens, i + 2);
-        const largeArc = numT(tokens, i + 3);
-        const sweep = numT(tokens, i + 4);
-        let ex = numT(tokens, i + 5), ey = numT(tokens, i + 6);
-        i += 7;
+        // SVGO arc-flag fix: SVGO omits separators between flags and the
+        // following coordinate. e.g. "A30 30 0 0130 50" tokenizes as
+        // ["30","30","0","0130","50"] where "0130" = largeArc=0, sweep=1, x=30.
+        // An arc flag is always exactly one character ('0' or '1').
+        let largeArc: number, sweep: number;
+        let ex: number, ey: number;
+        const tok3 = i + 3 < tokens.length ? tokens[i + 3] : "";
+        if (tok3.length > 1 && (tok3[0] === "0" || tok3[0] === "1")) {
+          // tok3 contains largeArc flag concatenated with remaining tokens
+          largeArc = parseInt(tok3[0]);
+          const rem3 = tok3.slice(1); // e.g. "130" or "1" or "130 50" (just "130" here)
+          const tok4 = i + 4 < tokens.length ? tokens[i + 4] : "";
+          if (rem3.length > 1 && (rem3[0] === "0" || rem3[0] === "1")) {
+            // rem3 = sweepFlag + xCoord concatenated, e.g. "130"
+            sweep = parseInt(rem3[0]);
+            ex = parseFloat(rem3.slice(1)) || 0;
+            ey = numT(tokens, i + 4);
+            i += 5;
+          } else if (rem3.length === 1 && (rem3 === "0" || rem3 === "1")) {
+            // rem3 is exactly the sweep flag, x/y are separate tokens
+            sweep = parseInt(rem3);
+            ex = numT(tokens, i + 4); ey = numT(tokens, i + 5);
+            i += 6;
+          } else if (tok4.length > 1 && (tok4[0] === "0" || tok4[0] === "1")) {
+            // rem3 was the x coord (no sweep in tok3), tok4 has sweep+y
+            sweep = parseInt(tok4[0]);
+            ex = parseFloat(rem3) || 0;
+            ey = parseFloat(tok4.slice(1)) || 0;
+            i += 5;
+          } else {
+            // Fallback: treat rem3 as sweep flag, tok4/tok5 as x/y
+            sweep = parseInt(rem3) || 0;
+            ex = numT(tokens, i + 4); ey = numT(tokens, i + 5);
+            i += 6;
+          }
+        } else {
+          largeArc = numT(tokens, i + 3);
+          sweep = numT(tokens, i + 4);
+          ex = numT(tokens, i + 5); ey = numT(tokens, i + 6);
+          i += 7;
+        }
         if (isRel) { ex += cx; ey += cy; }
         const arcPoints = approximateArc(cx, cy, arx, ary, rotation, largeArc !== 0, sweep !== 0, ex, ey);
         for (const p of arcPoints) {
@@ -361,7 +401,16 @@ function approximateArc(
   if (!sweep && dtheta > 0) dtheta -= 2 * Math.PI;
   if (sweep && dtheta < 0) dtheta += 2 * Math.PI;
 
-  const segments = Math.max(8, Math.ceil(Math.abs(dtheta) / (Math.PI / 16)));
+  // Adaptive tessellation: chord deviation = r*(1-cos(θ/2)) = tolerance → θ = 2*acos(1-tol/r)
+  // Use the smaller of rx/ry as the effective radius for conservative segmentation.
+  const effectiveR = Math.min(rx, ry);
+  let segments: number;
+  if (effectiveR <= 0 || CURVE_CHORD_TOLERANCE_MM >= effectiveR) {
+    segments = 8; // very small radius: fixed fallback
+  } else {
+    const thetaPerSeg = 2 * Math.acos(1 - CURVE_CHORD_TOLERANCE_MM / effectiveR);
+    segments = Math.max(4, Math.min(360, Math.ceil(Math.abs(dtheta) / thetaPerSeg)));
+  }
   const result: Array<{ x: number; y: number }> = [];
 
   for (let s = 1; s <= segments; s++) {

@@ -1,10 +1,12 @@
 ---
 status: active
-current: fortification (v0.7.1 released 2026-06-14; Wave 2a shipped; W2b + Waves 3-4 next)
+current: fortification (v0.7.1 released 2026-06-14; Wave 2 complete; Waves 3-4 next)
 next: v0.8 — Camera & Rotary
 testing: null
 pinned: true
 shipped:
+  - date: 2026-06-14
+    item: "Fortification W2b — import fidelity (relay kerf-fortify-w2b-imports, F21/F22/F23/F25/tokenizer/F7-carryover from the cut-path audit): PDF imports at correct physical size regardless of render DPI (was: 156% at 150 DPI); PNG reads embedded pHYs DPI metadata (was: hardcoded 96 DPI — 300 DPI scans imported 3.1× too large); rotated SVG rect/ellipse import as path objects preserving their geometry (was: collapsed to axis-aligned AABB — 45° rect became a square); DXF Y-axis flipped to match screen coordinates, $INSUNITS scaling applied, LWPOLYLINE bulge converted to arc points, unsupported entities surfaced (was: mirrored, unscaled, chords, silent drops); SVG arc tessellation adapts to radius for smooth curves at any scale (was: fixed 11.25°/seg); SVGO concatenated arc-flag parsing fixed; Z-after-number tokenizer infinite loop fixed; containment-based inner-first replaces area heuristic for cut ordering. Tests 319→338 JS, 49→53 Rust. Razor PASS_WITH_WARNINGS (0 CRITICAL, 2 WARNING)."
   - date: 2026-06-14
     item: "Fortification W2a — G-code pipeline correctness (relay kerf-fortify-w2a-gcode, F3/F4/F5/F6/F7 from the cut-path audit): fill mode on non-rectangular shapes auto-routes to offset fill with a warning (was: scanned the AABB — an ellipse burned a solid rectangle); grayscale bidirectional reverse rows now place pixels at correct X positions (was: offset by the full run width, burning left of the image); image rotation and mirror transforms now reach the G-code (was: rotation accepted but unused, mirror never sent — back-of-acrylic workflow burned unmirrored); kerf offset direction is winding-independent with correct miter scaling at corners, and applies to rect/ellipse (was: direction inverted for CW winding, corners under-offset ~29%, primitives bypassed); cut ordering respects user-set layer sequence (was: fills always before cuts regardless of layer order). Known deferred: containment-based inner-first (area heuristic retained). Tests 308→319 JS, 43→49 Rust. Razor PASS_WITH_WARNINGS (0 CRITICAL, 2 WARNING)."
   - date: 2026-06-14
@@ -342,9 +344,9 @@ guided error recovery), plus a code-health refactor.
       sampling, compound-path splitting, JS-fallback deletion (W1c) — **v0.7.0**
 - [x] Wave 2a — G-code pipeline: fill-shape interim (F3), grayscale-bidi (F4), image
       rotation/mirror (F5), kerf direction/winding/primitives (F6), cut ordering (F7)
-- [ ] Wave 2b — import fidelity: SVG rotated primitives (F22), DXF Y-flip/units/bulge (F23),
-      PDF/image DPI (F21); + Z-after-number tokenizer loop, sampler flatness hardening
-      (F25 revisit); + containment-based inner-first (F7 carryover)
+- [x] Wave 2b — import fidelity: SVG rotated primitives (F22), DXF Y-flip/units/bulge (F23),
+      PDF/image DPI (F21), sampler flatness hardening (F25), tokenizer loop,
+      containment-based inner-first (F7 carryover)
 - [ ] Wave 3 — fail-safe + work-loss: laser-off interlocks (F8/F9/F16), single-sender
       gate (F18), work-loss cluster (F26), state truth (F19), DTR banner-grace, export
       groups remainder (F27)
