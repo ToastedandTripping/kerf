@@ -120,17 +120,24 @@ describe("distributeObjects moves path points", () => {
   });
 });
 
-describe("multi-flip position writes move path points (F29 geometry-mirroring untouched)", () => {
-  it("horizontal multi-flip repositions the path with its points", () => {
+describe("multi-flip mirrors path geometry and repositions (F29)", () => {
+  it("horizontal multi-flip mirrors path points across the selection axis", () => {
+    // p1: path at x=0..20 (width 20), r1: rect at x=80..100 (width 20)
+    // Selection spans x=0..100. Flip axis = x=50 (allLeft+allRight = 100, mirror = 100-x).
     useStore.getState().addObject(makePath("p1", 0, 0));
     useStore.getState().addObject(makeRect("r1", 80, 0));
     useStore.getState().setSelectedIds(["p1", "r1"]);
     useStore.getState().flipObjects("horizontal");
     const p = get("p1");
-    expect(p.transform.x).toBe(80); // mirrored position across the selection span
-    expect(p.points![0].x).toBe(80);
+    // F29: path is mirrored geometrically — points x' = 100 - x
+    // Original point[0] at x=0 → mirrored to x=100; point[1] at x=20 → x=80
+    // pointsBBox of mirrored points: x=80..100, so transform.x=80
+    expect(p.transform.x).toBe(80); // AABB left of mirrored points
+    expect(p.points![0].x).toBe(100); // first point is mirrored to the far end
     assertPointsInvariant(p);
+    // rect is also mirrored in position (and scaleX negated)
     expect(get("r1").transform.x).toBe(0);
+    expect(get("r1").transform.scaleX).toBe(-1);
   });
 });
 

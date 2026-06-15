@@ -6,7 +6,7 @@ import { generateId } from "./storeTypes";
 import { applyObjects } from "./storeHelpers";
 import { hasPlaceholders, extractPlaceholders, substitutePlaceholders, generateSerialValues } from "../../lib/variableText";
 import { computeAABB, nestItems } from "../../lib/nesting";
-import { offsetRingByDistance, movePartial, pointsBBox, buildGroupObject } from "../../lib/geometry";
+import { offsetRingByDistance, movePartial, pointsBBox, buildGroupObject, composeGroupChild } from "../../lib/geometry";
 
 // Module-level font cache to avoid reloading on every conversion
 let cachedFont: opentype.Font | null = null;
@@ -170,7 +170,9 @@ function runBoolean(get: StoreGet, clip: ClipFn) {
   get().withUndo("boolean", () => {
     const { selectedIds, objects, removeObjects, addObject, setSelectedIds } = get();
     const selected = objects.filter((o) => selectedIds.includes(o.id));
-    const polys = selected.map(objectToPolygon).filter(Boolean) as polygonClipping.Polygon[];
+    // F28: flatten groups to world-frame leaf objects before converting to polygons
+    const flatSelected = selected.flatMap((o) => flattenForBoolean(o));
+    const polys = flatSelected.map(objectToPolygon).filter(Boolean) as polygonClipping.Polygon[];
     if (polys.length < 2) return;
     const result = clip(polys[0], ...polys.slice(1));
     removeObjects(selectedIds);
@@ -186,46 +188,56 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
       get().withUndo("align", () => {
         const { selectedIds, objects, updateObject } = get();
         const selected = objects.filter((o) => selectedIds.includes(o.id));
-        const bounds = selected.map((o) => ({
-          id: o.id,
-          left: o.transform.x,
-          right: o.transform.x + o.transform.width,
-          top: o.transform.y,
-          bottom: o.transform.y + o.transform.height,
-          cx: o.transform.x + o.transform.width / 2,
-          cy: o.transform.y + o.transform.height / 2,
-        }));
+        // F30: use rotation-aware AABB for accurate alignment of rotated objects
+        const bounds = selected.map((o) => {
+          const aabb = computeAABB(o);
+          return {
+            id: o.id,
+            aabb,
+            left: aabb.x,
+            right: aabb.x + aabb.w,
+            top: aabb.y,
+            bottom: aabb.y + aabb.h,
+            cx: aabb.x + aabb.w / 2,
+            cy: aabb.y + aabb.h / 2,
+          };
+        });
 
         // W1b: every position write routes through movePartial so path/line
-        // points travel with the transform.
+        // points travel with the transform. dx/dy computed as delta from
+        // current rotated AABB edge to the target edge.
         let target: number;
         switch (alignment) {
           case "left":
             target = Math.min(...bounds.map((b) => b.left));
             for (const b of bounds) {
               const obj = objects.find((o) => o.id === b.id)!;
-              updateObject(b.id, movePartial(obj, target, obj.transform.y));
+              const dx = target - b.left;
+              updateObject(b.id, movePartial(obj, obj.transform.x + dx, obj.transform.y));
             }
             break;
           case "right":
             target = Math.max(...bounds.map((b) => b.right));
             for (const b of bounds) {
               const obj = objects.find((o) => o.id === b.id)!;
-              updateObject(b.id, movePartial(obj, target - obj.transform.width, obj.transform.y));
+              const dx = target - b.right;
+              updateObject(b.id, movePartial(obj, obj.transform.x + dx, obj.transform.y));
             }
             break;
           case "top":
             target = Math.min(...bounds.map((b) => b.top));
             for (const b of bounds) {
               const obj = objects.find((o) => o.id === b.id)!;
-              updateObject(b.id, movePartial(obj, obj.transform.x, target));
+              const dy = target - b.top;
+              updateObject(b.id, movePartial(obj, obj.transform.x, obj.transform.y + dy));
             }
             break;
           case "bottom":
             target = Math.max(...bounds.map((b) => b.bottom));
             for (const b of bounds) {
               const obj = objects.find((o) => o.id === b.id)!;
-              updateObject(b.id, movePartial(obj, obj.transform.x, target - obj.transform.height));
+              const dy = target - b.bottom;
+              updateObject(b.id, movePartial(obj, obj.transform.x, obj.transform.y + dy));
             }
             break;
           case "hcenter": {
@@ -234,7 +246,8 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
             const center = (allLeft + allRight) / 2;
             for (const b of bounds) {
               const obj = objects.find((o) => o.id === b.id)!;
-              updateObject(b.id, movePartial(obj, center - obj.transform.width / 2, obj.transform.y));
+              const dx = center - b.cx;
+              updateObject(b.id, movePartial(obj, obj.transform.x + dx, obj.transform.y));
             }
             break;
           }
@@ -244,7 +257,8 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
             const center = (allTop + allBottom) / 2;
             for (const b of bounds) {
               const obj = objects.find((o) => o.id === b.id)!;
-              updateObject(b.id, movePartial(obj, obj.transform.x, center - obj.transform.height / 2));
+              const dy = center - b.cy;
+              updateObject(b.id, movePartial(obj, obj.transform.x, obj.transform.y + dy));
             }
             break;
           }
@@ -258,27 +272,32 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
         const { selectedIds, objects, updateObject } = get();
         const selected = objects.filter((o) => selectedIds.includes(o.id));
 
+        // F30: use rotation-aware AABB so rotated objects distribute by visual bounds
         if (direction === "horizontal") {
-          const sorted = [...selected].sort((a, b) => a.transform.x - b.transform.x);
-          const first = sorted[0].transform.x;
-          const last = sorted[sorted.length - 1].transform.x + sorted[sorted.length - 1].transform.width;
-          const totalWidth = sorted.reduce((s, o) => s + o.transform.width, 0);
+          const withAABB = selected.map((o) => ({ obj: o, aabb: computeAABB(o) }));
+          const sorted = [...withAABB].sort((a, b) => a.aabb.x - b.aabb.x);
+          const first = sorted[0].aabb.x;
+          const last = sorted[sorted.length - 1].aabb.x + sorted[sorted.length - 1].aabb.w;
+          const totalWidth = sorted.reduce((s, { aabb }) => s + aabb.w, 0);
           const gap = (last - first - totalWidth) / (sorted.length - 1);
           let x = first;
-          for (const obj of sorted) {
-            updateObject(obj.id, movePartial(obj, x, obj.transform.y));
-            x += obj.transform.width + gap;
+          for (const { obj, aabb } of sorted) {
+            const dx = x - aabb.x;
+            updateObject(obj.id, movePartial(obj, obj.transform.x + dx, obj.transform.y));
+            x += aabb.w + gap;
           }
         } else {
-          const sorted = [...selected].sort((a, b) => a.transform.y - b.transform.y);
-          const first = sorted[0].transform.y;
-          const last = sorted[sorted.length - 1].transform.y + sorted[sorted.length - 1].transform.height;
-          const totalHeight = sorted.reduce((s, o) => s + o.transform.height, 0);
+          const withAABB = selected.map((o) => ({ obj: o, aabb: computeAABB(o) }));
+          const sorted = [...withAABB].sort((a, b) => a.aabb.y - b.aabb.y);
+          const first = sorted[0].aabb.y;
+          const last = sorted[sorted.length - 1].aabb.y + sorted[sorted.length - 1].aabb.h;
+          const totalHeight = sorted.reduce((s, { aabb }) => s + aabb.h, 0);
           const gap = (last - first - totalHeight) / (sorted.length - 1);
           let y = first;
-          for (const obj of sorted) {
-            updateObject(obj.id, movePartial(obj, obj.transform.x, y));
-            y += obj.transform.height + gap;
+          for (const { obj, aabb } of sorted) {
+            const dy = y - aabb.y;
+            updateObject(obj.id, movePartial(obj, obj.transform.x, obj.transform.y + dy));
+            y += aabb.h + gap;
           }
         }
       });
@@ -318,7 +337,12 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
               updateObject(obj.id, { transform: { ...t, scaleY: t.scaleY * -1 } });
             }
           } else {
-            updateObject(obj.id, { transform: { ...t, scaleX: 1, scaleY: 1 } });
+            // F29: rect/ellipse — negate the appropriate scale axis
+            if (axis === "horizontal") {
+              updateObject(obj.id, { transform: { ...t, scaleX: t.scaleX * -1 } });
+            } else {
+              updateObject(obj.id, { transform: { ...t, scaleY: t.scaleY * -1 } });
+            }
           }
         } else {
           const allLeft = Math.min(...selected.map((o) => o.transform.x));
@@ -326,16 +350,48 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
           const allTop = Math.min(...selected.map((o) => o.transform.y));
           const allBottom = Math.max(...selected.map((o) => o.transform.y + o.transform.height));
 
-          // W1b: position-mirroring writes route through movePartial so paths
-          // actually move. The geometry-mirroring defect itself (children are
-          // repositioned but not mirrored) is F29 — Wave 4, scope-locked out.
+          // F29: mirror positions AND geometry for each object in the selection.
+          // The flip axis for horizontal is x = (allLeft + allRight) / 2;
+          // for vertical is y = (allTop + allBottom) / 2.
           for (const obj of selected) {
             if (axis === "horizontal") {
-              const newX = allRight - (obj.transform.x - allLeft) - obj.transform.width;
-              updateObject(obj.id, movePartial(obj, newX, obj.transform.y));
+              if ((obj.type === "path" || obj.type === "line") && obj.points) {
+                // Mirror all path points around the selection's vertical axis
+                const flipAxisX = allLeft + allRight;
+                const flippedPoints = obj.points.map((p) => ({
+                  ...p,
+                  x: flipAxisX - p.x,
+                  handleIn: p.handleIn ? { x: flipAxisX - p.handleIn.x, y: p.handleIn.y } : undefined,
+                  handleOut: p.handleOut ? { x: flipAxisX - p.handleOut.x, y: p.handleOut.y } : undefined,
+                }));
+                const bb = pointsBBox(flippedPoints);
+                updateObject(obj.id, { points: flippedPoints, transform: { ...obj.transform, x: bb.x, y: bb.y, width: bb.width, height: bb.height } });
+              } else if (obj.type === "rectangle" || obj.type === "ellipse") {
+                const newX = allRight - (obj.transform.x - allLeft) - obj.transform.width;
+                updateObject(obj.id, { transform: { ...obj.transform, x: newX, scaleX: obj.transform.scaleX * -1 } });
+              } else {
+                const newX = allRight - (obj.transform.x - allLeft) - obj.transform.width;
+                updateObject(obj.id, movePartial(obj, newX, obj.transform.y));
+              }
             } else {
-              const newY = allBottom - (obj.transform.y - allTop) - obj.transform.height;
-              updateObject(obj.id, movePartial(obj, obj.transform.x, newY));
+              if ((obj.type === "path" || obj.type === "line") && obj.points) {
+                // Mirror all path points around the selection's horizontal axis
+                const flipAxisY = allTop + allBottom;
+                const flippedPoints = obj.points.map((p) => ({
+                  ...p,
+                  y: flipAxisY - p.y,
+                  handleIn: p.handleIn ? { x: p.handleIn.x, y: flipAxisY - p.handleIn.y } : undefined,
+                  handleOut: p.handleOut ? { x: p.handleOut.x, y: flipAxisY - p.handleOut.y } : undefined,
+                }));
+                const bb = pointsBBox(flippedPoints);
+                updateObject(obj.id, { points: flippedPoints, transform: { ...obj.transform, x: bb.x, y: bb.y, width: bb.width, height: bb.height } });
+              } else if (obj.type === "rectangle" || obj.type === "ellipse") {
+                const newY = allBottom - (obj.transform.y - allTop) - obj.transform.height;
+                updateObject(obj.id, { transform: { ...obj.transform, y: newY, scaleY: obj.transform.scaleY * -1 } });
+              } else {
+                const newY = allBottom - (obj.transform.y - allTop) - obj.transform.height;
+                updateObject(obj.id, movePartial(obj, obj.transform.x, newY));
+              }
             }
           }
         }
@@ -782,6 +838,29 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
   };
 }
 
+// F28: rotate a polygon ring around (cx, cy) by degrees — used in objectToPolygon
+// to world-frame rotate rect/ellipse rings before boolean ops.
+function applyRotation(ring: polygonClipping.Ring, cx: number, cy: number, deg: number): polygonClipping.Ring {
+  if (deg === 0) return ring;
+  const rad = deg * Math.PI / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return ring.map(([x, y]): polygonClipping.Pair => {
+    const dx = x - cx;
+    const dy = y - cy;
+    return [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos];
+  });
+}
+
+// F28: flatten group children to world frame before boolean ops.
+// Recurses into nested groups. Returns non-group leaf objects.
+function flattenForBoolean(obj: DesignObject): DesignObject[] {
+  if (obj.type === "group" && obj.children) {
+    return obj.children.flatMap((child) => flattenForBoolean(composeGroupChild(child, obj)));
+  }
+  return [obj];
+}
+
 function sampleBezierSegment(
   p0: { x: number; y: number },
   cp1: { x: number; y: number },
@@ -804,11 +883,13 @@ function objectToPolygon(obj: DesignObject): polygonClipping.Polygon | null {
   const t = obj.transform;
   switch (obj.type) {
     case "rectangle": {
-      const ring: polygonClipping.Ring = [
+      const cx = t.x + t.width / 2;
+      const cy = t.y + t.height / 2;
+      const ring: polygonClipping.Ring = applyRotation([
         [t.x, t.y], [t.x + t.width, t.y],
         [t.x + t.width, t.y + t.height], [t.x, t.y + t.height],
         [t.x, t.y],
-      ];
+      ], cx, cy, t.rotation || 0);
       return [ring];
     }
     case "ellipse": {
@@ -820,7 +901,7 @@ function objectToPolygon(obj: DesignObject): polygonClipping.Polygon | null {
         const angle = (i / segments) * Math.PI * 2;
         ring.push([cx + rx * Math.cos(angle), cy + ry * Math.sin(angle)]);
       }
-      return [ring];
+      return [applyRotation(ring, cx, cy, t.rotation || 0)];
     }
     case "path": {
       if (!obj.points || obj.points.length < 3) return null;
@@ -856,20 +937,31 @@ function objectToPolygon(obj: DesignObject): polygonClipping.Polygon | null {
 }
 
 function multiPolygonToObjects(mp: polygonClipping.MultiPolygon, template: DesignObject): DesignObject[] {
-  return mp.map((polygon) => {
-    const ring = polygon[0];
-    const points = ring.map((p) => ({ x: p[0], y: p[1] }));
-    const xs = points.map((p) => p.x);
-    const ys = points.map((p) => p.y);
-    const minX = Math.min(...xs), minY = Math.min(...ys);
-    const maxX = Math.max(...xs), maxY = Math.max(...ys);
-    return {
-      ...template,
-      id: generateId(),
-      type: "path" as const,
-      points, closed: true,
-      transform: { ...template.transform, x: minX, y: minY, width: maxX - minX, height: maxY - minY },
-    };
-  });
+  // F28: preserve holes — polygon[0] is the outer ring, polygon[1..] are holes.
+  // Each ring becomes a path object. Multi-ring polygons group the outer + holes together.
+  const allContours: DesignObject[] = [];
+
+  for (const polygon of mp) {
+    const contourObjects: DesignObject[] = [];
+    for (const ring of polygon) {
+      const points = ring.map((p) => ({ x: p[0], y: p[1] }));
+      const bb = pointsBBox(points);
+      contourObjects.push({
+        ...template,
+        id: generateId(),
+        type: "path" as const,
+        points,
+        closed: true,
+        transform: { ...template.transform, x: bb.x, y: bb.y, width: bb.width, height: bb.height, rotation: 0 },
+      });
+    }
+    if (contourObjects.length === 1) {
+      allContours.push(contourObjects[0]);
+    } else if (contourObjects.length > 1) {
+      allContours.push(buildGroupObject(contourObjects, generateId(), template.name || "Boolean", template.layerIndex));
+    }
+  }
+
+  return allContours;
 }
 

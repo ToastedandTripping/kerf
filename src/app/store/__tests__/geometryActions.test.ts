@@ -18,6 +18,41 @@ function makeRect(id: string, x: number, y: number, w: number, h: number): Desig
   };
 }
 
+function makeRotatedRect(id: string, x: number, y: number, w: number, h: number, rotation: number): DesignObject {
+  return {
+    ...makeRect(id, x, y, w, h),
+    transform: { x, y, width: w, height: h, rotation, scaleX: 1, scaleY: 1 },
+  };
+}
+
+function makePath(id: string, pts: Array<{ x: number; y: number }>): DesignObject {
+  const xs = pts.map((p) => p.x);
+  const ys = pts.map((p) => p.y);
+  return {
+    id,
+    type: "path",
+    name: `Path ${id}`,
+    transform: {
+      x: Math.min(...xs),
+      y: Math.min(...ys),
+      width: Math.max(...xs) - Math.min(...xs),
+      height: Math.max(...ys) - Math.min(...ys),
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+    },
+    layerIndex: 0,
+    visible: true,
+    locked: false,
+    fill: null,
+    stroke: "#4a90e2",
+    strokeWidth: 1,
+    opacity: 1,
+    points: pts,
+    closed: true,
+  };
+}
+
 describe("Geometry Actions", () => {
   beforeEach(() => {
     useStore.setState({
@@ -52,14 +87,14 @@ describe("Geometry Actions", () => {
   });
 
   describe("flipObjects", () => {
-    it("flips a single rectangle horizontally (resets scale)", () => {
+    it("flips a single rectangle horizontally (negates scaleX)", () => {
       const obj = makeRect("r1", 10, 10, 40, 20);
       useStore.getState().addObject(obj);
       useStore.getState().setSelectedIds(["r1"]);
       useStore.getState().flipObjects("horizontal");
       const updated = useStore.getState().objects.find((o) => o.id === "r1")!;
-      // Rectangle flip resets scaleX/scaleY to 1
-      expect(updated.transform.scaleX).toBe(1);
+      // F29: rectangle horizontal flip negates scaleX; scaleY unchanged
+      expect(updated.transform.scaleX).toBe(-1);
       expect(updated.transform.scaleY).toBe(1);
     });
 
@@ -353,6 +388,128 @@ describe("Geometry Actions", () => {
       useStore.getState().setSelectedIds(["r1"]);
       useStore.getState().booleanDifference();
       expect(useStore.getState().objects).toHaveLength(1);
+    });
+  });
+
+  // F28 — Booleans on rotated shapes + hole preservation
+  describe("booleanUnion on rotated rectangles (F28)", () => {
+    it("produces a world-frame result (rotation=0) for two overlapping rotated rects", () => {
+      // Two 45-degree rotated rects overlapping at origin
+      const r1 = makeRotatedRect("r1", 0, 0, 20, 20, 45);
+      const r2 = makeRotatedRect("r2", 5, 5, 20, 20, 45);
+      useStore.getState().addObject(r1);
+      useStore.getState().addObject(r2);
+      useStore.getState().setSelectedIds(["r1", "r2"]);
+      useStore.getState().booleanUnion();
+      const objs = useStore.getState().objects;
+      expect(objs).toHaveLength(1);
+      expect(objs[0].type).toBe("path");
+      // Result rotation is always 0 (world-frame path)
+      expect(objs[0].transform.rotation).toBe(0);
+      // Transform bounds should be non-zero (rotated input produces non-trivial output)
+      expect(objs[0].transform.width).toBeGreaterThan(0);
+      expect(objs[0].transform.height).toBeGreaterThan(0);
+    });
+
+    it("boolean difference on two overlapping rects where inner is fully inside: result should exist", () => {
+      // Large outer rect, smaller inner rect punched out
+      const outer = makeRect("r1", 0, 0, 30, 30);
+      const inner = makeRect("r2", 10, 10, 10, 10);
+      useStore.getState().addObject(outer);
+      useStore.getState().addObject(inner);
+      useStore.getState().setSelectedIds(["r1", "r2"]);
+      useStore.getState().booleanDifference();
+      const objs = useStore.getState().objects;
+      // Should produce at least one result (polygon with hole or flat path)
+      expect(objs.length).toBeGreaterThanOrEqual(1);
+      // All results must be paths (or groups if hole is preserved as group)
+      for (const o of objs) {
+        expect(["path", "group"]).toContain(o.type);
+      }
+    });
+  });
+
+  // F29 — Flip mirrors geometry
+  describe("flipObjects F29 fixes", () => {
+    it("single rect vertical flip negates scaleY", () => {
+      const r = makeRect("r1", 10, 10, 40, 20);
+      useStore.getState().addObject(r);
+      useStore.getState().setSelectedIds(["r1"]);
+      useStore.getState().flipObjects("vertical");
+      const updated = useStore.getState().objects.find((o) => o.id === "r1")!;
+      expect(updated.transform.scaleY).toBe(-1);
+      expect(updated.transform.scaleX).toBe(1);
+    });
+
+    it("multi-select flip: path points are mirrored across the selection axis", () => {
+      // Path at x=0..10, rect at x=30..40
+      const path = makePath("p1", [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 5, y: 10 }]);
+      const rect = makeRect("r1", 30, 0, 10, 10);
+      useStore.getState().addObject(path);
+      useStore.getState().addObject(rect);
+      useStore.getState().setSelectedIds(["p1", "r1"]);
+      useStore.getState().flipObjects("horizontal");
+      const objs = useStore.getState().objects;
+      const flippedPath = objs.find((o) => o.id === "p1")!;
+      // Selection spans x=0 to x=40. Flip axis = x=20.
+      // Original point (0,0) should map to (40,0); (10,0) to (30,0); (5,10) to (35,10)
+      const pts = flippedPath.points!;
+      // Points should be mirrored: sum of original + flipped = 40 for each x
+      const originalXs = [0, 10, 5];
+      const flippedXs = pts.map((p) => p.x);
+      for (let i = 0; i < originalXs.length; i++) {
+        expect(flippedXs[i]).toBeCloseTo(40 - originalXs[i], 5);
+      }
+    });
+
+    it("multi-select flip: rect scaleX is negated", () => {
+      const r1 = makeRect("r1", 0, 0, 10, 10);
+      const r2 = makeRect("r2", 30, 0, 10, 10);
+      useStore.getState().addObject(r1);
+      useStore.getState().addObject(r2);
+      useStore.getState().setSelectedIds(["r1", "r2"]);
+      useStore.getState().flipObjects("horizontal");
+      const objs = useStore.getState().objects;
+      const flippedR1 = objs.find((o) => o.id === "r1")!;
+      const flippedR2 = objs.find((o) => o.id === "r2")!;
+      // Both rects should have scaleX negated
+      expect(flippedR1.transform.scaleX).toBe(-1);
+      expect(flippedR2.transform.scaleX).toBe(-1);
+    });
+  });
+
+  // F30 — Rotation-aware bounds for align
+  describe("alignObjects with rotated objects (F30)", () => {
+    it("aligns left using rotated AABB for a rotated rect", () => {
+      // A 90-degree rotated rect at (10,10) with w=20, h=40:
+      // Rotated AABB: cx=20, cy=30; rotated dims w=40, h=20; AABB x=0, y=20
+      const rotated = makeRotatedRect("rot", 10, 10, 20, 40, 90);
+      // An unrotated rect clearly to the right
+      const normal = makeRect("nrm", 60, 10, 20, 20);
+      useStore.getState().addObject(rotated);
+      useStore.getState().addObject(normal);
+      useStore.getState().setSelectedIds(["rot", "nrm"]);
+      useStore.getState().alignObjects("left");
+      const objs = useStore.getState().objects;
+      const alignedNrm = objs.find((o) => o.id === "nrm")!;
+      // Both should have their rotated AABB left aligned to the minimum (rotated rect's AABB x=0)
+      // rotated rect AABB x = cx - rotW/2 = 20 - 20 = 0, so target=0
+      // normal rect AABB x = 60 (no rotation), so it should move left by 60
+      expect(alignedNrm.transform.x).toBeCloseTo(60 - 60, 3); // moves by -60 to x=0
+    });
+
+    it("distributes horizontally using rotated AABB (F30)", () => {
+      // Three rects, middle one rotated 45 degrees
+      const r1 = makeRect("r1", 0, 50, 10, 10);
+      const r2 = makeRotatedRect("r2", 40, 40, 10, 10, 45); // rotated AABB shifts position
+      const r3 = makeRect("r3", 100, 50, 10, 10);
+      useStore.getState().addObject(r1);
+      useStore.getState().addObject(r2);
+      useStore.getState().addObject(r3);
+      useStore.getState().setSelectedIds(["r1", "r2", "r3"]);
+      useStore.getState().distributeObjects("horizontal");
+      // Should not throw; result should be 3 objects still
+      expect(useStore.getState().objects).toHaveLength(3);
     });
   });
 });
