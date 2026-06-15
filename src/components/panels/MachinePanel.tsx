@@ -195,7 +195,27 @@ export function MachinePanel() {
 
     const elapsed = job.estimatedTimeSecs * (jobProgress || 1);
     if (endState === "complete") {
-      addConsoleLine("Job complete", "info");
+      // F19: after last ack, wait for machine to actually reach Idle before
+      // re-enabling START — head is still decelerating at last-ack time.
+      const IDLE_TIMEOUT_MS = 30000;
+      const IDLE_POLL_MS = 200;
+      const idleDeadline = Date.now() + IDLE_TIMEOUT_MS;
+      let reachedIdle = false;
+      while (Date.now() < idleDeadline) {
+        await new Promise((r) => setTimeout(r, IDLE_POLL_MS));
+        try {
+          const report = await machineConnection.getStatusReport();
+          if (report && report.match(/^<Idle/i)) {
+            reachedIdle = true;
+            break;
+          }
+        } catch { /* port may be gone; fall through to timeout */ }
+      }
+      if (!reachedIdle) {
+        addConsoleLine("Job complete (Idle timeout — head may still be moving)", "warning");
+      } else {
+        addConsoleLine("Job complete", "info");
+      }
       setStatusMessage(`Job complete -- ${formatTime(elapsed)}`);
     } else if (endState === "alarm") {
       addConsoleLine(
@@ -472,7 +492,7 @@ export function MachinePanel() {
                 await machineConnection.send("M5");
               }}
             />
-            <ActionButton label="Set Origin" color="var(--text-secondary)" onClick={() => machineConnection.setOrigin()} />
+            <ActionButton label="Set Origin" color="var(--text-secondary)" disabled={!machineConnected || jobRunning} onClick={() => machineConnection.setOrigin()} />
             <button
               onClick={() => setActiveTool(activeTool === "positionLaser" ? "select" : "positionLaser")}
               disabled={!machineConnected || machineState !== "idle"}

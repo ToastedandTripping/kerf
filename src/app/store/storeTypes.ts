@@ -107,14 +107,15 @@ export interface AppState {
 
   // Machine connection
   machineConnected: boolean;
-  machineState: "idle" | "run" | "hold" | "alarm" | "disconnected";
+  // F19: "door" added to handle Door:n GRBL substates ($10=0 machines)
+  machineState: "idle" | "run" | "hold" | "alarm" | "door" | "disconnected";
   machinePosition: { x: number; y: number; z: number };
   grblSValueMax: number;
   grblLaserMode: boolean;
   grblAccelX: number;
   grblAccelY: number;
   setMachineConnected: (connected: boolean) => void;
-  setMachineState: (state: "idle" | "run" | "hold" | "alarm" | "disconnected") => void;
+  setMachineState: (state: "idle" | "run" | "hold" | "alarm" | "door" | "disconnected") => void;
   setMachinePosition: (pos: { x: number; y: number; z: number }) => void;
   setGrblSValueMax: (v: number) => void;
   setGrblLaserMode: (v: boolean) => void;
@@ -143,6 +144,9 @@ export interface AppState {
   jobProgress: number;
   setJobRunning: (running: boolean) => void;
   setJobProgress: (p: number) => void;
+  // F18: serialBusy flag — set by the material test loop; UI paths check before sending
+  serialBusy: boolean;
+  setSerialBusy: (busy: boolean) => void;
 
   // Z-Order
   moveObjectForward: (id: string) => void;

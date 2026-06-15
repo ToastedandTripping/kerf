@@ -142,7 +142,16 @@ export const fileOperations = {
         importImageData(data, ext);
       } else {
         const content = await fsModule.readTextFile(pathStr);
-        const project = JSON.parse(content) as KerfProject;
+        // F26: surface corrupt file errors clearly
+        let project: KerfProject;
+        try {
+          project = JSON.parse(content) as KerfProject;
+        } catch {
+          const store = useStore.getState();
+          store.setStatusMessage("Project file is corrupted and could not be loaded");
+          store.addConsoleLine(`Failed to load "${pathStr}": file is corrupted or not a valid Kerf project`, "error");
+          return;
+        }
         loadProjectWithMigrations(project);
         useStore.getState().setProjectPath(pathStr);
         addRecentFile(pathStr);
@@ -180,16 +189,31 @@ export const fileOperations = {
   },
 
   async openRecentFile(filePath: string) {
+    // F26: check for unsaved changes before discarding current project
+    const canProceed = await checkUnsavedChanges();
+    if (!canProceed) return;
+
     const hasTauri = await ensureTauri();
     if (!hasTauri || !fsModule) return;
     try {
       const content = await fsModule.readTextFile(filePath);
-      const project = JSON.parse(content) as KerfProject;
+      // F26: wrap JSON.parse in try/catch — surface corrupt file errors instead of
+      // letting them throw uncaught or silently fall through to an empty state.
+      let project: KerfProject;
+      try {
+        project = JSON.parse(content) as KerfProject;
+      } catch {
+        const store = useStore.getState();
+        store.setStatusMessage("Project file is corrupted and could not be loaded");
+        store.addConsoleLine(`Failed to load "${filePath}": file is corrupted or not a valid Kerf project`, "error");
+        return;
+      }
       loadProjectWithMigrations(project);
       useStore.getState().setProjectPath(filePath);
       addRecentFile(filePath);
     } catch (e) {
       console.error("Failed to open recent file:", e);
+      useStore.getState().addConsoleLine(`Failed to open recent file: ${e}`, "error");
     }
   },
 

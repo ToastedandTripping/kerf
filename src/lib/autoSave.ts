@@ -47,11 +47,8 @@ export async function checkRecoveryFile(): Promise<{ project: ReturnType<typeof 
     const fs = await import("@tauri-apps/plugin-fs");
     const stat = await fs.stat(recoveryPath);
     if (!stat || !stat.mtime) return null;
-    const age = Date.now() - new Date(stat.mtime).getTime();
-    if (age > 24 * 60 * 60 * 1000) {
-      await fs.remove(recoveryPath);
-      return null;
-    }
+    // F26: no 24h expiry — recovery files persist until the user explicitly
+    // dismisses them. An overnight crash should still offer recovery the next day.
     const content = await fs.readTextFile(recoveryPath);
     const project = JSON.parse(content);
     return { project, timestamp: new Date(stat.mtime).getTime() };

@@ -179,7 +179,8 @@ export const machineConnection = {
       // <Hold…> consumed after resume would re-arm the job loop's pause-wait
       // with polling suspended (permanently wedged job).
       if (lastStatusReport) {
-        const m = lastStatusReport.match(/MPos:([-\d.]+),([-\d.]+),([-\d.]+)/);
+        // F19: accept both MPos and WPos for $10=0 machines
+        const m = lastStatusReport.match(/[MW]Pos:([-\d.]+),([-\d.]+),([-\d.]+)/);
         if (m) {
           store.setMachinePosition({
             x: parseFloat(m[1]),
@@ -215,7 +216,17 @@ export const machineConnection = {
 
   async pollStatus(): Promise<void> {
     const store = useStore.getState();
-    if (!store.machineConnected) return;
+    // F19: guard against stacking — if disconnected, clear the interval and bail.
+    // This prevents intervals leaking when a serial error triggers disconnect()
+    // before the next poll fires (e.g. 3-strike path clears the interval, but
+    // an unexpected disconnect path may not reach disconnect() immediately).
+    if (!store.machineConnected) {
+      if (statusPollInterval) {
+        clearInterval(statusPollInterval);
+        statusPollInterval = null;
+      }
+      return;
+    }
     if (jobPollingSuspended) return;
 
     try {
@@ -225,11 +236,14 @@ export const machineConnection = {
       // alive; a genuinely dead port surfaces as a write failure (rejection).
       consecutivePollFailures = 0;
       if (!status) return;
-      // Parse GRBL status: <Idle|MPos:0.000,0.000,0.000|FS:0,0>
-      const match = status.match(/<(\w+)\|MPos:([-\d.]+),([-\d.]+),([-\d.]+)/);
+      // F19: Parse GRBL status — handles MPos and WPos ($10=0 machines), and
+      // Hold:n / Door:n substates. Map substates to their parent for the UI.
+      const match = status.match(/<(\w+(?::\d+)?)\|[MW]Pos:([-\d.]+),([-\d.]+),([-\d.]+)/);
       if (match) {
-        const state = match[1].toLowerCase() as "idle" | "run" | "hold" | "alarm";
-        store.setMachineState(state);
+        const rawState = match[1].toLowerCase();
+        // Map Hold:n → "hold", Door:n → "door" (any substate collapses to parent)
+        const baseState = rawState.split(":")[0] as "idle" | "run" | "hold" | "alarm" | "door";
+        store.setMachineState(baseState);
         store.setMachinePosition({
           x: parseFloat(match[2]),
           y: parseFloat(match[3]),
@@ -340,9 +354,11 @@ export const machineConnection = {
     try { report = await this.getStatusReport(); } catch { /* port may be gone */ }
 
     // Refresh DRO/state from the fresh post-reset report, if any.
-    const match = report.match(/<(\w+)\|MPos:([-\d.]+),([-\d.]+),([-\d.]+)/);
+    // F19: accept both MPos and WPos to support $10=0 machines.
+    const match = report.match(/<(\w+(?::\d+)?)\|[MW]Pos:([-\d.]+),([-\d.]+),([-\d.]+)/);
     if (match) {
-      store.setMachineState(match[1].toLowerCase() as "idle" | "run" | "hold" | "alarm");
+      const rawState = match[1].toLowerCase();
+      store.setMachineState(rawState.split(":")[0] as "idle" | "run" | "hold" | "alarm" | "door");
       store.setMachinePosition({
         x: parseFloat(match[2]),
         y: parseFloat(match[3]),
