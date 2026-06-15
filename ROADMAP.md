@@ -1,6 +1,6 @@
 ---
 status: active
-current: fortification complete (v0.7.1 released 2026-06-14; Waves 1-4 shipped; final re-audit + /production next)
+current: fortification complete, production-ready (v0.7.2 — Waves 1-4 shipped, final audit PASSED 2026-06-15)
 next: v0.8 — Camera & Rotary
 testing: null
 pinned: true
@@ -361,7 +361,7 @@ guided error recovery), plus a code-health refactor.
 - [x] Wave 4 — re-audit fixes (originTop, rotated image Y, locked images, MaterialTest,
       powerScale images, power_min) + editing correctness: booleans (F28), flip (F29),
       rotation-aware bounds (F30)
-- [ ] Final re-audit + /production pass
+- [x] Final re-audit + production pass — PASSED 2026-06-15 (0 blockers, 8 LOW residuals)
 
 ---
 
