@@ -588,15 +588,43 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                     let overscan = layer.overscan.max(0.0);
                     let scanning_offset = layer.scanning_offset;
 
-                    // Scan lines are generated in the object's local (unrotated) space.
-                    // The transform_to_grbl helper applies rotation + Y-flip per coordinate.
-                    let (x_min, x_max, y_min, y_max) = (obj.x, obj.x + obj.width, obj.y, obj.y + obj.height);
                     // Combine object rotation + layer scan angle + per-pass angle increment
                     let obj_rot = if obj.rotation.abs() > 0.001 { obj.rotation.to_radians() } else { 0.0 };
                     let layer_angle = layer.scan_angle.to_radians() + (pass as f64) * layer.angle_increment.to_radians();
                     let rotation_rad = obj_rot + layer_angle;
                     let center_x = obj.x + obj.width / 2.0;
                     let center_y = obj.y + obj.height / 2.0;
+
+                    // F10: compute scan boundaries in the ROTATED coordinate frame so
+                    // scan lines cover the full object area at any scan angle.
+                    // Rotate the 4 AABB corners by -rotation_rad around the object center,
+                    // then take the AABB of those rotated points. transform_to_grbl rotates
+                    // back by +rotation_rad, giving full corner coverage.
+                    let (x_min, x_max, y_min, y_max) = if rotation_rad.abs() > 1e-6 {
+                        let corners = [
+                            (obj.x,              obj.y),
+                            (obj.x + obj.width,  obj.y),
+                            (obj.x + obj.width,  obj.y + obj.height),
+                            (obj.x,              obj.y + obj.height),
+                        ];
+                        let cos_r = (-rotation_rad).cos();
+                        let sin_r = (-rotation_rad).sin();
+                        let rotated: Vec<(f64, f64)> = corners.iter().map(|&(px, py)| {
+                            let dx = px - center_x;
+                            let dy = py - center_y;
+                            (center_x + dx * cos_r - dy * sin_r,
+                             center_y + dx * sin_r + dy * cos_r)
+                        }).collect();
+                        let rx_min = rotated.iter().map(|&(x, _)| x).fold(f64::INFINITY, f64::min);
+                        let rx_max = rotated.iter().map(|&(x, _)| x).fold(f64::NEG_INFINITY, f64::max);
+                        let ry_min = rotated.iter().map(|&(_, y)| y).fold(f64::INFINITY, f64::min);
+                        let ry_max = rotated.iter().map(|&(_, y)| y).fold(f64::NEG_INFINITY, f64::max);
+                        (rx_min, rx_max, ry_min, ry_max)
+                    } else {
+                        (obj.x, obj.x + obj.width, obj.y, obj.y + obj.height)
+                    };
+                    // Scan lines are generated in the rotated frame; transform_to_grbl
+                    // applies +rotation_rad to map back to machine coordinates.
 
                     let scan_params = ScanLineParams {
                         overscan,
@@ -652,7 +680,8 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                         }).collect()
                     };
 
-                    lines.push(format!("{} S{}", power_cmd, s_max));
+                    // F8: no bulk M3 here — laser is enabled per-ring, off between rings.
+                    // This prevents G0 rapids between rings from firing the laser under $32=0.
 
                     for path in &paths_to_offset {
                         if path.points.len() < 3 { continue; }
@@ -666,6 +695,9 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                         for ring in &rings {
                             if ring.len() < 2 { continue; }
 
+                            // Laser off before rapid — safe traverse between rings (F8)
+                            lines.push("M5".to_string());
+
                             // Rapid to ring start
                             let (rsx, rsy) = (ring[0].x, fy(ring[0].y));
                             let dist = ((rsx - cur_x).powi(2) + (rsy - cur_y).powi(2)).sqrt();
@@ -675,6 +707,9 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                             moves.push(GcodeMove { x: rsx, y: rsy, move_type: "rapid".to_string(), speed: 3000.0, power: 0.0 });
                             cur_x = rsx;
                             cur_y = rsy;
+
+                            // Laser on before cutting this ring (F8)
+                            lines.push(format!("{} S{}", power_cmd, s_max));
 
                             // Cut along ring
                             for pt in ring.iter().skip(1) {
@@ -895,6 +930,113 @@ mod tests {
         let g1_count = gcode.matches("G1 X").count();
         assert!(g0_count >= 2, "Expected multiple G0 moves (home + lead-in approach); got:\n{}", gcode);
         assert!(g1_count >= 2, "Expected G1 for lead-in cut + path cuts; got:\n{}", gcode);
+    }
+
+    // F8 — offsetFill: each ring's G0 rapid is preceded by M5 and followed by
+    // the power command. No M3 fires before any G0 between rings.
+    #[test]
+    fn f8_offset_fill_m5_before_each_ring_rapid() {
+        let mut layer = make_layer_line();
+        layer.mode = "offsetFill".to_string();
+        layer.interval = 0.5;
+        // 20×20 square — large enough to produce at least 2 concentric rings
+        let obj = make_rect_obj("sq", 0.0, 0.0, 20.0, 20.0, layer);
+        let result = generate_gcode(&[obj], 100.0, 1000.0, false);
+        let gcode = &result.gcode;
+
+        // There must be at least 2 rings to validate inter-ring safety
+        let g0_count = gcode.matches("G0 X").count();
+        assert!(g0_count >= 2, "Expected ≥2 rings; got:\n{}", gcode);
+
+        // Every G0 rapid must be preceded by M5 (no active laser across rapids)
+        let lines: Vec<&str> = gcode.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if line.starts_with("G0 X") && !line.contains("Y0") { // skip final G0 home
+                // Scan backward for the nearest M5 or power command before this G0
+                let mut found_m5 = false;
+                let mut found_power = false;
+                for j in (0..i).rev() {
+                    if lines[j].starts_with("M5") { found_m5 = true; break; }
+                    if lines[j].starts_with("M3") || lines[j].starts_with("M4") {
+                        found_power = true; break;
+                    }
+                }
+                assert!(found_m5 && !found_power,
+                    "Expected M5 immediately before G0 at line {i}: {line}\nFull G-code:\n{gcode}");
+            }
+        }
+
+        // Every cut segment (G1 X) must be preceded by a power command (M3/M4) before any G0
+        for (i, line) in lines.iter().enumerate() {
+            if line.starts_with("G1 X") {
+                let mut found_power = false;
+                let mut found_g0 = false;
+                for j in (0..i).rev() {
+                    if lines[j].starts_with("M3") || lines[j].starts_with("M4") {
+                        found_power = true; break;
+                    }
+                    if lines[j].starts_with("G0 X") { found_g0 = true; }
+                    // Stop scan at object header comment
+                    if lines[j].starts_with("; Offset Fill:") { break; }
+                }
+                let _ = found_g0; // presence of G0 is expected between power and G1
+                assert!(found_power,
+                    "Expected power command (M3/M4) before G1 at line {i}: {line}\nFull G-code:\n{gcode}");
+            }
+        }
+    }
+
+    // F10 — fill mode scan angle: 45° scan on a 10×10 square must produce
+    // Y coordinates outside the unrotated AABB (demonstrating corner coverage).
+    // At 45° the rotated AABB is ~14.14mm wide/tall, so scan line Y values in
+    // rotated space extend beyond the original 0..10 range before transform_to_grbl
+    // rotates them back.
+    #[test]
+    fn f10_fill_scan_angle_covers_full_area() {
+        let mut layer = make_layer_line();
+        layer.mode = "fill".to_string();
+        layer.scan_angle = 45.0;
+        layer.interval = 0.5;
+        // 10×10 square at (0,0)
+        let obj = make_rect_obj("sq", 0.0, 0.0, 10.0, 10.0, layer);
+        let result = generate_gcode(&[obj], 100.0, 1000.0, false);
+        let gcode = &result.gcode;
+
+        // Extract all X values from G0/G1 moves
+        let mut xs: Vec<f64> = Vec::new();
+        let mut ys: Vec<f64> = Vec::new();
+        for line in gcode.lines() {
+            if line.starts_with("G0 X") || line.starts_with("G1 X") {
+                if let (Some(xi), Some(yi)) = (line.find('X'), line.find('Y')) {
+                    let x_str = &line[xi+1..].split_whitespace().next().unwrap_or("0");
+                    let y_str = &line[yi+1..].split_whitespace().next().unwrap_or("0");
+                    if let (Ok(x), Ok(y)) = (x_str.parse::<f64>(), y_str.parse::<f64>()) {
+                        xs.push(x);
+                        ys.push(y);
+                    }
+                }
+            }
+        }
+
+        // Under the old (unrotated-AABB) code, X and Y in rotated space would
+        // span exactly 0..10 in design coords — the corners at 45° would be missed.
+        // With the fix, the rotated AABB is wider (~-2.07..12.07 in rotated space),
+        // so after transform_to_grbl the machine coordinates extend beyond a 10×10 box.
+        // The bounding box of all moves should be larger than 10mm in at least one axis.
+        let x_min = xs.iter().cloned().fold(f64::INFINITY, f64::min);
+        let x_max = xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let y_min = ys.iter().cloned().fold(f64::INFINITY, f64::min);
+        let y_max = ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let x_span = x_max - x_min;
+        // Y span in workspace coords (after Y-flip) covers the full 100mm-mapped extent
+        let y_span = y_max - y_min;
+        // With rotated AABB the coverage span should be > 10mm (the original square side)
+        assert!(
+            x_span > 10.0 || y_span > 10.0,
+            "Expected scan coverage span > 10mm at 45° (rotated AABB fix); x_span={x_span:.3} y_span={y_span:.3}\nG-code:\n{gcode}"
+        );
+        // Also verify there are actual scan moves (not an empty result)
+        assert!(!xs.is_empty(), "Expected scan moves to be generated; got:\n{gcode}");
     }
 }
 

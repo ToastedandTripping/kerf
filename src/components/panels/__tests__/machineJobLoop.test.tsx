@@ -278,13 +278,17 @@ describe("MachinePanel START/FRAME gating (F15)", () => {
     fireEvent.click(getByText("FRAME"));
     // Extents of the seeded moves: X 10..50, Y 20..80. Under the deleted
     // design→machine flip (H=300) the Ys would have been 220/280.
+    // F16: Frame now sends M5 before first move (clear stale M3) and M5 after
+    // last move (belt-and-suspenders). Update test to match new behavior.
     await waitFor(() =>
       expect(sentCommands()).toEqual([
+        "M5",
         "G0 X10.000 Y20.000",
         "G0 X50.000 Y20.000",
         "G0 X50.000 Y80.000",
         "G0 X10.000 Y80.000",
         "G0 X10.000 Y20.000",
+        "M5",
       ]),
     );
   });
