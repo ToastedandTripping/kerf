@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import QRCode from "qrcode";
 import { useStore, generateId } from "../../app/store";
+import { useEscapeClose } from "../../lib/hooks/useEscapeClose";
+import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
 
 interface Props {
   open: boolean;
@@ -19,6 +21,10 @@ export function QrCodeDialog({ open, onClose }: Props) {
   const [size, setSize] = useState(30); // mm
   const [errorLevel, setErrorLevel] = useState<"L" | "M" | "Q" | "H">("M");
   const previewRef = useRef<HTMLCanvasElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEscapeClose(open, onClose);
+  useFocusTrap(dialogRef, open);
 
   const content = mode === "text" ? text
     : mode === "url" ? url
@@ -113,6 +119,7 @@ export function QrCodeDialog({ open, onClose }: Props) {
         position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999,
       }} />
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="qr-code-dialog-title"

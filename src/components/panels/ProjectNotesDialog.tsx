@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useStore } from "../../app/store";
+import { useEscapeClose } from "../../lib/hooks/useEscapeClose";
+import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
 
 interface Props {
   open: boolean;
@@ -11,6 +13,10 @@ export function ProjectNotesDialog({ open, onClose }: Props) {
   const setProjectNotes = useStore((s) => s.setProjectNotes);
   const [notes, setNotes] = useState(projectNotes);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEscapeClose(open, onClose);
+  useFocusTrap(dialogRef, open);
 
   useEffect(() => {
     if (open) {
@@ -37,6 +43,7 @@ export function ProjectNotesDialog({ open, onClose }: Props) {
         }}
       />
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="project-notes-dialog-title"

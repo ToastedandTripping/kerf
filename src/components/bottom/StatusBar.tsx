@@ -32,12 +32,12 @@ export function StatusBar() {
       }}
     >
       <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
-        {/* Machine status */}
-        <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+        {/* Machine status — aria-live so screen readers announce state transitions */}
+        <span aria-live="polite" aria-atomic="true" style={{ display: "flex", alignItems: "center", gap: "4px" }}>
           <span style={{
             width: "6px", height: "6px", borderRadius: "50%",
             background: MACHINE_STATE_COLORS[machineState] ?? "var(--text-muted)",
-          }} />
+          }} aria-hidden="true" />
           <span style={{ color: MACHINE_STATE_COLORS[machineState] ?? "var(--text-muted)" }}>
             {MACHINE_STATE_LABELS[machineState] ?? machineState}
           </span>

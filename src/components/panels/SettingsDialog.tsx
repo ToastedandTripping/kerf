@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useStore } from "../../app/store";
+import { useEscapeClose } from "../../lib/hooks/useEscapeClose";
+import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
 
 interface Props {
   open: boolean;
@@ -16,6 +18,10 @@ export function SettingsDialog({ open, onClose }: Props) {
   const [wWidth, setWWidth] = useState(workspaceWidth.toString());
   const [wHeight, setWHeight] = useState(workspaceHeight.toString());
   const [gSize, setGSize] = useState(gridSize.toString());
+
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEscapeClose(open, onClose);
+  useFocusTrap(dialogRef, open);
 
   if (!open) return null;
 
@@ -65,6 +71,7 @@ export function SettingsDialog({ open, onClose }: Props) {
         }}
       />
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-dialog-title"
