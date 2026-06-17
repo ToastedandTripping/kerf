@@ -1,0 +1,18 @@
+#!/bin/sh
+# Block Zustand selectors that return new objects/arrays (React Error 185).
+# This pattern has crashed the app 3 times. See CLAUDE.md for details.
+
+BAD=$(git diff --cached --diff-filter=ACM -- '*.ts' '*.tsx' | grep "^+" | grep -v "^+++" | grep -E "useStore\(\(s\) => \{|useStore\(\(s\) => \(\{|useStore\(\(s\) => s\.[a-zA-Z]+\.(filter|map|reduce|slice)\(")
+
+if [ -n "$BAD" ]; then
+  echo ""
+  echo "BLOCKED: Zustand selector returns a new object/array (React Error 185 risk)"
+  echo ""
+  echo "These lines create new references every render, causing infinite re-render loops:"
+  echo "$BAD"
+  echo ""
+  echo "Fix: use separate useStore() calls for each value, or derive arrays outside the selector."
+  echo "See CLAUDE.md 'Zustand Selector Rules' for examples."
+  echo ""
+  exit 1
+fi

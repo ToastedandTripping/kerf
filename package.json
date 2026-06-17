@@ -5,6 +5,7 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
+    "prepare": "git config core.hooksPath .hooks",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
