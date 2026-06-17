@@ -193,13 +193,13 @@ export function ImageTraceDialog({ open, onClose }: Props) {
   // before committing without having to change the active layer first.
   const [targetLayerIndex, setTargetLayerIndex] = useState<number | null>(null);
 
-  const { selectedImage, layers, activeLayerIndex } = useStore((s) => {
-    const selected = s.objects.filter((o) => s.selectedIds.includes(o.id));
-    const img = (selected.length === 1 && selected[0].type === "image" && selected[0].imageData)
-      ? selected[0]
-      : null;
-    return { selectedImage: img, layers: s.layers, activeLayerIndex: s.activeLayerIndex };
-  });
+  const layers = useStore((s) => s.layers);
+  const activeLayerIndex = useStore((s) => s.activeLayerIndex);
+  const selectedIds = useStore((s) => s.selectedIds);
+  const objects = useStore((s) => s.objects);
+  const selectedImage = (selectedIds.length === 1
+    && objects.find((o) => o.id === selectedIds[0] && o.type === "image" && o.imageData))
+    || null;
 
   // When the dialog opens, reset the layer target to the active layer
   useEffect(() => {
