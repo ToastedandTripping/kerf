@@ -12,6 +12,11 @@ import { exportSvgContent } from "./svgExport";
 export { parsePathD } from "./svgImport";
 export { importDxfDirect } from "./dxfImport";
 
+type TauriDialogPath = string | { path: string };
+function resolvePath(path: TauriDialogPath): string {
+  return typeof path === "string" ? path : path.path;
+}
+
 let dialogModule: typeof import("@tauri-apps/plugin-dialog") | null = null;
 let fsModule: typeof import("@tauri-apps/plugin-fs") | null = null;
 
@@ -121,7 +126,7 @@ export const fileOperations = {
         ],
       });
       if (!path) return;
-      const pathStr = typeof path === "string" ? path : (path as any).path ?? String(path);
+      const pathStr = resolvePath(path);
       const ext = pathStr.split(".").pop()?.toLowerCase() || "";
       if (ext === "svg") {
         const content = await fsModule.readTextFile(pathStr);
@@ -224,7 +229,7 @@ export const fileOperations = {
         filters: [{ name: "SVG", extensions: ["svg"] }],
       });
       if (!path) return;
-      const pathStr = typeof path === "string" ? path : (path as any).path ?? String(path);
+      const pathStr = resolvePath(path);
       const content = await fsModule.readTextFile(pathStr);
       const { openSvgImport } = await import("../../app/App");
       openSvgImport(content);
@@ -252,7 +257,7 @@ export const fileOperations = {
         filters: [{ name: "DXF", extensions: ["dxf"] }],
       });
       if (!path) return;
-      const pathStr = typeof path === "string" ? path : (path as any).path ?? String(path);
+      const pathStr = resolvePath(path);
       const content = await fsModule.readTextFile(pathStr);
       importDxfDirect(content);
     }
@@ -265,7 +270,7 @@ export const fileOperations = {
         filters: [{ name: "PDF", extensions: ["pdf"] }],
       });
       if (!path) return;
-      const pathStr = typeof path === "string" ? path : (path as any).path ?? String(path);
+      const pathStr = resolvePath(path);
       const data = await fsModule.readFile(pathStr);
       const { pdfBytesToArrayBuffer } = await import("./pdfImport");
       const { openPdfImport } = await import("../../app/App");
@@ -282,7 +287,7 @@ export const fileOperations = {
         filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "bmp", "gif", "webp"] }],
       });
       if (!path) return;
-      const pathStr = typeof path === "string" ? path : (path as any).path ?? String(path);
+      const pathStr = resolvePath(path);
       const ext = pathStr.split(".").pop()?.toLowerCase() || "png";
       const data = await fsModule.readFile(pathStr);
       importImageData(data, ext);

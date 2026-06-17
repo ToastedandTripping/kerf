@@ -40,9 +40,9 @@ class ViewportErrorBoundary extends Component<{ children: ReactNode }, { error: 
   render() {
     if (this.state.error) {
       return (
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "#1a1a1a", color: "#888", flexDirection: "column", gap: "12px" }}>
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg-panel)", color: "var(--text-secondary)", flexDirection: "column", gap: "12px" }}>
           <div style={{ fontSize: "14px" }}>Canvas failed to render</div>
-          <div style={{ fontSize: "11px", color: "#555", maxWidth: "300px", textAlign: "center" }}>{this.state.error.message}</div>
+          <div style={{ fontSize: "11px", color: "var(--text-tertiary)", maxWidth: "300px", textAlign: "center" }}>{this.state.error.message}</div>
           <button onClick={() => this.setState({ error: null })} style={{ padding: "6px 16px", fontSize: "12px", background: "var(--accent, #4a90e2)", border: "none", borderRadius: "4px", color: "#fff", cursor: "pointer" }}>
             Retry
           </button>

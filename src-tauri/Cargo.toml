@@ -11,11 +11,15 @@ crate-type = ["lib", "cdylib", "staticlib"]
 name = "kerf"
 path = "src/main.rs"
 
+[features]
+default = []
+devtools = ["tauri/devtools"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["devtools"] }
+tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }

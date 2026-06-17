@@ -26,7 +26,6 @@ export function parsePngPhysDpi(data: Uint8Array): number | null {
       const unit = data[d + 8];
       if (unit === 1 && xppu > 0) {
         const dpi = xppu / 39.3701; // pixels per meter → DPI
-        console.log(`[imageImport] PNG pHYs: ${xppu} ppm = ${dpi.toFixed(1)} DPI`);
         return dpi;
       }
       return null;
