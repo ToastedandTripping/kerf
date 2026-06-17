@@ -513,7 +513,12 @@ function handleSelectMove(worldX: number, worldY: number, e: React.PointerEvent)
     guides.some((g, i) => g.type !== currentGuides[i]?.type || g.pos !== currentGuides[i]?.pos);
   if (guidesChanged) store.setGuides(guides);
 
-  // P1: Batch all object updates into a single Zustand set() call
+  // P1: Batch all object updates into a single Zustand set() call.
+  // Fix 3 (group snap): snap applies to each TOP-LEVEL selected object — groups
+  // are selected as a single unit (group.id in selectedIds, children are NOT).
+  // movePartial on a group moves the group transform; children maintain relative
+  // positions inside the group. Individual child paths never receive independent
+  // snap, so traced-image groups move without letter-scatter.
   const updates: Array<{ id: string; partial: Partial<DesignObject> }> = [];
   for (const id of store.selectedIds) {
     const original = drag.originalTransforms.get(id);

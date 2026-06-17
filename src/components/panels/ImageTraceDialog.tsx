@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useStore, generateId } from "../../app/store";
 import { parsePathD } from "../../lib/fileOps";
-import { pointsBBox, buildGroupObject } from "../../lib/geometry";
+import { pointsBBox, buildGroupObject, signedArea } from "../../lib/geometry";
 import type { DesignObject, PathPoint, Transform } from "../../app/types";
 
 interface Props {
@@ -15,6 +15,15 @@ interface Props {
  * construction for the trace creator (exported so the W1b invariant sweep can
  * exercise it without the Rust tracer). Anchors-only loop bbox, no ||1 clamp:
  * traced objects are born with transform ≡ pointsBBox.
+ *
+ * Fix 1: All per-image paths are wrapped in a single top-level group named
+ * "Trace: {imageName}" so the whole trace moves as a unit and doesn't scatter
+ * under grid snap.
+ *
+ * Fix 2: Each closed contour is normalized to CCW winding (positive signedArea
+ * in screen Y-down coords). CW paths fill inward on engrave layers, producing
+ * inconsistent solid/outline mixed output. Reversing CW paths to CCW ensures
+ * all letters fill consistently regardless of vtracer's winding choice.
  */
 export function buildTracedPathObjects(
   svg: string,
@@ -23,12 +32,13 @@ export function buildTracedPathObjects(
   heightPx: number,
   layerIndex: number,
   layerColor: string,
+  imageName?: string,
 ): DesignObject[] {
   const parser = new DOMParser();
   const doc = parser.parseFromString(svg, "image/svg+xml");
   const pathElements = doc.querySelectorAll("path");
 
-  const prepared: DesignObject[] = [];
+  const allPathObjects: DesignObject[] = [];
   for (const pathEl of pathElements) {
     const d = pathEl.getAttribute("d");
     if (!d) continue;
@@ -48,7 +58,7 @@ export function buildTracedPathObjects(
     const contourObjects: DesignObject[] = [];
     for (const sub of parsePathD(d)) {
       if (sub.points.length < 2) continue;
-      const scaledPoints: PathPoint[] = sub.points.map((p) => {
+      let scaledPoints: PathPoint[] = sub.points.map((p) => {
         const px = p.x + offsetX, py = p.y + offsetY;
         const scaled: PathPoint = {
           x: imgT.x + (px / widthPx) * imgT.width,
@@ -69,6 +79,22 @@ export function buildTracedPathObjects(
         return scaled;
       });
 
+      // Fix 2: Normalize closed paths to CCW winding (positive signedArea in
+      // screen Y-down coords). vtracer output has inconsistent winding; on
+      // engrave/fill layers, CW paths fill inward (solid) while CCW fill
+      // outward (outline-only). Normalizing to CCW ensures consistent fill.
+      if (sub.closed && scaledPoints.length >= 3) {
+        const pts = scaledPoints.map((p): [number, number] => [p.x, p.y]);
+        if (signedArea(pts) < 0) {
+          // CW → reverse to CCW (also swap handles to preserve curve direction)
+          scaledPoints = scaledPoints.slice().reverse().map((p) => ({
+            ...p,
+            handleIn: p.handleOut,
+            handleOut: p.handleIn,
+          }));
+        }
+      }
+
       const bb = pointsBBox(scaledPoints);
 
       contourObjects.push({
@@ -81,12 +107,18 @@ export function buildTracedPathObjects(
     }
 
     if (contourObjects.length === 1) {
-      prepared.push(contourObjects[0]);
+      allPathObjects.push(contourObjects[0]);
     } else if (contourObjects.length > 1) {
-      prepared.push(buildGroupObject(contourObjects, generateId(), "Traced path", layerIndex));
+      allPathObjects.push(buildGroupObject(contourObjects, generateId(), "Traced path", layerIndex));
     }
   }
-  return prepared;
+
+  // Fix 1: Wrap all output paths from a single image in one top-level group so
+  // the whole trace moves as a unit. Without this, grid snap scatters individual
+  // letters/parts on the first drag. Users can Ungroup (Ctrl+Shift+G) if needed.
+  if (allPathObjects.length <= 1) return allPathObjects;
+  const groupName = imageName ? `Trace: ${imageName}` : "Traced image";
+  return [buildGroupObject(allPathObjects, generateId(), groupName, layerIndex)];
 }
 
 type TraceMode = "standard" | "sketch";
@@ -150,13 +182,25 @@ export function ImageTraceDialog({ open, onClose }: Props) {
 
   const generationRef = useRef(0);
 
-  const selectedImage = useStore((s) => {
+  // Fix 4: Layer selector — allows targeting a specific layer at trace time.
+  // Defaults to active layer; user can switch to any layer (Engrave, Score, Cut, etc.)
+  // before committing without having to change the active layer first.
+  const [targetLayerIndex, setTargetLayerIndex] = useState<number | null>(null);
+
+  const { selectedImage, layers, activeLayerIndex } = useStore((s) => {
     const selected = s.objects.filter((o) => s.selectedIds.includes(o.id));
-    if (selected.length === 1 && selected[0].type === "image" && selected[0].imageData) {
-      return selected[0];
-    }
-    return null;
+    const img = (selected.length === 1 && selected[0].type === "image" && selected[0].imageData)
+      ? selected[0]
+      : null;
+    return { selectedImage: img, layers: s.layers, activeLayerIndex: s.activeLayerIndex };
   });
+
+  // When the dialog opens, reset the layer target to the active layer
+  useEffect(() => {
+    if (open) setTargetLayerIndex(null);
+  }, [open]);
+
+  const effectiveLayerIndex = targetLayerIndex ?? activeLayerIndex;
 
   function applyPreset(p: Exclude<Preset, "custom">) {
     const v = PRESETS[p];
@@ -233,15 +277,17 @@ export function ImageTraceDialog({ open, onClose }: Props) {
     try {
       const result = await invoke<TraceResult>("trace_image_command", { params: buildParams(1.0) });
       const store = useStore.getState();
-      const layerColor = store.layers[store.activeLayerIndex]?.color || "#4a90e2";
+      const layerColor = store.layers[effectiveLayerIndex]?.color || "#4a90e2";
+      const imageName = selectedImage.name || selectedImage.id;
 
       const prepared = buildTracedPathObjects(
         result.svg,
         selectedImage.transform,
         result.widthPx,
         result.heightPx,
-        store.activeLayerIndex,
+        effectiveLayerIndex,
         layerColor,
+        imageName,
       );
 
       store.withUndo("trace", () => {
@@ -249,7 +295,7 @@ export function ImageTraceDialog({ open, onClose }: Props) {
         for (const obj of prepared) { store.addObject(obj); newIds.push(obj.id); }
         if (newIds.length > 0) {
           store.setSelectedIds(newIds);
-          store.addConsoleLine(`Traced image: ${newIds.length} paths added`, "info");
+          store.addConsoleLine(`Traced image: ${newIds.length === 1 ? "1 group" : `${newIds.length} paths`} added to ${store.layers[effectiveLayerIndex]?.name ?? "layer"}`, "info");
         }
       });
       onClose();
@@ -337,6 +383,31 @@ export function ImageTraceDialog({ open, onClose }: Props) {
             <input type="checkbox" checked={traceTransparency} onChange={(e) => setTraceTransparency(e.target.checked)} />
             Trace transparency
           </label>
+        </div>
+
+        {/* Fix 4: Layer selector */}
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
+          <span style={{ fontSize: "11px", color: "var(--text-secondary)", minWidth: "70px" }}>Trace to</span>
+          <select
+            value={effectiveLayerIndex}
+            onChange={(e) => setTargetLayerIndex(Number(e.target.value))}
+            style={{
+              flex: 1, background: "var(--bg-input)", border: "1px solid var(--border)",
+              color: "var(--text-primary)", padding: "4px 8px", borderRadius: "var(--radius-sm)",
+              fontSize: "11px", cursor: "pointer",
+            }}
+          >
+            {layers.map((layer, idx) => (
+              <option key={idx} value={idx}>
+                {layer.name}{idx === activeLayerIndex ? " (active)" : ""}
+              </option>
+            ))}
+          </select>
+          <span style={{
+            width: "10px", height: "10px", borderRadius: "50%", flexShrink: 0,
+            background: layers[effectiveLayerIndex]?.color || "#4a90e2",
+            border: "1px solid var(--border)",
+          }} />
         </div>
 
         {/* Advanced */}

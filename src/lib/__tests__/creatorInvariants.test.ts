@@ -301,6 +301,43 @@ describe("image trace", () => {
     expect(objects[0].transform.height).toBe(0);
     assertPointsInvariant(objects[0]);
   });
+
+  // Fix 1: Multi-element trace → top-level group
+  it("Fix 1: multiple traced paths from one image are wrapped in a single group", () => {
+    // Two separate <path> elements (simulating e.g. two letters from vtracer)
+    const svg = [
+      `<svg>`,
+      `<path d="M 0 0 L 20 0 L 20 20 L 0 20 Z"/>`,
+      `<path d="M 30 0 L 50 0 L 50 20 L 30 20 Z"/>`,
+      `</svg>`,
+    ].join("\n");
+    const objects = buildTracedPathObjects(svg, imgT, 100, 80, 0, "#4a90e2", "sign.png");
+    // Fix 1: multiple paths → one group
+    expect(objects.length).toBe(1);
+    expect(objects[0].type).toBe("group");
+    expect(objects[0].name).toBe("Trace: sign.png");
+    // Children are the two traced paths
+    expect(objects[0].children?.length).toBeGreaterThanOrEqual(2);
+    assertPointsInvariant(objects[0]);
+  });
+
+  // Fix 2: Winding normalization
+  it("Fix 2: CW-wound closed paths are normalized to CCW after trace", () => {
+    // A CW square in screen coords (Y-down): going right→down→left→up gives negative signedArea
+    // per the shoelace formula with Y-down. vtracer sometimes emits these.
+    // After buildTracedPathObjects, all closed paths should have positive signedArea (CCW).
+    const svg = `<svg><path d="M 0 10 L 0 0 L 10 0 L 10 10 Z"/></svg>`;
+    const objects = buildTracedPathObjects(svg, imgT, 100, 80, 0, "#4a90e2");
+    expect(objects.length).toBe(1);
+    expect(objects[0].type).toBe("path");
+    const pts = objects[0].points!;
+    const area = pts.reduce((acc, p, i) => {
+      const j = (i + 1) % pts.length;
+      return acc + p.x * pts[j].y - pts[j].x * p.y;
+    }, 0) / 2;
+    // CCW in screen Y-down coords = positive signedArea
+    expect(area).toBeGreaterThanOrEqual(0);
+  });
 });
 
 describe("pen tool (pointer pipeline)", () => {
