@@ -1,8 +1,10 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useStore, generateId } from "../../app/store";
 import { parsePathD } from "../../lib/fileOps";
 import { pointsBBox, buildGroupObject } from "../../lib/geometry";
 import type { DesignObject, PathPoint } from "../../app/types";
+import { useEscapeClose } from "../../lib/hooks/useEscapeClose";
+import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
 
 interface Props {
   open: boolean;
@@ -160,6 +162,10 @@ export function SvgImportDialog({ open, svgContent, onClose }: Props) {
   const [textFonts, setTextFonts] = useState<string[]>([]);
   const [importing, setImporting] = useState(false);
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEscapeClose(open, onClose);
+  useFocusTrap(dialogRef, open);
+
   useEffect(() => {
     if (!open || !svgContent) { setTextFonts([]); return; }
     setColorGroups(extractColors(svgContent));
@@ -210,6 +216,7 @@ export function SvgImportDialog({ open, svgContent, onClose }: Props) {
     <>
       <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999 }} />
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="svg-import-dialog-title"

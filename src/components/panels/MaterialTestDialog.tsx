@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useStore } from "../../app/store";
 import { machineConnection } from "../../lib/machine/connection";
+import { useEscapeClose } from "../../lib/hooks/useEscapeClose";
+import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
 
 interface Props {
   open: boolean;
@@ -130,6 +132,10 @@ export function MaterialTestDialog({ open, onClose }: Props) {
   const jobRunning = useStore((s) => s.jobRunning);
   const grblSValueMax = useStore((s) => s.grblSValueMax);
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEscapeClose(open, onClose);
+  useFocusTrap(dialogRef, open);
+
   if (!open) return null;
 
   const totalWidth = speedSteps * (cellWidth + cellGap) - cellGap + 10;
@@ -208,6 +214,7 @@ export function MaterialTestDialog({ open, onClose }: Props) {
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="material-test-dialog-title"

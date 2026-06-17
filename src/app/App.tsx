@@ -256,11 +256,15 @@ export default function App() {
           position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
           display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999,
         }}>
-          <div style={{
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="recovery-dialog-title"
+            style={{
             background: "var(--bg-panel)", border: "1px solid var(--border)",
             borderRadius: "8px", padding: "24px", maxWidth: "360px", width: "90%",
           }}>
-            <h3 style={{ margin: "0 0 8px", fontSize: "14px", color: "var(--text-primary)" }}>
+            <h3 id="recovery-dialog-title" style={{ margin: "0 0 8px", fontSize: "14px", color: "var(--text-primary)" }}>
               Recover unsaved work?
             </h3>
             <p style={{ margin: "0 0 16px", fontSize: "12px", color: "var(--text-secondary)" }}>

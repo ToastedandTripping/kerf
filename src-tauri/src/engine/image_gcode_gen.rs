@@ -379,6 +379,18 @@ fn generate_scan_gcode(
     lines.push("M5 ; laser off".to_string());
     lines.push(format!("; Image engrave: {}x{} px, interval {}mm", width, height, interval));
 
+    // Pre-compute which rows have content so sparse images skip pixel-scan work
+    // for empty bands rather than invoking find_*_runs per row.
+    let row_has_content: Vec<bool> = (0..h).map(|row| {
+        let row_start = row * w;
+        let row_pixels = &pixels[row_start..row_start + w];
+        if is_grayscale {
+            row_pixels.iter().any(|&p| p < 255)
+        } else {
+            row_pixels.iter().any(|&p| p == 0)
+        }
+    }).collect();
+
     for pass in 0..req.passes {
         if req.passes > 1 {
             lines.push(format!("; Pass {}/{}", pass + 1, req.passes));
@@ -387,6 +399,11 @@ fn generate_scan_gcode(
         let mut forward = true;
 
         for row in 0..h {
+            // Fast-path: skip empty rows without invoking full run-finding logic
+            if !row_has_content[row] {
+                continue;
+            }
+
             let y_mm = req.y + row as f64 * interval;
 
             // Find runs of "on" pixels in this row

@@ -4,6 +4,8 @@ import { useStore, generateId } from "../../app/store";
 import { parsePathD } from "../../lib/fileOps";
 import { pointsBBox, buildGroupObject, signedArea } from "../../lib/geometry";
 import type { DesignObject, PathPoint, Transform } from "../../app/types";
+import { useEscapeClose } from "../../lib/hooks/useEscapeClose";
+import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
 
 interface Props {
   open: boolean;
@@ -181,6 +183,10 @@ export function ImageTraceDialog({ open, onClose }: Props) {
   const [committing, setCommitting] = useState(false);
 
   const generationRef = useRef(0);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEscapeClose(open, onClose);
+  useFocusTrap(dialogRef, open);
 
   // Fix 4: Layer selector — allows targeting a specific layer at trace time.
   // Defaults to active layer; user can switch to any layer (Engrave, Score, Cut, etc.)
@@ -332,6 +338,7 @@ export function ImageTraceDialog({ open, onClose }: Props) {
     <>
       <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999 }} />
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="image-trace-main-dialog-title"

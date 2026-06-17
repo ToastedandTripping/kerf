@@ -1,6 +1,10 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useStore, generateId } from "../../app/store";
 import type { DesignObject } from "../../app/types";
+import { useEscapeClose } from "../../lib/hooks/useEscapeClose";
+import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
+
+const TRACE_TIP_KEY = "kerf_image_trace_tip_dismissed";
 
 interface Props {
   open: boolean;
@@ -21,6 +25,22 @@ export function ImageImportDialog({ open, imageData, fileName, imageWidth, image
   const [selectedLayer, setSelectedLayer] = useState(0);
   const [autoTrace, setAutoTrace] = useState(true);
   const [dpiOverride, setDpiOverride] = useState<string>("");
+
+  const [tipDismissed, setTipDismissed] = useState(
+    () => localStorage.getItem(TRACE_TIP_KEY) === "1",
+  );
+
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEscapeClose(open, onClose);
+  useFocusTrap(dialogRef, open);
+
+  const selectedLayerMode = layers[selectedLayer]?.mode ?? "line";
+  const showTraceTip = !tipDismissed && selectedLayerMode === "fill";
+
+  function dismissTip() {
+    localStorage.setItem(TRACE_TIP_KEY, "1");
+    setTipDismissed(true);
+  }
 
   const effectiveDpi = dpiOverride ? parseFloat(dpiOverride) || 300 : (detectedDpi ?? 300);
   const effectiveWidthMm = widthMmOverride ?? (imageWidth / effectiveDpi) * 25.4;
@@ -64,6 +84,7 @@ export function ImageImportDialog({ open, imageData, fileName, imageWidth, image
     <>
       <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999 }} />
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="image-import-dialog-title"
@@ -146,6 +167,31 @@ export function ImageImportDialog({ open, imageData, fileName, imageWidth, image
             ))}
           </div>
         </div>
+
+        {/* Trace tip — shown once for engrave/fill layers */}
+        {showTraceTip && (
+          <div style={{
+            display: "flex", alignItems: "flex-start", gap: "8px",
+            fontSize: "11px", color: "var(--text-secondary)", marginBottom: "12px",
+            padding: "8px 10px", background: "rgba(74,144,226,0.08)",
+            borderRadius: "var(--radius-sm)", border: "1px solid rgba(74,144,226,0.2)",
+          }}>
+            <span style={{ flex: 1 }}>
+              Tip: For text and logos, use Trace (Alt+T) to convert to vectors for faster cutting. Raster engraving scans every pixel — best for photos and detailed images.
+            </span>
+            <button
+              onClick={dismissTip}
+              aria-label="Dismiss tip"
+              style={{
+                flexShrink: 0, background: "none", border: "none",
+                color: "var(--text-muted)", cursor: "pointer", fontSize: "13px",
+                padding: "0 2px", lineHeight: 1,
+              }}
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         {/* Auto-trace option */}
         <label style={{

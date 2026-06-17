@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useCallback } from "react";
 import { useStore } from "../../app/store";
 import { fileOperations } from "../../lib/fileOps";
 import { getRecentFiles, clearRecentFiles } from "../../lib/recentFiles";
@@ -20,12 +20,54 @@ function buildRecentFilesItems(): MenuItem[] {
   return items;
 }
 
+const MENU_COUNT = 6; // File, Edit, View, Arrange, Tools, Help
+
 export function MenuBar() {
   const projectName = useStore((s) => s.projectName);
   const isDirty = useStore((s) => s.isDirty);
 
+  // Refs for each top-level menu trigger so Arrow keys can move focus between them
+  const triggerRefs = useRef<Array<HTMLButtonElement | null>>(
+    Array.from({ length: MENU_COUNT }, () => null),
+  );
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+
+  const focusTrigger = useCallback((index: number) => {
+    const el = triggerRefs.current[index];
+    if (el) el.focus();
+  }, []);
+
+  const handleMenubarKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const focused = triggerRefs.current.findIndex((el) => el === document.activeElement);
+      if (focused === -1) return;
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        const next = (focused + 1) % MENU_COUNT;
+        focusTrigger(next);
+        if (openIndex !== null) setOpenIndex(next);
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        const prev = (focused - 1 + MENU_COUNT) % MENU_COUNT;
+        focusTrigger(prev);
+        if (openIndex !== null) setOpenIndex(prev);
+      }
+    },
+    [openIndex, focusTrigger],
+  );
+
+  const makeMenuProps = (index: number) => ({
+    triggerRef: (el: HTMLButtonElement | null) => { triggerRefs.current[index] = el; },
+    isOpen: openIndex === index,
+    onOpen: () => setOpenIndex(index),
+    onClose: () => setOpenIndex(null),
+  });
+
   return (
     <div
+      role="menubar"
+      aria-label="Application menu"
+      onKeyDown={handleMenubarKeyDown}
       style={{
         height: "var(--menubar-height)",
         display: "flex",
@@ -48,7 +90,7 @@ export function MenuBar() {
       >
         KERF
       </span>
-      <MenuButton label="File" items={[
+      <MenuButton label="File" {...makeMenuProps(0)} items={[
         { label: "New", shortcut: "Ctrl+N", action: fileOperations.newProject },
         { label: "Open...", shortcut: "Ctrl+O", action: fileOperations.openProject },
         ...buildRecentFilesItems(),
@@ -63,7 +105,7 @@ export function MenuBar() {
         { label: "Export SVG...", action: fileOperations.exportSvg },
         { label: "Save G-code...", action: fileOperations.exportGcode },
       ]} />
-      <MenuButton label="Edit" items={[
+      <MenuButton label="Edit" {...makeMenuProps(1)} items={[
         { label: "Undo", shortcut: "Ctrl+Z", action: () => useStore.getState().undo() },
         { label: "Redo", shortcut: "Ctrl+Shift+Z", action: () => useStore.getState().redo() },
         { type: "separator" },
@@ -98,7 +140,7 @@ export function MenuBar() {
           });
         }},
       ]} />
-      <MenuButton label="View" items={[
+      <MenuButton label="View" {...makeMenuProps(2)} items={[
         { label: "Toggle Grid", shortcut: "G", action: () => {
           const s = useStore.getState();
           s.setGridVisible(!s.gridVisible);
@@ -119,7 +161,7 @@ export function MenuBar() {
           s.setCamera({ zoom: Math.max(0.05, s.camera.zoom / 1.25) });
         }},
       ]} />
-      <MenuButton label="Arrange" items={[
+      <MenuButton label="Arrange" {...makeMenuProps(3)} items={[
         { label: "Group", shortcut: "Ctrl+G", action: () => useStore.getState().groupSelected() },
         { label: "Ungroup", shortcut: "Ctrl+U", action: () => useStore.getState().ungroupSelected() },
         { type: "separator" },
@@ -182,7 +224,7 @@ export function MenuBar() {
           });
         }},
       ]} />
-      <MenuButton label="Tools" items={[
+      <MenuButton label="Tools" {...makeMenuProps(4)} items={[
         { label: "Boolean Union", action: () => useStore.getState().booleanUnion() },
         { label: "Boolean Difference", action: () => useStore.getState().booleanDifference() },
         { label: "Boolean Intersection", action: () => useStore.getState().booleanIntersection() },
@@ -211,7 +253,7 @@ export function MenuBar() {
         { label: "Preferences...", action: () => openSettings() },
         { label: "Project Notes...", action: () => openProjectNotes() },
       ]} />
-      <MenuButton label="Help" items={[
+      <MenuButton label="Help" {...makeMenuProps(5)} items={[
         { label: "Keyboard Shortcuts", shortcut: "?", action: () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "?" })) },
         { type: "separator" },
         { label: "Welcome Guide", action: () => {
@@ -266,15 +308,33 @@ interface MenuItem {
   type?: "separator";
 }
 
-function MenuButton({ label, items }: { label: string; items: MenuItem[] }) {
-  const [open, setOpen] = useState(false);
+interface MenuButtonProps {
+  label: string;
+  items: MenuItem[];
+  triggerRef: (el: HTMLButtonElement | null) => void;
+  isOpen: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+}
+
+function MenuButton({ label, items, triggerRef, isOpen, onOpen, onClose }: MenuButtonProps) {
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function scheduleClose() {
-    closeTimer.current = setTimeout(() => setOpen(false), 100);
+    closeTimer.current = setTimeout(() => onClose(), 100);
   }
   function cancelClose() {
     if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null; }
+  }
+
+  function handleTriggerKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
+    if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown") {
+      e.preventDefault();
+      onOpen();
+    } else if (e.key === "Escape") {
+      onClose();
+    }
+    // ArrowLeft/Right are handled by the menubar container
   }
 
   return (
@@ -284,8 +344,12 @@ function MenuButton({ label, items }: { label: string; items: MenuItem[] }) {
       onMouseLeave={scheduleClose}
     >
       <button
+        ref={triggerRef}
+        role="menuitem"
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
         style={{
-          background: open ? "var(--bg-hover)" : "none",
+          background: isOpen ? "var(--bg-hover)" : "none",
           border: "none",
           color: "var(--text-secondary)",
           padding: "4px 10px",
@@ -294,14 +358,17 @@ function MenuButton({ label, items }: { label: string; items: MenuItem[] }) {
           fontSize: "13px",
           WebkitAppRegion: "no-drag",
         } as React.CSSProperties}
-        onMouseEnter={(e) => { if (!open) e.currentTarget.style.background = "var(--bg-hover)"; }}
-        onMouseLeave={(e) => { if (!open) e.currentTarget.style.background = "none"; }}
-        onClick={() => setOpen(!open)}
+        onMouseEnter={(e) => { if (!isOpen) e.currentTarget.style.background = "var(--bg-hover)"; }}
+        onMouseLeave={(e) => { if (!isOpen) e.currentTarget.style.background = "none"; }}
+        onClick={() => isOpen ? onClose() : onOpen()}
+        onKeyDown={handleTriggerKeyDown}
       >
         {label}
       </button>
-      {open && (
+      {isOpen && (
         <div
+          role="menu"
+          aria-label={label}
           style={{
             position: "absolute",
             top: "100%",
@@ -319,6 +386,7 @@ function MenuButton({ label, items }: { label: string; items: MenuItem[] }) {
             item.type === "separator" ? (
               <div
                 key={i}
+                role="separator"
                 style={{
                   height: "1px",
                   background: "var(--border)",
@@ -328,6 +396,7 @@ function MenuButton({ label, items }: { label: string; items: MenuItem[] }) {
             ) : (
               <button
                 key={i}
+                role="menuitem"
                 style={{
                   display: "flex",
                   width: "100%",
@@ -342,9 +411,10 @@ function MenuButton({ label, items }: { label: string; items: MenuItem[] }) {
                 }}
                 onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
                 onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+                onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}
                 onClick={() => {
                   item.action?.();
-                  setOpen(false);
+                  onClose();
                 }}
               >
                 <span>{item.label}</span>

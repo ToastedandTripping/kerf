@@ -6,6 +6,35 @@ import { canStartJob, frameTargets } from "../../lib/machine/canStartJob";
 import { MACHINE_STATE_COLORS } from "../../lib/machine/machineStateDisplay";
 import type { StartCorner } from "../../app/types";
 
+/** Returns the fraction of non-transparent / non-white pixels in an image data URL.
+ *  Samples a scaled-down copy (max 64x64) to keep this fast. */
+async function getImageContentRatio(dataUrl: string): Promise<number> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const SIZE = 64;
+      const canvas = document.createElement("canvas");
+      canvas.width = SIZE;
+      canvas.height = SIZE;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { resolve(0); return; }
+      ctx.drawImage(img, 0, 0, SIZE, SIZE);
+      const { data } = ctx.getImageData(0, 0, SIZE, SIZE);
+      let content = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+        // Transparent = empty, near-white (>230 all channels) = empty
+        if (a < 10) continue;
+        if (r > 230 && g > 230 && b > 230) continue;
+        content++;
+      }
+      resolve(content / (SIZE * SIZE));
+    };
+    img.onerror = () => resolve(0);
+    img.src = dataUrl;
+  });
+}
+
 export function MachinePanel() {
   const machineConnected = useStore((s) => s.machineConnected);
   const machineState = useStore((s) => s.machineState);
@@ -36,6 +65,7 @@ export function MachinePanel() {
   const [expanded, setExpanded] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [connectionError, setConnectionError] = useState<{ message: string; suggestions: string[] } | null>(null);
+  const [sparseImageWarning, setSparseImageWarning] = useState(false);
   const jobStartTimeRef = useRef<number>(0);
   const [elapsedSecs, setElapsedSecs] = useState(0);
 
@@ -108,6 +138,7 @@ export function MachinePanel() {
    *  gcodeResult is left untouched on failure — the null/stale gates keep
    *  START and FRAME blocked on every failure path. */
   async function handleGenerateGcode(): Promise<boolean> {
+    setSparseImageWarning(false);
     setGenerating(true);
     try {
       const result = await generateGcode();
@@ -116,6 +147,22 @@ export function MachinePanel() {
         `G-code generated: ${result.lineCount} lines, ${result.cutDistance.toFixed(1)}mm cut, ~${Math.ceil(result.estimatedTimeSecs)}s`,
         "info"
       );
+      // Fix 6: warn if job is long and image objects appear sparse
+      if (result.estimatedTimeSecs > 30 * 60) {
+        const store = useStore.getState();
+        const imageObjs = store.objects.filter(
+          (o) => o.type === "image" && o.visible && o.imageData,
+        );
+        if (imageObjs.length > 0) {
+          const ratios = await Promise.all(
+            imageObjs.map((o) => getImageContentRatio(o.imageData!)),
+          );
+          const avgContent = ratios.reduce((s, r) => s + r, 0) / ratios.length;
+          if (avgContent < 0.20) {
+            setSparseImageWarning(true);
+          }
+        }
+      }
       return true;
     } catch (e) {
       addConsoleLine(`G-code generation failed: ${e}`, "error");
@@ -614,6 +661,52 @@ export function MachinePanel() {
               <span>Cut: {gcodeResult.cutDistance.toFixed(1)}mm</span>
               <span>Travel: {gcodeResult.travelDistance.toFixed(1)}mm</span>
               <span>Time: ~{formatTime(gcodeResult.estimatedTimeSecs)}</span>
+            </div>
+          )}
+
+          {/* Fix 6: sparse image guidance — shown when engraving a mostly-empty image */}
+          {sparseImageWarning && (
+            <div style={{
+              padding: "8px 10px",
+              background: "rgba(226,160,74,0.1)",
+              border: "1px solid rgba(226,160,74,0.3)",
+              borderRadius: "var(--radius-sm)",
+              fontSize: "11px",
+              color: "var(--accent-warm)",
+            }}>
+              <div style={{ fontWeight: 600, marginBottom: "4px" }}>
+                This image is mostly empty space.
+              </div>
+              <div style={{ color: "var(--text-secondary)", marginBottom: "8px" }}>
+                Tracing to vectors would be much faster. Select the image and press Alt+T to trace.
+              </div>
+              <div style={{ display: "flex", gap: "6px" }}>
+                <button
+                  onClick={() => {
+                    const s = useStore.getState();
+                    const img = s.objects.find((o) => o.type === "image" && o.visible);
+                    if (img) s.setSelectedIds([img.id]);
+                    setSparseImageWarning(false);
+                  }}
+                  style={{
+                    fontSize: "11px", padding: "3px 10px", cursor: "pointer",
+                    background: "var(--accent-warm)", border: "none", color: "#fff",
+                    borderRadius: "var(--radius-sm)",
+                  }}
+                >
+                  Select Image
+                </button>
+                <button
+                  onClick={() => setSparseImageWarning(false)}
+                  style={{
+                    fontSize: "11px", padding: "3px 10px", cursor: "pointer",
+                    background: "none", border: "1px solid var(--border)",
+                    color: "var(--text-secondary)", borderRadius: "var(--radius-sm)",
+                  }}
+                >
+                  Continue
+                </button>
+              </div>
             </div>
           )}
 
