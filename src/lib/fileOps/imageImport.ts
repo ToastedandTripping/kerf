@@ -56,7 +56,7 @@ export function importImageData(data: Uint8Array, ext: string) {
 
   const img = new Image();
   img.onload = () => {
-    const dpi = detectedDpi ?? 96;
+    const dpi = detectedDpi ?? 300;
     const widthMm = (img.width / dpi) * 25.4;
     const heightMm = (img.height / dpi) * 25.4;
 
@@ -77,7 +77,7 @@ export function importImageData(data: Uint8Array, ext: string) {
 
     store.addObject(obj);
     store.setSelectedIds([obj.id]);
-    const dpiNote = detectedDpi ? ` at ${detectedDpi.toFixed(0)} DPI` : " (96 DPI fallback)";
+    const dpiNote = detectedDpi ? ` at ${detectedDpi.toFixed(0)} DPI` : " (300 DPI assumed)";
     store.addConsoleLine(`Image imported: ${img.width}x${img.height}px → ${widthMm.toFixed(0)}x${heightMm.toFixed(0)}mm${dpiNote}`, "info");
   };
   img.src = base64;

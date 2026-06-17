@@ -140,6 +140,7 @@ export function ImageTraceDialog({ open, onClose }: Props) {
   const [useAdaptiveThreshold, setUseAdaptiveThreshold] = useState(true);
   const [adaptiveBlockSize, setAdaptiveBlockSize] = useState(15);
   const [morphRadius, setMorphRadius] = useState(1);
+  const [traceTransparency, setTraceTransparency] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const [preview, setPreview] = useState<{ svg: string; pathCount: number } | null>(null);
@@ -173,6 +174,7 @@ export function ImageTraceDialog({ open, onClose }: Props) {
       mode, threshold, thresholdLow, cornerThreshold, filterSpeckle, invert,
       previewScale: scale, blurRadius, smoothness, ignoreArea,
       useAdaptiveThreshold, adaptiveBlockSize, morphRadius,
+      traceTransparency,
     };
   }
 
@@ -198,7 +200,7 @@ export function ImageTraceDialog({ open, onClose }: Props) {
     return () => clearTimeout(timer);
   }, [open, mode, threshold, thresholdLow, cornerThreshold, filterSpeckle, invert,
       blurRadius, smoothness, ignoreArea, useAdaptiveThreshold, adaptiveBlockSize,
-      morphRadius, selectedImage?.id]);
+      morphRadius, traceTransparency, selectedImage?.id]);
 
   if (!open) return null;
 
@@ -331,6 +333,10 @@ export function ImageTraceDialog({ open, onClose }: Props) {
               Adaptive threshold
             </label>
           )}
+          <label style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer", fontSize: "11px", color: "var(--text-secondary)" }}>
+            <input type="checkbox" checked={traceTransparency} onChange={(e) => setTraceTransparency(e.target.checked)} />
+            Trace transparency
+          </label>
         </div>
 
         {/* Advanced */}
