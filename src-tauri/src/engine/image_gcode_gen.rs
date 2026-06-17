@@ -52,10 +52,15 @@ pub struct ImageEngraveRequest {
     pub newsprint_cell_size: Option<u32>,  // Newsprint dither cell size (default 6)
     #[serde(default)]
     pub newsprint_angle: Option<f64>,      // Newsprint dither angle (default 45)
+    #[serde(default)]
+    pub remove_background: bool,
+    #[serde(default = "default_bg_tolerance")]
+    pub bg_tolerance: f64,
 }
 
 fn default_s_value_max() -> f64 { 1000.0 }
 fn default_scale() -> f64 { 1.0 }
+fn default_bg_tolerance() -> f64 { 20.0 }
 
 /// Preview dithered image: runs steps 1-5 (decode, grayscale, resize, adjust, power curve, dither)
 /// and returns the pixel buffer + dimensions. Used for the engrave preview dialog.
@@ -65,8 +70,22 @@ pub fn preview_dither(req: &ImageEngraveRequest) -> Result<(Vec<u8>, u32, u32), 
     let img = image::load_from_memory(&image_bytes)
         .map_err(|e| format!("Failed to decode image: {}", e))?;
 
-    // 2. Convert to grayscale
-    let gray = img.to_luma8();
+    // 2. Convert to grayscale (alpha-aware: composite against white before converting)
+    let rgba = img.to_rgba8();
+    let gray = image::GrayImage::from_fn(rgba.width(), rgba.height(), |x, y| {
+        let p = rgba.get_pixel(x, y);
+        let a = p[3] as f64 / 255.0;
+        let luma = 0.299 * p[0] as f64 + 0.587 * p[1] as f64 + 0.114 * p[2] as f64;
+        let composited = luma * a + 255.0 * (1.0 - a);
+        image::Luma([composited.round() as u8])
+    });
+
+    // 2.5. Background removal (corner-sample dominant color → threshold to white)
+    let gray = if req.remove_background {
+        remove_background(&gray, req.bg_tolerance)
+    } else {
+        gray
+    };
 
     // 3. Resize to target DPI
     let interval = if req.interval > 0.0 { req.interval } else { 0.1 };
@@ -601,6 +620,35 @@ fn estimate_simple_time(cut_dist: &f64, travel_dist: &f64, speed_mm_s: f64) -> f
     cut_time + travel_time
 }
 
+/// Remove background from a grayscale image by sampling the 4 corners,
+/// determining the dominant background luma, and setting pixels within
+/// `tolerance` brightness levels of it to white (255 = no engrave).
+fn remove_background(gray: &image::GrayImage, tolerance: f64) -> image::GrayImage {
+    let (w, h) = gray.dimensions();
+    if w == 0 || h == 0 {
+        return gray.clone();
+    }
+
+    // Sample 4 corners
+    let corners = [
+        gray.get_pixel(0, 0)[0] as f64,
+        gray.get_pixel(w - 1, 0)[0] as f64,
+        gray.get_pixel(0, h - 1)[0] as f64,
+        gray.get_pixel(w - 1, h - 1)[0] as f64,
+    ];
+
+    // Dominant color: average of corners (they're usually all the same for plain backgrounds)
+    let bg_luma: f64 = corners.iter().sum::<f64>() / corners.len() as f64;
+
+    let mut out = gray.clone();
+    for pixel in out.pixels_mut() {
+        if (pixel[0] as f64 - bg_luma).abs() <= tolerance {
+            *pixel = image::Luma([255u8]);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -699,6 +747,8 @@ mod tests {
             power_curve: None,
             newsprint_cell_size: None,
             newsprint_angle: None,
+            remove_background: false,
+            bg_tolerance: 20.0,
         }
     }
 
@@ -906,5 +956,128 @@ mod tests {
             "F9: expected G90 in preamble before first move; preamble:\n{}", preamble_lines.join("\n"));
         assert!(preamble_lines.iter().any(|l| l.starts_with("M5")),
             "F9: expected M5 in preamble before first move; preamble:\n{}", preamble_lines.join("\n"));
+    }
+
+    // ─── Fix 1: Alpha-aware compositing ─────────────────────────────────────
+
+    /// Build a minimal PNG with RGBA data and base64-encode it for use in tests.
+    /// `pixels` is a flat Vec of (R,G,B,A) tuples, one per pixel.
+    fn make_rgba_png_base64(width: u32, height: u32, pixels: &[(u8, u8, u8, u8)]) -> String {
+        use image::{ImageBuffer, Rgba, ImageEncoder};
+        let mut img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(width, height);
+        for (i, &(r, g, b, a)) in pixels.iter().enumerate() {
+            let x = (i as u32) % width;
+            let y = (i as u32) / width;
+            img.put_pixel(x, y, Rgba([r, g, b, a]));
+        }
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::codecs::png::PngEncoder::new(&mut buf)
+            .write_image(img.as_raw(), width, height, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        let bytes = buf.into_inner();
+        format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes))
+    }
+
+    #[test]
+    fn fix1_transparent_pixel_composites_to_white() {
+        // A fully transparent black pixel (R=0,G=0,B=0,A=0) should composite to white (255).
+        // White means no-engrave — the laser should not fire.
+        let req = ImageEngraveRequest {
+            image_data: make_rgba_png_base64(1, 1, &[(0, 0, 0, 0)]),
+            width: 1.0,
+            height: 1.0,
+            dither: "grayscale".to_string(),
+            ..base_req()
+        };
+        let (pixels, w, h) = preview_dither(&req).expect("preview_dither should succeed");
+        assert_eq!(w, 1);
+        assert_eq!(h, 1);
+        // Transparent pixel must composite to white (255).
+        assert_eq!(pixels[0], 255, "Transparent pixel should become white (no-engrave), got {}", pixels[0]);
+    }
+
+    #[test]
+    fn fix1_opaque_image_unchanged() {
+        // A fully opaque black pixel (R=0,G=0,B=0,A=255) should remain black (0).
+        // No behavioral change for opaque images.
+        let req = ImageEngraveRequest {
+            image_data: make_rgba_png_base64(1, 1, &[(0, 0, 0, 255)]),
+            width: 1.0,
+            height: 1.0,
+            dither: "grayscale".to_string(),
+            ..base_req()
+        };
+        let (pixels, _, _) = preview_dither(&req).expect("preview_dither should succeed");
+        assert_eq!(pixels[0], 0, "Opaque black pixel should remain black, got {}", pixels[0]);
+    }
+
+    #[test]
+    fn fix1_semi_transparent_pixel_blends() {
+        // A semi-transparent white pixel (R=255,G=255,B=255,A=128) composited on white
+        // should still be white.
+        let req = ImageEngraveRequest {
+            image_data: make_rgba_png_base64(1, 1, &[(255, 255, 255, 128)]),
+            width: 1.0,
+            height: 1.0,
+            dither: "grayscale".to_string(),
+            ..base_req()
+        };
+        let (pixels, _, _) = preview_dither(&req).expect("preview_dither should succeed");
+        assert_eq!(pixels[0], 255, "Semi-transparent white on white should remain white, got {}", pixels[0]);
+    }
+
+    // ─── Fix 3: Background removal ──────────────────────────────────────────
+
+    #[test]
+    fn fix3_white_background_pixels_become_white() {
+        // A 3-pixel image: 2 white corners + 1 black center (non-background).
+        // With remove_background=true and default tolerance=20:
+        // - White pixels (255) are near the bg_luma (255) → set to white (no change needed)
+        // - Black pixel (0) is far from bg_luma → preserved
+        let req = ImageEngraveRequest {
+            image_data: make_rgba_png_base64(3, 1, &[
+                (255, 255, 255, 255), // corner 0 — white bg
+                (0, 0, 0, 255),       // center — black foreground
+                (255, 255, 255, 255), // corner 1 — white bg
+            ]),
+            width: 3.0,
+            height: 1.0,
+            dither: "grayscale".to_string(),
+            remove_background: true,
+            bg_tolerance: 20.0,
+            ..base_req()
+        };
+        let (pixels, w, h) = preview_dither(&req).expect("preview_dither should succeed");
+        assert_eq!(w, 3);
+        assert_eq!(h, 1);
+        // Corner pixels should be white (background removed)
+        assert_eq!(pixels[0], 255, "Left corner should be white (bg removed), got {}", pixels[0]);
+        assert_eq!(pixels[2], 255, "Right corner should be white (bg removed), got {}", pixels[2]);
+        // Center pixel (far from bg) should NOT be white
+        assert!(pixels[1] < 200, "Center black pixel should be dark, got {}", pixels[1]);
+    }
+
+    #[test]
+    fn fix3_disabled_preserves_original() {
+        // When remove_background=false, the gray center pixel should not be whitened.
+        // Use grayscale dither (pass-through) so the value is not binarized by error diffusion.
+        let req = ImageEngraveRequest {
+            image_data: make_rgba_png_base64(3, 1, &[
+                (255, 255, 255, 255),
+                (128, 128, 128, 255),
+                (255, 255, 255, 255),
+            ]),
+            width: 3.0,
+            height: 1.0,
+            dither: "grayscale".to_string(),
+            remove_background: false,
+            bg_tolerance: 20.0,
+            ..base_req()
+        };
+        let (pixels, _, _) = preview_dither(&req).expect("preview_dither should succeed");
+        // Center gray pixel should still be ~128, not forced to white (255) by bg removal.
+        // Grayscale dither is a pass-through, so the original luma (~128) is preserved.
+        assert!(pixels[1] < 200,
+            "Center gray pixel should not be whitened when bg removal disabled, got {}", pixels[1]);
     }
 }

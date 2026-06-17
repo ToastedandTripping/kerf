@@ -336,7 +336,7 @@ async function generateImageGcode(sValueMax: number = 1000): Promise<GcodeResult
     if (obj.locked) lockedImageCount++;
     const layer = store.layers.find((l) => l.index === obj.layerIndex) || store.layers[0];
     if (!layer.visible || layer.output === false) continue;
-    const adj = obj.imageAdjustments || { brightness: 0, contrast: 0, gamma: 1, invert: false };
+    const adj = obj.imageAdjustments || { brightness: 0, contrast: 0, gamma: 1, invert: false, removeBackground: false, bgTolerance: 20 };
     // Fix 5: apply per-object powerScale (default 1) to image engraving power
     const powerScale = obj.powerScale ?? 1;
 
@@ -365,6 +365,8 @@ async function generateImageGcode(sValueMax: number = 1000): Promise<GcodeResult
           contrast: adj.contrast,
           gamma: adj.gamma,
           invert: adj.invert,
+          removeBackground: adj.removeBackground ?? false,
+          bgTolerance: adj.bgTolerance ?? 20,
           workspaceHeight: store.workspaceHeight,
           originTop: store.originTop,
           sValueMax,
@@ -468,7 +470,7 @@ export async function previewImageDither(objectId: string): Promise<PreviewDithe
     throw new Error("No image object found");
   }
   const layer = store.layers.find((l) => l.index === obj.layerIndex) || store.layers[0];
-  const adj = obj.imageAdjustments || { brightness: 0, contrast: 0, gamma: 1, invert: false };
+  const adj = obj.imageAdjustments || { brightness: 0, contrast: 0, gamma: 1, invert: false, removeBackground: false, bgTolerance: 20 };
 
   return invoke<PreviewDitherResult>("preview_image_dither", {
     request: {
@@ -494,6 +496,8 @@ export async function previewImageDither(objectId: string): Promise<PreviewDithe
       contrast: adj.contrast,
       gamma: adj.gamma,
       invert: adj.invert,
+      removeBackground: adj.removeBackground ?? false,
+      bgTolerance: adj.bgTolerance ?? 20,
       workspaceHeight: store.workspaceHeight,
       originTop: store.originTop,
       sValueMax: store.grblSValueMax,

@@ -330,6 +330,8 @@ export function PropertiesPanel() {
                         contrast: obj.imageAdjustments?.contrast ?? 0,
                         gamma: obj.imageAdjustments?.gamma ?? 1,
                         invert: e.target.checked,
+                        removeBackground: obj.imageAdjustments?.removeBackground ?? false,
+                        bgTolerance: obj.imageAdjustments?.bgTolerance ?? 20,
                       } satisfies ImageAdjustments,
                     })
                   }
@@ -338,6 +340,49 @@ export function PropertiesPanel() {
                   style={inputStyle}
                 />
               </PropertyRow>
+              <PropertyRow label="Remove Bg">
+                <input
+                  type="checkbox"
+                  checked={obj.imageAdjustments?.removeBackground ?? false}
+                  onChange={(e) =>
+                    updateObject(obj.id, {
+                      imageAdjustments: {
+                        brightness: obj.imageAdjustments?.brightness ?? 0,
+                        contrast: obj.imageAdjustments?.contrast ?? 0,
+                        gamma: obj.imageAdjustments?.gamma ?? 1,
+                        invert: obj.imageAdjustments?.invert ?? false,
+                        removeBackground: e.target.checked,
+                        bgTolerance: obj.imageAdjustments?.bgTolerance ?? 20,
+                      } satisfies ImageAdjustments,
+                    })
+                  }
+                  onFocus={beginEdit}
+                  onBlur={commitEdit}
+                  style={inputStyle}
+                />
+              </PropertyRow>
+              {(obj.imageAdjustments?.removeBackground ?? false) && (
+                <NumberField
+                  label="Tolerance"
+                  value={obj.imageAdjustments?.bgTolerance ?? 20}
+                  onChange={(v) =>
+                    updateObject(obj.id, {
+                      imageAdjustments: {
+                        brightness: obj.imageAdjustments?.brightness ?? 0,
+                        contrast: obj.imageAdjustments?.contrast ?? 0,
+                        gamma: obj.imageAdjustments?.gamma ?? 1,
+                        invert: obj.imageAdjustments?.invert ?? false,
+                        removeBackground: obj.imageAdjustments?.removeBackground ?? false,
+                        bgTolerance: Math.max(0, Math.min(50, v)),
+                      } satisfies ImageAdjustments,
+                    })
+                  }
+                  unit=""
+                  step={1}
+                  onFocus={beginEdit}
+                  onBlur={commitEdit}
+                />
+              )}
               <button
                 onClick={() => openDitherPreview(obj.id)}
                 style={{

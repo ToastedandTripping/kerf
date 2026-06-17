@@ -131,15 +131,39 @@ function extractColors(svgText: string): ColorGroup[] {
     }));
 }
 
+function extractTextFonts(svgText: string): string[] {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(svgText, "image/svg+xml");
+  const fonts = new Set<string>();
+  for (const el of doc.querySelectorAll("text, tspan")) {
+    const style = el.getAttribute("style") || "";
+    const fontFamilyMatch = style.match(/font-family\s*:\s*([^;]+)/);
+    const fontFamily = fontFamilyMatch
+      ? fontFamilyMatch[1].trim()
+      : el.getAttribute("font-family");
+    if (fontFamily) {
+      // Remove quotes and split comma-separated fallbacks, take the first one
+      const primary = fontFamily.replace(/['"]/g, "").split(",")[0].trim();
+      if (primary) fonts.add(primary);
+    }
+    // Also check if there's no font-family but there is text — record as "unknown"
+    if (!fontFamily && el.tagName.toLowerCase() === "text") {
+      fonts.add("(unknown)");
+    }
+  }
+  return Array.from(fonts);
+}
+
 export function SvgImportDialog({ open, svgContent, onClose }: Props) {
   const layers = useStore((s) => s.layers);
   const [colorGroups, setColorGroups] = useState<ColorGroup[]>([]);
+  const [textFonts, setTextFonts] = useState<string[]>([]);
   const [importing, setImporting] = useState(false);
 
   useEffect(() => {
-    if (open && svgContent) {
-      setColorGroups(extractColors(svgContent));
-    }
+    if (!open || !svgContent) { setTextFonts([]); return; }
+    setColorGroups(extractColors(svgContent));
+    setTextFonts(extractTextFonts(svgContent));
   }, [open, svgContent]);
 
   const previewSvgUrl = useMemo(() => {
@@ -210,6 +234,18 @@ export function SvgImportDialog({ open, svgContent, onClose }: Props) {
               <img src={previewSvgUrl} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} alt="SVG preview" />
             )}
           </div>
+
+          {/* SVG text warning */}
+          {textFonts.length > 0 && (
+            <div style={{
+              marginBottom: "12px", padding: "8px 10px",
+              background: "rgba(226,200,74,0.1)", border: "1px solid rgba(226,200,74,0.3)",
+              borderRadius: "var(--radius-sm)", fontSize: "11px", color: "rgba(226,200,74,0.9)",
+            }}>
+              This SVG contains text using: <strong>{textFonts.join(", ")}</strong>.
+              Text may render differently without the original fonts. Convert text to paths before exporting for exact results.
+            </div>
+          )}
 
           {/* Color-to-layer mapping */}
           {colorGroups.length > 0 && (

@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { useStore, generateId } from "../../app/store";
 import type { DesignObject } from "../../app/types";
 
@@ -11,19 +11,20 @@ interface Props {
   /** Optional: physical mm dimensions override (used when caller knows the true DPI, e.g. PDF). */
   widthMmOverride?: number;
   heightMmOverride?: number;
+  detectedDpi?: number;
   onClose: () => void;
   onImported: (autoTrace: boolean) => void;
 }
 
-export function ImageImportDialog({ open, imageData, fileName, imageWidth, imageHeight, widthMmOverride, heightMmOverride, onClose, onImported }: Props) {
+export function ImageImportDialog({ open, imageData, fileName, imageWidth, imageHeight, widthMmOverride, heightMmOverride, detectedDpi, onClose, onImported }: Props) {
   const layers = useStore((s) => s.layers);
   const [selectedLayer, setSelectedLayer] = useState(0);
   const [autoTrace, setAutoTrace] = useState(true);
+  const [dpiOverride, setDpiOverride] = useState<string>("");
 
-  // Use caller-supplied mm dimensions when available (e.g. from PDF or PNG pHYs).
-  // Fall back to the legacy 96 DPI conversion for plain raster imports.
-  const widthMm = useMemo(() => widthMmOverride ?? (imageWidth / 96) * 25.4, [imageWidth, widthMmOverride]);
-  const heightMm = useMemo(() => heightMmOverride ?? (imageHeight / 96) * 25.4, [imageHeight, heightMmOverride]);
+  const effectiveDpi = dpiOverride ? parseFloat(dpiOverride) || 300 : (detectedDpi ?? 300);
+  const effectiveWidthMm = widthMmOverride ?? (imageWidth / effectiveDpi) * 25.4;
+  const effectiveHeightMm = heightMmOverride ?? (imageHeight / effectiveDpi) * 25.4;
 
   if (!open || !imageData) return null;
 
@@ -37,7 +38,7 @@ export function ImageImportDialog({ open, imageData, fileName, imageWidth, image
       name: fileName,
       transform: {
         x: 10, y: 10,
-        width: widthMm, height: heightMm,
+        width: effectiveWidthMm, height: effectiveHeightMm,
         rotation: 0, scaleX: 1, scaleY: 1,
       },
       layerIndex: selectedLayer,
@@ -48,13 +49,13 @@ export function ImageImportDialog({ open, imageData, fileName, imageWidth, image
 
     store.addObject(obj);
     store.setSelectedIds([obj.id]);
-    const dpiNote = widthMmOverride ? "from source DPI" : "at 96 dpi";
+    const dpiNote = widthMmOverride ? "from source DPI" : `at ${effectiveDpi.toFixed(0)} dpi`;
     store.addConsoleLine(
-      `Imported ${fileName} to ${layers[selectedLayer]?.name}${imageWidth > 0 ? ` (${imageWidth}x${imageHeight}px)` : ""} ${widthMm.toFixed(0)}x${heightMm.toFixed(0)}mm ${dpiNote}`,
+      `Imported ${fileName} to ${layers[selectedLayer]?.name}${imageWidth > 0 ? ` (${imageWidth}x${imageHeight}px)` : ""} ${effectiveWidthMm.toFixed(0)}x${effectiveHeightMm.toFixed(0)}mm ${dpiNote}`,
       "info"
     );
 
-    useStore.getState().setStatusMessage(`Imported ${fileName}${imageWidth > 0 ? ` -- ${imageWidth}x${imageHeight}px` : ""} -- ${widthMm.toFixed(0)}x${heightMm.toFixed(0)}mm`);
+    useStore.getState().setStatusMessage(`Imported ${fileName}${imageWidth > 0 ? ` -- ${imageWidth}x${imageHeight}px` : ""} -- ${effectiveWidthMm.toFixed(0)}x${effectiveHeightMm.toFixed(0)}mm`);
     onImported(autoTrace);
     onClose();
   }
@@ -87,9 +88,29 @@ export function ImageImportDialog({ open, imageData, fileName, imageWidth, image
 
         {/* Info */}
         <div style={{ fontSize: "11px", color: "var(--text-muted)", marginBottom: "12px" }}>
-          {fileName}{imageWidth > 0 ? ` -- ${imageWidth}x${imageHeight}px` : ""} ({widthMm.toFixed(0)}x{heightMm.toFixed(0)}mm)
-          {!widthMmOverride && <span style={{ opacity: 0.6, marginLeft: "4px" }}>assuming 96 dpi</span>}
+          {fileName}{imageWidth > 0 ? ` -- ${imageWidth}x${imageHeight}px` : ""} ({effectiveWidthMm.toFixed(0)}x{effectiveHeightMm.toFixed(0)}mm)
         </div>
+        {!widthMmOverride && (
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
+            <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+              DPI: {detectedDpi ? `${detectedDpi.toFixed(0)} (from file)` : "300 (assumed)"}
+            </span>
+            <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Override:</span>
+            <input
+              type="number"
+              min="36" max="1200"
+              placeholder={String(detectedDpi?.toFixed(0) ?? "300")}
+              value={dpiOverride}
+              onChange={(e) => setDpiOverride(e.target.value)}
+              style={{
+                width: "60px", background: "var(--bg-input)", border: "1px solid var(--border)",
+                color: "var(--text-primary)", padding: "2px 6px",
+                borderRadius: "var(--radius-sm)", fontSize: "11px",
+              }}
+            />
+            <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>DPI</span>
+          </div>
+        )}
 
         {/* Layer selection */}
         <div style={{ marginBottom: "12px" }}>
