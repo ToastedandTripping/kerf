@@ -205,16 +205,15 @@ describe("F7: layerIndex propagated to CutObject for layer-order-respecting cuts
   });
 
   it("fill layer after line layer preserves source order in emitted objects", () => {
-    // Layer 1 is fill (Engrave in DEFAULT_LAYERS), layer 0 is line (Cut).
-    // If we place an object on layer 1 and another on layer 0,
-    // toCutObjects sorts by layer POSITION in the layers array.
-    // DEFAULT_LAYERS: [Cut (index 0), Engrave (index 1), Score (index 2), ...]
-    // So an object on layerIndex=0 comes before one on layerIndex=1.
-    const r0 = makeRect("cut", { layerIndex: 0 });   // line (Cut)
-    const r1 = makeRect("engrave", { layerIndex: 1 }); // fill (Engrave)
+    // toCutObjects sorts by layer POSITION in the layers array (layerIndex).
+    // Fix 4: DEFAULT_LAYERS is now [Engrave (index 0), Score (index 1), Cut (index 2), ...].
+    // This test uses synthetic layer names but relies on layerIndex ordering:
+    // an object with layerIndex=0 always emits before layerIndex=1.
+    const r0 = makeRect("first", { layerIndex: 0 });   // first layer (Engrave in new order)
+    const r1 = makeRect("second", { layerIndex: 1 }); // second layer (Score in new order)
     const { objects } = toCutObjectsForTest([r1, r0], DEFAULT_LAYERS); // reversed input
-    // Should be sorted: cut (index 0) first, engrave (index 1) second
-    expect(objects[0].id).toBe("cut");
-    expect(objects[1].id).toBe("engrave");
+    // Should be sorted by layerIndex: 0 first, 1 second
+    expect(objects[0].id).toBe("first");
+    expect(objects[1].id).toBe("second");
   });
 });

@@ -179,11 +179,12 @@ describe("F2: bezier sampling at toCutObjects serialization", () => {
   });
 
   it("kerf offset applies AFTER sampling — the offset ring reflects the dense polyline", () => {
-    const kerfLayers: Layer[] = [
-      { ...DEFAULT_LAYERS[0], kerfOffset: 0.1 },
-      ...DEFAULT_LAYERS.slice(1),
-    ];
-    const obj = basePath("k1", bezierCirclePoints(30, 30, 20), true);
+    // Fix 4: DEFAULT_LAYERS[2] is now Cut (line mode); use it for kerf test.
+    const cutLayerIdx = DEFAULT_LAYERS.findIndex((l) => l.name === "Cut");
+    const kerfLayers: Layer[] = DEFAULT_LAYERS.map((l, i) =>
+      i === cutLayerIdx ? { ...l, kerfOffset: 0.1 } : l
+    );
+    const obj = basePath("k1", bezierCirclePoints(30, 30, 20), true, cutLayerIdx);
     const { objects } = toCutObjectsForTest([obj], kerfLayers);
     const pts = objects[0].paths[0].points;
     // Offsetting the sparse 4 anchors then sampling would yield 4 points;
@@ -236,12 +237,16 @@ describe("W1c rider: fill-mode 2×-energy warning for grouped objects", () => {
   }
 
   it("warns once when ≥2 grouped objects sit on a non-'line' layer", () => {
-    const { warnings } = toCutObjectsForTest([groupedSquares(1)], DEFAULT_LAYERS); // layer 1 = Engrave (fill)
+    // Fix 4: DEFAULT_LAYERS[0] is now Engrave (fill); index updated from 1.
+    const engraveIdx = DEFAULT_LAYERS.findIndex((l) => l.name === "Engrave");
+    const { warnings } = toCutObjectsForTest([groupedSquares(engraveIdx)], DEFAULT_LAYERS); // layer 0 = Engrave (fill)
     expect(warnings.filter((w) => w.includes("double energy"))).toHaveLength(1);
   });
 
   it("does NOT warn for a group on a 'line' layer", () => {
-    const { warnings } = toCutObjectsForTest([groupedSquares(0)], DEFAULT_LAYERS); // layer 0 = Cut (line)
+    // Fix 4: DEFAULT_LAYERS[2] is now Cut (line); index updated from 0.
+    const cutIdx = DEFAULT_LAYERS.findIndex((l) => l.name === "Cut");
+    const { warnings } = toCutObjectsForTest([groupedSquares(cutIdx)], DEFAULT_LAYERS); // layer 2 = Cut (line)
     expect(warnings.some((w) => w.includes("double energy"))).toBe(false);
   });
 

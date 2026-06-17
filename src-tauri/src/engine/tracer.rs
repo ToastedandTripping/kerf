@@ -72,6 +72,20 @@ pub fn trace_image(params: TraceParams) -> Result<TraceResult, String> {
         gray = imageproc::filter::gaussian_blur_f32(&gray, params.blur_radius);
     }
 
+    // Fix 5: Binary auto-threshold — if >90% of pixels are near-black (<20) or
+    // near-white (>235), the image is already binary. Use a fixed midpoint
+    // threshold (128) and skip adaptive preprocessing, which introduces halos
+    // on already-clean black-on-transparent PNGs.
+    let is_near_binary = {
+        let total = (w * h) as usize;
+        if total == 0 {
+            false
+        } else {
+            let binary_count = gray.pixels().filter(|p| p[0] < 20 || p[0] > 235).count();
+            binary_count * 10 >= total * 9  // >90%
+        }
+    };
+
     // Step 3: Binarization (mode-dependent)
     // Fix 6: Trace transparency — use alpha channel directly as binary mask when requested.
     // Skips grayscale-based threshold; traces the alpha boundary instead.
@@ -96,12 +110,24 @@ pub fn trace_image(params: TraceParams) -> Result<TraceResult, String> {
             bin
         }
         _ => {
-            if params.use_adaptive_threshold {
+            if params.use_adaptive_threshold && !is_near_binary {
+                // Adaptive threshold: good for photos/gradients.
+                // Skipped for near-binary images — adaptive halos degrade clean edges.
                 let block = params.adaptive_block_size.max(3) | 1;
                 let adapted = adaptive_threshold(&gray, block);
                 let mut bin = GrayImage::new(w, h);
                 for (x, y, pixel) in adapted.enumerate_pixels() {
                     let is_fg = if params.invert { pixel[0] > 0 } else { pixel[0] == 0 };
+                    bin.put_pixel(x, y, Luma([if is_fg { 0 } else { 255 }]));
+                }
+                bin
+            } else if is_near_binary {
+                // Fix 5: Binary image auto-threshold — use simple midpoint (128)
+                // for near-binary input regardless of use_adaptive_threshold setting.
+                // Avoids adaptive halos on clean black-on-transparent PNGs.
+                let mut bin = GrayImage::new(w, h);
+                for (x, y, pixel) in gray.enumerate_pixels() {
+                    let is_fg = if params.invert { pixel[0] >= 128 } else { pixel[0] < 128 };
                     bin.put_pixel(x, y, Luma([if is_fg { 0 } else { 255 }]));
                 }
                 bin
@@ -390,6 +416,70 @@ mod tests {
         // With alpha tracing: first two pixels are opaque → should produce foreground paths
         assert!(result_alpha.path_count >= 1,
             "Alpha-based tracing of opaque pixels should produce at least 1 path");
+    }
+
+    // ─── Fix 5: Binary auto-threshold ───────────────────────────────────────
+
+    #[test]
+    fn fix5_binary_image_detected_and_uses_midpoint_threshold() {
+        // A 20x20 image: inner 12x12 block is pure black (0,0,0,255), border is
+        // pure white (255,255,255,255). >90% of pixels are near-binary (<20 or >235),
+        // so is_near_binary should be true and the midpoint threshold path fires.
+        // The result must trace at least 1 path regardless of use_adaptive_threshold.
+        let w = 20u32;
+        let h = 20u32;
+        let mut pixels = vec![(255u8, 255u8, 255u8, 255u8); (w * h) as usize];
+        for y in 4..16u32 {
+            for x in 4..16u32 {
+                pixels[(y * w + x) as usize] = (0, 0, 0, 255);
+            }
+        }
+        let image_data = make_rgba_png_b64(w, h, &pixels);
+
+        // With adaptive threshold enabled — binary detection should override it
+        let params_adaptive = TraceParams {
+            image_data: image_data.clone(),
+            use_adaptive_threshold: true,
+            ..base_params(String::new())
+        };
+        let result_adaptive = trace_image(params_adaptive).expect("trace should succeed");
+        assert!(result_adaptive.path_count >= 1,
+            "Near-binary image with adaptive threshold enabled should still trace: got {} paths",
+            result_adaptive.path_count);
+
+        // Without adaptive threshold — should also work via binary path
+        let params_simple = TraceParams {
+            image_data,
+            use_adaptive_threshold: false,
+            ..base_params(String::new())
+        };
+        let result_simple = trace_image(params_simple).expect("trace should succeed");
+        assert!(result_simple.path_count >= 1,
+            "Near-binary image without adaptive threshold should trace: got {} paths",
+            result_simple.path_count);
+    }
+
+    #[test]
+    fn fix5_non_binary_image_not_misclassified() {
+        // A gradient image: pixel values span 0..255. Should NOT trigger binary
+        // auto-threshold (>90% of pixels are neither <20 nor >235).
+        let w = 16u32;
+        let h = 1u32;
+        let mut pixels = vec![(0u8, 0u8, 0u8, 255u8); (w * h) as usize];
+        // Fill with evenly spaced grayscale values across 16 pixels: 0, 17, 34, ..., 255
+        for i in 0..w {
+            let v = (i * 255 / (w - 1)) as u8;
+            pixels[i as usize] = (v, v, v, 255);
+        }
+        let image_data = make_rgba_png_b64(w, h, &pixels);
+        // Should still produce a result without error (gradient just traces fewer/no paths)
+        let params = TraceParams {
+            image_data,
+            use_adaptive_threshold: false,
+            ..base_params(String::new())
+        };
+        let result = trace_image(params);
+        assert!(result.is_ok(), "Non-binary gradient image should trace without error");
     }
 
     // ─── Fix 4: Preprocessing + spline mode ─────────────────────────────────

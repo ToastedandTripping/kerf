@@ -196,13 +196,15 @@ const layerDefaults = {
   kerfOffset: 0, perforationCut: 0, perforationSkip: 0,
 };
 
+// Fix 4: Engrave-before-cut ordering (industry convention: engrave/score first
+// so pieces stay in place while being engraved, cut last to release them).
 export const DEFAULT_LAYERS: Layer[] = [
-  { index: 0, name: "Cut", color: "#4a90e2", mode: "line", power: 100, speed: 20, passes: 1, ...layerDefaults },
-  { index: 1, name: "Engrave", color: "#e24a4a", mode: "fill", power: 50, speed: 100, passes: 1, ...layerDefaults, airAssist: false },
-  { index: 2, name: "Score", color: "#4ae28a", mode: "line", power: 30, speed: 50, passes: 1, ...layerDefaults },
-  { index: 3, name: "Layer 3", color: "#ff8000", mode: "line", power: 100, speed: 20, passes: 1, ...layerDefaults },
-  { index: 4, name: "Layer 4", color: "#e2e24a", mode: "line", power: 100, speed: 20, passes: 1, ...layerDefaults },
-  { index: 5, name: "Layer 5", color: "#4ae2e2", mode: "line", power: 100, speed: 20, passes: 1, ...layerDefaults },
+  { index: 0, name: "Engrave", color: "#e24a4a", mode: "fill", power: 50, speed: 100, passes: 1, ...layerDefaults, airAssist: false },
+  { index: 1, name: "Score", color: "#4ae28a", mode: "line", power: 30, speed: 50, passes: 1, ...layerDefaults },
+  { index: 2, name: "Cut", color: "#4a90e2", mode: "line", power: 100, speed: 20, passes: 1, ...layerDefaults },
+  { index: 3, name: "Custom 4", color: "#ff8000", mode: "line", power: 100, speed: 20, passes: 1, ...layerDefaults },
+  { index: 4, name: "Custom 5", color: "#e2e24a", mode: "line", power: 100, speed: 20, passes: 1, ...layerDefaults },
+  { index: 5, name: "Custom 6", color: "#4ae2e2", mode: "line", power: 100, speed: 20, passes: 1, ...layerDefaults },
 ];
 
 export type StartCorner = "bottomLeft" | "bottomRight" | "topLeft" | "topRight" | "center";
