@@ -3,7 +3,6 @@
 /// Converts grayscale images to binary (black/white) pixel data suitable
 /// for laser engraving scan lines. Each algorithm produces different visual
 /// characteristics optimized for various material/image combinations.
-
 /// Available dithering algorithms
 #[derive(Debug, Clone, PartialEq)]
 pub enum DitherAlgorithm {
@@ -95,6 +94,7 @@ fn dither_ordered(pixels: &[u8], w: usize, h: usize) -> Vec<u8> {
 
 /// Error diffusion helper: applies error to neighbor if in bounds
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn distribute_error(buffer: &mut [i16], w: usize, h: usize, x: usize, y: usize, dx: i32, dy: i32, error: i16, weight: i16, divisor: i16) {
     let nx = x as i32 + dx;
     let ny = y as i32 + dy;

@@ -170,6 +170,7 @@ fn collect_scan_segments(
 }
 
 /// Emit G-code from a list of scan segments (possibly reordered).
+#[allow(clippy::too_many_arguments)]
 fn emit_scan_segments(
     segments: &[ScanSegment],
     params: &ScanLineParams,
@@ -250,6 +251,7 @@ fn emit_scan_segments(
 
 /// Generate scan lines for fill mode (horizontal or vertical).
 /// Collects segments, optionally reorders for flood fill, then emits G-code.
+#[allow(clippy::too_many_arguments)]
 fn generate_scan_lines(
     params: &ScanLineParams,
     lines: &mut Vec<String>,
@@ -516,7 +518,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                         cur_y = ty;
                                         lines.push("M5".to_string());
                                         laser_on = false;
-                                        next_toggle_dist = next_toggle_dist + tab_width;
+                                        next_toggle_dist += tab_width;
                                         _cur_seg_dist = next_toggle_dist - tab_width;
                                     }
                                 }
@@ -1083,7 +1085,7 @@ fn object_to_path(obj: &CutObject) -> PathSegment {
             let w = obj.width;
             let h = obj.height;
 
-            let is_rounded = obj.corner_radius.map_or(false, |r| r > 0.0);
+            let is_rounded = obj.corner_radius.is_some_and(|r| r > 0.0);
             if is_rounded {
                 let r = obj.corner_radius.unwrap().min(w / 2.0).min(h / 2.0);
                 let mut points = Vec::new();

@@ -172,19 +172,19 @@ fn remove_self_intersections(pts: &[Point]) -> Vec<Point> {
                     if t > 1e-10 && t < 1.0 - 1e-10 && u > 1e-10 && u < 1.0 - 1e-10 {
                         // Build loop A: 0..=i, int_pt, j+1..end
                         let mut loop_a = Vec::new();
-                        for k in 0..=i {
-                            loop_a.push(current[k].clone());
+                        for item in current.iter().take(i + 1) {
+                            loop_a.push(item.clone());
                         }
                         loop_a.push(int_pt.clone());
-                        for k in (j + 1)..n {
-                            loop_a.push(current[k].clone());
+                        for item in current.iter().skip(j + 1) {
+                            loop_a.push(item.clone());
                         }
 
                         // Build loop B: int_pt, i+1..=j
                         let mut loop_b = Vec::new();
                         loop_b.push(int_pt.clone());
-                        for k in (i + 1)..=j {
-                            loop_b.push(current[k].clone());
+                        for item in current.iter().take(j + 1).skip(i + 1) {
+                            loop_b.push(item.clone());
                         }
 
                         // Keep the larger loop
@@ -234,7 +234,7 @@ fn segment_intersection(
     let t = (dx_ab * dy_b - dy_ab * dx_b) / denom;
     let u = (dx_ab * dy_a - dy_ab * dx_a) / denom;
 
-    if t >= 0.0 && t <= 1.0 && u >= 0.0 && u <= 1.0 {
+    if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
         Some((t, u, Point {
             x: a1.x + t * dx_a,
             y: a1.y + t * dy_a,

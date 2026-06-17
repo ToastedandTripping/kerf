@@ -45,6 +45,7 @@ pub fn optimize_cut_order_from(objects: &[CutObject], start_x: f64, start_y: f64
 
 
 /// Returns true if object A's bbox is fully contained within object B's bbox.
+#[allow(clippy::too_many_arguments)]
 fn bbox_contains(ax: f64, ay: f64, aw: f64, ah: f64, bx: f64, by: f64, bw: f64, bh: f64) -> bool {
     ax >= bx && ay >= by && ax + aw <= bx + bw && ay + ah <= by + bh
 }
@@ -104,6 +105,7 @@ pub fn sort_inner_first(objects: &mut [CutObject]) {
 /// 2. Group affinity (same group_id stays together)
 /// 3. Inner-first (smaller bounding box area first)
 /// 4. Nearest-neighbor (minimize travel)
+#[allow(dead_code)]
 pub fn multi_criteria_sort(objects: &mut Vec<CutObject>, start_x: f64, start_y: f64) {
     if objects.is_empty() {
         return;
@@ -169,7 +171,7 @@ pub fn multi_criteria_sort(objects: &mut Vec<CutObject>, start_x: f64, start_y: 
                 cur_x = ex;
                 cur_y = ey;
             }
-            objects.extend(group.drain(..));
+            objects.append(group);
         } else {
             // Multiple groups at same priority -- pick nearest group first (by first object)
             let group_indices: Vec<usize> = (gi..gj).collect();
@@ -199,7 +201,7 @@ pub fn multi_criteria_sort(objects: &mut Vec<CutObject>, start_x: f64, start_y: 
                     cur_x = ex;
                     cur_y = ey;
                 }
-                objects.extend(group.drain(..));
+                objects.append(group);
             }
         }
 

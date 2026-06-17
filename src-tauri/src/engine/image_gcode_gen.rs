@@ -6,7 +6,6 @@
 /// - Image data is fundamentally different from vector paths
 /// - Image processing is CPU-heavy (needs spawn_blocking)
 /// - Keeps the vector pipeline clean
-
 use base64::Engine;
 use image::imageops::FilterType;
 use serde::{Deserialize, Serialize};
@@ -168,18 +167,14 @@ fn decode_base64(data: &str) -> Result<Vec<u8>, String> {
 /// Apply brightness, contrast, gamma, and invert adjustments to pixel data
 fn apply_adjustments(pixels: &mut [u8], brightness: f64, contrast: f64, gamma: f64, invert: bool) {
     let brightness_offset = brightness * 2.55; // scale -100..100 to -255..255
-    let contrast_factor = if contrast >= 0.0 {
-        (100.0 + contrast) / 100.0
-    } else {
-        (100.0 + contrast) / 100.0
-    };
+    let contrast_factor = (100.0 + contrast) / 100.0;
     // contrast_factor: 0.0 (at -100) to 2.0 (at +100)
     let contrast_factor = contrast_factor.max(0.0);
     let gamma_inv = if gamma > 0.0 { 1.0 / gamma } else { 1.0 };
 
     // Build lookup table for performance (256 entries)
     let mut lut = [0u8; 256];
-    for i in 0..256 {
+    for (i, lut_entry) in lut.iter_mut().enumerate() {
         let mut v = i as f64;
 
         // Brightness
@@ -196,7 +191,7 @@ fn apply_adjustments(pixels: &mut [u8], brightness: f64, contrast: f64, gamma: f
             v = 255.0 - v;
         }
 
-        lut[i] = v.round().clamp(0.0, 255.0) as u8;
+        *lut_entry = v.round().clamp(0.0, 255.0) as u8;
     }
 
     for pixel in pixels.iter_mut() {
@@ -217,8 +212,8 @@ pub fn build_power_curve_lut(points: &[(f64, f64)]) -> [u8; 256] {
 
     if n < 2 {
         // Identity: no transform
-        for i in 0..256 {
-            lut[i] = i as u8;
+        for (i, lut_entry) in lut.iter_mut().enumerate() {
+            *lut_entry = i as u8;
         }
         return lut;
     }
@@ -268,7 +263,7 @@ pub fn build_power_curve_lut(points: &[(f64, f64)]) -> [u8; 256] {
     }
 
     // Evaluate the spline at each integer shade value 0-255
-    for shade in 0..256 {
+    for (shade, lut_entry) in lut.iter_mut().enumerate() {
         let x = shade as f64;
 
         // Find the segment containing x
@@ -309,7 +304,7 @@ pub fn build_power_curve_lut(points: &[(f64, f64)]) -> [u8; 256] {
         // Power% → shade: 0% power = 255 (white), 100% power = 0 (black)
         let clamped_power = power_pct.clamp(0.0, 100.0);
         let shade_out = 255.0 - (clamped_power / 100.0 * 255.0);
-        lut[shade] = shade_out.round().clamp(0.0, 255.0) as u8;
+        *lut_entry = shade_out.round().clamp(0.0, 255.0) as u8;
     }
 
     lut
@@ -387,7 +382,7 @@ fn generate_scan_gcode(
         if is_grayscale {
             row_pixels.iter().any(|&p| p < 255)
         } else {
-            row_pixels.iter().any(|&p| p == 0)
+            row_pixels.contains(&0)
         }
     }).collect();
 
@@ -398,9 +393,9 @@ fn generate_scan_gcode(
 
         let mut forward = true;
 
-        for row in 0..h {
+        for (row, &has_row_content) in row_has_content.iter().enumerate() {
             // Fast-path: skip empty rows without invoking full run-finding logic
-            if !row_has_content[row] {
+            if !has_row_content {
                 continue;
             }
 
