@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { useStore, generateId } from "../../app/store";
 import type { DesignObject } from "../../app/types";
 
@@ -21,11 +21,6 @@ export function ImageImportDialog({ open, imageData, fileName, imageWidth, image
   const [selectedLayer, setSelectedLayer] = useState(0);
   const [autoTrace, setAutoTrace] = useState(true);
   const [dpiOverride, setDpiOverride] = useState<string>("");
-
-  // Use caller-supplied mm dimensions when available (e.g. from PDF or PNG pHYs).
-  // Fall back to 300 DPI for plain raster imports.
-  const widthMm = useMemo(() => widthMmOverride ?? (imageWidth / 300) * 25.4, [imageWidth, widthMmOverride]);
-  const heightMm = useMemo(() => heightMmOverride ?? (imageHeight / 300) * 25.4, [imageHeight, heightMmOverride]);
 
   const effectiveDpi = dpiOverride ? parseFloat(dpiOverride) || 300 : (detectedDpi ?? 300);
   const effectiveWidthMm = widthMmOverride ?? (imageWidth / effectiveDpi) * 25.4;

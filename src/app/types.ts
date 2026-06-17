@@ -66,6 +66,8 @@ export interface ImageAdjustments {
   contrast: number;    // -100 to 100, default 0
   gamma: number;       // 0.1 to 5.0, default 1.0
   invert: boolean;     // default false
+  removeBackground?: boolean;  // default false
+  bgTolerance?: number;        // 0-50, default 20
 }
 
 export interface DesignObject {

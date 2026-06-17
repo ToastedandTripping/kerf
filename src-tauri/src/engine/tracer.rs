@@ -161,9 +161,7 @@ pub fn trace_image(params: TraceParams) -> Result<TraceResult, String> {
         params.corner_threshold
     };
 
-    let simplify_mode = if params.smoothness > 1.0 {
-        PathSimplifyMode::Spline
-    } else if params.smoothness > 0.5 {
+    let simplify_mode = if params.smoothness > 0.5 {
         PathSimplifyMode::Spline
     } else {
         PathSimplifyMode::Polygon
