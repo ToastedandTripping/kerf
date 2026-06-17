@@ -25,3 +25,4 @@ src-tauri/target/
 
 # Local session-lifecycle symlinks (machine-specific, point outside the repo)
 .claude/commands/
+.claude/worktrees/
