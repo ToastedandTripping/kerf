@@ -11,6 +11,14 @@ import { useStore } from "../index";
 import type { DesignObject } from "../../types";
 import { DEFAULT_LAYERS } from "../../types";
 
+// Snapshot the store's INITIAL state before any test mutates the singleton,
+// so the defaults assertions verify initialization (not setState).
+const INITIAL_DEFAULTS = {
+  snapToGrid: useStore.getState().snapToGrid,
+  startCorner: useStore.getState().startCorner,
+  originTop: useStore.getState().originTop,
+};
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 function makeRect(id: string, layerIndex = 0): DesignObject {
@@ -229,39 +237,20 @@ describe("4 — moveObjectsToLayer recurses beyond 2 levels (3+ deep)", () => {
 // ── 5. Fresh-store defaults ───────────────────────────────────────────────────
 
 describe("5 — fresh store has correct new defaults", () => {
-  it("startCorner defaults to topLeft", () => {
-    // Reset to a known starting state then check
-    useStore.setState({ startCorner: "topLeft" as const });
-    expect(useStore.getState().startCorner).toBe("topLeft");
+  // INITIAL_DEFAULTS was captured at module scope (before any test ran), so these
+  // assertions reflect the actual initialization values in src/app/store/index.ts.
+  // If any default is reverted there, the corresponding snapshot value will differ
+  // and this test will fail — which is the point.
+
+  it("snapToGrid initializes to false", () => {
+    expect(INITIAL_DEFAULTS.snapToGrid).toBe(false);
   });
 
-  it("originTop defaults to true", () => {
-    useStore.setState({ originTop: true });
-    expect(useStore.getState().originTop).toBe(true);
+  it("startCorner initializes to topLeft", () => {
+    expect(INITIAL_DEFAULTS.startCorner).toBe("topLeft");
   });
 
-  it("snapToGrid defaults to false", () => {
-    useStore.setState({ snapToGrid: false });
-    expect(useStore.getState().snapToGrid).toBe(false);
-  });
-
-  // This test verifies the actual init values by checking the module-level store
-  // creation — the store is a singleton in tests, so we check the configured values
-  // from a store where setState hasn't overridden these fields.
-  it("initial store state has all three defaults correct", () => {
-    // Partially reset relevant fields to undefined to force reading initial config
-    // We cannot easily get a fresh store singleton, so we verify the initial
-    // config values are as specified (this is what the store creator sets).
-    // The three fields are: snapToGrid, startCorner, originTop.
-    // We verify by resetting to the initial state values and reading back.
-    useStore.setState({
-      snapToGrid: false,
-      startCorner: "topLeft",
-      originTop: true,
-    });
-    const state = useStore.getState();
-    expect(state.snapToGrid).toBe(false);
-    expect(state.startCorner).toBe("topLeft");
-    expect(state.originTop).toBe(true);
+  it("originTop initializes to true", () => {
+    expect(INITIAL_DEFAULTS.originTop).toBe(true);
   });
 });
