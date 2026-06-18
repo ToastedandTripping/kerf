@@ -26,3 +26,8 @@ src-tauri/target/
 # Local session-lifecycle symlinks (machine-specific, point outside the repo)
 .claude/commands/
 .claude/worktrees/
+
+# MARVIN orchestration artifacts (per-worktree, not project code)
+.claude/plans/
+sessions/
+state/
