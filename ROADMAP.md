@@ -1,10 +1,12 @@
 ---
 status: active
-current: v0.8.0 released 2026-06-15 — Fortification (31 audit defects + 5 re-audit findings fixed, production audit PASSED)
+current: Layer-change root-cause fix + fluid movement + top-left origin defaults (relay kerf-layer-snap-defaults, on branch awaiting merge). Post-v0.8.5.
 next: v0.9 — Camera & Rotary
 testing: null
 pinned: true
 shipped:
+  - date: 2026-06-18
+    item: "Layer-change root-cause fix + fluid movement + top-left origin defaults (relay kerf-layer-snap-defaults): moving a traced group (or a nested letter) to another layer now actually propagates. The earlier c70b37a recursion collected child ids correctly, but the shared writers updateObjects/updateObject mapped only the TOP-LEVEL objects array, silently dropping every nested partial — so letters kept their engrave color on canvas AND the cut preview still engraved them (each leaf is rendered/gcoded by its own stroke/layerIndex). Both writers now route through one recursive applyPartialsDeep (reference-identity-preserving for unchanged subtrees; applies a partial ONLY to explicitly-mapped ids, so it never cascades a group's write onto children — drag/rotate/scale hot path provably unaffected); moveObjectsToLayer's id-collector made unbounded-depth to match. Grid snapping now defaults OFF (fluid movement; Snap toggle retained in View menu / status bar) and new projects default to origin top-left + start-corner top-left (load fallbacks deliberately left at bottomLeft/false so existing saved projects load at the origin they were designed with — only fresh sessions get the new default). Tests 383→392 JS (incl. a non-tautological initial-defaults assertion). Razor PASS (0 CRITICAL/WARNING/SPEC_GAPS; 2 NOTE, 1 fixed). Plan critic-reviewed (CONCERN → 3 must-fixes folded pre-implementation: fixed both shallow writers not just the plural, recursive collector, corrected test-sweep enumeration)."
   - date: 2026-06-14
     item: "Fortification W4 — re-audit fixes + editing correctness (relay kerf-fortify-w4-editing, W4a: originTop serialization, rotated image binary Y, locked images, MaterialTest S-value/errors, powerScale images, power_min vector; W4b: F28/F29/F30 — booleans on rotated shapes with hole preservation, flip mirrors geometry, rotation-aware align/distribute/marquee). Tests 351→369 JS. Razor PASS_WITH_WARNINGS (0 CRITICAL)."
   - date: 2026-06-14
