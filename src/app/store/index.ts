@@ -82,6 +82,26 @@ function pushObjectsUndo(
   });
 }
 
+// --- Deep partial-apply helper ---
+// Applies partials from updateMap to any object in the tree at any depth,
+// preserving reference identity for unchanged subtrees (perf / Pixi reconciliation).
+// NOTE: objectsById is intentionally a top-level-only index and is NOT updated here
+// for nested ids — callers must not assume objectsById.get(nestedId) works.
+function applyPartialsDeep(
+  objects: DesignObject[],
+  updateMap: Map<string, Partial<DesignObject>>,
+): DesignObject[] {
+  return objects.map((o) => {
+    const partial = updateMap.get(o.id);
+    let next = partial ? { ...o, ...partial } : o;
+    if (next.type === "group" && next.children) {
+      const newChildren = applyPartialsDeep(next.children, updateMap);
+      if (newChildren !== next.children) next = { ...next, children: newChildren };
+    }
+    return next;
+  });
+}
+
 // --- B4.3: Shared z-order wrapper ---
 // Owns withUndo + findIndex + its own INLINE objects patch (it does NOT route
 // through applyObjects); caller supplies 1-2 lines of index math.
@@ -140,9 +160,7 @@ export const useStore = create<AppState>((set, get) => ({
       }
     }
     set((state) => {
-      const newObjects = state.objects.map((o) =>
-        o.id === id ? { ...o, ...partial } : o
-      );
+      const newObjects = applyPartialsDeep(state.objects, new Map([[id, partial]]));
       return {
         objects: newObjects,
         objectsById: buildObjectsById(newObjects),
@@ -167,10 +185,7 @@ export const useStore = create<AppState>((set, get) => ({
     }
     set((state) => {
       const updateMap = new Map(updates.map((u) => [u.id, u.partial]));
-      const newObjects = state.objects.map((o) => {
-        const partial = updateMap.get(o.id);
-        return partial ? { ...o, ...partial } : o;
-      });
+      const newObjects = applyPartialsDeep(state.objects, updateMap);
       return {
         objects: newObjects,
         objectsById: buildObjectsById(newObjects),
@@ -182,17 +197,20 @@ export const useStore = create<AppState>((set, get) => ({
   moveObjectsToLayer: (ids, layerIndex) => {
     const state = get();
     const layerColor = state.layers[layerIndex]?.color || "#4a90e2";
+    // Recursive descendant collector — matches the unbounded depth of applyPartialsDeep.
+    function collectDescendantIds(obj: DesignObject, acc: string[]): void {
+      acc.push(obj.id);
+      if (obj.type === "group" && obj.children) {
+        for (const child of obj.children) collectDescendantIds(child, acc);
+      }
+    }
     const allIds: string[] = [];
     for (const id of ids) {
-      allIds.push(id);
       const obj = state.objectsById.get(id);
-      if (obj?.type === "group" && obj.children) {
-        for (const child of obj.children) {
-          allIds.push(child.id);
-          if (child.type === "group" && child.children) {
-            for (const gc of child.children) allIds.push(gc.id);
-          }
-        }
+      if (obj) {
+        collectDescendantIds(obj, allIds);
+      } else {
+        allIds.push(id);
       }
     }
     state.withUndo("move-to-layer", () => {
@@ -356,7 +374,7 @@ export const useStore = create<AppState>((set, get) => ({
     })),
   gridVisible: true,
   setGridVisible: (v) => set({ gridVisible: v }),
-  snapToGrid: true,
+  snapToGrid: false,
   setSnapToGrid: (v) => set({ snapToGrid: v }),
   gridSize: 10,
   setGridSize: (s) => set({ gridSize: s }),
@@ -660,7 +678,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   // Start corner
-  startCorner: "bottomLeft",
+  startCorner: "topLeft",
   // F15: start corner feeds the G-code optimizer (cut order), so it stales.
   setStartCorner: (corner) =>
     set((state) => ({
@@ -670,7 +688,7 @@ export const useStore = create<AppState>((set, get) => ({
     })),
 
   // Device origin
-  originTop: false,
+  originTop: true,
   setOriginTop: (v) =>
     set((state) => ({
       originTop: v,
