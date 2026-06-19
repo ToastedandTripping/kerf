@@ -153,6 +153,15 @@ Zustand `set()` call during drag. Cursor position and pan camera bypass Zustand 
 during interaction, syncing to the store only on pointer-up. `objectsById` Map and
 `selectedSet` Set provide O(1) lookups in hot paths.
 
+Both mutation primitives (`updateObject`, `updateObjects`) apply partials through one
+recursive `applyPartialsDeep` helper that descends into `group.children` and writes a
+partial to ANY id present in the update map, at any depth — preserving reference identity
+for unchanged subtrees (so the per-frame drag path doesn't rebuild the tree). It only
+touches explicitly-mapped ids, so a group write never cascades onto its children
+(move/rotate/scale pass top-level ids only; children ride along via render-time
+composition). `objectsById` is deliberately a TOP-LEVEL-only index — `.get(nestedId)`
+returns undefined by design; callers needing a nested object walk `children`.
+
 Selection overlay and drawing layer are separate Pixi containers on top of the
 objects container.
 
