@@ -1,6 +1,6 @@
 ---
 status: active
-current: Layer-change root-cause fix + fluid movement + top-left origin defaults (relay kerf-layer-snap-defaults, on branch awaiting merge). Post-v0.8.5.
+current: v0.8.6 released 2026-06-18 — layer-change root-cause fix (nested group children) + fluid movement (grid snap default off) + top-left origin defaults.
 next: v0.9 — Camera & Rotary
 testing: null
 pinned: true
