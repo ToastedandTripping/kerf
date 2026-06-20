@@ -68,6 +68,8 @@ function seedReadyToStart() {
     // Hardcoded moves have positive Y (10–80mm) which only fits originTop:false bounds.
     // Set explicitly so the gate doesn't reject after the new originTop:true default.
     originTop: false,
+    // workspaceVerified must be true or canStartJob blocks START.
+    workspaceVerified: true,
   });
 }
 
