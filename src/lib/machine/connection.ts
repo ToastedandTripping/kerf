@@ -32,9 +32,21 @@ interface StatusOutcome {
  * (and thus the alarm panel's code parser) — never silently vanish. */
 function surfaceUnsolicited(line: string): void {
   const store = useStore.getState();
-  if (line.startsWith("ALARM")) store.addConsoleLine(line, "error");
-  else if (line.startsWith("[MSG:")) store.addConsoleLine(line, "info");
-  else store.addConsoleLine(line, "received");
+  if (line.startsWith("ALARM")) {
+    store.addConsoleLine(line, "error");
+    // Mid-job ALARM via drained/unsolicited path: flip jobRunning so the job
+    // loop exits on its next iteration. The loop checks jobRunning before each
+    // send and surfaces "Job cancelled" — that's the right exit message for an
+    // externally-triggered alarm. The job loop already surfaces the ALARM line
+    // it received directly; this path handles ALARMs that arrived as debris.
+    if (store.jobRunning) {
+      store.setJobRunning(false);
+    }
+  } else if (line.startsWith("[MSG:")) {
+    store.addConsoleLine(line, "info");
+  } else {
+    store.addConsoleLine(line, "received");
+  }
 }
 
 const LAST_PORT_KEY = "kerf-last-port";
@@ -250,6 +262,11 @@ export const machineConnection = {
           z: parseFloat(match[4]),
         });
       }
+      // Parse WCO if present (Workstream B — warn-only, never block)
+      const wcoMatch = status.match(/WCO:([-\d.]+),([-\d.]+)/);
+      if (wcoMatch) {
+        store.setWorkCoordOffset({ x: parseFloat(wcoMatch[1]), y: parseFloat(wcoMatch[2]) });
+      }
     } catch {
       consecutivePollFailures++;
       if (consecutivePollFailures >= 3) {
@@ -267,19 +284,65 @@ export const machineConnection = {
   },
 
   async jog(axis: string, distance: number, feedRate: number = 1000): Promise<void> {
-    await this.send(`$J=G91 ${axis}${distance} F${feedRate}`);
+    const store = useStore.getState();
+    // Jog is disabled in alarm state — machine must be unlocked first
+    if (store.machineState === "alarm") {
+      store.addConsoleLine("Jog blocked: machine in alarm state — unlock ($X) first", "warning");
+      return;
+    }
+    const { machinePosition, workspaceWidth, workspaceHeight } = store;
+    // Clamp relative jog destination to bed bounds [0..bed]
+    let clamped = distance;
+    if (axis === "X" || axis === "x") {
+      const dest = machinePosition.x + distance;
+      const destClamped = Math.max(0, Math.min(workspaceWidth, dest));
+      clamped = destClamped - machinePosition.x;
+    } else if (axis === "Y" || axis === "y") {
+      const dest = machinePosition.y + distance;
+      const destClamped = Math.max(0, Math.min(workspaceHeight, dest));
+      clamped = destClamped - machinePosition.y;
+    }
+    if (clamped === 0) {
+      store.addConsoleLine("Jog clamped: already at bed edge", "info");
+      return;
+    }
+    await this.send(`$J=G91 ${axis}${clamped} F${feedRate}`);
   },
 
   async jogTo(x: number, y: number, feedRate: number = 3000): Promise<void> {
-    await this.send(`$J=G90 X${x.toFixed(3)} Y${y.toFixed(3)} F${feedRate}`);
+    const store = useStore.getState();
+    if (store.machineState === "alarm") {
+      store.addConsoleLine("Jog blocked: machine in alarm state — unlock ($X) first", "warning");
+      return;
+    }
+    const { workspaceWidth, workspaceHeight } = store;
+    // Clamp absolute destination to bed bounds
+    const cx = Math.max(0, Math.min(workspaceWidth, x));
+    const cy = Math.max(0, Math.min(workspaceHeight, y));
+    await this.send(`$J=G90 X${cx.toFixed(3)} Y${cy.toFixed(3)} F${feedRate}`);
   },
 
   async home(): Promise<void> {
-    await this.send("$H");
+    const responses = await this.send("$H");
+    // A successful homing cycle returns "ok"; ALARM/error responses leave machineHomed false.
+    const success = responses.some((r) => r === "ok");
+    if (success) {
+      useStore.getState().setMachineHomed(true);
+    }
   },
 
   async setOrigin(): Promise<void> {
     await this.send("G92 X0 Y0");
+    const store = useStore.getState();
+    const { workCoordOffset } = store;
+    if (workCoordOffset.x !== 0 || workCoordOffset.y !== 0) {
+      store.addConsoleLine(
+        `Work origin set. Previous offset was X${workCoordOffset.x.toFixed(3)} Y${workCoordOffset.y.toFixed(3)}. Run G92.1 to clear offset.`,
+        "info",
+      );
+    }
+    // Reset the known offset to 0 since we just set origin — next poll will update if needed
+    store.setWorkCoordOffset({ x: 0, y: 0 });
   },
 
   async softReset(): Promise<void> {
@@ -390,6 +453,8 @@ export const machineConnection = {
    * "unverified" fallback in connect() key off this. */
   async queryGrblSettings(): Promise<boolean> {
     const store = useStore.getState();
+    // New connection: machineHomed resets — must home again this session for soft limits
+    store.setMachineHomed(false);
     try {
       store.addConsoleLine("$$", "sent");
       const outcome = await invoke<SendOutcome>("serial_send", { command: "$$" });
@@ -403,7 +468,16 @@ export const machineConnection = {
           parsedAny = true;
           const key = parseInt(match[1], 10);
           const value = parseFloat(match[2]);
-          if (key === 30) {
+          if (key === 20) {
+            store.setGrblSoftLimits(value === 1);
+            store.addConsoleLine(`$20=${value} (soft limits ${value === 1 ? "enabled" : "disabled"})`, "info");
+          } else if (key === 21) {
+            store.setGrblHardLimits(value === 1);
+            store.addConsoleLine(`$21=${value} (hard limits ${value === 1 ? "enabled" : "disabled"})`, "info");
+          } else if (key === 22) {
+            store.setGrblHoming(value === 1);
+            store.addConsoleLine(`$22=${value} (homing cycle ${value === 1 ? "enabled" : "disabled"})`, "info");
+          } else if (key === 30) {
             // C2: firmware always wins (safety); log when it differs from the persisted value
             const prev = store.grblSValueMax;
             if (value !== prev) {
@@ -431,6 +505,7 @@ export const machineConnection = {
       }
       if (maxTravelX > 0 && maxTravelY > 0) {
         store.setWorkspaceSize(maxTravelX, maxTravelY);
+        store.setWorkspaceVerified(true);
         store.addConsoleLine(`Workspace set to ${maxTravelX}×${maxTravelY}mm from machine settings`, "info");
       }
       return parsedAny;
