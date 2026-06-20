@@ -290,22 +290,29 @@ export const machineConnection = {
       store.addConsoleLine("Jog blocked: machine in alarm state — unlock ($X) first", "warning");
       return;
     }
-    const { machinePosition, workspaceWidth, workspaceHeight } = store;
-    // Clamp relative jog destination to bed bounds [0..bed]
+    const { machinePosition, workspaceWidth, workspaceHeight, workspaceVerified } = store;
+    // WARNING-1: The client-side clamp assumes machinePosition is in machine-frame
+    // [0..bed] coordinates. On $10=0 machines WPos can be WCO-offset (negative or
+    // shifted), so clamping to [0..bed] would mis-clamp a valid jog.
+    // Only apply the clamp when the workspace is verified (bed size is known) —
+    // this is a best-effort convenience guard; $20 soft limits are the hard backstop.
     let clamped = distance;
-    if (axis === "X" || axis === "x") {
-      const dest = machinePosition.x + distance;
-      const destClamped = Math.max(0, Math.min(workspaceWidth, dest));
-      clamped = destClamped - machinePosition.x;
-    } else if (axis === "Y" || axis === "y") {
-      const dest = machinePosition.y + distance;
-      const destClamped = Math.max(0, Math.min(workspaceHeight, dest));
-      clamped = destClamped - machinePosition.y;
+    if (workspaceVerified) {
+      if (axis === "X" || axis === "x") {
+        const dest = machinePosition.x + distance;
+        const destClamped = Math.max(0, Math.min(workspaceWidth, dest));
+        clamped = destClamped - machinePosition.x;
+      } else if (axis === "Y" || axis === "y") {
+        const dest = machinePosition.y + distance;
+        const destClamped = Math.max(0, Math.min(workspaceHeight, dest));
+        clamped = destClamped - machinePosition.y;
+      }
+      if (clamped === 0) {
+        store.addConsoleLine("Jog clamped: already at bed edge", "info");
+        return;
+      }
     }
-    if (clamped === 0) {
-      store.addConsoleLine("Jog clamped: already at bed edge", "info");
-      return;
-    }
+    // When workspace is unverified, skip the clamp and let GRBL/$20 be the backstop.
     await this.send(`$J=G91 ${axis}${clamped} F${feedRate}`);
   },
 

@@ -79,6 +79,8 @@ export function MachinePanel() {
   const [confirmBedOpen, setConfirmBedOpen] = useState(false);
   const [bedWInput, setBedWInput] = useState("");
   const [bedHInput, setBedHInput] = useState("");
+  const [softLimitsConfirmOpen, setSoftLimitsConfirmOpen] = useState(false);
+  const [softLimitsEnabling, setSoftLimitsEnabling] = useState(false);
   const jobStartTimeRef = useRef<number>(0);
   const [elapsedSecs, setElapsedSecs] = useState(0);
 
@@ -492,7 +494,7 @@ export function MachinePanel() {
             <span>Z: <strong>{machinePosition.z.toFixed(2)}</strong></span>
           </div>
 
-          {/* Workstream A: soft limits banner — three states */}
+          {/* Workstream A: soft limits banner — three states + enable/disable control */}
           {machineConnected && (
             <div style={{
               fontSize: "10px",
@@ -501,12 +503,126 @@ export function MachinePanel() {
               border: `1px solid ${softLimitsActive ? "rgba(74,226,138,0.2)" : "rgba(226,160,74,0.35)"}`,
               background: softLimitsActive ? "rgba(74,226,138,0.06)" : "rgba(226,160,74,0.08)",
               color: softLimitsActive ? "var(--success)" : "var(--accent-warm)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "4px",
             }}>
-              {softLimitsActive
-                ? "Soft limits active — firmware will stop before frame edges"
-                : grblSoftLimits && !machineHomed
-                  ? "Soft limits INACTIVE — home the machine first ($H)"
-                  : "Soft limits OFF — Kerf bounds checks are your only protection"}
+              <span>
+                {softLimitsActive
+                  ? "Soft limits active — firmware will stop before frame edges"
+                  : grblSoftLimits && !machineHomed
+                    ? "Soft limits INACTIVE — home the machine first ($H)"
+                    : "Soft limits OFF — Kerf bounds checks are your only protection"}
+              </span>
+              {/* SPEC_GAP: Enable/Disable soft limits action */}
+              {!softLimitsEnabling && (
+                grblSoftLimits ? (
+                  <button
+                    onClick={async () => {
+                      await machineConnection.send("$20=0");
+                      addConsoleLine("$20=0 — soft limits disabled", "info");
+                      await machineConnection.queryGrblSettings();
+                    }}
+                    style={{
+                      alignSelf: "flex-start",
+                      fontSize: "9px",
+                      padding: "2px 6px",
+                      background: "var(--bg-input)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "3px",
+                      color: "var(--text-muted)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Disable soft limits ($20=0)
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setSoftLimitsConfirmOpen(true)}
+                    style={{
+                      alignSelf: "flex-start",
+                      fontSize: "9px",
+                      padding: "2px 6px",
+                      background: "var(--bg-input)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "3px",
+                      color: "var(--text-muted)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Enable soft limits…
+                  </button>
+                )
+              )}
+              {/* Enable confirmation — inline, same pattern as bed confirm */}
+              {softLimitsConfirmOpen && !grblSoftLimits && (
+                <div style={{
+                  marginTop: "2px",
+                  padding: "6px 8px",
+                  background: "rgba(226,160,74,0.08)",
+                  border: "1px solid rgba(226,160,74,0.35)",
+                  borderRadius: "3px",
+                  fontSize: "9px",
+                  color: "var(--text-secondary)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "5px",
+                }}>
+                  <span style={{ fontWeight: 600, color: "var(--accent-warm)" }}>
+                    Enabling soft limits writes $22=1 (homing required) and $20=1.
+                  </span>
+                  <span>
+                    GRBL will require a homing cycle at every power-on. If your machine has
+                    no working limit switches this will lock up on the next start.
+                  </span>
+                  <span style={{ fontWeight: 600 }}>
+                    Only proceed if you have working limit switches installed and tested.
+                  </span>
+                  <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+                    <button
+                      onClick={async () => {
+                        setSoftLimitsEnabling(true);
+                        setSoftLimitsConfirmOpen(false);
+                        try {
+                          await machineConnection.send("$22=1");
+                          addConsoleLine("$22=1 — homing cycle enabled", "info");
+                          await machineConnection.send("$20=1");
+                          addConsoleLine("$20=1 — soft limits enabled", "info");
+                          await machineConnection.queryGrblSettings();
+                          addConsoleLine("Soft limits enabled. Run Home ($H) to activate.", "info");
+                        } finally {
+                          setSoftLimitsEnabling(false);
+                        }
+                      }}
+                      style={{
+                        fontSize: "9px",
+                        padding: "2px 8px",
+                        cursor: "pointer",
+                        background: "var(--accent)",
+                        border: "none",
+                        color: "#fff",
+                        borderRadius: "3px",
+                      }}
+                    >
+                      I have limit switches — Enable
+                    </button>
+                    <button
+                      onClick={() => setSoftLimitsConfirmOpen(false)}
+                      style={{
+                        fontSize: "9px",
+                        padding: "2px 6px",
+                        cursor: "pointer",
+                        background: "none",
+                        border: "1px solid var(--border)",
+                        color: "var(--text-muted)",
+                        borderRadius: "3px",
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -934,14 +1050,18 @@ export function MachinePanel() {
             // FRAME contract change (F15): framing traces the true G-code
             // extents, so generated, non-stale G-code is now a prerequisite
             // (it used to work from design bounds alone).
+            // WARNING-2: also block on unverified workspace — FRAME drives the
+            // head to G-code extents; if the bed size is wrong it can crash.
             const frameDisabled =
               !machineConnected || machineState !== "idle" || jobRunning ||
-              !gcodeResult || gcodeStale;
-            const frameHint = !gcodeResult
-              ? "Generate G-code first"
-              : gcodeStale
-                ? "Design changed -- regenerate G-code"
-                : undefined;
+              !gcodeResult || gcodeStale || !workspaceVerified;
+            const frameHint = !workspaceVerified
+              ? "Confirm bed size before framing"
+              : !gcodeResult
+                ? "Generate G-code first"
+                : gcodeStale
+                  ? "Design changed -- regenerate G-code"
+                  : undefined;
             return (
           <div style={{ display: "flex", gap: "4px" }}>
             <button
@@ -968,7 +1088,14 @@ export function MachinePanel() {
                 // Machine-frame moves extents — the old design→machine Y-flip
                 // is deliberately DELETED, not ported: moves[] is already
                 // machine-frame, flipping again would trace a mirrored rect.
-                const moves = useStore.getState().gcodeResult?.moves ?? [];
+                const storeState = useStore.getState();
+                // WARNING-2: explicit guard — frameDisabled already blocks the button,
+                // but guard here too so the handler is safe if called by other paths.
+                if (!storeState.workspaceVerified) {
+                  addConsoleLine("FRAME blocked: confirm bed size before framing", "error");
+                  return;
+                }
+                const moves = storeState.gcodeResult?.moves ?? [];
                 const targets = frameTargets(moves);
                 if (!targets) {
                   addConsoleLine("Nothing to cut -- no moves in the generated G-code", "error");
@@ -976,7 +1103,6 @@ export function MachinePanel() {
                 }
                 // Bounds check: same gate that START uses — never send out-of-range G0s
                 const ext = movesExtents(moves)!; // targets non-null implies ext non-null
-                const storeState = useStore.getState();
                 if (!isWithinBounds(ext, storeState.workspaceWidth, storeState.workspaceHeight, storeState.originTop)) {
                   addConsoleLine(
                     "FRAME blocked: G-code extends outside workspace bounds. Move or resize the design to fit.",

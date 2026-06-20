@@ -83,7 +83,8 @@ export interface JobGateState {
   workspaceWidth: number;
   workspaceHeight: number;
   originTop?: boolean;
-  workspaceVerified?: boolean;
+  /** NOTE-1: fail-closed — undefined/missing is treated as unverified (not as verified). */
+  workspaceVerified: boolean;
 }
 
 export interface JobGate {
@@ -97,8 +98,8 @@ export function canStartJob(state: JobGateState): JobGate {
   if (state.jobRunning) return { ok: false, reason: "Job already running" };
   if (!state.gcodeResult) return { ok: false, reason: "Generate G-code first" };
   if (state.gcodeStale) return { ok: false, reason: "Design changed -- regenerate G-code" };
-  // Unverified bed: the 500×300 default must not silently pass
-  if (state.workspaceVerified === false) {
+  // NOTE-1: fail-closed — any falsy value (false, undefined) blocks; only explicit true passes
+  if (!state.workspaceVerified) {
     return { ok: false, reason: "Confirm bed size before starting — go to Machine Settings" };
   }
   const ext = movesExtents(state.gcodeResult.moves);

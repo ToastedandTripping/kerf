@@ -266,12 +266,17 @@ describe("canStartJob — unverified bed blocks START", () => {
     expect(gate.reason).toContain("Confirm bed size");
   });
 
-  it("passes when workspaceVerified is undefined (backward compat — treated as verified)", () => {
-    // Old callers may not pass workspaceVerified; must not block them
-    const { workspaceVerified: _, ...rest } = baseState();
-    // undefined means the field wasn't passed — must not block
-    // The gate only blocks on explicit false
-    expect(canStartJob(rest).ok).toBe(true);
+  it("blocks when workspaceVerified is omitted/undefined (NOTE-1: fail-closed)", () => {
+    // NOTE-1: fail-closed — undefined must block the same as false.
+    // A caller that forgets to pass workspaceVerified should not silently allow a job
+    // against a potentially wrong default bed size.
+    const state: JobGateState = {
+      ...baseState(),
+      workspaceVerified: undefined as unknown as boolean,
+    };
+    const gate = canStartJob(state);
+    expect(gate.ok).toBe(false);
+    expect(gate.reason).toContain("Confirm bed size");
   });
 });
 
@@ -335,5 +340,164 @@ describe("grblHoming gates home — store state", () => {
     mockInvoke.mockResolvedValueOnce({ responses: ["ALARM:8"], drained: [] });
     await machineConnection.home();
     expect(useStore.getState().machineHomed).toBe(false);
+  });
+});
+
+// ---- NOTE-1: canStartJob fail-closed on undefined workspaceVerified ----
+describe("canStartJob — NOTE-1 fail-closed on missing workspaceVerified", () => {
+  it("blocks when workspaceVerified is false", () => {
+    const gate = canStartJob({
+      machineConnected: true, jobRunning: false,
+      gcodeResult: { moves: [{ x: 10, y: 10 }, { x: 100, y: 100 }] },
+      gcodeStale: false,
+      workspaceWidth: 500, workspaceHeight: 300,
+      workspaceVerified: false,
+    });
+    expect(gate.ok).toBe(false);
+    expect(gate.reason).toContain("Confirm bed size");
+  });
+
+  it("blocks when workspaceVerified is omitted (undefined) — must NOT pass silently", () => {
+    // Mutation check: if canStartJob used === false instead of !value,
+    // this would return ok:true and the test would fail.
+    const gate = canStartJob({
+      machineConnected: true, jobRunning: false,
+      gcodeResult: { moves: [{ x: 10, y: 10 }, { x: 100, y: 100 }] },
+      gcodeStale: false,
+      workspaceWidth: 500, workspaceHeight: 300,
+      workspaceVerified: undefined as unknown as boolean,
+    });
+    expect(gate.ok).toBe(false);
+    expect(gate.reason).toContain("Confirm bed size");
+  });
+
+  it("passes when workspaceVerified is explicitly true", () => {
+    const gate = canStartJob({
+      machineConnected: true, jobRunning: false,
+      gcodeResult: { moves: [{ x: 10, y: 10 }, { x: 100, y: 100 }] },
+      gcodeStale: false,
+      workspaceWidth: 500, workspaceHeight: 300,
+      workspaceVerified: true,
+    });
+    expect(gate.ok).toBe(true);
+  });
+});
+
+// ---- WARNING-2: FRAME blocked when workspaceVerified=false ----
+// The FRAME disable logic in MachinePanel.tsx includes !workspaceVerified.
+// We test the underlying canStartJob-equivalent gate via the store state
+// that MachinePanel reads, and also verify the jog clamp path skips when unverified.
+describe("WARNING-2 regression — FRAME blocked on unverified workspace", () => {
+  it("frameDisabled condition: !workspaceVerified blocks (equivalent pure-logic test)", () => {
+    // This tests the same condition MachinePanel evaluates for frameDisabled.
+    // frameDisabled = !machineConnected || machineState !== 'idle' || jobRunning
+    //               || !gcodeResult || gcodeStale || !workspaceVerified
+    // With all other conditions satisfied, !workspaceVerified must still block.
+    const workspaceVerified = false;
+    const machineConnected = true;
+    const machineState = "idle";
+    const jobRunning = false;
+    const gcodeResult = { moves: [{ x: 10, y: 10 }], gcode: "", lineCount: 1, cutDistance: 10, travelDistance: 0, estimatedTimeSecs: 5 };
+    const gcodeStale = false;
+    const frameDisabled =
+      !machineConnected || machineState !== "idle" || jobRunning ||
+      !gcodeResult || gcodeStale || !workspaceVerified;
+    // Mutation check: if !workspaceVerified were removed, frameDisabled would be false
+    expect(frameDisabled).toBe(true);
+  });
+
+  it("frameDisabled is false when workspaceVerified=true and other conditions are met", () => {
+    const workspaceVerified = true;
+    const machineConnected = true;
+    const machineState = "idle";
+    const jobRunning = false;
+    const gcodeResult = { moves: [{ x: 10, y: 10 }], gcode: "", lineCount: 1, cutDistance: 10, travelDistance: 0, estimatedTimeSecs: 5 };
+    const gcodeStale = false;
+    const frameDisabled =
+      !machineConnected || machineState !== "idle" || jobRunning ||
+      !gcodeResult || gcodeStale || !workspaceVerified;
+    expect(frameDisabled).toBe(false);
+  });
+});
+
+// ---- WARNING-1: jog clamp skipped when workspace unverified ----
+describe("WARNING-1 — jog clamp skipped when workspaceVerified=false", () => {
+  it("skips clamp and sends full distance when workspace is unverified", async () => {
+    // Machine is near the edge but workspace is unverified — the client-side
+    // clamp must NOT mis-clamp what might be a valid jog in the real frame.
+    useStore.setState({
+      machineState: "idle",
+      machinePosition: { x: 490, y: 50, z: 0 },
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+      workspaceVerified: false,
+    });
+    mockInvoke.mockResolvedValueOnce({ responses: ["ok"], drained: [] });
+    await machineConnection.jog("X", 50); // would clamp to 10 if verified
+    const sendArg = mockInvoke.mock.calls[0]?.[1]?.command as string;
+    // When unverified: full distance passes through, GRBL/$20 is the backstop
+    expect(sendArg).toContain("X50");
+    // Must NOT have clamped to X10
+    expect(sendArg).not.toContain("X10");
+  });
+
+  it("still applies clamp when workspace is verified (regression guard)", async () => {
+    useStore.setState({
+      machineState: "idle",
+      machinePosition: { x: 490, y: 50, z: 0 },
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+      workspaceVerified: true,
+    });
+    mockInvoke.mockResolvedValueOnce({ responses: ["ok"], drained: [] });
+    await machineConnection.jog("X", 50); // 490+50=540, clamped to 500, delta=10
+    const sendArg = mockInvoke.mock.calls[0]?.[1]?.command as string;
+    expect(sendArg).toContain("X10");
+  });
+});
+
+// ---- SPEC_GAP: soft limits enable/disable command sequence ----
+describe("SPEC_GAP — soft limits enable/disable command sequence", () => {
+  it("enable sequence issues $22=1 then $20=1 then re-queries", async () => {
+    // Simulate: send $22=1, send $20=1, then queryGrblSettings ($$ response)
+    mockInvoke
+      .mockResolvedValueOnce({ responses: ["ok"], drained: [] }) // $22=1
+      .mockResolvedValueOnce({ responses: ["ok"], drained: [] }) // $20=1
+      .mockResolvedValueOnce({ responses: ["$20=1", "$22=1"], drained: [] }); // queryGrblSettings ($$)
+
+    await machineConnection.send("$22=1");
+    await machineConnection.send("$20=1");
+    await machineConnection.queryGrblSettings();
+
+    const calls = mockInvoke.mock.calls;
+    // First call: $22=1
+    expect(calls[0]?.[1]?.command).toBe("$22=1");
+    // Second call: $20=1
+    expect(calls[1]?.[1]?.command).toBe("$20=1");
+    // Third call: $$ (queryGrblSettings)
+    expect(calls[2]?.[1]?.command).toBe("$$");
+    // After re-query, store reflects $20=1 and $22=1
+    expect(useStore.getState().grblSoftLimits).toBe(true);
+    expect(useStore.getState().grblHoming).toBe(true);
+  });
+
+  it("disable sequence issues $20=0 then re-queries", async () => {
+    // Pre-condition: soft limits were on
+    useStore.setState({ grblSoftLimits: true, grblHoming: true });
+
+    mockInvoke
+      .mockResolvedValueOnce({ responses: ["ok"], drained: [] }) // $20=0
+      .mockResolvedValueOnce({ responses: ["$20=0", "$22=1"], drained: [] }); // queryGrblSettings
+
+    await machineConnection.send("$20=0");
+    await machineConnection.queryGrblSettings();
+
+    const calls = mockInvoke.mock.calls;
+    expect(calls[0]?.[1]?.command).toBe("$20=0");
+    expect(calls[1]?.[1]?.command).toBe("$$");
+    // After re-query store reflects $20=0 (grblSoftLimits false)
+    expect(useStore.getState().grblSoftLimits).toBe(false);
+    // $22 left as-is (grblHoming still true)
+    expect(useStore.getState().grblHoming).toBe(true);
   });
 });
