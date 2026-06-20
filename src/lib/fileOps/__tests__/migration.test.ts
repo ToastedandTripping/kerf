@@ -19,9 +19,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { useStore } from "../../../app/store";
-import type { DesignObject, KerfProject, PathPoint } from "../../../app/types";
+import type { DesignObject, KerfProject, Layer, PathPoint } from "../../../app/types";
 import { DEFAULT_LAYERS, KERF_FORMAT_VERSION } from "../../../app/types";
-import { loadProjectWithMigrations, fileOperations } from "../index";
+import { loadProjectWithMigrations, migrateSpeedToMmMin, fileOperations } from "../index";
 import { assertPointsInvariant, pointsBBox, rotatePathPoint } from "../../geometry";
 import { flattenObjectsForTest } from "../../machine/gcodeGen";
 
@@ -272,5 +272,131 @@ describe("robustness + loader contract", () => {
     expect(useStore.getState().objects).toHaveLength(0);
     expect(useStore.getState().projectName).toBe("Untitled");
     expect(useStore.getState().projectPath).toBeNull();
+  });
+});
+
+// ─── Speed-unit migration (v1 → v2) ────────────────────────────────────────
+
+/** A v1 project: formatVersion=1, speeds stored in mm/s convention. */
+function v1Project(layerOverrides: Partial<Layer>[] = []): KerfProject {
+  return {
+    version: "0.8.5",
+    formatVersion: 1,
+    name: "V1 Project",
+    objects: [],
+    layers: DEFAULT_LAYERS.map((l, i) => ({
+      ...l,
+      speed: l.speed / 60, // reverse the mm/min default to simulate a v1 mm/s value
+      ...(layerOverrides[i] ?? {}),
+    })),
+    camera: { x: 0, y: 0, zoom: 1 },
+    workspaceWidth: 500,
+    workspaceHeight: 300,
+  };
+}
+
+describe("speed-unit migration (v1 → v2)", () => {
+  it("v1 project: layer.speed=20 (mm/s) → 1200 (mm/min) after migration", () => {
+    const project: KerfProject = {
+      ...legacyProject([]),
+      formatVersion: 1,
+      layers: [{ ...DEFAULT_LAYERS[2], speed: 20 }], // Cut layer at 20 mm/s
+    };
+    loadProjectWithMigrations(project);
+    const layer = useStore.getState().layers[0];
+    expect(layer.speed).toBe(1200);
+    expect(project.formatVersion).toBe(2);
+  });
+
+  it("v1 project: formatVersion stamped to 2 after speed migration", () => {
+    const project = v1Project();
+    loadProjectWithMigrations(project);
+    expect(project.formatVersion).toBe(KERF_FORMAT_VERSION); // = 2
+  });
+
+  it("v2 project: speed NOT re-multiplied (no double-convert)", () => {
+    const project: KerfProject = {
+      version: "0.9.0",
+      formatVersion: 2,
+      name: "V2 Project",
+      objects: [],
+      layers: [{ ...DEFAULT_LAYERS[2], speed: 1200 }],
+      camera: { x: 0, y: 0, zoom: 1 },
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+    };
+    loadProjectWithMigrations(project);
+    expect(useStore.getState().layers[0].speed).toBe(1200); // unchanged
+  });
+
+  it("legacy (undefined formatVersion) gets BOTH geometry + speed migrations", () => {
+    // Verify the geometry migration ran (transform sync) AND speed migration
+    const p = legacyPath("p1", [{ x: 10, y: 10 }, { x: 30, y: 20 }], { x: 75, y: 80 });
+    const project: KerfProject = {
+      ...legacyProject([p]),
+      layers: [{ ...DEFAULT_LAYERS[2], speed: 20 }],
+    };
+    loadProjectWithMigrations(project);
+    // Geometry migration: transform repaired to pointsBBox
+    expect(get("p1").transform).toMatchObject({ x: 10, y: 10 });
+    // Speed migration: 20 mm/s → 1200 mm/min
+    expect(useStore.getState().layers[0].speed).toBe(1200);
+  });
+
+  it("v1 project does NOT re-run geometry migration (geometry points unchanged)", () => {
+    // A v1 file has formatVersion=1 — the geometry gate (< 1) must NOT fire.
+    // Use a coherent path that would be re-based wrongly if the flip ran again.
+    const p = legacyPath("p1", [{ x: 10, y: 10 }, { x: 30, y: 20 }]);
+    const project: KerfProject = {
+      version: "0.8.5",
+      formatVersion: 1,
+      name: "V1",
+      objects: [p],
+      layers: [{ ...DEFAULT_LAYERS[2], speed: 20 }],
+      camera: { x: 0, y: 0, zoom: 1 },
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+    };
+    loadProjectWithMigrations(project);
+    // Points must NOT be transformed (geometry migration skipped for v1)
+    expect(get("p1").points![0]).toMatchObject({ x: 10, y: 10 });
+    expect(get("p1").points![1]).toMatchObject({ x: 30, y: 20 });
+    // But speed IS migrated
+    expect(useStore.getState().layers[0].speed).toBe(1200);
+  });
+
+  it("migrateSpeedToMmMin is guarded: missing/non-numeric speed fields do not throw", () => {
+    const project: KerfProject = {
+      version: "0.8.5",
+      formatVersion: 1,
+      name: "Partial",
+      objects: [],
+      // Intentionally malformed — speed field absent or wrong type
+      layers: [{ ...DEFAULT_LAYERS[2], speed: undefined as unknown as number }],
+      camera: { x: 0, y: 0, zoom: 1 },
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+    };
+    expect(() => migrateSpeedToMmMin(project)).not.toThrow();
+  });
+
+  it("migrateSpeedToMmMin also converts in-project materials", () => {
+    const project: KerfProject = {
+      version: "0.8.5",
+      formatVersion: 1,
+      name: "WithMaterials",
+      objects: [],
+      layers: [{ ...DEFAULT_LAYERS[2], speed: 20 }],
+      camera: { x: 0, y: 0, zoom: 1 },
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+      materials: [{
+        id: "test", name: "Test", material: "Plywood", thickness: "3mm",
+        mode: "line", power: 90, powerMin: 0, speed: 10, passes: 1, airAssist: true, interval: 0.1,
+      }],
+    };
+    migrateSpeedToMmMin(project);
+    expect(project.layers[0].speed).toBe(1200);
+    expect(project.materials![0].speed).toBe(600);
   });
 });

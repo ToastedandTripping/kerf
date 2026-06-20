@@ -57,13 +57,13 @@ function generateMaterialTestGcode(opts: MaterialTestOptions, sValueMax: number)
       const power = Math.round(powers[pi]);
       const speed = Math.round(speeds[si]);
       const sValue = Math.round((power / 100) * sValueMax);
-      const feedRate = speed * 60; // mm/s to mm/min
+      const feedRate = speed; // speed is already mm/min
 
       const cx = startX + si * (opts.cellWidth + opts.cellGap);
       // Y is inverted in G-code (origin bottom-left)
       const cy = startY + pi * (opts.cellHeight + opts.cellGap);
 
-      lines.push(`; Cell P${power}% S${speed}mm/s`);
+      lines.push(`; Cell P${power}% S${speed}mm/min`);
 
       if (opts.mode === "cut") {
         // Rectangle outline
@@ -122,8 +122,8 @@ export function MaterialTestDialog({ open, onClose }: Props) {
   const [powerMin, setPowerMin] = useState(10);
   const [powerMax, setPowerMax] = useState(100);
   const [powerSteps, setPowerSteps] = useState(5);
-  const [speedMin, setSpeedMin] = useState(50);
-  const [speedMax, setSpeedMax] = useState(500);
+  const [speedMin, setSpeedMin] = useState(3000);
+  const [speedMax, setSpeedMax] = useState(30000);
   const [speedSteps, setSpeedSteps] = useState(5);
   const [cellWidth, setCellWidth] = useState(10);
   const [cellHeight, setCellHeight] = useState(10);
@@ -259,15 +259,15 @@ export function MaterialTestDialog({ open, onClose }: Props) {
         {/* Speed range */}
         <div style={{ marginBottom: "12px" }}>
           <div style={{ fontSize: "10px", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "6px", fontWeight: 600 }}>
-            Speed (mm/s)
+            Speed (mm/min)
           </div>
           <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
             <span style={labelStyle}>Min</span>
-            <input type="number" min="1" max="10000" value={speedMin}
+            <input type="number" min="1" max="100000" value={speedMin}
               onChange={(e) => setSpeedMin(Math.max(1, Number(e.target.value)))}
               style={inputStyle} />
             <span style={labelStyle}>Max</span>
-            <input type="number" min="1" max="10000" value={speedMax}
+            <input type="number" min="1" max="100000" value={speedMax}
               onChange={(e) => setSpeedMax(Math.max(1, Number(e.target.value)))}
               style={inputStyle} />
           </div>

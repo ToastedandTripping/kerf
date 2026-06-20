@@ -404,6 +404,11 @@ export const machineConnection = {
           const key = parseInt(match[1], 10);
           const value = parseFloat(match[2]);
           if (key === 30) {
+            // C2: firmware always wins (safety); log when it differs from the persisted value
+            const prev = store.grblSValueMax;
+            if (value !== prev) {
+              store.addConsoleLine(`S-value max updated from machine: ${prev} → ${value}`, "info");
+            }
             store.setGrblSValueMax(value);
             store.addConsoleLine(`$30=${value} (S-value max)`, "info");
           } else if (key === 32) {

@@ -229,7 +229,7 @@ function LayerRow({
 
         {/* Compact power/speed readout */}
         <span style={{ fontSize: "9px", color: "var(--text-muted)", fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>
-          {layer.power}% {layer.speed}mm/s
+          {layer.power}% {layer.speed}mm/min
         </span>
 
         {/* Output toggle */}
@@ -375,16 +375,16 @@ function LayerRow({
               <SettingRow label="Speed">
                 <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
                   <input
-                    type="range" min="1" max="1000" value={layer.speed}
+                    type="range" min="1" max="20000" value={layer.speed}
                     onChange={(e) => onManualUpdate({ speed: Number(e.target.value) })}
                     style={{ flex: 1, accentColor: "var(--accent)" }}
                   />
                   <input
-                    type="number" min="1" max="10000" value={layer.speed}
+                    type="number" min="1" max="100000" value={layer.speed}
                     onChange={(e) => onManualUpdate({ speed: Math.max(1, Number(e.target.value)) })}
                     style={{ ...inputStyle, width: "50px", textAlign: "right" }}
                   />
-                  <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>mm/s</span>
+                  <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>mm/min</span>
                 </div>
               </SettingRow>
 
@@ -587,8 +587,8 @@ function LayerRow({
                 onClick={() => {
                   // Fill+Line preset: add both sub-layers atomically
                   addSubLayers(layer.index, [
-                    { mode: "fill", power: 50, speed: 100 },
-                    { mode: "line", power: 100, speed: 20 },
+                    { mode: "fill", power: 50, speed: 6000 },
+                    { mode: "line", power: 100, speed: 1200 },
                   ]);
                 }}
                 style={{
@@ -699,11 +699,11 @@ function SubLayerRow({
       <SettingRow label="Speed">
         <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
           <input
-            type="number" min="1" max="10000" value={sub.speed}
+            type="number" min="1" max="100000" value={sub.speed}
             onChange={(e) => onUpdate({ speed: Math.max(1, Number(e.target.value)) })}
             style={{ ...inputStyle, width: "50px", textAlign: "right" }}
           />
-          <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>mm/s</span>
+          <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>mm/min</span>
         </div>
       </SettingRow>
 

@@ -1,5 +1,5 @@
 import { useStore } from "../../app/store";
-import type { DesignObject, KerfProject } from "../../app/types";
+import type { DesignObject, KerfProject, Layer, MaterialPreset, SubLayer } from "../../app/types";
 import { DEFAULT_LAYERS, KERF_FORMAT_VERSION } from "../../app/types";
 import { pointsBBox, rotatePathPoint, POINTS_EPSILON } from "../geometry";
 import { DEFAULT_MATERIALS } from "../materials";
@@ -19,6 +19,11 @@ function resolvePath(path: TauriDialogPath): string {
 
 let dialogModule: typeof import("@tauri-apps/plugin-dialog") | null = null;
 let fsModule: typeof import("@tauri-apps/plugin-fs") | null = null;
+
+// Tracks original file content after a migrating load so saveToPath can write
+// a .bak sibling before overwriting. Cleared after first use.
+let _pendingBakContent: string | null = null;
+let _pendingBakPath: string | null = null;
 
 async function ensureTauri() {
   if (dialogModule && fsModule) return true;
@@ -80,11 +85,17 @@ async function checkUnsavedChanges(): Promise<boolean> {
  * 0 (a user's 45° reads 0° afterwards — visually exact, lossy on the field).
  */
 export function loadProjectWithMigrations(project: KerfProject): void {
-  if (project.formatVersion === undefined || project.formatVersion < KERF_FORMAT_VERSION) {
+  const v = project.formatVersion; // undefined => legacy v0
+  if (v === undefined || v < 1) {  // geometry: ONLY legacy v0 files
     migrateFlipTransforms(project.objects);
     migratePointsTransformSync(project.objects, 0, 0);
-    project.formatVersion = KERF_FORMAT_VERSION;
   }
+  if (v === undefined || v < 2) {  // speed mm/s → mm/min
+    migrateSpeedToMmMin(project);
+  }
+  // Stamp AFTER migration completes successfully; a throw leaves version
+  // unstamped so the file re-migrates on next load (never seal over partial state).
+  project.formatVersion = KERF_FORMAT_VERSION;
   useStore.getState().loadProject(project);
 }
 
@@ -157,6 +168,11 @@ export const fileOperations = {
           store.addConsoleLine(`Failed to load "${pathStr}": file is corrupted or not a valid Kerf project`, "error");
           return;
         }
+        // Track original content for .bak if a speed migration will run
+        if (project.formatVersion === undefined || project.formatVersion < 2) {
+          _pendingBakContent = content;
+          _pendingBakPath = pathStr;
+        }
         loadProjectWithMigrations(project);
         useStore.getState().setProjectPath(pathStr);
         addRecentFile(pathStr);
@@ -212,6 +228,11 @@ export const fileOperations = {
         store.setStatusMessage("Project file is corrupted and could not be loaded");
         store.addConsoleLine(`Failed to load "${filePath}": file is corrupted or not a valid Kerf project`, "error");
         return;
+      }
+      // Track original content for .bak if a speed migration will run
+      if (project.formatVersion === undefined || project.formatVersion < 2) {
+        _pendingBakContent = content;
+        _pendingBakPath = filePath;
       }
       loadProjectWithMigrations(project);
       useStore.getState().setProjectPath(filePath);
@@ -316,9 +337,81 @@ export const fileOperations = {
 
 async function saveToPath(path: string) {
   if (!fsModule) return;
+  // Write .bak before overwriting if this path has a pending backup from migration
+  if (_pendingBakPath === path && _pendingBakContent !== null) {
+    const content = _pendingBakContent;
+    _pendingBakContent = null;
+    _pendingBakPath = null;
+    await writeBakIfMissing(path, content);
+  }
   const project = useStore.getState().toProject();
   await fsModule.writeTextFile(path, JSON.stringify(project, null, 2));
   useStore.getState().setDirty(false);
+}
+
+/**
+ * Speed-unit migration (v1 → v2): multiply all stored speed fields by 60
+ * to convert the legacy mm/s convention to the canonical mm/min unit.
+ *
+ * ATOMICITY: each field is guarded by `typeof === "number"` before mutation,
+ * and all array access is optional-chained so this helper CANNOT throw under
+ * any well-typed input. The formatVersion stamp in the caller is written only
+ * after this function returns normally; an unexpected throw therefore leaves
+ * the version unstamped and the file re-migrates on next load (never seals
+ * v2 over a half-converted state).
+ *
+ * NOTE: exported materials (.json without a version wrapper) are NOT covered
+ * by this migration — they have no formatVersion. A pre-switch exported file
+ * re-imported after this release will have its speeds treated as mm/min
+ * already (which will be 60× too slow). Users should re-export presets after
+ * upgrading. In-project materials[] ARE migrated via this gate.
+ */
+export function migrateSpeedToMmMin(project: KerfProject): void {
+  // Migrate layers and their sub-layers
+  if (Array.isArray(project.layers)) {
+    for (const layer of project.layers) {
+      if (typeof (layer as Layer).speed === "number") {
+        (layer as Layer).speed *= 60;
+      }
+      if (Array.isArray((layer as Layer).subLayers)) {
+        for (const sub of (layer as Layer).subLayers!) {
+          if (typeof (sub as SubLayer).speed === "number") {
+            (sub as SubLayer).speed *= 60;
+          }
+        }
+      }
+    }
+  }
+  // Migrate in-project material presets
+  if (Array.isArray(project.materials)) {
+    for (const mat of project.materials) {
+      if (typeof (mat as MaterialPreset).speed === "number") {
+        (mat as MaterialPreset).speed *= 60;
+      }
+    }
+  }
+}
+
+/**
+ * Write a one-time .bak sibling of the original file on the first save
+ * after a migrating load. Called from saveToPath when migration occurred.
+ * Silently skips if the .bak already exists or on any fs error.
+ */
+async function writeBakIfMissing(originalPath: string, content: string): Promise<void> {
+  if (!fsModule) return;
+  const bakPath = `${originalPath}.bak`;
+  try {
+    // Check existence: readTextFile throws if missing, which is what we want
+    await fsModule.readTextFile(bakPath);
+    // .bak exists — do nothing
+  } catch {
+    // .bak does not exist — write it
+    try {
+      await fsModule.writeTextFile(bakPath, content);
+    } catch {
+      // Silently ignore write errors (read-only fs, disk full, etc.)
+    }
+  }
 }
 
 /**

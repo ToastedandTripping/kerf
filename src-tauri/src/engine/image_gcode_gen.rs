@@ -28,7 +28,7 @@ pub struct ImageEngraveRequest {
     pub scale_y: f64,           // 1.0 or -1.0 (mirror); applied as pixel buffer flip
     pub power: f64,             // 0-100
     pub power_min: f64,         // 0-100
-    pub speed: f64,             // mm/s
+    pub speed: f64,             // mm/min
     pub passes: u32,
     pub power_mode: String,     // "constant" or "variable"
     pub interval: f64,          // mm (DPI = 25.4 / interval)
@@ -350,7 +350,7 @@ fn generate_scan_gcode(
     let mut cur_x = 0.0_f64;
     let mut cur_y = 0.0_f64;
 
-    let speed_mm_min = req.speed * 60.0;
+    let speed_mm_min = req.speed; // canonical unit is mm/min
     let s_max = (req.power / 100.0 * req.s_value_max).round();
     let s_min = (req.power_min / 100.0 * req.s_value_max).round();
     let power_cmd = if req.power_mode == "variable" || is_grayscale { "M4" } else { "M3" };
@@ -741,7 +741,7 @@ mod tests {
             scale_y: 1.0,
             power: 100.0,
             power_min: 0.0,
-            speed: 100.0,
+            speed: 6000.0, // mm/min (was 100 mm/s before unit switch)
             passes: 1,
             power_mode: "variable".to_string(),
             interval: 1.0,

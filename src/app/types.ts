@@ -117,7 +117,7 @@ export interface Layer {
   mode: CutMode;
   power: number; // 0-100 max power
   powerMin: number; // 0-100 min power (for variable/grayscale)
-  speed: number; // mm/s
+  speed: number; // mm/min
   passes: number;
   powerMode: PowerMode;
   interval: number; // mm - line interval for fill mode
@@ -161,7 +161,7 @@ export interface SubLayer {
   mode: CutMode;
   power: number;
   powerMin: number;
-  speed: number;
+  speed: number; // mm/min
   passes: number;
   powerMode: PowerMode;
   interval: number;
@@ -175,7 +175,7 @@ export interface MaterialPreset {
   mode: CutMode;
   power: number;
   powerMin: number;
-  speed: number;
+  speed: number; // mm/min
   passes: number;
   airAssist: boolean;
   interval: number;
@@ -199,25 +199,31 @@ const layerDefaults = {
 // Fix 4: Engrave-before-cut ordering (industry convention: engrave/score first
 // so pieces stay in place while being engraved, cut last to release them).
 export const DEFAULT_LAYERS: Layer[] = [
-  { index: 0, name: "Engrave", color: "#e24a4a", mode: "fill", power: 50, speed: 100, passes: 1, ...layerDefaults, airAssist: false },
-  { index: 1, name: "Score", color: "#4ae28a", mode: "line", power: 30, speed: 50, passes: 1, ...layerDefaults },
-  { index: 2, name: "Cut", color: "#4a90e2", mode: "line", power: 100, speed: 20, passes: 1, ...layerDefaults },
-  { index: 3, name: "Custom 4", color: "#ff8000", mode: "line", power: 100, speed: 20, passes: 1, ...layerDefaults },
-  { index: 4, name: "Custom 5", color: "#e2e24a", mode: "line", power: 100, speed: 20, passes: 1, ...layerDefaults },
-  { index: 5, name: "Custom 6", color: "#4ae2e2", mode: "line", power: 100, speed: 20, passes: 1, ...layerDefaults },
+  { index: 0, name: "Engrave", color: "#e24a4a", mode: "fill", power: 50, speed: 6000, passes: 1, ...layerDefaults, airAssist: false },
+  { index: 1, name: "Score", color: "#4ae28a", mode: "line", power: 30, speed: 3000, passes: 1, ...layerDefaults },
+  { index: 2, name: "Cut", color: "#4a90e2", mode: "line", power: 100, speed: 1200, passes: 1, ...layerDefaults },
+  { index: 3, name: "Custom 4", color: "#ff8000", mode: "line", power: 100, speed: 1200, passes: 1, ...layerDefaults },
+  { index: 4, name: "Custom 5", color: "#e2e24a", mode: "line", power: 100, speed: 1200, passes: 1, ...layerDefaults },
+  { index: 5, name: "Custom 6", color: "#4ae2e2", mode: "line", power: 100, speed: 1200, passes: 1, ...layerDefaults },
 ];
 
 export type StartCorner = "bottomLeft" | "bottomRight" | "topLeft" | "topRight" | "center";
 
 /**
- * Geometry-convention version of saved project/recovery files (W1b).
- * Absent ⇒ legacy file ⇒ load-time migrations run (flip bake, then
- * points/transform sync + group-local re-base). Distinct from the semver-ish
- * `version` field, which tracks the app release, not the data convention.
- * Files saved with formatVersion 1 render group children wrong in pre-W1b
- * binaries — forward-incompat is inherent to the convention fix.
+ * Data-convention version of saved project/recovery files.
+ *
+ * undefined (absent) = legacy v0: geometry migrations run (flip bake, then
+ *   points/transform sync + group-local re-base). Pre-W1b binaries.
+ *
+ * 1 = post-W1b geometry fix. Layer speeds stored in mm/s (old unit). Forward-
+ *   incompat vs pre-W1b binaries (children render wrong).
+ *
+ * 2 = speed unit mm/s → mm/min (this release). Load-time migration ×60 all
+ *   speed fields. Forward-incompat vs v1 binaries: a v2 file re-read by a
+ *   pre-switch binary would treat 1200 as 1200 mm/s (60× too fast — fire risk).
+ *   BACKUP: the first save over a migrating file writes a .bak sibling.
  */
-export const KERF_FORMAT_VERSION = 1;
+export const KERF_FORMAT_VERSION = 2;
 
 export interface KerfProject {
   version: string;

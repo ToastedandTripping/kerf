@@ -58,6 +58,8 @@ export function MachinePanel() {
   const workspaceHeight = useStore((s) => s.workspaceHeight);
   const consoleLines = useStore((s) => s.consoleLines);
   const setStatusMessage = useStore((s) => s.setStatusMessage);
+  const grblSValueMax = useStore((s) => s.grblSValueMax);
+  const setGrblSValueMax = useStore((s) => s.setGrblSValueMax);
 
   const [selectedPort, setSelectedPort] = useState("");
   const [ports, setPorts] = useState<Array<{ name: string; portType: string; vid: number | null; pid: number | null }>>([]);
@@ -477,6 +479,35 @@ export function MachinePanel() {
             <span>X: <strong>{machinePosition.x.toFixed(2)}</strong></span>
             <span>Y: <strong>{machinePosition.y.toFixed(2)}</strong></span>
             <span>Z: <strong>{machinePosition.z.toFixed(2)}</strong></span>
+          </div>
+
+          {/* Laser power max (S-value / $30) */}
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px" }}>
+            <span style={{ color: "var(--text-secondary)", flex: 1 }}>
+              Laser power max (S-value · $30)
+            </span>
+            <input
+              type="number"
+              min="1"
+              max="65535"
+              value={grblSValueMax}
+              onChange={(e) => setGrblSValueMax(Math.max(1, Number(e.target.value)))}
+              style={{
+                width: "60px",
+                background: "var(--bg-input)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)",
+                color: "var(--text-primary)",
+                padding: "3px 6px",
+                fontSize: "11px",
+                textAlign: "right",
+              }}
+            />
+            {!machineConnected && (
+              <span style={{ fontSize: "10px", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                offline default
+              </span>
+            )}
           </div>
 
           {/* Jog controls */}

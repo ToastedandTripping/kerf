@@ -302,7 +302,7 @@ export const useStore = create<AppState>((set, get) => ({
           mode: "line",
           power: 100,
           powerMin: 0,
-          speed: 20,
+          speed: 1200, // mm/min
           passes: 1,
           powerMode: "constant",
           interval: 0.1,
@@ -320,7 +320,7 @@ export const useStore = create<AppState>((set, get) => ({
           mode: s.mode ?? "line",
           power: s.power ?? 100,
           powerMin: s.powerMin ?? 0,
-          speed: s.speed ?? 20,
+          speed: s.speed ?? 1200, // mm/min
           passes: s.passes ?? 1,
           powerMode: s.powerMode ?? "constant",
           interval: s.interval ?? 0.1,
@@ -507,7 +507,19 @@ export const useStore = create<AppState>((set, get) => ({
   machineConnected: false,
   machineState: "disconnected",
   machinePosition: { x: 0, y: 0, z: 0 },
-  grblSValueMax: 1000,
+  // C1: hydrate grblSValueMax at INIT time from localStorage so any pre-connect
+  // G-code generation uses the correct persisted value (lazy hydrate would leak
+  // 1000 → 4× overpower on $30=255 machines). Fall back to 1000 if absent/bad.
+  grblSValueMax: (() => {
+    try {
+      const raw = localStorage.getItem("kerf-s-value-max");
+      if (raw === null) return 1000;
+      const n = Number(raw);
+      return Number.isFinite(n) && n > 0 ? n : 1000;
+    } catch {
+      return 1000;
+    }
+  })(),
   grblLaserMode: false,
   grblAccelX: 500,
   grblAccelY: 500,
@@ -516,12 +528,15 @@ export const useStore = create<AppState>((set, get) => ({
   setMachinePosition: (pos) => set({ machinePosition: pos }),
   // F15: S-values are baked into generated G-code (different $30 machine =
   // stale). Value-change only — re-set on every connect by queryGrblSettings.
-  setGrblSValueMax: (v) =>
+  // C1: also persists to localStorage so the value survives restarts.
+  setGrblSValueMax: (v) => {
+    try { localStorage.setItem("kerf-s-value-max", String(v)); } catch { /* ignore quota/security errors */ }
     set((state) => ({
       grblSValueMax: v,
       gcodeStale:
         v !== state.grblSValueMax && state.gcodeResult !== null ? true : state.gcodeStale,
-    })),
+    }));
+  },
   setGrblLaserMode: (v) => set({ grblLaserMode: v }),
   setGrblAccel: (x, y) => set({ grblAccelX: x, grblAccelY: y }),
 

@@ -18,7 +18,7 @@ pub struct CutLayer {
     pub mode: String,        // "line", "fill"
     pub power: f64,          // 0-100
     pub power_min: f64,      // 0-100
-    pub speed: f64,          // mm/s
+    pub speed: f64,          // mm/min
     pub passes: u32,
     pub power_mode: String,  // "constant" or "variable"
     pub interval: f64,       // mm - line interval for fill
@@ -319,7 +319,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
 
     for obj in objects {
         let layer = &obj.layer;
-        let speed_mm_min = layer.speed * 60.0; // Convert mm/s to mm/min
+        let speed_mm_min = layer.speed; // canonical unit is mm/min
         let s_max = (layer.power / 100.0 * s_value_max).round();
         // Fix 6: compute s_min from power_min; used in M4 (variable) mode to floor S values.
         let s_min = (layer.power_min / 100.0 * s_value_max).round();
@@ -335,7 +335,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
             match layer.mode.as_str() {
                 "line" => {
                     // Vector cut mode
-                    lines.push(format!("; Cut: {} ({}% @ {}mm/s)", obj.id, layer.power, layer.speed));
+                    lines.push(format!("; Cut: {} ({}% @ {}mm/min)", obj.id, layer.power, layer.speed));
 
                     // Fix 6: in M4 (variable) mode, floor S values at s_min so the laser
                     // doesn't drop below min power during GRBL's speed-compensation at corners.
@@ -788,7 +788,7 @@ mod tests {
             mode: "line".to_string(),
             power: 100.0,
             power_min: 0.0,
-            speed: 20.0,
+            speed: 1200.0, // mm/min (was 20 mm/s before unit switch)
             passes: 1,
             power_mode: "constant".to_string(),
             interval: 0.1,
@@ -1049,6 +1049,49 @@ mod tests {
         );
         // Also verify there are actual scan moves (not an empty result)
         assert!(!xs.is_empty(), "Expected scan moves to be generated; got:\n{gcode}");
+    }
+
+    // SPEED-UNIT — after the mm/s → mm/min canonical switch, the ×60 multiplier
+    // is gone: a layer at 1200 mm/min must emit F1200 (not F72000).
+    // The ×60 line was at gcode_gen.rs:322 and has been removed; these tests
+    // are the regression guard.
+    #[test]
+    fn speed_unit_1200mmmin_emits_f1200() {
+        let mut layer = make_layer_line();
+        layer.speed = 1200.0; // mm/min — LightBurn-equivalent of 20 mm/s
+        let obj = make_rect_obj("r", 0.0, 0.0, 10.0, 10.0, layer);
+        let result = generate_gcode(&[obj], 100.0, 1000.0, false);
+        assert!(
+            result.gcode.contains("F1200"),
+            "Expected F1200 for 1200 mm/min layer; got:\n{}",
+            result.gcode
+        );
+        assert!(
+            !result.gcode.contains("F72000"),
+            "F72000 indicates leftover ×60 multiply; got:\n{}",
+            result.gcode
+        );
+    }
+
+    // LightBurn parity — the cut that prompted the unit switch:
+    // plywood at 480 mm/min, 60% power must emit F480.
+    #[test]
+    fn speed_unit_lightburn_parity_480mmmin() {
+        let mut layer = make_layer_line();
+        layer.speed = 480.0;
+        layer.power = 60.0;
+        let obj = make_rect_obj("r", 0.0, 0.0, 10.0, 10.0, layer);
+        let result = generate_gcode(&[obj], 100.0, 1000.0, false);
+        assert!(
+            result.gcode.contains("F480"),
+            "Expected F480 for 480 mm/min layer (LightBurn parity); got:\n{}",
+            result.gcode
+        );
+        assert!(
+            !result.gcode.contains("F28800"),
+            "F28800 indicates leftover ×60 multiply; got:\n{}",
+            result.gcode
+        );
     }
 }
 
