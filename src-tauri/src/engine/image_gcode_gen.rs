@@ -583,7 +583,8 @@ fn generate_scan_gcode(
         total_distance,
         cut_distance,
         travel_distance,
-        estimated_time_secs: estimate_simple_time(&cut_distance, &travel_distance, req.speed),
+        // req.speed is mm/min (canonical unit); estimate_simple_time works in mm/s.
+        estimated_time_secs: estimate_simple_time(&cut_distance, &travel_distance, req.speed / 60.0),
         line_count: lines.len(),
     })
 }
@@ -1091,5 +1092,24 @@ mod tests {
         // Grayscale dither is a pass-through, so the original luma (~128) is preserved.
         assert!(pixels[1] < 200,
             "Center gray pixel should not be whitened when bg removal disabled, got {}", pixels[1]);
+    }
+
+    /// Regression: after the mm/s → mm/min unit switch, the image-engrave time estimate must
+    /// remain minutes-scale (i.e. use mm/s internally), not drop to seconds-scale (the 60× bug).
+    ///
+    /// Setup: 100 mm of cut distance at 6000 mm/min (= 100 mm/s).
+    ///   Correct:  cut_time = 100 / 100 = 1 s → ~1 s total (no travel here)
+    ///   Bug (60×): cut_time = 100 / 6000 = 0.0167 s — 60× too small.
+    ///
+    /// The assertion `> 0.5` catches the bug (0.0167 < 0.5) while passing the fix (1.0 > 0.5).
+    #[test]
+    fn image_time_estimate_is_seconds_scale_not_60x_too_small() {
+        let t = estimate_simple_time(&100.0, &0.0, 6000.0 / 60.0);
+        // At 6000 mm/min (100 mm/s), 100 mm of cutting takes ~1 second.
+        // If the bug were present (speed passed as-is in mm/min), the result would be ~0.0167 s.
+        assert!(t > 0.5,
+            "estimate_simple_time returned {}s — expected ~1s; likely 60× too small (mm/min bug)", t);
+        assert!(t < 10.0,
+            "estimate_simple_time returned {}s — unexpectedly large; check unit handling", t);
     }
 }

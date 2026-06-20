@@ -345,8 +345,14 @@ describe("speed-unit migration (v1 → v2)", () => {
 
   it("v1 project does NOT re-run geometry migration (geometry points unchanged)", () => {
     // A v1 file has formatVersion=1 — the geometry gate (< 1) must NOT fire.
-    // Use a coherent path that would be re-based wrongly if the flip ran again.
-    const p = legacyPath("p1", [{ x: 10, y: 10 }, { x: 30, y: 20 }]);
+    //
+    // Use a DESYNCED + ROTATED path (same fixture as test (b) at line ~116).
+    // If the geometry gate incorrectly fires (e.g. gate were `< 2`), migratePointsTransformSync
+    // would bake the 90° rotation into the points, visibly moving them away from (10,10)/(30,20).
+    // A coherent path with rotation:0 would pass even with a broken gate — that was the
+    // tautological flaw this test replaces.
+    const points = [{ x: 10, y: 10 }, { x: 30, y: 20 }];
+    const p = legacyPath("p1", points, { x: 40, y: 45, width: 20, height: 10, rotation: 90 });
     const project: KerfProject = {
       version: "0.8.5",
       formatVersion: 1,
@@ -358,10 +364,12 @@ describe("speed-unit migration (v1 → v2)", () => {
       workspaceHeight: 300,
     };
     loadProjectWithMigrations(project);
-    // Points must NOT be transformed (geometry migration skipped for v1)
+    // Points must be UNCHANGED — geometry migration must have been skipped.
+    // If the gate misfired, migratePointsTransformSync would have rotated them
+    // about the OLD transform center (50, 47.5), producing x≈37.5 for point[0] — not 10.
     expect(get("p1").points![0]).toMatchObject({ x: 10, y: 10 });
     expect(get("p1").points![1]).toMatchObject({ x: 30, y: 20 });
-    // But speed IS migrated
+    // Speed IS migrated regardless of format version
     expect(useStore.getState().layers[0].speed).toBe(1200);
   });
 

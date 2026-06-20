@@ -593,7 +593,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                 }
                 "fill" => {
                     // Raster engrave mode
-                    lines.push(format!("; Engrave: {} ({}% @ {}mm/s, interval {}mm)",
+                    lines.push(format!("; Engrave: {} ({}% @ {}mm/min, interval {}mm)",
                         obj.id, layer.power, layer.speed, layer.interval));
 
                     let interval = if layer.interval > 0.0 { layer.interval } else { 0.1 };
@@ -676,7 +676,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                 }
                 "offsetFill" => {
                     // Offset fill mode: concentric paths spiraling inward
-                    lines.push(format!("; Offset Fill: {} ({}% @ {}mm/s, interval {}mm)",
+                    lines.push(format!("; Offset Fill: {} ({}% @ {}mm/min, interval {}mm)",
                         obj.id, layer.power, layer.speed, layer.interval));
 
                     let interval = if layer.interval > 0.0 { layer.interval } else { 0.5 };
