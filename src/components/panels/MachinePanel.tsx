@@ -501,6 +501,7 @@ export function MachinePanel() {
               padding: "5px 8px",
               borderRadius: "var(--radius-sm)",
               border: `1px solid ${softLimitsActive ? "rgba(74,226,138,0.2)" : "rgba(226,160,74,0.35)"}`,
+              borderLeft: softLimitsActive ? undefined : !grblSoftLimits ? "3px solid var(--accent-warm)" : undefined,
               background: softLimitsActive ? "rgba(74,226,138,0.06)" : "rgba(226,160,74,0.08)",
               color: softLimitsActive ? "var(--success)" : "var(--accent-warm)",
               display: "flex",
@@ -529,7 +530,7 @@ export function MachinePanel() {
                       padding: "2px 6px",
                       background: "var(--bg-input)",
                       border: "1px solid var(--border)",
-                      borderRadius: "3px",
+                      borderRadius: "var(--radius-sm)",
                       color: "var(--text-muted)",
                       cursor: "pointer",
                     }}
@@ -545,7 +546,7 @@ export function MachinePanel() {
                       padding: "2px 6px",
                       background: "var(--bg-input)",
                       border: "1px solid var(--border)",
-                      borderRadius: "3px",
+                      borderRadius: "var(--radius-sm)",
                       color: "var(--text-muted)",
                       cursor: "pointer",
                     }}
@@ -559,9 +560,9 @@ export function MachinePanel() {
                 <div style={{
                   marginTop: "2px",
                   padding: "6px 8px",
-                  background: "rgba(226,160,74,0.08)",
-                  border: "1px solid rgba(226,160,74,0.35)",
-                  borderRadius: "3px",
+                  background: "var(--bg-input)",
+                  borderLeft: "2px solid var(--accent-warm)",
+                  borderRadius: "var(--radius-sm)",
                   fontSize: "9px",
                   color: "var(--text-secondary)",
                   display: "flex",
@@ -601,7 +602,7 @@ export function MachinePanel() {
                         background: "var(--accent)",
                         border: "none",
                         color: "#fff",
-                        borderRadius: "3px",
+                        borderRadius: "var(--radius-sm)",
                       }}
                     >
                       I have limit switches — Enable
@@ -615,7 +616,7 @@ export function MachinePanel() {
                         background: "none",
                         border: "1px solid var(--border)",
                         color: "var(--text-muted)",
-                        borderRadius: "3px",
+                        borderRadius: "var(--radius-sm)",
                       }}
                     >
                       Cancel
@@ -648,7 +649,7 @@ export function MachinePanel() {
                   padding: "2px 6px",
                   background: "var(--bg-input)",
                   border: "1px solid var(--border)",
-                  borderRadius: "3px",
+                  borderRadius: "var(--radius-sm)",
                   color: "var(--text-muted)",
                   cursor: "pointer",
                 }}
@@ -688,7 +689,7 @@ export function MachinePanel() {
                     padding: "2px 8px",
                     background: "var(--bg-input)",
                     border: "1px solid var(--border)",
-                    borderRadius: "3px",
+                    borderRadius: "var(--radius-sm)",
                     color: "var(--text-primary)",
                     cursor: "pointer",
                   }}
@@ -705,9 +706,10 @@ export function MachinePanel() {
                     style={{
                       width: "56px", fontSize: "10px", padding: "2px 4px",
                       background: "var(--bg-input)", border: "1px solid var(--border)",
-                      borderRadius: "3px", color: "var(--text-primary)", textAlign: "right",
+                      borderRadius: "var(--radius-sm)", color: "var(--text-primary)", textAlign: "right",
                     }}
                   />
+                  <span style={{ color: "var(--text-muted)", fontSize: "9px" }}>mm</span>
                   <span style={{ color: "var(--text-secondary)" }}>H:</span>
                   <input
                     type="number"
@@ -716,7 +718,7 @@ export function MachinePanel() {
                     style={{
                       width: "56px", fontSize: "10px", padding: "2px 4px",
                       background: "var(--bg-input)", border: "1px solid var(--border)",
-                      borderRadius: "3px", color: "var(--text-primary)", textAlign: "right",
+                      borderRadius: "var(--radius-sm)", color: "var(--text-primary)", textAlign: "right",
                     }}
                   />
                   <span style={{ color: "var(--text-muted)", fontSize: "9px" }}>mm</span>
@@ -731,7 +733,7 @@ export function MachinePanel() {
                     style={{
                       fontSize: "9px", padding: "2px 8px", cursor: "pointer",
                       background: "var(--accent)", border: "none",
-                      color: "#fff", borderRadius: "3px",
+                      color: "#fff", borderRadius: "var(--radius-sm)",
                     }}
                   >
                     Confirm
@@ -741,7 +743,7 @@ export function MachinePanel() {
                     style={{
                       fontSize: "9px", padding: "2px 6px", cursor: "pointer",
                       background: "none", border: "1px solid var(--border)",
-                      color: "var(--text-muted)", borderRadius: "3px",
+                      color: "var(--text-muted)", borderRadius: "var(--radius-sm)",
                     }}
                   >
                     Cancel
@@ -1162,7 +1164,7 @@ export function MachinePanel() {
                 border: "none",
                 fontSize: "11px",
                 fontWeight: 700,
-                cursor: machineConnected && jobRunning ? "pointer" : machineConnected ? "default" : "not-allowed",
+                cursor: machineConnected && jobRunning ? "pointer" : "not-allowed",
                 background: "rgba(226,74,74,0.2)",
                 color: "var(--danger)",
                 opacity: !machineConnected ? 0.4 : !jobRunning ? 0.4 : 1,
