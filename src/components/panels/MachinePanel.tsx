@@ -482,9 +482,12 @@ export function MachinePanel() {
           </div>
 
           {/* Laser power max (S-value / $30) */}
-          <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px" }}>
-            <span style={{ color: "var(--text-secondary)", flex: 1 }}>
-              Laser power max (S-value · $30)
+          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <span style={{
+              fontSize: "10px", color: "var(--text-muted)", minWidth: "50px",
+              textTransform: "uppercase", letterSpacing: "0.3px",
+            }}>
+              Power max ($30)
             </span>
             <input
               type="number"
@@ -505,7 +508,7 @@ export function MachinePanel() {
             />
             {!machineConnected && (
               <span style={{ fontSize: "10px", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
-                offline default
+                offline default — connect to read from machine
               </span>
             )}
           </div>
