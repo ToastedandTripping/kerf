@@ -121,6 +121,29 @@ export interface AppState {
   setGrblLaserMode: (v: boolean) => void;
   setGrblAccel: (x: number, y: number) => void;
 
+  // Machine limit/homing flags (read from $20/$21/$22 on connect)
+  grblSoftLimits: boolean;       // $20: soft limits enabled in firmware
+  grblHardLimits: boolean;       // $21: hard limits enabled in firmware
+  grblHoming: boolean;           // $22: homing cycle enabled (requires limit switches)
+  machineHomed: boolean;         // true after a successful homing cycle this session
+  setGrblSoftLimits: (v: boolean) => void;
+  setGrblHardLimits: (v: boolean) => void;
+  setGrblHoming: (v: boolean) => void;
+  setMachineHomed: (v: boolean) => void;
+
+  // Work coordinate offset (WCO from GRBL status reports)
+  workCoordOffset: { x: number; y: number };
+  setWorkCoordOffset: (offset: { x: number; y: number }) => void;
+
+  // Workspace verification — true only when $130/$131 were both > 0
+  workspaceVerified: boolean;
+  setWorkspaceVerified: (v: boolean) => void;
+
+  // Derived: soft limits are actually active (must be checked outside selector)
+  // softLimitsActive = grblSoftLimits && grblHoming && machineHomed
+  // Exposed as a plain field updated by setters so selectors can read it as a primitive
+  softLimitsActive: boolean;
+
   // Console
   consoleLines: Array<{ text: string; type: "sent" | "received" | "info" | "error" | "warning" }>;
   addConsoleLine: (text: string, type: "sent" | "received" | "info" | "error" | "warning") => void;

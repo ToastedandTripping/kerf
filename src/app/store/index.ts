@@ -523,7 +523,10 @@ export const useStore = create<AppState>((set, get) => ({
   grblLaserMode: false,
   grblAccelX: 500,
   grblAccelY: 500,
-  setMachineConnected: (connected) => set({ machineConnected: connected }),
+  setMachineConnected: (connected) => set(connected
+    ? { machineConnected: true }
+    : { machineConnected: false, machineHomed: false, softLimitsActive: false }
+  ),
   setMachineState: (state) => set({ machineState: state }),
   setMachinePosition: (pos) => set({ machinePosition: pos }),
   // F15: S-values are baked into generated G-code (different $30 machine =
@@ -539,6 +542,34 @@ export const useStore = create<AppState>((set, get) => ({
   },
   setGrblLaserMode: (v) => set({ grblLaserMode: v }),
   setGrblAccel: (x, y) => set({ grblAccelX: x, grblAccelY: y }),
+
+  // Workstream A: $20/$21/$22 + machineHomed + derived softLimitsActive
+  grblSoftLimits: false,
+  grblHardLimits: false,
+  grblHoming: false,
+  machineHomed: false,
+  softLimitsActive: false,
+  setGrblSoftLimits: (v) => set((state) => {
+    const active = v && state.grblHoming && state.machineHomed;
+    return { grblSoftLimits: v, softLimitsActive: active };
+  }),
+  setGrblHardLimits: (v) => set({ grblHardLimits: v }),
+  setGrblHoming: (v) => set((state) => {
+    const active = state.grblSoftLimits && v && state.machineHomed;
+    return { grblHoming: v, softLimitsActive: active };
+  }),
+  setMachineHomed: (v) => set((state) => {
+    const active = state.grblSoftLimits && state.grblHoming && v;
+    return { machineHomed: v, softLimitsActive: active };
+  }),
+
+  // Workstream B: work coordinate offset
+  workCoordOffset: { x: 0, y: 0 },
+  setWorkCoordOffset: (offset) => set({ workCoordOffset: offset }),
+
+  // Workstream E: workspace verification
+  workspaceVerified: false,
+  setWorkspaceVerified: (v) => set({ workspaceVerified: v }),
 
   // Console
   consoleLines: [],
