@@ -586,8 +586,30 @@ function LineOverlaySettings({
       <SettingRow label="Power">
         <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
           <input
+            type="range" min="0" max="100" value={ov.power}
+            onChange={(e) => onUpdate({ power: Number(e.target.value) })}
+            style={{ flex: 1, accentColor: "var(--accent-warm)" }}
+          />
+          <input
             type="number" min="0" max="100" value={ov.power}
             onChange={(e) => onUpdate({ power: Math.max(0, Math.min(100, Number(e.target.value))) })}
+            style={{ ...inputStyle, width: "42px", textAlign: "right" }}
+          />
+          <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>%</span>
+        </div>
+      </SettingRow>
+
+      {/* Min Power */}
+      <SettingRow label="Min Pwr">
+        <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
+          <input
+            type="range" min="0" max="100" value={ov.powerMin}
+            onChange={(e) => onUpdate({ powerMin: Number(e.target.value) })}
+            style={{ flex: 1, accentColor: "var(--accent-warm)" }}
+          />
+          <input
+            type="number" min="0" max="100" value={ov.powerMin}
+            onChange={(e) => onUpdate({ powerMin: Math.max(0, Math.min(100, Number(e.target.value))) })}
             style={{ ...inputStyle, width: "42px", textAlign: "right" }}
           />
           <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>%</span>
@@ -597,6 +619,11 @@ function LineOverlaySettings({
       {/* Speed */}
       <SettingRow label="Speed">
         <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
+          <input
+            type="range" min="1" max="20000" value={ov.speed}
+            onChange={(e) => onUpdate({ speed: Number(e.target.value) })}
+            style={{ flex: 1, accentColor: "var(--accent)" }}
+          />
           <input
             type="number" min="1" max="100000" value={ov.speed}
             onChange={(e) => onUpdate({ speed: Math.max(1, Number(e.target.value)) })}

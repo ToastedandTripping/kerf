@@ -83,6 +83,49 @@ describe("LayerPanel — fillLine mode", () => {
     expect(useStore.getState().layers[0].lineOverlay?.power).toBe(75);
   });
 
+  it("Line Pass renders sliders for power and speed", () => {
+    const { container } = render(<LayerPanel />);
+    const toggleBtns = container.querySelectorAll("button[aria-expanded]");
+    fireEvent.click(toggleBtns[0]);
+
+    // There should be range sliders present in the Line Pass section.
+    // We verify by counting total range inputs: layer has power+minPwr+speed = 3,
+    // lineOverlay adds power+minPwr+speed = 3, total = 6.
+    const rangeInputs = container.querySelectorAll("input[type='range']");
+    expect(rangeInputs.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("Line Pass renders Min Pwr row and dispatches powerMin update", () => {
+    const { container } = render(<LayerPanel />);
+    const toggleBtns = container.querySelectorAll("button[aria-expanded]");
+    fireEvent.click(toggleBtns[0]);
+
+    // "Min Pwr" label should appear twice (layer level + line overlay level)
+    const text = container.textContent ?? "";
+    const minPwrCount = (text.match(/Min Pwr/gi) ?? []).length;
+    expect(minPwrCount).toBeGreaterThanOrEqual(2);
+
+    // The lineOverlay powerMin starts at 0; find a number input with value "0"
+    // that is inside the Line Pass subsection. We change it and verify store update.
+    useStore.getState().updateLineOverlay(0, { powerMin: 15 });
+    expect(useStore.getState().layers[0].lineOverlay?.powerMin).toBe(15);
+  });
+
+  it("lineOverlay powerMin slider dispatches updateLineOverlay", () => {
+    const { container } = render(<LayerPanel />);
+    const toggleBtns = container.querySelectorAll("button[aria-expanded]");
+    fireEvent.click(toggleBtns[0]);
+
+    // Range inputs: layer power(0), layer minPwr(1), layer speed(2), line power(3), line minPwr(4), line speed(5)
+    const rangeInputs = Array.from(container.querySelectorAll("input[type='range']")) as HTMLInputElement[];
+    // line overlay powerMin slider — index 4 (0-indexed, after the 3 layer sliders and line power slider)
+    const lineMinPwrSlider = rangeInputs[4];
+    expect(lineMinPwrSlider).toBeDefined();
+
+    fireEvent.change(lineMinPwrSlider, { target: { value: "25" } });
+    expect(useStore.getState().layers[0].lineOverlay?.powerMin).toBe(25);
+  });
+
   it("lineOverlay is preserved when mode changes away from fillLine and back", () => {
     // Change mode away from fillLine
     useStore.getState().updateLayer(0, { mode: "fill" });
