@@ -72,24 +72,66 @@ pub async fn generate_gcode(
                 .cloned()
                 .collect();
 
-            // Determine mode for this layer group (use first object's mode)
-            let is_line_mode = layer_objs.first()
-                .map(|o| o.layer.mode.as_str() == "line")
-                .unwrap_or(false);
+            // A4b (must-fix #2): partition fill-ish and line objects within a layer
+            // so that ALL fill passes precede ALL line (perimeter) passes.
+            // For a fillLine layer both maskFill/fill objects AND line overlay objects
+            // share the same layer_index — without partition, NN reordering could
+            // interleave them, cutting the perimeter before the fill finishes and
+            // shifting the workpiece. For pre-fillLine layers every object has one
+            // mode, so the partition is a no-op.
+            let is_fill_ish = |mode: &str| {
+                matches!(mode, "fill" | "maskFill" | "offsetFill")
+            };
 
-            if is_line_mode {
-                // Inner-first (smaller bbox area first) then NN
-                optimizer::sort_inner_first(&mut layer_objs);
-            }
+            let has_mixed = layer_objs.iter().any(|o| is_fill_ish(&o.layer.mode))
+                && layer_objs.iter().any(|o| o.layer.mode == "line");
 
-            let order = optimizer::optimize_cut_order_from(&layer_objs, cur_x, cur_y);
+            if has_mixed {
+                // Partition into fill-ish and line groups
+                let fill_group: Vec<CutObject> = layer_objs.iter()
+                    .filter(|o| is_fill_ish(&o.layer.mode))
+                    .cloned()
+                    .collect();
+                let mut line_group: Vec<CutObject> = layer_objs.iter()
+                    .filter(|o| o.layer.mode == "line")
+                    .cloned()
+                    .collect();
 
-            for &idx in &order {
-                let obj = &layer_objs[idx];
-                // Update current position to end of this object
-                cur_x = obj.x + obj.width;
-                cur_y = obj.y + obj.height;
-                final_objects.push(obj.clone());
+                // Fill-ish: NN optimize (inner-first not meaningful for fills)
+                let fill_order = optimizer::optimize_cut_order_from(&fill_group, cur_x, cur_y);
+                for &idx in &fill_order {
+                    let obj = &fill_group[idx];
+                    cur_x = obj.x + obj.width;
+                    cur_y = obj.y + obj.height;
+                    final_objects.push(obj.clone());
+                }
+
+                // Line: inner-first then NN, starting from where fills ended
+                optimizer::sort_inner_first(&mut line_group);
+                let line_order = optimizer::optimize_cut_order_from(&line_group, cur_x, cur_y);
+                for &idx in &line_order {
+                    let obj = &line_group[idx];
+                    cur_x = obj.x + obj.width;
+                    cur_y = obj.y + obj.height;
+                    final_objects.push(obj.clone());
+                }
+            } else {
+                // Homogeneous layer (pre-fillLine case — no-op partition)
+                let is_line_mode = layer_objs.first()
+                    .map(|o| o.layer.mode.as_str() == "line")
+                    .unwrap_or(false);
+
+                if is_line_mode {
+                    optimizer::sort_inner_first(&mut layer_objs);
+                }
+
+                let order = optimizer::optimize_cut_order_from(&layer_objs, cur_x, cur_y);
+                for &idx in &order {
+                    let obj = &layer_objs[idx];
+                    cur_x = obj.x + obj.width;
+                    cur_y = obj.y + obj.height;
+                    final_objects.push(obj.clone());
+                }
             }
         }
 
@@ -146,4 +188,147 @@ pub struct PreviewDitherResult {
     pub width: u32,
     pub height: u32,
     pub dither_method: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::gcode_gen::{CutLayer, CutObject};
+    use crate::engine::optimizer;
+
+    /// Test-local helper: apply A4b partition (fill-ish before line) and return
+    /// the result as a flat Vec.  Mirrors the inlined logic in generate_gcode.
+    fn sort_fill_before_line(objs: Vec<CutObject>, start_x: f64, start_y: f64) -> Vec<CutObject> {
+        let is_fill_ish = |mode: &str| matches!(mode, "fill" | "maskFill" | "offsetFill");
+        let has_mixed = objs.iter().any(|o| is_fill_ish(&o.layer.mode))
+            && objs.iter().any(|o| o.layer.mode == "line");
+
+        if !has_mixed {
+            return objs;
+        }
+
+        let fill_group: Vec<CutObject> = objs.iter().filter(|o| is_fill_ish(&o.layer.mode)).cloned().collect();
+        let mut line_group: Vec<CutObject> = objs.iter().filter(|o| o.layer.mode == "line").cloned().collect();
+
+        let mut result: Vec<CutObject> = Vec::new();
+        let mut cur_x = start_x;
+        let mut cur_y = start_y;
+
+        let fill_order = optimizer::optimize_cut_order_from(&fill_group, cur_x, cur_y);
+        for &idx in &fill_order {
+            let obj = &fill_group[idx];
+            cur_x = obj.x + obj.width;
+            cur_y = obj.y + obj.height;
+            result.push(obj.clone());
+        }
+
+        optimizer::sort_inner_first(&mut line_group);
+        let line_order = optimizer::optimize_cut_order_from(&line_group, cur_x, cur_y);
+        for &idx in &line_order {
+            let obj = &line_group[idx];
+            cur_x = obj.x + obj.width;
+            cur_y = obj.y + obj.height;
+            result.push(obj.clone());
+        }
+        result
+    }
+
+    fn make_cut_layer(mode: &str) -> CutLayer {
+        CutLayer {
+            mode: mode.to_string(),
+            power: 100.0,
+            power_min: 0.0,
+            speed: 1200.0,
+            passes: 1,
+            power_mode: "constant".to_string(),
+            interval: 0.1,
+            air_assist: true,
+            cut_inner_first: true,
+            dither: "floydSteinberg".to_string(),
+            scan_angle: 0.0,
+            angle_increment: 0.0,
+            overcut: 0.0,
+            lead_in: 0.0,
+            lead_out: 0.0,
+            overscan: 0.0,
+            bidirectional: true,
+            cross_hatch: false,
+            scanning_offset: 0.0,
+            tab_spacing: 0.0,
+            tab_width: 0.0,
+            perforation_cut: 0.0,
+            perforation_skip: 0.0,
+            power_curve: None,
+            fill_order: None,
+            newsprint_cell_size: None,
+            newsprint_angle: None,
+        }
+    }
+
+    fn make_obj_with_mode(id: &str, mode: &str, layer_index: i32) -> CutObject {
+        CutObject {
+            id: id.to_string(),
+            obj_type: "path".to_string(),
+            x: 10.0,
+            y: 10.0,
+            width: 20.0,
+            height: 20.0,
+            paths: vec![],
+            layer: make_cut_layer(mode),
+            corner_radius: None,
+            rotation: 0.0,
+            priority: None,
+            group_id: None,
+            layer_index: Some(layer_index),
+        }
+    }
+
+    /// A4b: a fillLine layer (mixed maskFill + line) emits ALL fill-ish objects
+    /// before ANY line objects — no interleaving.
+    #[test]
+    fn fill_before_line_fillline_layer() {
+        // Simulate: 3 maskFill objects + 1 line overlay (same layer_index)
+        let objs = vec![
+            make_obj_with_mode("fill_a", "maskFill", 0),
+            make_obj_with_mode("line_overlay", "line", 0),
+            make_obj_with_mode("fill_b", "maskFill", 0),
+            make_obj_with_mode("fill_c", "fill", 0),
+        ];
+        let result = sort_fill_before_line(objs, 0.0, 0.0);
+        // All fill-ish objects must precede the line object
+        let line_pos = result.iter().position(|o| o.layer.mode == "line").unwrap();
+        for (i, obj) in result.iter().enumerate() {
+            if obj.layer.mode != "line" {
+                assert!(i < line_pos,
+                    "fill-ish object '{}' at pos {} must precede line at pos {}", obj.id, i, line_pos);
+            }
+        }
+        // Total object count preserved
+        assert_eq!(result.len(), 4);
+    }
+
+    /// A4b: a homogeneous line-only layer is unchanged by the partition (no-op).
+    #[test]
+    fn homogeneous_line_layer_unchanged() {
+        let objs = vec![
+            make_obj_with_mode("a", "line", 0),
+            make_obj_with_mode("b", "line", 0),
+        ];
+        let result = sort_fill_before_line(objs, 0.0, 0.0);
+        // 2 objects, both line — no change
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|o| o.layer.mode == "line"));
+    }
+
+    /// A4b: a homogeneous fill-only layer is unchanged by the partition (no-op).
+    #[test]
+    fn homogeneous_fill_layer_unchanged() {
+        let objs = vec![
+            make_obj_with_mode("a", "maskFill", 0),
+            make_obj_with_mode("b", "maskFill", 0),
+        ];
+        let result = sort_fill_before_line(objs, 0.0, 0.0);
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|o| o.layer.mode == "maskFill"));
+    }
 }
