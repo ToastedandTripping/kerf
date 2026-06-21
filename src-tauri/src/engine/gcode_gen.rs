@@ -771,10 +771,14 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                     let rotation_rad = obj_rot + layer_angle;
 
                     // Rasterize the compound shape to an even-odd binary mask.
-                    // fill_compound_mask uses obj.x/y/width/height as the union bbox,
-                    // which was set by toCutObjects (Phase 1) to the union of all contours.
-                    // The mask origin and the CutObject bbox are therefore identical —
-                    // one source of truth, no drift to the optimizer (gcode.rs:88).
+                    // fill_compound_mask uses obj.x/y/width/height as the axis-aligned
+                    // union bbox in design space. Paths are rasterized in local (un-rotated)
+                    // coordinates — obj.paths are NOT pre-rotated (toCutObjects is TS-only
+                    // and does not transform path points; rotate_segment is the vector arm).
+                    // obj.rotation is carried via rotation_rad into scan_mask_to_gcode,
+                    // which rotates each output coordinate about the bbox center.
+                    // The mask origin and the CutObject bbox share one source of truth —
+                    // no drift to the optimizer.
                     let mask_result = super::mask_fill::fill_compound_mask(obj, interval);
 
                     match mask_result {

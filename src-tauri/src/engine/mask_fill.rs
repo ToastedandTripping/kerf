@@ -375,9 +375,19 @@ pub fn fill_compound_mask(
     let interval = if interval > 0.0 { interval } else { 0.1 };
 
     // Compute union bbox of all contours in obj.paths.
-    // The object's x/y/width/height is already the union bbox (set by toCutObjects,
-    // Phase 1), so we use it directly. Rotation was already applied by toCutObjects
-    // (the Rust engine applies `rotate_segment` per path).
+    // The object's x/y/width/height is already the axis-aligned union bbox of all
+    // contours in design space (set by toCutObjects, Phase 1).
+    //
+    // Rotation is NOT pre-applied to obj.paths here. toCutObjects is TypeScript and
+    // does not rotate path coordinates; `rotate_segment` in gcode_gen.rs is only
+    // called from the vector "line"/"cut" arm, not for maskFill objects. Instead:
+    // - fill_compound_mask rasterizes paths in local (un-rotated) coordinates.
+    // - The caller (gcode_gen.rs maskFill arm) computes `rotation_rad` from
+    //   `obj.rotation + scan_angle + angle_increment` and passes it to
+    //   `scan_mask_to_gcode`, which applies it as an output rotation of each
+    //   scanned coordinate about the bbox center.
+    // This is geometrically equivalent to rotating the rasterized bitmap and scanning
+    // it axis-aligned — but cheaper, since no interpolation step is needed.
     let bbox_x = obj.x;
     let bbox_y = obj.y;
     let bbox_w = obj.width;
