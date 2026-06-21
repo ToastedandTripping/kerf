@@ -120,21 +120,36 @@ describe("SVG import: compound path → grouped per-contour objects", () => {
     // Selection references the GROUP id, not nested children
     expect(useStore.getState().selectedIds).toEqual([group.id]);
 
-    // Serialization level: two 4-point rings — the pre-fix bridge pair
-    // (5,17) → (7,9) exists in NO serialized path.
-    const { objects: cut } = toCutObjectsForTest(objects, DEFAULT_LAYERS);
-    expect(cut).toHaveLength(2);
-    for (const c of cut) {
+    // Phase 1 (maskFill): on a FILL layer, the donut group coalesces into ONE
+    // CutObject with paths.length === 2 (outer + hole), not two separate objects.
+    // This is the correct behavior — both contours must be rasterized together
+    // via even-odd so the counter (hole) is left unburned.
+    const fillLayers = DEFAULT_LAYERS; // DEFAULT_LAYERS[0] is "Engrave" (fill)
+    const { objects: fillCut } = toCutObjectsForTest(objects, fillLayers);
+    expect(fillCut).toHaveLength(1);
+    expect(fillCut[0].paths).toHaveLength(2);
+    expect(fillCut[0].paths[0].points).toHaveLength(4); // outer square
+    expect(fillCut[0].paths[1].points).toHaveLength(4); // inner square (hole)
+    expect(fillCut[0].paths[0].closed).toBe(true);
+    expect(fillCut[0].paths[1].closed).toBe(true);
+    expect(fillCut[0].layer.mode).toBe("maskFill");
+    expect(fillCut[0].groupId).toBe(group.id);
+    // Union bbox: covers both the outer (5,7)-(15,17) contour
+    expect(fillCut[0].x).toBeCloseTo(5, 5);
+    expect(fillCut[0].y).toBeCloseTo(7, 5);
+    expect(fillCut[0].width).toBeCloseTo(10, 5);
+    expect(fillCut[0].height).toBeCloseTo(10, 5);
+
+    // On a LINE layer, the group emits TWO separate CutObjects (unchanged)
+    const lineLayers = DEFAULT_LAYERS.map((l, i) => i === 0 ? { ...l, mode: "line" as const } : l);
+    const { objects: lineCut } = toCutObjectsForTest(objects, lineLayers);
+    expect(lineCut).toHaveLength(2);
+    for (const c of lineCut) {
       expect(c.paths[0].points).toHaveLength(4);
       expect(c.paths[0].closed).toBe(true);
-      for (let i = 1; i < c.paths[0].points.length; i++) {
-        const a = c.paths[0].points[i - 1];
-        const b = c.paths[0].points[i];
-        expect(a.x === 5 && a.y === 17 && b.x === 7 && b.y === 9).toBe(false);
-      }
     }
-    expect(cut[0].groupId).toBe(group.id);
-    expect(cut[1].groupId).toBe(group.id);
+    expect(lineCut[0].groupId).toBe(group.id);
+    expect(lineCut[1].groupId).toBe(group.id);
   });
 
   it("CHARACTERIZATION: single-subpath path imports as one flat object — no group", () => {
@@ -281,5 +296,67 @@ describe("image trace: compound d split, single-subpath traces ungrouped", () =>
     expect(objects).toHaveLength(1);
     expect(objects[0].type).toBe("path");
     assertPointsInvariant(objects[0]);
+  });
+});
+
+// ─── Phase 1: fill-layer coalescing via toCutObjects ─────────────────────────
+
+describe("Phase 1: toCutObjects — fill layer coalesces grouped compound shapes into maskFill", () => {
+  // Multi-path CutObject round-trip gate (critic must-fix #4):
+  // A CutObject with >1 PathSegment must serialize/deserialize correctly.
+  // Here we verify it passes through toCutObjects with paths.length === 2
+  // and the correct mode before the Tauri serde boundary.
+  it("fill layer: donut group → one CutObject with 2 paths and mode=maskFill", () => {
+    _testImportSvgWithLayers(DONUT_SVG, null);
+    const objects = useStore.getState().objects;
+    const { objects: cut } = toCutObjectsForTest(objects, DEFAULT_LAYERS);
+    // fill layer → coalesced: 1 CutObject, 2 paths, mode = maskFill
+    expect(cut).toHaveLength(1);
+    expect(cut[0].paths).toHaveLength(2);
+    expect(cut[0].layer.mode).toBe("maskFill");
+  });
+
+  it("line layer: donut group → two separate CutObjects (unchanged)", () => {
+    _testImportSvgWithLayers(DONUT_SVG, null);
+    const objects = useStore.getState().objects;
+    const lineLayers = DEFAULT_LAYERS.map((l, i) => i === 0 ? { ...l, mode: "line" as const } : l);
+    const { objects: cut } = toCutObjectsForTest(objects, lineLayers);
+    // line mode → NOT coalesced: 2 CutObjects
+    expect(cut).toHaveLength(2);
+    for (const c of cut) expect(c.layer.mode).toBe("line");
+  });
+
+  it("nested word group: 'IO' text on fill layer → one CutObject per glyph, O coalesced with 2 paths", async () => {
+    // 'I' is a single-contour glyph (flat path, no groupId after textObjectToPaths);
+    // 'O' is a two-contour glyph (group with 2 children that get groupId on flatten).
+    // On a fill layer:
+    //   I (no groupId, non-rect path) → 1 CutObject, mode=maskFill (ungrouped non-rect on fill)
+    //   O (group with 2 children sharing groupId) → 1 coalesced CutObject, paths.length=2, mode=maskFill
+    // Total: 2 CutObjects, NOT 1 per word group.
+    const prepared = await textObjectToPaths({
+      id: "w1",
+      type: "text",
+      name: "IO",
+      transform: { x: 0, y: 30, width: 0, height: 0, rotation: 0, scaleX: 1, scaleY: 1 },
+      layerIndex: 0,
+      visible: true, locked: false,
+      fill: "#e8e8e8", stroke: "#e8e8e8", strokeWidth: 0, opacity: 1,
+      text: "IO", fontSize: 18, fontFamily: "sans-serif",
+    });
+    // prepared = [I_path, O_group]
+    expect(prepared).toHaveLength(2);
+
+    const { objects: cut } = toCutObjectsForTest(prepared, DEFAULT_LAYERS);
+    // 2 CutObjects total: one for I (single path), one coalesced for O (2 paths)
+    expect(cut).toHaveLength(2);
+
+    // The coalesced O group must have paths.length === 2 and mode=maskFill
+    const coalescedO = cut.find((c) => c.paths.length === 2);
+    expect(coalescedO).toBeDefined();
+    expect(coalescedO!.layer.mode).toBe("maskFill");
+
+    // Both cut objects must be maskFill (I is ungrouped non-rect on fill → maskFill too)
+    const maskFillCuts = cut.filter((c) => c.layer.mode === "maskFill");
+    expect(maskFillCuts).toHaveLength(2);
   });
 });

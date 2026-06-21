@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../app/store";
-import type { DesignObject, Layer } from "../../app/types";
+import type { DesignObject, Layer, InternalCutMode } from "../../app/types";
 import { offsetRingByDistance, composeGroupChild, sampleBezierPath } from "../geometry";
 
 export interface GcodeMove {
@@ -37,7 +37,7 @@ interface CutObject {
   height: number;
   paths: Array<{ points: Array<{ x: number; y: number }>; closed: boolean }>;
   layer: {
-    mode: string;
+    mode: InternalCutMode; // "maskFill" is internal-only, never persisted to disk
     power: number;
     powerMin: number;
     speed: number;
@@ -142,16 +142,28 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
   flat.sort((a, b) => (layerOrder.get(a.layerIndex) ?? 0) - (layerOrder.get(b.layerIndex) ?? 0));
   const result: CutObject[] = [];
   const warnings: string[] = [];
-  // W1c rider (F3 interim): fill mode scans each object's raw bbox, so ≥2
-  // grouped objects on a fill layer put 2× energy into overlapping regions
-  // (a split compound shape's hole bbox burns twice) until hole-aware fill
-  // ships. Counted per SOURCE object (pre-sub-layer expansion).
-  const fillGroupCounts = new Map<string, number>();
+
+  // Phase 1: group-aware fill coalescing.
+  //
+  // A fill-mode grouped non-rect object's contours must be rasterized together
+  // via even-odd (maskFill) so counters (O/e holes) are left unburned.
+  //
+  // Key: `${layerIndex}:${groupId}` → accumulates all paths + bbox for the group.
+  // Keyed on the LEAF groupId (the immediate parent group after flattenObjects),
+  // not any outer word-group id. One coalesced CutObject is emitted per key.
+  type GroupEntry = {
+    paths: CutObject["paths"];
+    minX: number; minY: number; maxX: number; maxY: number;
+    firstObj: DesignObject;
+    layer: Layer;
+  };
+  const groupBuf = new Map<string, GroupEntry>();
 
   // F11: locked objects are included in G-code. Locking protects position from
   // accidental edits — it is not an exclusion from the cut job. Use the layer
   // Output toggle to exclude objects from cutting.
   let lockedCount = 0;
+
   for (const obj of flat) {
     if (!obj.visible) continue;
     if (obj.locked) lockedCount++;
@@ -163,10 +175,45 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
     }
     if (obj.type === "image") continue;
 
-    if (obj.groupId && layer.mode !== "line") {
-      fillGroupCounts.set(obj.groupId, (fillGroupCounts.get(obj.groupId) || 0) + 1);
+    const isNonRectShape = obj.type === "ellipse" || obj.type === "path" || obj.type === "line";
+
+    // Fill-mode non-rect shapes with a groupId → coalesce into one maskFill CutObject.
+    // Rectangles keep the AABB fill path (their bbox IS the shape, no coalescing needed).
+    if (layer.mode === "fill" && isNonRectShape && obj.groupId) {
+      const key = `${obj.layerIndex ?? 0}:${obj.groupId}`;
+
+      // Build this contour's sampled path
+      const contourPaths: CutObject["paths"] = [];
+      if (obj.points && obj.points.length >= 2) {
+        contourPaths.push({
+          points: sampleBezierPath(obj.points, obj.closed || false),
+          closed: obj.closed || false,
+        });
+      }
+
+      const { x, y, width, height } = obj.transform;
+      const x2 = x + width;
+      const y2 = y + height;
+
+      if (groupBuf.has(key)) {
+        const entry = groupBuf.get(key)!;
+        entry.paths.push(...contourPaths);
+        entry.minX = Math.min(entry.minX, x);
+        entry.minY = Math.min(entry.minY, y);
+        entry.maxX = Math.max(entry.maxX, x2);
+        entry.maxY = Math.max(entry.maxY, y2);
+      } else {
+        groupBuf.set(key, {
+          paths: [...contourPaths],
+          minX: x, minY: y, maxX: x2, maxY: y2,
+          firstObj: obj,
+          layer,
+        });
+      }
+      continue; // will be emitted after the loop as a coalesced CutObject
     }
 
+    // All other objects (line mode, fill+rect, ungrouped fill non-rect) emit normally.
     const paths: CutObject["paths"] = [];
 
     if (obj.points && obj.points.length >= 2) {
@@ -180,17 +227,12 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
       });
     }
 
-    // F3: fill mode burns the object's AABB — for non-rectangular shapes
-    // (ellipses and paths) redirect to offsetFill so the contour is respected.
-    // Rectangles are exempt: their AABB IS the shape.
-    const isNonRectShape = obj.type === "ellipse" || obj.type === "path" || obj.type === "line";
-
-    let effectiveMode = layer.mode;
+    // Phase 2: ungrouped fill non-rect closed shapes route to maskFill.
+    // Rectangles keep the AABB fast path (their bbox IS the shape).
+    // offsetFill remains an explicit opt-in dropdown mode.
+    let effectiveMode: InternalCutMode = layer.mode;
     if (layer.mode === "fill" && isNonRectShape) {
-      effectiveMode = "offsetFill";
-      warnings.push(
-        `Fill mode on non-rectangular object "${obj.name}" redirected to offsetFill -- fill mode only traces the bounding box`,
-      );
+      effectiveMode = "maskFill";
     }
 
     // Apply kerf offset for closed paths in line mode
@@ -283,7 +325,6 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
         const cl = buildCutLayer(layer, sub);
         cl.power *= scale;
         cl.powerMin *= scale;
-        // Apply F3 mode override per sub-layer too
         if (effectiveMode !== layer.mode && cl.mode === layer.mode) cl.mode = effectiveMode;
         result.push({ ...base, id: `${obj.id}_${sub.id}`, layer: cl });
       }
@@ -291,10 +332,39 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
       const cl = buildCutLayer(layer);
       cl.power *= scale;
       cl.powerMin *= scale;
-      // Apply F3 fill→offsetFill override
       if (effectiveMode !== layer.mode) cl.mode = effectiveMode;
       result.push({ ...base, layer: cl });
     }
+  }
+
+  // Drain groupBuf: emit one coalesced maskFill CutObject per fill group.
+  // x/y/width/height = union bbox of all contours — the Rust optimizer
+  // reads CutObject.x/y/width/height for nearest-neighbor routing (gcode.rs:88),
+  // so the union bbox must be correct here, not just in the mask render.
+  for (const [, entry] of groupBuf) {
+    const { firstObj, layer, paths: coalescedPaths, minX, minY, maxX, maxY } = entry;
+    const scale = firstObj.powerScale ?? 1.0;
+    const cl = buildCutLayer(layer);
+    cl.power *= scale;
+    cl.powerMin *= scale;
+    // maskFill is internal-only; never persisted to disk (Layer.mode stays "fill")
+    cl.mode = "maskFill";
+
+    result.push({
+      id: firstObj.groupId!, // keyed on groupId; uniquely identifies the compound shape
+      objType: "path",
+      x: minX,
+      y: minY,
+      width: maxX - minX,
+      height: maxY - minY,
+      paths: coalescedPaths,
+      cornerRadius: null,
+      rotation: firstObj.transform.rotation || 0,
+      priority: firstObj.priority ?? 0,
+      groupId: firstObj.groupId,
+      layerIndex: firstObj.layerIndex,
+      layer: cl,
+    });
   }
 
   // F11: emit info message when locked objects are present in the output
@@ -302,15 +372,6 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
     console.info(
       `Note: ${lockedCount} locked object(s) included in G-code — use layer Output toggle to exclude from cut`,
     );
-  }
-
-  for (const count of fillGroupCounts.values()) {
-    if (count >= 2) {
-      warnings.push(
-        "Fill warning: overlapping fill regions in a group receive double energy until hole-aware fill ships -- a compound shape's hole area is scanned twice (char risk on thin stock)",
-      );
-      break; // One warning is enough
-    }
   }
 
   return { objects: result, warnings };

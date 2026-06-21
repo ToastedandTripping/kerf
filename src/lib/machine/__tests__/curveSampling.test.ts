@@ -236,11 +236,14 @@ describe("W1c rider: fill-mode 2×-energy warning for grouped objects", () => {
     };
   }
 
-  it("warns once when ≥2 grouped objects sit on a non-'line' layer", () => {
-    // Fix 4: DEFAULT_LAYERS[0] is now Engrave (fill); index updated from 1.
+  it("Phase 2: grouped objects on a fill layer no longer emit double-energy warning (maskFill fixes the root cause)", () => {
+    // The W1c interim double-energy warning is retired in Phase 2:
+    // even-odd masks fill overlaps once, so the warning's cause no longer exists.
+    // Grouped non-rect shapes on a fill layer are now coalesced into ONE maskFill
+    // CutObject via Phase 1 group-aware coalescing, preventing double-energy entirely.
     const engraveIdx = DEFAULT_LAYERS.findIndex((l) => l.name === "Engrave");
-    const { warnings } = toCutObjectsForTest([groupedSquares(engraveIdx)], DEFAULT_LAYERS); // layer 0 = Engrave (fill)
-    expect(warnings.filter((w) => w.includes("double energy"))).toHaveLength(1);
+    const { warnings } = toCutObjectsForTest([groupedSquares(engraveIdx)], DEFAULT_LAYERS);
+    expect(warnings.filter((w) => w.includes("double energy"))).toHaveLength(0);
   });
 
   it("does NOT warn for a group on a 'line' layer", () => {

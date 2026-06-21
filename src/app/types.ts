@@ -104,6 +104,9 @@ export interface DesignObject {
 }
 
 export type CutMode = "line" | "fill" | "offsetFill";
+// Internal-only mode used in toCutObjects and the Rust maskFill dispatch arm.
+// NOT persisted to disk — never appears in saved project files or Layer.mode.
+export type InternalCutMode = CutMode | "maskFill";
 export type PowerMode = "constant" | "variable"; // M3 vs M4
 
 export interface Layer {
