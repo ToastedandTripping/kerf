@@ -791,7 +791,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                         }
                         Ok((pixels, mask_w, mask_h, origin_x, origin_y)) => {
                             // Check for all-background mask (degenerate input after dilation)
-                            let has_content = pixels.iter().any(|&p| p == 0);
+                            let has_content = pixels.contains(&0);
                             if !has_content {
                                 eprintln!(
                                     "[gcode_gen] maskFill: '{}' produced all-background mask \
@@ -809,7 +809,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                     overscan: layer.overscan.max(0.0),
                                     bidirectional: layer.bidirectional,
                                     scanning_offset: layer.scanning_offset,
-                                    speed_mm_min: speed_mm_min,
+                                    speed_mm_min,
                                     s_max,
                                     s_min: 0.0, // maskFill is always binary (constant power per run)
                                     power_cmd: power_cmd.to_string(),

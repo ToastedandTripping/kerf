@@ -1,18 +1,18 @@
-/// Hole-aware bitmap-mask scanline fill for compound shapes.
-///
-/// Architecture:
-///   1. Render all contours of a compound shape into one `tiny_skia::Path`.
-///   2. Rasterize with `FillRule::EvenOdd` — counters (O/e holes) are left white.
-///   3. Scan the resulting binary mask through `scan_mask_to_gcode` (extracted
-///      from `image_gcode_gen.rs` Phase 0) to emit G-code scan rows.
-///
-/// Even-odd makes winding direction irrelevant for hole detection — do NOT
-/// re-add CCW import normalization (Fix-2 in ImageTraceDialog) when debugging
-/// hole issues here. If a counter still burns, check the EvenOdd probe test
-/// or the alpha-threshold constant (FILLED_ALPHA_THRESHOLD = 128).
-///
-/// Phase 0: micro-probe gate + scanner extraction (scan_mask_to_gcode)
-/// Phase 2: fill_compound_mask + dispatch glue
+//! Hole-aware bitmap-mask scanline fill for compound shapes.
+//!
+//! Architecture:
+//!   1. Render all contours of a compound shape into one `tiny_skia::Path`.
+//!   2. Rasterize with `FillRule::EvenOdd` — counters (O/e holes) are left white.
+//!   3. Scan the resulting binary mask through `scan_mask_to_gcode` (extracted
+//!      from `image_gcode_gen.rs` Phase 0) to emit G-code scan rows.
+//!
+//! Even-odd makes winding direction irrelevant for hole detection — do NOT
+//! re-add CCW import normalization (Fix-2 in ImageTraceDialog) when debugging
+//! hole issues here. If a counter still burns, check the EvenOdd probe test
+//! or the alpha-threshold constant (FILLED_ALPHA_THRESHOLD = 128).
+//!
+//! Phase 0: micro-probe gate + scanner extraction (scan_mask_to_gcode)
+//! Phase 2: fill_compound_mask + dispatch glue
 
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Transform};
 
@@ -25,6 +25,10 @@ use crate::engine::image_gcode_gen::{estimate_simple_time, find_binary_runs, fin
 // This pins the AA edge behavior: AA fringe pixels below the midpoint
 // don't widen strokes or spawn stray scan runs.
 const FILLED_ALPHA_THRESHOLD: u8 = 128;
+
+/// A scan run carried through bidirectional ordering:
+/// `(x_start, x_end, optional original (start, end) for grayscale pixel indexing)`.
+type OrderedRun = (usize, usize, Option<(usize, usize)>);
 
 // ─── Phase 0: MaskScanParams ───────────────────────────────────────────────────
 
@@ -189,7 +193,7 @@ pub fn scan_mask_to_gcode<'a>(
             // Forward or reverse run order (bidirectional).
             // For grayscale mode, carry the original (start, end) for pixel indexing.
             // For binary mode, swap start/end for reverse direction.
-            let ordered_runs: Vec<(usize, usize, Option<(usize, usize)>)> = if forward {
+            let ordered_runs: Vec<OrderedRun> = if forward {
                 runs.iter().map(|&(s, e)| (s, e, if is_grayscale { Some((s, e)) } else { None })).collect()
             } else {
                 runs.iter().rev().map(|&(s, e)| {
@@ -544,7 +548,7 @@ fn build_subcontour_dilated(
     };
 
     // Compute the pixel-space Y centroid and min/max
-    let rows: Vec<f32> = seg.points.iter().map(|p| to_row(p)).collect();
+    let rows: Vec<f32> = seg.points.iter().map(to_row).collect();
     let row_min = rows.iter().cloned().fold(f32::INFINITY, f32::min);
     let row_max = rows.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
     let row_center = (row_min + row_max) / 2.0;
