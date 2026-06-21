@@ -1170,6 +1170,128 @@ mod tests {
 
     // LightBurn parity — the cut that prompted the unit switch:
     // plywood at 480 mm/min, 60% power must emit F480.
+    /// MUST-FIX 4: Serde round-trip — CutObject with >1 PathSegment must survive
+    /// serialize → deserialize intact.
+    ///
+    /// Before this PR, the frontend never emitted multi-path CutObjects (single
+    /// contour only). The maskFill dispatch arm is the first code path that expects
+    /// `obj.paths` to carry multiple contours (compound shapes, glyphs). If the
+    /// Tauri IPC layer silently drops path segments the maskFill engrave is silently
+    /// wrong — only the first contour is rasterized, so holes and dropout-prone glyphs
+    /// look correct in tests but fail in production.
+    ///
+    /// This test serializes a CutObject with 3 PathSegments (H-shape: left vertical,
+    /// right vertical, crossbar) to JSON and back, then asserts all 3 segments and
+    /// all their points survive the round-trip.
+    #[test]
+    fn cutobject_multi_path_serde_roundtrip() {
+        let make_rect_path = |x0: f64, y0: f64, x1: f64, y1: f64| PathSegment {
+            points: vec![
+                Point { x: x0, y: y0 },
+                Point { x: x1, y: y0 },
+                Point { x: x1, y: y1 },
+                Point { x: x0, y: y1 },
+            ],
+            closed: true,
+        };
+
+        let obj = CutObject {
+            id: "H-compound".to_string(),
+            obj_type: "path".to_string(),
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+            paths: vec![
+                make_rect_path(0.0, 0.0, 2.0, 10.0),  // left vertical
+                make_rect_path(8.0, 0.0, 10.0, 10.0), // right vertical
+                make_rect_path(0.0, 4.0, 10.0, 6.0),  // crossbar
+            ],
+            layer: CutLayer {
+                mode: "maskFill".to_string(),
+                power: 100.0,
+                power_min: 0.0,
+                speed: 6000.0,
+                passes: 1,
+                power_mode: "constant".to_string(),
+                interval: 1.0,
+                air_assist: false,
+                cut_inner_first: false,
+                dither: "threshold".to_string(),
+                scan_angle: 0.0,
+                angle_increment: 0.0,
+                overcut: 0.0,
+                lead_in: 0.0,
+                lead_out: 0.0,
+                overscan: 0.0,
+                bidirectional: false,
+                cross_hatch: false,
+                scanning_offset: 0.0,
+                tab_spacing: 0.0,
+                tab_width: 0.0,
+                perforation_cut: 0.0,
+                perforation_skip: 0.0,
+                power_curve: None,
+                fill_order: None,
+                newsprint_cell_size: None,
+                newsprint_angle: None,
+            },
+            corner_radius: None,
+            rotation: 0.0,
+            priority: None,
+            group_id: None,
+            layer_index: None,
+        };
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&obj).expect("CutObject should serialize to JSON");
+
+        // Deserialize back
+        let restored: CutObject = serde_json::from_str(&json)
+            .expect("CutObject JSON should deserialize back to CutObject");
+
+        // All 3 path segments must survive
+        assert_eq!(
+            restored.paths.len(), 3,
+            "Expected 3 PathSegments after round-trip, got {}. \
+             IPC or serde is silently dropping compound paths.",
+            restored.paths.len()
+        );
+
+        // Each segment's point count must be preserved
+        for (i, seg) in restored.paths.iter().enumerate() {
+            assert_eq!(
+                seg.points.len(), 4,
+                "Segment {} should have 4 points after round-trip, got {}",
+                i, seg.points.len()
+            );
+            assert!(
+                seg.closed,
+                "Segment {} should be closed after round-trip",
+                i
+            );
+        }
+
+        // Spot-check a coordinate value that shouldn't be 0.0
+        let left_x1 = restored.paths[0].points[1].x;
+        assert!(
+            (left_x1 - 2.0).abs() < 1e-9,
+            "Left vertical segment point[1].x should be 2.0, got {}", left_x1
+        );
+        let crossbar_y0 = restored.paths[2].points[0].y;
+        assert!(
+            (crossbar_y0 - 4.0).abs() < 1e-9,
+            "Crossbar segment point[0].y should be 4.0, got {}", crossbar_y0
+        );
+
+        // Layer mode must survive (if "maskFill" were coerced to a default the
+        // dispatch arm would silently skip the object)
+        assert_eq!(
+            restored.layer.mode, "maskFill",
+            "Layer mode must survive serde round-trip; got '{}'", restored.layer.mode
+        );
+    }
+
     #[test]
     fn speed_unit_lightburn_parity_480mmmin() {
         let mut layer = make_layer_line();
