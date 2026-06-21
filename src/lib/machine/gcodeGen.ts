@@ -72,16 +72,16 @@ interface CutObject {
   layerIndex?: number;
 }
 
-/** Build layer settings for a CutObject from a Layer (or SubLayer override) */
-function buildCutLayer(layer: Layer, sub?: { mode: InternalCutMode; power: number; powerMin: number; speed: number; passes: number; powerMode: string; interval: number }): CutObject["layer"] {
+/** Build layer settings for a CutObject from a Layer */
+function buildCutLayer(layer: Layer): CutObject["layer"] {
   return {
-    mode: sub?.mode ?? layer.mode,
-    power: sub?.power ?? layer.power,
-    powerMin: sub?.powerMin ?? layer.powerMin,
-    speed: sub?.speed ?? layer.speed,
-    passes: sub?.passes ?? layer.passes,
-    powerMode: sub?.powerMode ?? layer.powerMode,
-    interval: sub?.interval ?? layer.interval,
+    mode: layer.mode,
+    power: layer.power,
+    powerMin: layer.powerMin,
+    speed: layer.speed,
+    passes: layer.passes,
+    powerMode: layer.powerMode,
+    interval: layer.interval,
     airAssist: layer.airAssist,
     cutInnerFirst: layer.cutInnerFirst,
     dither: layer.dither,
@@ -105,6 +105,42 @@ function buildCutLayer(layer: Layer, sub?: { mode: InternalCutMode; power: numbe
   };
 }
 
+
+/** Build a line-mode CutObject layer for the line overlay of a fillLine layer.
+ *  Uses lineOverlay settings (power/speed/etc.) but inherits all geometry-affecting
+ *  fields (kerfOffset, leadIn/Out, etc.) from the parent layer. */
+function buildLineOverlayCutLayer(layer: Layer): CutObject["layer"] {
+  const ov = layer.lineOverlay ?? { power: 100, powerMin: 0, speed: 1200, passes: 1, powerMode: "constant" as const };
+  return {
+    mode: "line",
+    power: ov.power,
+    powerMin: ov.powerMin,
+    speed: ov.speed,
+    passes: ov.passes,
+    powerMode: ov.powerMode,
+    interval: layer.interval, // line mode ignores interval, but keep consistent
+    airAssist: layer.airAssist,
+    cutInnerFirst: layer.cutInnerFirst,
+    dither: layer.dither,
+    scanAngle: layer.scanAngle ?? 0,
+    angleIncrement: layer.angleIncrement ?? 0,
+    overcut: layer.overcut,
+    leadIn: layer.leadIn,
+    leadOut: layer.leadOut,
+    overscan: layer.overscan,
+    bidirectional: layer.bidirectional,
+    crossHatch: layer.crossHatch,
+    scanningOffset: layer.scanningOffset,
+    tabSpacing: layer.tabSpacing,
+    tabWidth: layer.tabWidth,
+    perforationCut: layer.perforationCut,
+    perforationSkip: layer.perforationSkip,
+    powerCurve: layer.powerCurve?.map((p) => [p.x, p.y] as [number, number]),
+    fillOrder: layer.fillOrder || "sequential",
+    newsprintCellSize: layer.newsprintCellSize,
+    newsprintAngle: layer.newsprintAngle,
+  };
+}
 
 /** Recursively flatten groups into leaf objects with parent transform applied.
  *
@@ -177,9 +213,9 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
 
     const isNonRectShape = obj.type === "ellipse" || obj.type === "path" || obj.type === "line";
 
-    // Fill-mode non-rect shapes with a groupId → coalesce into one maskFill CutObject.
+    // Fill-mode (or fillLine) non-rect shapes with a groupId → coalesce into one maskFill CutObject.
     // Rectangles keep the AABB fill path (their bbox IS the shape, no coalescing needed).
-    if (layer.mode === "fill" && isNonRectShape && obj.groupId) {
+    if ((layer.mode === "fill" || layer.mode === "fillLine") && isNonRectShape && obj.groupId) {
       const key = `${obj.layerIndex ?? 0}:${obj.groupId}`;
 
       // Build this contour's sampled path
@@ -227,11 +263,11 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
       });
     }
 
-    // Phase 2: ungrouped fill non-rect closed shapes route to maskFill.
+    // Phase 2: ungrouped fill/fillLine non-rect closed shapes route to maskFill.
     // Rectangles keep the AABB fast path (their bbox IS the shape).
     // offsetFill remains an explicit opt-in dropdown mode.
     let effectiveMode: InternalCutMode = layer.mode;
-    if (layer.mode === "fill" && isNonRectShape) {
+    if ((layer.mode === "fill" || layer.mode === "fillLine") && isNonRectShape) {
       effectiveMode = "maskFill";
     }
 
@@ -319,21 +355,27 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
 
     const scale = obj.powerScale ?? 1.0;
 
-    // If layer has sub-layers, emit one CutObject per sub-layer
-    if (layer.subLayers && layer.subLayers.length > 0) {
-      for (const sub of layer.subLayers) {
-        const cl = buildCutLayer(layer, sub);
-        cl.power *= scale;
-        cl.powerMin *= scale;
-        if (effectiveMode !== layer.mode && cl.mode === layer.mode) cl.mode = effectiveMode;
-        result.push({ ...base, id: `${obj.id}_${sub.id}`, layer: cl });
+    // Emit fill CutObject (or maskFill/line as determined by effectiveMode)
+    const cl = buildCutLayer(layer);
+    cl.power *= scale;
+    cl.powerMin *= scale;
+    if (effectiveMode !== layer.mode) cl.mode = effectiveMode;
+    result.push({ ...base, layer: cl });
+
+    // fillLine: also emit a line overlay CutObject for the perimeter cut.
+    // Line overlay emits iff there are closed paths (independent of fill success).
+    if (layer.mode === "fillLine") {
+      const hasClosed = paths.some((p) => p.closed);
+      if (hasClosed) {
+        const overlayLayer = buildLineOverlayCutLayer(layer);
+        overlayLayer.power *= scale;
+        overlayLayer.powerMin *= scale;
+        result.push({
+          ...base,
+          id: `${obj.id}_line_overlay`,
+          layer: overlayLayer,
+        });
       }
-    } else {
-      const cl = buildCutLayer(layer);
-      cl.power *= scale;
-      cl.powerMin *= scale;
-      if (effectiveMode !== layer.mode) cl.mode = effectiveMode;
-      result.push({ ...base, layer: cl });
     }
   }
 
@@ -347,10 +389,10 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
     const cl = buildCutLayer(layer);
     cl.power *= scale;
     cl.powerMin *= scale;
-    // maskFill is internal-only; never persisted to disk (Layer.mode stays "fill")
+    // maskFill is internal-only; never persisted to disk (Layer.mode stays "fill"/"fillLine")
     cl.mode = "maskFill";
 
-    result.push({
+    const baseCoalesced = {
       id: firstObj.groupId!, // keyed on groupId; uniquely identifies the compound shape
       objType: "path",
       x: minX,
@@ -363,8 +405,26 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
       priority: firstObj.priority ?? 0,
       groupId: firstObj.groupId,
       layerIndex: firstObj.layerIndex,
-      layer: cl,
-    });
+    };
+
+    result.push({ ...baseCoalesced, layer: cl });
+
+    // fillLine: after the maskFill, also emit a line overlay CutObject over the
+    // coalesced paths. Line emits independent of fill — it is a real perimeter
+    // cut the user requested. Skip only when there are no closed paths.
+    if (layer.mode === "fillLine") {
+      const hasClosed = coalescedPaths.some((p) => p.closed);
+      if (hasClosed) {
+        const overlayLayer = buildLineOverlayCutLayer(layer);
+        overlayLayer.power *= scale;
+        overlayLayer.powerMin *= scale;
+        result.push({
+          ...baseCoalesced,
+          id: `${firstObj.groupId!}_line_overlay`,
+          layer: overlayLayer,
+        });
+      }
+    }
   }
 
   // F11: emit info message when locked objects are present in the output
