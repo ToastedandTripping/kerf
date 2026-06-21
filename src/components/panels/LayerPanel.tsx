@@ -40,7 +40,6 @@ export function LayerPanel() {
         borderBottom: "1px solid var(--border)",
         display: "flex",
         flexDirection: "column",
-        maxHeight: "50%",
         overflow: "hidden",
       }}
     >

@@ -556,3 +556,30 @@ describe("sub-layer → fillLine migration (v2 → v3)", () => {
     expect(project.layers[0].mode).toBe(DEFAULT_LAYERS[0].mode);
   });
 });
+
+// ─── powerMode preservation (regression guard for B1 DEFAULT_LAYERS change) ─
+
+describe("powerMode preservation: saved layers survive DEFAULT_LAYERS default flip", () => {
+  it("v3 fill layer with powerMode=constant is NOT rewritten to variable by load", () => {
+    // B1 changed DEFAULT_LAYERS[0].powerMode to "variable" for new projects.
+    // A v3 project saved with powerMode="constant" must survive a round-trip
+    // through loadProjectWithMigrations unchanged — the store must never
+    // substitute DEFAULT_LAYERS values for fields that are already present.
+    const project: KerfProject = {
+      version: "0.9.0",
+      formatVersion: KERF_FORMAT_VERSION,
+      name: "SavedConstant",
+      objects: [],
+      layers: [
+        { ...DEFAULT_LAYERS[0], mode: "fill", powerMode: "constant" as const },
+        ...DEFAULT_LAYERS.slice(1),
+      ],
+      camera: { x: 0, y: 0, zoom: 1 },
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+    };
+    loadProjectWithMigrations(project);
+    const loaded = useStore.getState().layers[0];
+    expect(loaded.powerMode).toBe("constant");
+  });
+});

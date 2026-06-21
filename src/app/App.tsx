@@ -33,6 +33,48 @@ import { OnboardingOverlay, shouldShowOnboarding } from "../components/panels/On
 import { useStore } from "./store";
 import { generateId } from "./store/storeTypes";
 
+/** Collapsible panel section with a consistent header style. */
+function CollapsibleSection({
+  title,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <button
+        onClick={onToggle}
+        style={{
+          width: "100%",
+          padding: "6px 12px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          background: "none",
+          border: "none",
+          borderBottom: "1px solid var(--border)",
+          color: "var(--text-secondary)",
+          fontSize: "11px",
+          fontWeight: 600,
+          textTransform: "uppercase",
+          letterSpacing: "0.5px",
+          cursor: "pointer",
+          textAlign: "left",
+        }}
+      >
+        <span>{title}</span>
+        <span style={{ fontSize: "10px", opacity: 0.6 }}>{open ? "▲" : "▼"}</span>
+      </button>
+      {open && children}
+    </div>
+  );
+}
+
 class ViewportErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state: { error: Error | null } = { error: null };
   static getDerivedStateFromError(error: Error) { return { error }; }
@@ -186,60 +228,21 @@ export default function App() {
               are collapsible (closed by default) so expand/adjust knobs is comfortable. */}
           <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
             <LayerPanel />
-            {/* B5: collapsible header for MaterialLibrary — closed by default */}
-            <div>
-              <button
-                onClick={() => setMaterialLibraryOpen((v) => !v)}
-                style={{
-                  width: "100%",
-                  padding: "6px 12px",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  background: "none",
-                  border: "none",
-                  borderBottom: materialLibraryOpen ? "none" : "1px solid var(--border)",
-                  color: "var(--text-secondary)",
-                  fontSize: "11px",
-                  fontWeight: 600,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.5px",
-                  cursor: "pointer",
-                  textAlign: "left",
-                }}
-              >
-                <span>Materials</span>
-                <span style={{ fontSize: "10px", opacity: 0.6 }}>{materialLibraryOpen ? "▲" : "▼"}</span>
-              </button>
-              {materialLibraryOpen && <MaterialLibrary />}
-            </div>
-            {/* B5: collapsible header for PropertiesPanel — closed by default */}
-            <div>
-              <button
-                onClick={() => setPropertiesPanelOpen((v) => !v)}
-                style={{
-                  width: "100%",
-                  padding: "6px 12px",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  background: "none",
-                  border: "none",
-                  borderBottom: propertiesPanelOpen ? "none" : "1px solid var(--border)",
-                  color: "var(--text-secondary)",
-                  fontSize: "11px",
-                  fontWeight: 600,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.5px",
-                  cursor: "pointer",
-                  textAlign: "left",
-                }}
-              >
-                <span>Properties</span>
-                <span style={{ fontSize: "10px", opacity: 0.6 }}>{propertiesPanelOpen ? "▲" : "▼"}</span>
-              </button>
-              {propertiesPanelOpen && <PropertiesPanel />}
-            </div>
+            {/* B5: collapsible secondary panels — closed by default so LayerPanel gets room */}
+            <CollapsibleSection
+              title="Materials"
+              open={materialLibraryOpen}
+              onToggle={() => setMaterialLibraryOpen((v) => !v)}
+            >
+              <MaterialLibrary />
+            </CollapsibleSection>
+            <CollapsibleSection
+              title="Properties"
+              open={propertiesPanelOpen}
+              onToggle={() => setPropertiesPanelOpen((v) => !v)}
+            >
+              <PropertiesPanel />
+            </CollapsibleSection>
           </div>
           {/* Fixed bottom zone: machine controls always visible; cap reduced from
               50% to 40% since the layer panel now has more vertical room. */}
