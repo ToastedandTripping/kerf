@@ -247,6 +247,7 @@ describe("canStartJob — unverified bed blocks START", () => {
   function baseState(): JobGateState {
     return {
       machineConnected: true,
+      machineState: "idle",
       jobRunning: false,
       gcodeResult: { moves: [{ x: 10, y: 10 }, { x: 100, y: 100 }] },
       gcodeStale: false,
@@ -340,6 +341,52 @@ describe("grblHoming gates home — store state", () => {
     mockInvoke.mockResolvedValueOnce({ responses: ["ALARM:8"], drained: [] });
     await machineConnection.home();
     expect(useStore.getState().machineHomed).toBe(false);
+  });
+});
+
+// ---- BUG 3: canStartJob ALARM gate ----
+describe("canStartJob — ALARM gate (BUG 3)", () => {
+  function baseState(): JobGateState {
+    return {
+      machineConnected: true,
+      machineState: "idle",
+      jobRunning: false,
+      gcodeResult: { moves: [{ x: 10, y: 10 }, { x: 100, y: 100 }] },
+      gcodeStale: false,
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+      workspaceVerified: true,
+    };
+  }
+
+  it("blocks when machineState=alarm and shows the correct reason", () => {
+    const gate = canStartJob({ ...baseState(), machineState: "alarm" });
+    expect(gate.ok).toBe(false);
+    expect(gate.reason).toContain("ALARM");
+  });
+
+  it("passes when machineState=idle (normal case)", () => {
+    const gate = canStartJob({ ...baseState(), machineState: "idle" });
+    expect(gate.ok).toBe(true);
+  });
+
+  it("alarm gate fires even when all other conditions are satisfied", () => {
+    // Verify alarm check is not masked by a prior gate condition.
+    const gate = canStartJob({
+      ...baseState(),
+      machineState: "alarm",
+      machineConnected: true,
+      jobRunning: false,
+      gcodeStale: false,
+      workspaceVerified: true,
+    });
+    expect(gate.ok).toBe(false);
+    expect(gate.reason).toContain("ALARM");
+  });
+
+  it("alarm reason includes Home or Unlock hint", () => {
+    const gate = canStartJob({ ...baseState(), machineState: "alarm" });
+    expect(gate.reason).toMatch(/\$H|\$X/);
   });
 });
 

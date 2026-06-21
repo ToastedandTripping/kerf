@@ -98,6 +98,9 @@ export const machineConnection = {
         baudRate,
       });
       store.setMachineConnected(true);
+      // NOTE: machineState is set below after a real status query (companion fix
+      // for BUG 3). We set "idle" here as a safe initial value so the UI is never
+      // left in "disconnected" while the status query is in-flight.
       store.setMachineState("idle");
       store.addConsoleLine(response, "received");
 
@@ -121,6 +124,31 @@ export const machineConnection = {
       // sValueMax stayed 1000 on a $30=255 machine (4x overpower), no laser-mode
       // warning, default workspace. Both entry paths now produce identical output.
       const settingsVerified = await this.queryGrblSettings();
+
+      // BUG 3 companion fix: query the real machine state immediately after
+      // connect so the UI reflects ALARM (or any other state) before the first
+      // 250ms poll fires. This closes the window where the UI shows "idle" while
+      // the machine is actually locked.
+      try {
+        const initStatus = await this.getStatusReport();
+        if (initStatus) {
+          const initMatch = initStatus.match(/<(\w+(?::\d+)?)\|/);
+          if (initMatch) {
+            const rawState = initMatch[1].toLowerCase().split(":")[0] as
+              "idle" | "run" | "hold" | "alarm" | "door";
+            store.setMachineState(rawState);
+            if (rawState === "alarm") {
+              store.addConsoleLine(
+                "Machine is in ALARM state — Home ($H) or Unlock ($X) before starting a job.",
+                "warning",
+              );
+            }
+          }
+        }
+      } catch {
+        // Non-fatal: pollStatus will correct the state within 250ms.
+      }
+
       if (settingsVerified) {
         // $32 warning ONLY on a successful $$ parse: grblLaserMode defaults
         // false, so warning off the default after a failed query would be a

@@ -64,7 +64,11 @@ export function LayerPanel() {
           <div
             key={layer.index}
             draggable
-            onDragStart={() => { dragSourceRef.current = layer.index; }}
+            onDragStart={(e) => {
+              const tag = (e.target as HTMLElement).tagName;
+              if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") { e.preventDefault(); return; }
+              dragSourceRef.current = layer.index;
+            }}
             onDragOver={(e) => { e.preventDefault(); setDragOverIndex(layer.index); }}
             onDragLeave={() => setDragOverIndex(null)}
             onDrop={() => {

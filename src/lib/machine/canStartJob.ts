@@ -77,6 +77,7 @@ export function isWithinBounds(
 
 export interface JobGateState {
   machineConnected: boolean;
+  machineState?: string;
   jobRunning: boolean;
   gcodeResult: { moves: MovesPoint[] } | null;
   gcodeStale: boolean;
@@ -95,6 +96,7 @@ export interface JobGate {
 /** Pure START gate. Every blocking condition carries a user-facing reason. */
 export function canStartJob(state: JobGateState): JobGate {
   if (!state.machineConnected) return { ok: false, reason: "Machine not connected" };
+  if (state.machineState === "alarm") return { ok: false, reason: "Machine locked (ALARM) — Home ($H) or Unlock ($X) first" };
   if (state.jobRunning) return { ok: false, reason: "Job already running" };
   if (!state.gcodeResult) return { ok: false, reason: "Generate G-code first" };
   if (state.gcodeStale) return { ok: false, reason: "Design changed -- regenerate G-code" };

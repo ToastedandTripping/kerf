@@ -1046,7 +1046,7 @@ export function MachinePanel() {
           {/* Start / Frame / Stop controls */}
           {(() => {
             const startGate = canStartJob({
-              machineConnected, jobRunning, gcodeResult, gcodeStale,
+              machineConnected, machineState, jobRunning, gcodeResult, gcodeStale,
               workspaceWidth, workspaceHeight, originTop, workspaceVerified,
             });
             // FRAME contract change (F15): framing traces the true G-code
@@ -1055,7 +1055,7 @@ export function MachinePanel() {
             // WARNING-2: also block on unverified workspace — FRAME drives the
             // head to G-code extents; if the bed size is wrong it can crash.
             const frameDisabled =
-              !machineConnected || machineState !== "idle" || jobRunning ||
+              !machineConnected || machineState === "alarm" || machineState !== "idle" || jobRunning ||
               !gcodeResult || gcodeStale || !workspaceVerified;
             const frameHint = !workspaceVerified
               ? "Confirm bed size before framing"
