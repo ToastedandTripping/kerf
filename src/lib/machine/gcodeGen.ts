@@ -73,7 +73,7 @@ interface CutObject {
 }
 
 /** Build layer settings for a CutObject from a Layer (or SubLayer override) */
-function buildCutLayer(layer: Layer, sub?: { mode: string; power: number; powerMin: number; speed: number; passes: number; powerMode: string; interval: number }): CutObject["layer"] {
+function buildCutLayer(layer: Layer, sub?: { mode: InternalCutMode; power: number; powerMin: number; speed: number; passes: number; powerMode: string; interval: number }): CutObject["layer"] {
   return {
     mode: sub?.mode ?? layer.mode,
     power: sub?.power ?? layer.power,
