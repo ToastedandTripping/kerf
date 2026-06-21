@@ -19,9 +19,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { useStore } from "../../../app/store";
-import type { DesignObject, KerfProject, Layer, PathPoint } from "../../../app/types";
+import type { DesignObject, KerfProject, Layer, PathPoint, LineOverlay } from "../../../app/types";
 import { DEFAULT_LAYERS, KERF_FORMAT_VERSION } from "../../../app/types";
-import { loadProjectWithMigrations, migrateSpeedToMmMin, fileOperations } from "../index";
+import { loadProjectWithMigrations, migrateSpeedToMmMin, migrateSubLayersToFillLine, fileOperations } from "../index";
 import { assertPointsInvariant, pointsBBox, rotatePathPoint } from "../../geometry";
 import { flattenObjectsForTest } from "../../machine/gcodeGen";
 
@@ -305,13 +305,13 @@ describe("speed-unit migration (v1 → v2)", () => {
     loadProjectWithMigrations(project);
     const layer = useStore.getState().layers[0];
     expect(layer.speed).toBe(1200);
-    expect(project.formatVersion).toBe(2);
+    expect(project.formatVersion).toBe(KERF_FORMAT_VERSION);
   });
 
-  it("v1 project: formatVersion stamped to 2 after speed migration", () => {
+  it("v1 project: formatVersion stamped to KERF_FORMAT_VERSION after migration", () => {
     const project = v1Project();
     loadProjectWithMigrations(project);
-    expect(project.formatVersion).toBe(KERF_FORMAT_VERSION); // = 2
+    expect(project.formatVersion).toBe(KERF_FORMAT_VERSION);
   });
 
   it("v2 project: speed NOT re-multiplied (no double-convert)", () => {
@@ -406,5 +406,153 @@ describe("speed-unit migration (v1 → v2)", () => {
     migrateSpeedToMmMin(project);
     expect(project.layers[0].speed).toBe(1200);
     expect(project.materials![0].speed).toBe(600);
+  });
+});
+
+// ─── Sub-layer → fillLine migration (v2 → v3) ─────────────────────────────
+
+/** A v2 project with sub-layers attached to a layer. */
+function v2ProjectWithSubLayers(subLayers: Array<{ mode: string; power: number; powerMin: number; speed: number; passes: number; powerMode: string; interval: number }>): KerfProject {
+  const layerWithSubs = {
+    ...DEFAULT_LAYERS[0],
+    subLayers: subLayers.map((s, i) => ({ id: `sub_${i}`, ...s })),
+  };
+  return {
+    version: "0.8.6",
+    formatVersion: 2,
+    name: "V2 with subs",
+    objects: [],
+    layers: [layerWithSubs, ...DEFAULT_LAYERS.slice(1)],
+    camera: { x: 0, y: 0, zoom: 1 },
+    workspaceWidth: 500,
+    workspaceHeight: 300,
+  };
+}
+
+describe("sub-layer → fillLine migration (v2 → v3)", () => {
+  it("clean fill+line pair → mode=fillLine + correct lineOverlay", () => {
+    const project = v2ProjectWithSubLayers([
+      { mode: "fill", power: 50, powerMin: 0, speed: 6000, passes: 1, powerMode: "constant", interval: 0.1 },
+      { mode: "line", power: 90, powerMin: 0, speed: 1200, passes: 2, powerMode: "variable", interval: 0.1 },
+    ]);
+    loadProjectWithMigrations(project);
+    const layer = useStore.getState().layers[0];
+    expect(layer.mode).toBe("fillLine");
+    expect(layer.power).toBe(50);
+    expect(layer.speed).toBe(6000);
+    const ov = layer.lineOverlay as LineOverlay;
+    expect(ov.power).toBe(90);
+    expect(ov.speed).toBe(1200);
+    expect(ov.passes).toBe(2);
+    expect(ov.powerMode).toBe("variable");
+    expect((layer as Layer & { subLayers?: unknown }).subLayers).toBeUndefined();
+    expect(project.formatVersion).toBe(KERF_FORMAT_VERSION);
+  });
+
+  it("clean line+fill pair (any order) → mode=fillLine", () => {
+    // Same result regardless of sub-layer order
+    const project = v2ProjectWithSubLayers([
+      { mode: "line", power: 90, powerMin: 0, speed: 1200, passes: 1, powerMode: "constant", interval: 0.1 },
+      { mode: "fill", power: 50, powerMin: 0, speed: 6000, passes: 1, powerMode: "constant", interval: 0.1 },
+    ]);
+    loadProjectWithMigrations(project);
+    const layer = useStore.getState().layers[0];
+    expect(layer.mode).toBe("fillLine");
+    expect(layer.power).toBe(50); // fill sub's power
+    expect(layer.lineOverlay?.power).toBe(90); // line sub's power
+  });
+
+  it("single sub → flatten: mode and settings copied to layer", () => {
+    const project = v2ProjectWithSubLayers([
+      { mode: "line", power: 80, powerMin: 5, speed: 800, passes: 3, powerMode: "variable", interval: 0.1 },
+    ]);
+    loadProjectWithMigrations(project);
+    const layer = useStore.getState().layers[0];
+    expect(layer.mode).toBe("line");
+    expect(layer.power).toBe(80);
+    expect(layer.speed).toBe(800);
+    expect(layer.passes).toBe(3);
+    expect((layer as Layer & { subLayers?: unknown }).subLayers).toBeUndefined();
+  });
+
+  it("pathological 3-sub stack → collapses to fillLine + console.warn", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const project = v2ProjectWithSubLayers([
+      { mode: "fill", power: 50, powerMin: 0, speed: 6000, passes: 1, powerMode: "constant", interval: 0.1 },
+      { mode: "line", power: 90, powerMin: 0, speed: 1200, passes: 1, powerMode: "constant", interval: 0.1 },
+      { mode: "line", power: 70, powerMin: 0, speed: 900, passes: 1, powerMode: "constant", interval: 0.1 },
+    ]);
+    loadProjectWithMigrations(project);
+    const layer = useStore.getState().layers[0];
+    expect(layer.mode).toBe("fillLine");
+    expect(layer.lineOverlay?.power).toBe(90); // first line sub used
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("[Kerf migration v3]"));
+    warnSpy.mockRestore();
+  });
+
+  it("pathological two-fills stack → collapses to fillLine + console.warn", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const project = v2ProjectWithSubLayers([
+      { mode: "fill", power: 60, powerMin: 0, speed: 5000, passes: 1, powerMode: "constant", interval: 0.1 },
+      { mode: "fill", power: 40, powerMin: 0, speed: 4000, passes: 1, powerMode: "constant", interval: 0.1 },
+    ]);
+    loadProjectWithMigrations(project);
+    const layer = useStore.getState().layers[0];
+    expect(layer.mode).toBe("fillLine");
+    // No line sub → lineOverlay defaults
+    expect(layer.lineOverlay?.power).toBe(100);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("v2 file is idempotent: round-trip load → mode=fillLine preserved, no double-migrate", () => {
+    const project = v2ProjectWithSubLayers([
+      { mode: "fill", power: 50, powerMin: 0, speed: 6000, passes: 1, powerMode: "constant", interval: 0.1 },
+      { mode: "line", power: 90, powerMin: 0, speed: 1200, passes: 1, powerMode: "constant", interval: 0.1 },
+    ]);
+    loadProjectWithMigrations(project); // first load: migrates v2 → v3
+    expect(project.formatVersion).toBe(KERF_FORMAT_VERSION);
+    const firstLineOverlay = { ...useStore.getState().layers[0].lineOverlay };
+
+    // Serialize (as toProject would) and re-load
+    const serialized = JSON.parse(JSON.stringify(useStore.getState().toProject())) as KerfProject;
+    loadProjectWithMigrations(serialized); // second load: v3 file, no migration
+    const layer2 = useStore.getState().layers[0];
+    expect(layer2.mode).toBe("fillLine");
+    expect(layer2.lineOverlay?.power).toBe(firstLineOverlay.power);
+    expect(layer2.lineOverlay?.speed).toBe(firstLineOverlay.speed);
+  });
+
+  it("layers without sub-layers are untouched by the migration", () => {
+    const project: KerfProject = {
+      version: "0.8.6",
+      formatVersion: 2,
+      name: "Clean",
+      objects: [],
+      layers: DEFAULT_LAYERS,
+      camera: { x: 0, y: 0, zoom: 1 },
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+    };
+    loadProjectWithMigrations(project);
+    const layers = useStore.getState().layers;
+    for (const l of layers) {
+      expect(l.mode).not.toBe("fillLine");
+      expect(l.lineOverlay).toBeUndefined();
+    }
+  });
+
+  it("migrateSubLayersToFillLine is a no-op on a project with no subLayers", () => {
+    const project: KerfProject = {
+      version: "0.8.6",
+      name: "NoSubs",
+      objects: [],
+      layers: DEFAULT_LAYERS,
+      camera: { x: 0, y: 0, zoom: 1 },
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+    };
+    expect(() => migrateSubLayersToFillLine(project)).not.toThrow();
+    expect(project.layers[0].mode).toBe(DEFAULT_LAYERS[0].mode);
   });
 });

@@ -108,22 +108,13 @@ describe("F15 gcodeStale writers", () => {
     expect(stale()).toBe(true);
   });
 
-  it("sub-layer writers stale (they do NOT route through updateLayer)", () => {
+  it("updateLineOverlay stales (direct generation-input writer, does not route through updateLayer)", () => {
     markFresh();
-    useStore.getState().addSubLayer(0);
-    expect(stale()).toBe(true);
-    const subId = useStore.getState().layers[0].subLayers![0].id;
-
-    markFresh();
-    useStore.getState().updateSubLayer(0, subId, { power: 42 });
+    useStore.getState().updateLineOverlay(0, { power: 80 });
     expect(stale()).toBe(true);
 
     markFresh();
-    useStore.getState().addSubLayers(0, [{ mode: "fill" }]);
-    expect(stale()).toBe(true);
-
-    markFresh();
-    useStore.getState().removeSubLayer(0, subId);
+    useStore.getState().updateLineOverlay(0, { speed: 900, passes: 2 });
     expect(stale()).toBe(true);
   });
 
