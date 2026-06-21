@@ -1,6 +1,6 @@
 [package]
 name = "kerf"
-version = "0.8.5"
+version = "0.8.6"
 edition = "2021"
 
 [lib]
@@ -31,3 +31,4 @@ visioncortex = "0.8"
 image = "0.25"
 imageproc = "0.25"
 base64 = "0.22"
+tiny-skia = "=0.12.0"

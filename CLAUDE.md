@@ -20,3 +20,22 @@ Laser cutter CAD/CAM desktop app. Tauri v2 / React / Pixi.js / Rust.
 - Coordinates in mm
 - Layers are color-coded, 6 default (Cut, Engrave, Score + 3)
 - Dark mode, minimal chrome, Apple-esque design
+
+## Critical: Zustand Selector Rules (React Error 185)
+**NEVER** return a new object/array from a `useStore` selector. This causes infinite re-render loops (React Error 185) that crash the app with a blank screen. This bug has appeared 3 times.
+
+BAD (creates new object every render → infinite loop):
+```typescript
+const { a, b } = useStore((s) => ({ a: s.a, b: s.b }));
+const filtered = useStore((s) => s.items.filter(...));
+```
+
+GOOD (stable references):
+```typescript
+const a = useStore((s) => s.a);
+const b = useStore((s) => s.b);
+const items = useStore((s) => s.items);
+const filtered = items.filter(...); // derive outside the selector
+```
+
+Razor MUST check every `useStore` call in reviewed diffs for this pattern.

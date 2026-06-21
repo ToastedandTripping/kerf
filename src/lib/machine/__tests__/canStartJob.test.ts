@@ -22,6 +22,8 @@ function okState(): JobGateState {
     gcodeStale: false,
     workspaceWidth: 500,
     workspaceHeight: 300,
+    // NOTE-1: workspaceVerified is now required and fail-closed (undefined blocks)
+    workspaceVerified: true,
   };
 }
 

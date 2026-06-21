@@ -76,6 +76,9 @@ function seedBase() {
     workspaceWidth: 500,
     workspaceHeight: 300,
     grblSValueMax: 1000,
+    // NOTE-1: workspaceVerified is now fail-closed (undefined blocks); seed as true
+    // so this suite tests G-code failure gating, not workspace verification gating.
+    workspaceVerified: true,
   });
 }
 

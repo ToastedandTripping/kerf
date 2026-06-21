@@ -82,6 +82,26 @@ function pushObjectsUndo(
   });
 }
 
+// --- Deep partial-apply helper ---
+// Applies partials from updateMap to any object in the tree at any depth,
+// preserving reference identity for unchanged subtrees (perf / Pixi reconciliation).
+// NOTE: objectsById is intentionally a top-level-only index and is NOT updated here
+// for nested ids — callers must not assume objectsById.get(nestedId) works.
+function applyPartialsDeep(
+  objects: DesignObject[],
+  updateMap: Map<string, Partial<DesignObject>>,
+): DesignObject[] {
+  return objects.map((o) => {
+    const partial = updateMap.get(o.id);
+    let next = partial ? { ...o, ...partial } : o;
+    if (next.type === "group" && next.children) {
+      const newChildren = applyPartialsDeep(next.children, updateMap);
+      if (newChildren !== next.children) next = { ...next, children: newChildren };
+    }
+    return next;
+  });
+}
+
 // --- B4.3: Shared z-order wrapper ---
 // Owns withUndo + findIndex + its own INLINE objects patch (it does NOT route
 // through applyObjects); caller supplies 1-2 lines of index math.
@@ -140,9 +160,7 @@ export const useStore = create<AppState>((set, get) => ({
       }
     }
     set((state) => {
-      const newObjects = state.objects.map((o) =>
-        o.id === id ? { ...o, ...partial } : o
-      );
+      const newObjects = applyPartialsDeep(state.objects, new Map([[id, partial]]));
       return {
         objects: newObjects,
         objectsById: buildObjectsById(newObjects),
@@ -167,10 +185,7 @@ export const useStore = create<AppState>((set, get) => ({
     }
     set((state) => {
       const updateMap = new Map(updates.map((u) => [u.id, u.partial]));
-      const newObjects = state.objects.map((o) => {
-        const partial = updateMap.get(o.id);
-        return partial ? { ...o, ...partial } : o;
-      });
+      const newObjects = applyPartialsDeep(state.objects, updateMap);
       return {
         objects: newObjects,
         objectsById: buildObjectsById(newObjects),
@@ -182,17 +197,20 @@ export const useStore = create<AppState>((set, get) => ({
   moveObjectsToLayer: (ids, layerIndex) => {
     const state = get();
     const layerColor = state.layers[layerIndex]?.color || "#4a90e2";
+    // Recursive descendant collector — matches the unbounded depth of applyPartialsDeep.
+    function collectDescendantIds(obj: DesignObject, acc: string[]): void {
+      acc.push(obj.id);
+      if (obj.type === "group" && obj.children) {
+        for (const child of obj.children) collectDescendantIds(child, acc);
+      }
+    }
     const allIds: string[] = [];
     for (const id of ids) {
-      allIds.push(id);
       const obj = state.objectsById.get(id);
-      if (obj?.type === "group" && obj.children) {
-        for (const child of obj.children) {
-          allIds.push(child.id);
-          if (child.type === "group" && child.children) {
-            for (const gc of child.children) allIds.push(gc.id);
-          }
-        }
+      if (obj) {
+        collectDescendantIds(obj, allIds);
+      } else {
+        allIds.push(id);
       }
     }
     state.withUndo("move-to-layer", () => {
@@ -284,7 +302,7 @@ export const useStore = create<AppState>((set, get) => ({
           mode: "line",
           power: 100,
           powerMin: 0,
-          speed: 20,
+          speed: 1200, // mm/min
           passes: 1,
           powerMode: "constant",
           interval: 0.1,
@@ -302,7 +320,7 @@ export const useStore = create<AppState>((set, get) => ({
           mode: s.mode ?? "line",
           power: s.power ?? 100,
           powerMin: s.powerMin ?? 0,
-          speed: s.speed ?? 20,
+          speed: s.speed ?? 1200, // mm/min
           passes: s.passes ?? 1,
           powerMode: s.powerMode ?? "constant",
           interval: s.interval ?? 0.1,
@@ -356,7 +374,7 @@ export const useStore = create<AppState>((set, get) => ({
     })),
   gridVisible: true,
   setGridVisible: (v) => set({ gridVisible: v }),
-  snapToGrid: true,
+  snapToGrid: false,
   setSnapToGrid: (v) => set({ snapToGrid: v }),
   gridSize: 10,
   setGridSize: (s) => set({ gridSize: s }),
@@ -489,23 +507,69 @@ export const useStore = create<AppState>((set, get) => ({
   machineConnected: false,
   machineState: "disconnected",
   machinePosition: { x: 0, y: 0, z: 0 },
-  grblSValueMax: 1000,
+  // C1: hydrate grblSValueMax at INIT time from localStorage so any pre-connect
+  // G-code generation uses the correct persisted value (lazy hydrate would leak
+  // 1000 → 4× overpower on $30=255 machines). Fall back to 1000 if absent/bad.
+  grblSValueMax: (() => {
+    try {
+      const raw = localStorage.getItem("kerf-s-value-max");
+      if (raw === null) return 1000;
+      const n = Number(raw);
+      return Number.isFinite(n) && n > 0 ? n : 1000;
+    } catch {
+      return 1000;
+    }
+  })(),
   grblLaserMode: false,
   grblAccelX: 500,
   grblAccelY: 500,
-  setMachineConnected: (connected) => set({ machineConnected: connected }),
+  setMachineConnected: (connected) => set(connected
+    ? { machineConnected: true }
+    : { machineConnected: false, machineHomed: false, softLimitsActive: false }
+  ),
   setMachineState: (state) => set({ machineState: state }),
   setMachinePosition: (pos) => set({ machinePosition: pos }),
   // F15: S-values are baked into generated G-code (different $30 machine =
   // stale). Value-change only — re-set on every connect by queryGrblSettings.
-  setGrblSValueMax: (v) =>
+  // C1: also persists to localStorage so the value survives restarts.
+  setGrblSValueMax: (v) => {
+    try { localStorage.setItem("kerf-s-value-max", String(v)); } catch { /* ignore quota/security errors */ }
     set((state) => ({
       grblSValueMax: v,
       gcodeStale:
         v !== state.grblSValueMax && state.gcodeResult !== null ? true : state.gcodeStale,
-    })),
+    }));
+  },
   setGrblLaserMode: (v) => set({ grblLaserMode: v }),
   setGrblAccel: (x, y) => set({ grblAccelX: x, grblAccelY: y }),
+
+  // Workstream A: $20/$21/$22 + machineHomed + derived softLimitsActive
+  grblSoftLimits: false,
+  grblHardLimits: false,
+  grblHoming: false,
+  machineHomed: false,
+  softLimitsActive: false,
+  setGrblSoftLimits: (v) => set((state) => {
+    const active = v && state.grblHoming && state.machineHomed;
+    return { grblSoftLimits: v, softLimitsActive: active };
+  }),
+  setGrblHardLimits: (v) => set({ grblHardLimits: v }),
+  setGrblHoming: (v) => set((state) => {
+    const active = state.grblSoftLimits && v && state.machineHomed;
+    return { grblHoming: v, softLimitsActive: active };
+  }),
+  setMachineHomed: (v) => set((state) => {
+    const active = state.grblSoftLimits && state.grblHoming && v;
+    return { machineHomed: v, softLimitsActive: active };
+  }),
+
+  // Workstream B: work coordinate offset
+  workCoordOffset: { x: 0, y: 0 },
+  setWorkCoordOffset: (offset) => set({ workCoordOffset: offset }),
+
+  // Workstream E: workspace verification
+  workspaceVerified: false,
+  setWorkspaceVerified: (v) => set({ workspaceVerified: v }),
 
   // Console
   consoleLines: [],
@@ -660,7 +724,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   // Start corner
-  startCorner: "bottomLeft",
+  startCorner: "topLeft",
   // F15: start corner feeds the G-code optimizer (cut order), so it stales.
   setStartCorner: (corner) =>
     set((state) => ({
@@ -670,7 +734,7 @@ export const useStore = create<AppState>((set, get) => ({
     })),
 
   // Device origin
-  originTop: false,
+  originTop: true,
   setOriginTop: (v) =>
     set((state) => ({
       originTop: v,

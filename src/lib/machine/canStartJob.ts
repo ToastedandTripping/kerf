@@ -56,6 +56,25 @@ export function frameTargets(moves: ReadonlyArray<MovesPoint>): MovesPoint[] | n
   ];
 }
 
+/**
+ * Pure bounds predicate — shared by canStartJob and the FRAME gate.
+ * Returns true when the extents rectangle fits within the declared bed.
+ * Extracted so FRAME gets the same check that START uses (one source of truth).
+ */
+export function isWithinBounds(
+  ext: MovesExtents,
+  workspaceWidth: number,
+  workspaceHeight: number,
+  originTop?: boolean,
+): boolean {
+  if (originTop) {
+    return ext.minX >= 0 && ext.maxX <= workspaceWidth &&
+           ext.maxY <= 0 && ext.minY >= -workspaceHeight;
+  }
+  return ext.minX >= 0 && ext.minY >= 0 &&
+         ext.maxX <= workspaceWidth && ext.maxY <= workspaceHeight;
+}
+
 export interface JobGateState {
   machineConnected: boolean;
   jobRunning: boolean;
@@ -64,6 +83,8 @@ export interface JobGateState {
   workspaceWidth: number;
   workspaceHeight: number;
   originTop?: boolean;
+  /** NOTE-1: fail-closed — undefined/missing is treated as unverified (not as verified). */
+  workspaceVerified: boolean;
 }
 
 export interface JobGate {
@@ -77,12 +98,13 @@ export function canStartJob(state: JobGateState): JobGate {
   if (state.jobRunning) return { ok: false, reason: "Job already running" };
   if (!state.gcodeResult) return { ok: false, reason: "Generate G-code first" };
   if (state.gcodeStale) return { ok: false, reason: "Design changed -- regenerate G-code" };
+  // NOTE-1: fail-closed — any falsy value (false, undefined) blocks; only explicit true passes
+  if (!state.workspaceVerified) {
+    return { ok: false, reason: "Confirm bed size before starting — go to Machine Settings" };
+  }
   const ext = movesExtents(state.gcodeResult.moves);
   if (!ext) return { ok: false, reason: "Nothing to cut -- no moves in the generated G-code" };
-  const outOfBounds = state.originTop
-    ? (ext.minX < 0 || ext.maxX > state.workspaceWidth || ext.maxY > 0 || ext.minY < -state.workspaceHeight)
-    : (ext.minX < 0 || ext.minY < 0 || ext.maxX > state.workspaceWidth || ext.maxY > state.workspaceHeight);
-  if (outOfBounds) {
+  if (!isWithinBounds(ext, state.workspaceWidth, state.workspaceHeight, state.originTop)) {
     return {
       ok: false,
       reason: "G-code extends outside workspace bounds. Move or resize the design to fit.",

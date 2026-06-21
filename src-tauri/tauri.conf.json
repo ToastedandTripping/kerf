@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicklascschmidt/tauri-v2-schema/refs/heads/main/tauri.conf.json",
   "productName": "Kerf",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "identifier": "com.kerf.laser",
   "build": {
     "frontendDist": "../dist",

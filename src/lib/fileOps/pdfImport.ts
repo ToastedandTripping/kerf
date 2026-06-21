@@ -6,7 +6,7 @@
  */
 
 import type { DesignObject, PathPoint } from "../../app/types";
-import { pointsBBox } from "../geometry";
+import { pointsBBox, buildGroupObject } from "../geometry";
 
 /** Read a PDF file into an ArrayBuffer suitable for pdfjs-dist */
 export async function loadPdfFile(file: File): Promise<ArrayBuffer> {
@@ -124,17 +124,19 @@ export async function extractVectorPaths(
   }
 
   function emitPaths(pathList: SubPath[]) {
-    for (const sub of pathList) {
-      if (sub.points.length < 2) continue;
+    // Filter out degenerate sub-paths (< 2 points) before grouping
+    const validSubs = pathList.filter((sub) => sub.points.length >= 2);
+    if (validSubs.length === 0) return;
 
-      // W1b: ANCHORS-ONLY bbox (the app-wide invariant definition — a curve
-      // may overshoot the anchor bbox; accepted and consistent: the bbox is a
-      // selection/handle frame, not a render bound). No ||1 clamp — axis-
-      // parallel PDF segments get their true zero-thickness bbox; hit-testing
-      // carries the ε band for them.
+    // Build individual path DesignObjects for each subpath.
+    // W1b: ANCHORS-ONLY bbox (the app-wide invariant definition — a curve
+    // may overshoot the anchor bbox; accepted and consistent: the bbox is a
+    // selection/handle frame, not a render bound). No ||1 clamp — axis-
+    // parallel PDF segments get their true zero-thickness bbox; hit-testing
+    // carries the ε band for them.
+    const subObjects: DesignObject[] = validSubs.map((sub) => {
       const bb = pointsBBox(sub.points);
-
-      const obj: DesignObject = {
+      return {
         id: generateId(),
         type: "path",
         name: `PDF Path`,
@@ -156,8 +158,19 @@ export async function extractVectorPaths(
         opacity: 1,
         points: sub.points,
         closed: sub.closed,
-      };
-      objects.push(obj);
+      } as DesignObject;
+    });
+
+    if (subObjects.length === 1) {
+      // Single-subpath: emit as a flat path (unchanged behavior)
+      objects.push(subObjects[0]);
+    } else {
+      // Compound path (multiple subpaths): group via buildGroupObject BEFORE objects.push
+      // so the outer/hole pairing is preserved for fill coalescing (Phase 1 fix).
+      // Regrouping after objects.push is wrong — the pairing is lost once objects are separate.
+      // This mirrors the SVG/trace producers (SvgImportDialog, ImageTraceDialog).
+      const group = buildGroupObject(subObjects, generateId(), "PDF Compound Path", layerIndex);
+      objects.push(group);
     }
   }
 

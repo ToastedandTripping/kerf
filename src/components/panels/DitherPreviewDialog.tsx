@@ -334,11 +334,13 @@ export function DitherPreviewDialog({
 }
 
 /** Rough engrave time estimate from pixel dimensions.
- *  Uses hardcoded assumptions (100mm/s, 0.1mm interval) -- does not
- *  reflect actual layer settings. Displayed as "approx." in the UI. */
+ *  Uses hardcoded assumptions (0.1mm interval, 100 mm/s internal heuristic) --
+ *  does not reflect actual layer settings. Displayed as "approx." in the UI.
+ *  NOTE: `speed` here is an internal mm/s heuristic for time estimation only,
+ *  intentionally NOT the stored layer speed (which is canonical mm/min). */
 function estimateEngraveTime(w: number, h: number): number {
   const interval = 0.1;  // assumed line interval (mm)
-  const speed = 100;     // assumed engrave speed (mm/s)
+  const speed = 100;     // internal mm/s heuristic for estimate only (NOT stored speed)
   const widthMm = w * interval;
   const rows = h;
   return (rows * widthMm) / speed;

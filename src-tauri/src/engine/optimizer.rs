@@ -286,7 +286,7 @@ mod tests {
             mode: "line".to_string(),
             power: 100.0,
             power_min: 0.0,
-            speed: 20.0,
+            speed: 1200.0, // mm/min (was 20 mm/s before unit switch)
             passes: 1,
             power_mode: "constant".to_string(),
             interval: 0.1,

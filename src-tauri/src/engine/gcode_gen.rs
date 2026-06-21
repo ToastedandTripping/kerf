@@ -18,7 +18,7 @@ pub struct CutLayer {
     pub mode: String,        // "line", "fill"
     pub power: f64,          // 0-100
     pub power_min: f64,      // 0-100
-    pub speed: f64,          // mm/s
+    pub speed: f64,          // mm/min
     pub passes: u32,
     pub power_mode: String,  // "constant" or "variable"
     pub interval: f64,       // mm - line interval for fill
@@ -319,7 +319,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
 
     for obj in objects {
         let layer = &obj.layer;
-        let speed_mm_min = layer.speed * 60.0; // Convert mm/s to mm/min
+        let speed_mm_min = layer.speed; // canonical unit is mm/min
         let s_max = (layer.power / 100.0 * s_value_max).round();
         // Fix 6: compute s_min from power_min; used in M4 (variable) mode to floor S values.
         let s_min = (layer.power_min / 100.0 * s_value_max).round();
@@ -335,7 +335,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
             match layer.mode.as_str() {
                 "line" => {
                     // Vector cut mode
-                    lines.push(format!("; Cut: {} ({}% @ {}mm/s)", obj.id, layer.power, layer.speed));
+                    lines.push(format!("; Cut: {} ({}% @ {}mm/min)", obj.id, layer.power, layer.speed));
 
                     // Fix 6: in M4 (variable) mode, floor S values at s_min so the laser
                     // doesn't drop below min power during GRBL's speed-compensation at corners.
@@ -593,7 +593,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                 }
                 "fill" => {
                     // Raster engrave mode
-                    lines.push(format!("; Engrave: {} ({}% @ {}mm/s, interval {}mm)",
+                    lines.push(format!("; Engrave: {} ({}% @ {}mm/min, interval {}mm)",
                         obj.id, layer.power, layer.speed, layer.interval));
 
                     let interval = if layer.interval > 0.0 { layer.interval } else { 0.1 };
@@ -676,7 +676,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                 }
                 "offsetFill" => {
                     // Offset fill mode: concentric paths spiraling inward
-                    lines.push(format!("; Offset Fill: {} ({}% @ {}mm/s, interval {}mm)",
+                    lines.push(format!("; Offset Fill: {} ({}% @ {}mm/min, interval {}mm)",
                         obj.id, layer.power, layer.speed, layer.interval));
 
                     let interval = if layer.interval > 0.0 { layer.interval } else { 0.5 };
@@ -751,6 +751,101 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
 
                     lines.push("M5".to_string());
                 }
+                "maskFill" => {
+                    // Hole-aware bitmap-mask scanline fill (Phase 2).
+                    //
+                    // Even-odd fill rule: winding direction is IRRELEVANT here — do NOT
+                    // re-add CCW import normalization (Fix-2 in ImageTraceDialog) when
+                    // debugging hole issues. If a counter still burns, check the EvenOdd
+                    // probe test or the alpha-threshold in mask_fill.rs.
+                    lines.push(format!("; Mask Fill: {} ({}% @ {}mm/min, interval {}mm)",
+                        obj.id, layer.power, layer.speed, layer.interval));
+
+                    let interval = if layer.interval > 0.0 { layer.interval } else { 0.1 };
+
+                    // Combine object rotation + scan angle + per-pass increment.
+                    // Matches the "fill" arm's rotation convention exactly.
+                    let obj_rot = if obj.rotation.abs() > 0.001 { obj.rotation.to_radians() } else { 0.0 };
+                    let layer_angle = layer.scan_angle.to_radians()
+                        + (pass as f64) * layer.angle_increment.to_radians();
+                    let rotation_rad = obj_rot + layer_angle;
+
+                    // Rasterize the compound shape to an even-odd binary mask.
+                    // fill_compound_mask uses obj.x/y/width/height as the axis-aligned
+                    // union bbox in design space. Paths are rasterized in local (un-rotated)
+                    // coordinates — obj.paths are NOT pre-rotated (toCutObjects is TS-only
+                    // and does not transform path points; rotate_segment is the vector arm).
+                    // obj.rotation is carried via rotation_rad into scan_mask_to_gcode,
+                    // which rotates each output coordinate about the bbox center.
+                    // The mask origin and the CutObject bbox share one source of truth —
+                    // no drift to the optimizer.
+                    let mask_result = super::mask_fill::fill_compound_mask(obj, interval);
+
+                    match mask_result {
+                        Err(e) => {
+                            // Degenerate / empty mask (critic must-fix #3): skip + warn.
+                            // Do not silently emit nothing — log the warning and continue.
+                            // This preserves the job for all other objects.
+                            eprintln!("[gcode_gen] maskFill skipped '{}': {}", obj.id, e);
+                            lines.push(format!("; maskFill skipped: {}", e));
+                        }
+                        Ok((pixels, mask_w, mask_h, origin_x, origin_y)) => {
+                            // Check for all-background mask (degenerate input after dilation)
+                            let has_content = pixels.iter().any(|&p| p == 0);
+                            if !has_content {
+                                eprintln!(
+                                    "[gcode_gen] maskFill: '{}' produced all-background mask \
+                                     (zero-area path after thin-stroke dilation). Skipping.",
+                                    obj.id
+                                );
+                                lines.push(format!("; maskFill skipped: all-background mask for '{}'", obj.id));
+                            } else {
+                                let scan_params = super::mask_fill::MaskScanParams {
+                                    origin_x,
+                                    origin_y,
+                                    width_mm: obj.width,
+                                    height_mm: obj.height,
+                                    interval,
+                                    overscan: layer.overscan.max(0.0),
+                                    bidirectional: layer.bidirectional,
+                                    scanning_offset: layer.scanning_offset,
+                                    speed_mm_min: speed_mm_min,
+                                    s_max,
+                                    s_min: 0.0, // maskFill is always binary (constant power per run)
+                                    power_cmd: power_cmd.to_string(),
+                                    workspace_height,
+                                    origin_top,
+                                    rotation_rad,
+                                    passes: 1, // outer pass loop already handles multi-pass
+                                    grayscale_pixels: None, // maskFill uses binary fill
+                                };
+
+                                match super::mask_fill::scan_mask_to_gcode(
+                                    &pixels, mask_w, mask_h, &scan_params,
+                                ) {
+                                    Ok(scan_result) => {
+                                        for line in scan_result.gcode.lines() {
+                                            lines.push(line.to_string());
+                                        }
+                                        moves.extend(scan_result.moves.clone());
+                                        cut_distance += scan_result.cut_distance;
+                                        travel_distance += scan_result.travel_distance;
+                                        total_distance += scan_result.total_distance;
+                                        if !scan_result.moves.is_empty() {
+                                            let last = scan_result.moves.last().unwrap();
+                                            cur_x = last.x;
+                                            cur_y = last.y;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("[gcode_gen] maskFill scan error for '{}': {}", obj.id, e);
+                                        lines.push(format!("; maskFill scan error: {}", e));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
 
@@ -788,7 +883,7 @@ mod tests {
             mode: "line".to_string(),
             power: 100.0,
             power_min: 0.0,
-            speed: 20.0,
+            speed: 1200.0, // mm/min (was 20 mm/s before unit switch)
             passes: 1,
             power_mode: "constant".to_string(),
             interval: 0.1,
@@ -1049,6 +1144,171 @@ mod tests {
         );
         // Also verify there are actual scan moves (not an empty result)
         assert!(!xs.is_empty(), "Expected scan moves to be generated; got:\n{gcode}");
+    }
+
+    // SPEED-UNIT — after the mm/s → mm/min canonical switch, the ×60 multiplier
+    // is gone: a layer at 1200 mm/min must emit F1200 (not F72000).
+    // The ×60 line was at gcode_gen.rs:322 and has been removed; these tests
+    // are the regression guard.
+    #[test]
+    fn speed_unit_1200mmmin_emits_f1200() {
+        let mut layer = make_layer_line();
+        layer.speed = 1200.0; // mm/min — LightBurn-equivalent of 20 mm/s
+        let obj = make_rect_obj("r", 0.0, 0.0, 10.0, 10.0, layer);
+        let result = generate_gcode(&[obj], 100.0, 1000.0, false);
+        assert!(
+            result.gcode.contains("F1200"),
+            "Expected F1200 for 1200 mm/min layer; got:\n{}",
+            result.gcode
+        );
+        assert!(
+            !result.gcode.contains("F72000"),
+            "F72000 indicates leftover ×60 multiply; got:\n{}",
+            result.gcode
+        );
+    }
+
+    // LightBurn parity — the cut that prompted the unit switch:
+    // plywood at 480 mm/min, 60% power must emit F480.
+    /// MUST-FIX 4: Serde round-trip — CutObject with >1 PathSegment must survive
+    /// serialize → deserialize intact.
+    ///
+    /// Before this PR, the frontend never emitted multi-path CutObjects (single
+    /// contour only). The maskFill dispatch arm is the first code path that expects
+    /// `obj.paths` to carry multiple contours (compound shapes, glyphs). If the
+    /// Tauri IPC layer silently drops path segments the maskFill engrave is silently
+    /// wrong — only the first contour is rasterized, so holes and dropout-prone glyphs
+    /// look correct in tests but fail in production.
+    ///
+    /// This test serializes a CutObject with 3 PathSegments (H-shape: left vertical,
+    /// right vertical, crossbar) to JSON and back, then asserts all 3 segments and
+    /// all their points survive the round-trip.
+    #[test]
+    fn cutobject_multi_path_serde_roundtrip() {
+        let make_rect_path = |x0: f64, y0: f64, x1: f64, y1: f64| PathSegment {
+            points: vec![
+                Point { x: x0, y: y0 },
+                Point { x: x1, y: y0 },
+                Point { x: x1, y: y1 },
+                Point { x: x0, y: y1 },
+            ],
+            closed: true,
+        };
+
+        let obj = CutObject {
+            id: "H-compound".to_string(),
+            obj_type: "path".to_string(),
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+            paths: vec![
+                make_rect_path(0.0, 0.0, 2.0, 10.0),  // left vertical
+                make_rect_path(8.0, 0.0, 10.0, 10.0), // right vertical
+                make_rect_path(0.0, 4.0, 10.0, 6.0),  // crossbar
+            ],
+            layer: CutLayer {
+                mode: "maskFill".to_string(),
+                power: 100.0,
+                power_min: 0.0,
+                speed: 6000.0,
+                passes: 1,
+                power_mode: "constant".to_string(),
+                interval: 1.0,
+                air_assist: false,
+                cut_inner_first: false,
+                dither: "threshold".to_string(),
+                scan_angle: 0.0,
+                angle_increment: 0.0,
+                overcut: 0.0,
+                lead_in: 0.0,
+                lead_out: 0.0,
+                overscan: 0.0,
+                bidirectional: false,
+                cross_hatch: false,
+                scanning_offset: 0.0,
+                tab_spacing: 0.0,
+                tab_width: 0.0,
+                perforation_cut: 0.0,
+                perforation_skip: 0.0,
+                power_curve: None,
+                fill_order: None,
+                newsprint_cell_size: None,
+                newsprint_angle: None,
+            },
+            corner_radius: None,
+            rotation: 0.0,
+            priority: None,
+            group_id: None,
+            layer_index: None,
+        };
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&obj).expect("CutObject should serialize to JSON");
+
+        // Deserialize back
+        let restored: CutObject = serde_json::from_str(&json)
+            .expect("CutObject JSON should deserialize back to CutObject");
+
+        // All 3 path segments must survive
+        assert_eq!(
+            restored.paths.len(), 3,
+            "Expected 3 PathSegments after round-trip, got {}. \
+             IPC or serde is silently dropping compound paths.",
+            restored.paths.len()
+        );
+
+        // Each segment's point count must be preserved
+        for (i, seg) in restored.paths.iter().enumerate() {
+            assert_eq!(
+                seg.points.len(), 4,
+                "Segment {} should have 4 points after round-trip, got {}",
+                i, seg.points.len()
+            );
+            assert!(
+                seg.closed,
+                "Segment {} should be closed after round-trip",
+                i
+            );
+        }
+
+        // Spot-check a coordinate value that shouldn't be 0.0
+        let left_x1 = restored.paths[0].points[1].x;
+        assert!(
+            (left_x1 - 2.0).abs() < 1e-9,
+            "Left vertical segment point[1].x should be 2.0, got {}", left_x1
+        );
+        let crossbar_y0 = restored.paths[2].points[0].y;
+        assert!(
+            (crossbar_y0 - 4.0).abs() < 1e-9,
+            "Crossbar segment point[0].y should be 4.0, got {}", crossbar_y0
+        );
+
+        // Layer mode must survive (if "maskFill" were coerced to a default the
+        // dispatch arm would silently skip the object)
+        assert_eq!(
+            restored.layer.mode, "maskFill",
+            "Layer mode must survive serde round-trip; got '{}'", restored.layer.mode
+        );
+    }
+
+    #[test]
+    fn speed_unit_lightburn_parity_480mmmin() {
+        let mut layer = make_layer_line();
+        layer.speed = 480.0;
+        layer.power = 60.0;
+        let obj = make_rect_obj("r", 0.0, 0.0, 10.0, 10.0, layer);
+        let result = generate_gcode(&[obj], 100.0, 1000.0, false);
+        assert!(
+            result.gcode.contains("F480"),
+            "Expected F480 for 480 mm/min layer (LightBurn parity); got:\n{}",
+            result.gcode
+        );
+        assert!(
+            !result.gcode.contains("F28800"),
+            "F28800 indicates leftover ×60 multiply; got:\n{}",
+            result.gcode
+        );
     }
 }
 

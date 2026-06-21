@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { machineConnection } from "../../lib/machine/connection";
+import { useStore } from "../../app/store";
 
 // Standard GRBL setting descriptions
 const GRBL_SETTINGS: Record<number, { label: string; unit: string }> = {
@@ -22,7 +23,7 @@ const GRBL_SETTINGS: Record<number, { label: string; unit: string }> = {
   25: { label: "Homing seek rate", unit: "mm/min" },
   26: { label: "Homing debounce", unit: "milliseconds" },
   27: { label: "Homing pull-off", unit: "mm" },
-  30: { label: "Max spindle speed", unit: "RPM" },
+  30: { label: "Max laser power (S-value max)", unit: "" },
   31: { label: "Min spindle speed", unit: "RPM" },
   32: { label: "Laser mode", unit: "boolean" },
   100: { label: "X steps/mm", unit: "steps/mm" },
@@ -107,6 +108,12 @@ export function GrblSettingsDialog({ open, onClose }: Props) {
     }
     setEditError(null);
     await machineConnection.send(`$${key}=${value}`);
+    // C4: sync store for settings Kerf uses internally so G-code stays consistent
+    if (key === 30) {
+      useStore.getState().setGrblSValueMax(Number(value));
+    } else if (key === 32) {
+      useStore.getState().setGrblLaserMode(Number(value) === 1);
+    }
     setEditingKey(null);
     // Reload settings to verify
     await loadSettings();

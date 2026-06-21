@@ -81,32 +81,36 @@ const squarePoints = (x: number, y: number, s: number): PathPoint[] => [
   { x, y }, { x: x + s, y }, { x: x + s, y: y + s }, { x, y: y + s },
 ];
 
-// ─── F3: fill mode auto-route ─────────────────────────────────────────────────
+// ─── F3 (updated): fill mode → maskFill for non-rectangular shapes ───────────
+// Phase 2 retires the fill→offsetFill auto-route and replaces it with
+// fill→maskFill (hole-aware bitmap scanline fill). The old offsetFill redirect
+// warning is removed — even-odd masks fill overlaps once, so no warning needed.
 
-describe("F3: fill mode → offsetFill for non-rectangular shapes", () => {
+describe("F3 (maskFill): fill mode → maskFill for non-rectangular shapes", () => {
   const fillLayer: Layer = makeLayer({ mode: "fill", index: 0 });
   const fillLayers = [fillLayer, ...DEFAULT_LAYERS.slice(1)];
 
-  it("rectangle on fill layer stays fill (AABB == shape)", () => {
+  it("rectangle on fill layer stays fill (AABB fast path — bbox IS the shape)", () => {
     const { objects, warnings } = toCutObjectsForTest([makeRect("r1")], fillLayers);
     expect(objects).toHaveLength(1);
     expect(objects[0].layer.mode).toBe("fill");
     expect(warnings.some((w) => w.includes("redirected"))).toBe(false);
   });
 
-  it("ellipse on fill layer → offsetFill + warning", () => {
+  it("ungrouped ellipse on fill layer → maskFill (no warning, no offsetFill)", () => {
     const { objects, warnings } = toCutObjectsForTest([makeEllipse("e1")], fillLayers);
     expect(objects).toHaveLength(1);
-    expect(objects[0].layer.mode).toBe("offsetFill");
-    expect(warnings.some((w) => w.includes("redirected") && w.includes("e1"))).toBe(true);
+    expect(objects[0].layer.mode).toBe("maskFill");
+    // No redirected warning — even-odd replaces the buggy offsetFill path
+    expect(warnings.some((w) => w.includes("redirected"))).toBe(false);
   });
 
-  it("path on fill layer → offsetFill + warning", () => {
+  it("ungrouped path on fill layer → maskFill (retired offsetFill)", () => {
     const path = makePath("p1", squarePoints(0, 0, 10));
     const { objects, warnings } = toCutObjectsForTest([path], fillLayers);
     expect(objects).toHaveLength(1);
-    expect(objects[0].layer.mode).toBe("offsetFill");
-    expect(warnings.some((w) => w.includes("redirected"))).toBe(true);
+    expect(objects[0].layer.mode).toBe("maskFill");
+    expect(warnings.some((w) => w.includes("redirected"))).toBe(false);
   });
 
   it("rectangle on fill layer emits no redirect warning", () => {

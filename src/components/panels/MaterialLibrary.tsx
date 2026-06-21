@@ -224,7 +224,7 @@ export function MaterialLibrary() {
                   >
                     <span>{preset.mode === "fill" ? "Engrave" : "Cut"}</span>
                     <span style={{ fontSize: "9px", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
-                      {preset.power}% {preset.speed}mm/s x{preset.passes}
+                      {preset.power}% {preset.speed}mm/min x{preset.passes}
                     </span>
                   </button>
                 ))}

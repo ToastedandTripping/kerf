@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useStore } from "../../app/store";
 import { machineConnection, type ConnectionError } from "../../lib/machine/connection";
 import { generateGcode } from "../../lib/machine/gcodeGen";
-import { canStartJob, frameTargets } from "../../lib/machine/canStartJob";
+import { canStartJob, movesExtents, frameTargets, isWithinBounds } from "../../lib/machine/canStartJob";
 import { MACHINE_STATE_COLORS } from "../../lib/machine/machineStateDisplay";
 import type { StartCorner } from "../../app/types";
 
@@ -58,6 +58,16 @@ export function MachinePanel() {
   const workspaceHeight = useStore((s) => s.workspaceHeight);
   const consoleLines = useStore((s) => s.consoleLines);
   const setStatusMessage = useStore((s) => s.setStatusMessage);
+  const grblSValueMax = useStore((s) => s.grblSValueMax);
+  const setGrblSValueMax = useStore((s) => s.setGrblSValueMax);
+  const grblSoftLimits = useStore((s) => s.grblSoftLimits);
+  const grblHoming = useStore((s) => s.grblHoming);
+  const machineHomed = useStore((s) => s.machineHomed);
+  const softLimitsActive = useStore((s) => s.softLimitsActive);
+  const workCoordOffset = useStore((s) => s.workCoordOffset);
+  const workspaceVerified = useStore((s) => s.workspaceVerified);
+  const setWorkspaceSize = useStore((s) => s.setWorkspaceSize);
+  const setWorkspaceVerified = useStore((s) => s.setWorkspaceVerified);
 
   const [selectedPort, setSelectedPort] = useState("");
   const [ports, setPorts] = useState<Array<{ name: string; portType: string; vid: number | null; pid: number | null }>>([]);
@@ -66,6 +76,11 @@ export function MachinePanel() {
   const [generating, setGenerating] = useState(false);
   const [connectionError, setConnectionError] = useState<{ message: string; suggestions: string[] } | null>(null);
   const [sparseImageWarning, setSparseImageWarning] = useState(false);
+  const [confirmBedOpen, setConfirmBedOpen] = useState(false);
+  const [bedWInput, setBedWInput] = useState("");
+  const [bedHInput, setBedHInput] = useState("");
+  const [softLimitsConfirmOpen, setSoftLimitsConfirmOpen] = useState(false);
+  const [softLimitsEnabling, setSoftLimitsEnabling] = useState(false);
   const jobStartTimeRef = useRef<number>(0);
   const [elapsedSecs, setElapsedSecs] = useState(0);
 
@@ -479,6 +494,297 @@ export function MachinePanel() {
             <span>Z: <strong>{machinePosition.z.toFixed(2)}</strong></span>
           </div>
 
+          {/* Workstream A: soft limits banner — three states + enable/disable control */}
+          {machineConnected && (
+            <div style={{
+              fontSize: "10px",
+              padding: "5px 8px",
+              borderRadius: "var(--radius-sm)",
+              border: `1px solid ${softLimitsActive ? "rgba(74,226,138,0.2)" : "rgba(226,160,74,0.35)"}`,
+              borderLeft: softLimitsActive ? undefined : !grblSoftLimits ? "3px solid var(--accent-warm)" : undefined,
+              background: softLimitsActive ? "rgba(74,226,138,0.06)" : "rgba(226,160,74,0.08)",
+              color: softLimitsActive ? "var(--success)" : "var(--accent-warm)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "4px",
+            }}>
+              <span>
+                {softLimitsActive
+                  ? "Soft limits active — firmware will stop before frame edges"
+                  : grblSoftLimits && !machineHomed
+                    ? "Soft limits INACTIVE — home the machine first ($H)"
+                    : "Soft limits OFF — Kerf bounds checks are your only protection"}
+              </span>
+              {/* SPEC_GAP: Enable/Disable soft limits action */}
+              {!softLimitsEnabling && (
+                grblSoftLimits ? (
+                  <button
+                    onClick={async () => {
+                      await machineConnection.send("$20=0");
+                      addConsoleLine("$20=0 — soft limits disabled", "info");
+                      await machineConnection.queryGrblSettings();
+                    }}
+                    style={{
+                      alignSelf: "flex-start",
+                      fontSize: "9px",
+                      padding: "2px 6px",
+                      background: "var(--bg-input)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "var(--radius-sm)",
+                      color: "var(--text-muted)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Disable soft limits ($20=0)
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setSoftLimitsConfirmOpen(true)}
+                    style={{
+                      alignSelf: "flex-start",
+                      fontSize: "9px",
+                      padding: "2px 6px",
+                      background: "var(--bg-input)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "var(--radius-sm)",
+                      color: "var(--text-muted)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Enable soft limits…
+                  </button>
+                )
+              )}
+              {/* Enable confirmation — inline, same pattern as bed confirm */}
+              {softLimitsConfirmOpen && !grblSoftLimits && (
+                <div style={{
+                  marginTop: "2px",
+                  padding: "6px 8px",
+                  background: "var(--bg-input)",
+                  borderLeft: "2px solid var(--accent-warm)",
+                  borderRadius: "var(--radius-sm)",
+                  fontSize: "9px",
+                  color: "var(--text-secondary)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "5px",
+                }}>
+                  <span style={{ fontWeight: 600, color: "var(--accent-warm)" }}>
+                    Enabling soft limits writes $22=1 (homing required) and $20=1.
+                  </span>
+                  <span>
+                    GRBL will require a homing cycle at every power-on. If your machine has
+                    no working limit switches this will lock up on the next start.
+                  </span>
+                  <span style={{ fontWeight: 600 }}>
+                    Only proceed if you have working limit switches installed and tested.
+                  </span>
+                  <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+                    <button
+                      onClick={async () => {
+                        setSoftLimitsEnabling(true);
+                        setSoftLimitsConfirmOpen(false);
+                        try {
+                          await machineConnection.send("$22=1");
+                          addConsoleLine("$22=1 — homing cycle enabled", "info");
+                          await machineConnection.send("$20=1");
+                          addConsoleLine("$20=1 — soft limits enabled", "info");
+                          await machineConnection.queryGrblSettings();
+                          addConsoleLine("Soft limits enabled. Run Home ($H) to activate.", "info");
+                        } finally {
+                          setSoftLimitsEnabling(false);
+                        }
+                      }}
+                      style={{
+                        fontSize: "9px",
+                        padding: "2px 8px",
+                        cursor: "pointer",
+                        background: "var(--accent)",
+                        border: "none",
+                        color: "#fff",
+                        borderRadius: "var(--radius-sm)",
+                      }}
+                    >
+                      I have limit switches — Enable
+                    </button>
+                    <button
+                      onClick={() => setSoftLimitsConfirmOpen(false)}
+                      style={{
+                        fontSize: "9px",
+                        padding: "2px 6px",
+                        cursor: "pointer",
+                        background: "none",
+                        border: "1px solid var(--border)",
+                        color: "var(--text-muted)",
+                        borderRadius: "var(--radius-sm)",
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Workstream B: work coordinate offset warning */}
+          {machineConnected && (workCoordOffset.x !== 0 || workCoordOffset.y !== 0) && (
+            <div style={{
+              fontSize: "10px",
+              padding: "5px 8px",
+              borderRadius: "var(--radius-sm)",
+              border: "1px solid rgba(226,160,74,0.3)",
+              background: "rgba(226,160,74,0.06)",
+              color: "var(--accent-warm)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "3px",
+            }}>
+              <span>Work origin offset: X{workCoordOffset.x.toFixed(3)} Y{workCoordOffset.y.toFixed(3)} from machine zero</span>
+              <button
+                onClick={() => machineConnection.send("G92.1")}
+                style={{
+                  alignSelf: "flex-start",
+                  fontSize: "9px",
+                  padding: "2px 6px",
+                  background: "var(--bg-input)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                }}
+              >
+                Clear offset (G92.1)
+              </button>
+            </div>
+          )}
+
+          {/* Workstream E: unverified bed size prompt */}
+          {machineConnected && !workspaceVerified && (
+            <div style={{
+              fontSize: "10px",
+              padding: "6px 8px",
+              borderRadius: "var(--radius-sm)",
+              border: "1px solid rgba(226,74,74,0.35)",
+              background: "rgba(226,74,74,0.06)",
+              color: "var(--danger)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "4px",
+            }}>
+              <span style={{ fontWeight: 600 }}>Bed size unconfirmed</span>
+              <span style={{ color: "var(--text-secondary)" }}>
+                Machine did not report $130/$131. Confirm bed size before cutting.
+              </span>
+              {!confirmBedOpen ? (
+                <button
+                  onClick={() => {
+                    setBedWInput(String(workspaceWidth));
+                    setBedHInput(String(workspaceHeight));
+                    setConfirmBedOpen(true);
+                  }}
+                  style={{
+                    alignSelf: "flex-start",
+                    fontSize: "9px",
+                    padding: "2px 8px",
+                    background: "var(--bg-input)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius-sm)",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                  }}
+                >
+                  Set bed size
+                </button>
+              ) : (
+                <div style={{ display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap" }}>
+                  <span style={{ color: "var(--text-secondary)" }}>W:</span>
+                  <input
+                    type="number"
+                    value={bedWInput}
+                    onChange={(e) => setBedWInput(e.target.value)}
+                    style={{
+                      width: "56px", fontSize: "10px", padding: "2px 4px",
+                      background: "var(--bg-input)", border: "1px solid var(--border)",
+                      borderRadius: "var(--radius-sm)", color: "var(--text-primary)", textAlign: "right",
+                    }}
+                  />
+                  <span style={{ color: "var(--text-muted)", fontSize: "9px" }}>mm</span>
+                  <span style={{ color: "var(--text-secondary)" }}>H:</span>
+                  <input
+                    type="number"
+                    value={bedHInput}
+                    onChange={(e) => setBedHInput(e.target.value)}
+                    style={{
+                      width: "56px", fontSize: "10px", padding: "2px 4px",
+                      background: "var(--bg-input)", border: "1px solid var(--border)",
+                      borderRadius: "var(--radius-sm)", color: "var(--text-primary)", textAlign: "right",
+                    }}
+                  />
+                  <span style={{ color: "var(--text-muted)", fontSize: "9px" }}>mm</span>
+                  <button
+                    onClick={() => {
+                      const w = Math.max(1, Number(bedWInput) || 1);
+                      const h = Math.max(1, Number(bedHInput) || 1);
+                      setWorkspaceSize(w, h);
+                      setWorkspaceVerified(true);
+                      setConfirmBedOpen(false);
+                    }}
+                    style={{
+                      fontSize: "9px", padding: "2px 8px", cursor: "pointer",
+                      background: "var(--accent)", border: "none",
+                      color: "#fff", borderRadius: "var(--radius-sm)",
+                    }}
+                  >
+                    Confirm
+                  </button>
+                  <button
+                    onClick={() => setConfirmBedOpen(false)}
+                    style={{
+                      fontSize: "9px", padding: "2px 6px", cursor: "pointer",
+                      background: "none", border: "1px solid var(--border)",
+                      color: "var(--text-muted)", borderRadius: "var(--radius-sm)",
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Laser power max (S-value / $30) */}
+          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <span style={{
+              fontSize: "10px", color: "var(--text-muted)", minWidth: "50px",
+              textTransform: "uppercase", letterSpacing: "0.3px",
+            }}>
+              Power max ($30)
+            </span>
+            <input
+              type="number"
+              min="1"
+              max="65535"
+              value={grblSValueMax}
+              onChange={(e) => setGrblSValueMax(Math.max(1, Number(e.target.value)))}
+              style={{
+                width: "60px",
+                background: "var(--bg-input)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)",
+                color: "var(--text-primary)",
+                padding: "3px 6px",
+                fontSize: "11px",
+                textAlign: "right",
+              }}
+            />
+            {!machineConnected && (
+              <span style={{ fontSize: "10px", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                offline default — connect to read from machine
+              </span>
+            )}
+          </div>
+
           {/* Jog controls */}
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "2px" }}>
             <div style={{ fontSize: "10px", color: "var(--text-muted)", marginBottom: "2px" }}>
@@ -486,18 +792,19 @@ export function MachinePanel() {
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 32px)", gap: "2px" }}>
               <div />
-              <JogButton label="&#x25B2;" onClick={() => machineConnection.jog("Y", jogStep)} title="Y+" />
+              <JogButton label="&#x25B2;" onClick={() => machineConnection.jog("Y", jogStep)} title="Y+" disabled={machineState === "alarm"} />
               <div />
-              <JogButton label="&#x25C0;" onClick={() => machineConnection.jog("X", -jogStep)} title="X-" />
+              <JogButton label="&#x25C0;" onClick={() => machineConnection.jog("X", -jogStep)} title="X-" disabled={machineState === "alarm"} />
               <JogButton
                 label="&#x2302;"
                 onClick={() => machineConnection.home()}
-                title="Home"
-                accent
+                title={grblHoming ? "Home ($H)" : "Home disabled — machine has no limit switches ($22=0)"}
+                accent={grblHoming}
+                disabled={!grblHoming}
               />
-              <JogButton label="&#x25B6;" onClick={() => machineConnection.jog("X", jogStep)} title="X+" />
+              <JogButton label="&#x25B6;" onClick={() => machineConnection.jog("X", jogStep)} title="X+" disabled={machineState === "alarm"} />
               <div />
-              <JogButton label="&#x25BC;" onClick={() => machineConnection.jog("Y", -jogStep)} title="Y-" />
+              <JogButton label="&#x25BC;" onClick={() => machineConnection.jog("Y", -jogStep)} title="Y-" disabled={machineState === "alarm"} />
               <div />
             </div>
             {/* Step size */}
@@ -740,19 +1047,23 @@ export function MachinePanel() {
           {(() => {
             const startGate = canStartJob({
               machineConnected, jobRunning, gcodeResult, gcodeStale,
-              workspaceWidth, workspaceHeight, originTop,
+              workspaceWidth, workspaceHeight, originTop, workspaceVerified,
             });
             // FRAME contract change (F15): framing traces the true G-code
             // extents, so generated, non-stale G-code is now a prerequisite
             // (it used to work from design bounds alone).
+            // WARNING-2: also block on unverified workspace — FRAME drives the
+            // head to G-code extents; if the bed size is wrong it can crash.
             const frameDisabled =
               !machineConnected || machineState !== "idle" || jobRunning ||
-              !gcodeResult || gcodeStale;
-            const frameHint = !gcodeResult
-              ? "Generate G-code first"
-              : gcodeStale
-                ? "Design changed -- regenerate G-code"
-                : undefined;
+              !gcodeResult || gcodeStale || !workspaceVerified;
+            const frameHint = !workspaceVerified
+              ? "Confirm bed size before framing"
+              : !gcodeResult
+                ? "Generate G-code first"
+                : gcodeStale
+                  ? "Design changed -- regenerate G-code"
+                  : undefined;
             return (
           <div style={{ display: "flex", gap: "4px" }}>
             <button
@@ -779,10 +1090,26 @@ export function MachinePanel() {
                 // Machine-frame moves extents — the old design→machine Y-flip
                 // is deliberately DELETED, not ported: moves[] is already
                 // machine-frame, flipping again would trace a mirrored rect.
-                const moves = useStore.getState().gcodeResult?.moves ?? [];
+                const storeState = useStore.getState();
+                // WARNING-2: explicit guard — frameDisabled already blocks the button,
+                // but guard here too so the handler is safe if called by other paths.
+                if (!storeState.workspaceVerified) {
+                  addConsoleLine("FRAME blocked: confirm bed size before framing", "error");
+                  return;
+                }
+                const moves = storeState.gcodeResult?.moves ?? [];
                 const targets = frameTargets(moves);
                 if (!targets) {
                   addConsoleLine("Nothing to cut -- no moves in the generated G-code", "error");
+                  return;
+                }
+                // Bounds check: same gate that START uses — never send out-of-range G0s
+                const ext = movesExtents(moves)!; // targets non-null implies ext non-null
+                if (!isWithinBounds(ext, storeState.workspaceWidth, storeState.workspaceHeight, storeState.originTop)) {
+                  addConsoleLine(
+                    "FRAME blocked: G-code extends outside workspace bounds. Move or resize the design to fit.",
+                    "error",
+                  );
                   return;
                 }
                 // F16: M5 guard before framing clears any stale M3 from a
@@ -837,7 +1164,7 @@ export function MachinePanel() {
                 border: "none",
                 fontSize: "11px",
                 fontWeight: 700,
-                cursor: machineConnected && jobRunning ? "pointer" : machineConnected ? "default" : "not-allowed",
+                cursor: machineConnected && jobRunning ? "pointer" : "not-allowed",
                 background: "rgba(226,74,74,0.2)",
                 color: "var(--danger)",
                 opacity: !machineConnected ? 0.4 : !jobRunning ? 0.4 : 1,
@@ -871,14 +1198,15 @@ function formatTimeMSS(totalSecs: number): string {
 }
 
 function JogButton({
-  label, onClick, title, accent,
+  label, onClick, title, accent, disabled,
 }: {
-  label: string; onClick: () => void; title: string; accent?: boolean;
+  label: string; onClick: () => void; title: string; accent?: boolean; disabled?: boolean;
 }) {
   return (
     <button
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
       title={title}
+      disabled={disabled}
       style={{
         width: "32px",
         height: "32px",
@@ -889,8 +1217,9 @@ function JogButton({
         border: `1px solid ${accent ? "var(--accent)" : "var(--border)"}`,
         borderRadius: "var(--radius-sm)",
         color: accent ? "var(--accent)" : "var(--text-primary)",
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
         fontSize: "14px",
+        opacity: disabled ? 0.4 : 1,
       }}
     >
       {label}
