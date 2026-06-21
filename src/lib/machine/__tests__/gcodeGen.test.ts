@@ -340,3 +340,98 @@ describe("fillLine dual-emission (regression guard for dropped-pass bug)", () =>
     expect(lineObjs[0].id).toMatch(/line_overlay/);
   });
 });
+
+// ─── B1: M4 default + $32=0 warning ──────────────────────────────────────────
+
+describe("B1 — M4 default and $32=0 warning at job generation", () => {
+  beforeEach(() => {
+    mockInvoke.mockReset();
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "generate_gcode") return rustResult();
+      if (cmd === "generate_image_gcode") return undefined;
+      return undefined;
+    });
+    useStore.setState({
+      objects: [],
+      objectsById: new Map(),
+      selectedIds: [],
+      selectedSet: new Set(),
+      undoStack: [],
+      redoStack: [],
+      consoleLines: [],
+      layers: DEFAULT_LAYERS,
+      grblLaserMode: false,
+      grblSValueMax: 1000,
+    });
+  });
+
+  it("B1a: DEFAULT_LAYERS Engrave layer defaults to powerMode='variable' (M4)", () => {
+    const engrave = DEFAULT_LAYERS[0];
+    expect(engrave.mode).toBe("fill");
+    expect(engrave.powerMode).toBe("variable");
+  });
+
+  it("B1a: DEFAULT_LAYERS line layers retain powerMode='constant' (M3)", () => {
+    const lineLayers = DEFAULT_LAYERS.filter((l) => l.mode === "line");
+    for (const layer of lineLayers) {
+      expect(layer.powerMode).toBe("constant");
+    }
+  });
+
+  it("B1c: warns when M4 layer is in job but $32=0 (laser mode disabled)", async () => {
+    // Engrave layer is already powerMode='variable' in DEFAULT_LAYERS
+    useStore.setState({ grblLaserMode: false });
+    useStore.getState().addObject(makeRect("r1", 0, 0, 10, 10));
+
+    await generateGcode();
+
+    const warnings = useStore.getState().consoleLines.map((l) => l.text);
+    const has32Warning = warnings.some(
+      (t) => t.includes("$32") && t.includes("M4") && t.includes("variable power")
+    );
+    expect(has32Warning).toBe(true);
+  });
+
+  it("B1c: does NOT warn about $32 when $32=1 (laser mode enabled)", async () => {
+    useStore.setState({ grblLaserMode: true });
+    useStore.getState().addObject(makeRect("r1", 0, 0, 10, 10));
+
+    await generateGcode();
+
+    const warnings = useStore.getState().consoleLines.map((l) => l.text);
+    const has32Warning = warnings.some(
+      (t) => t.includes("$32") && t.includes("M4") && t.includes("variable power")
+    );
+    expect(has32Warning).toBe(false);
+  });
+
+  it("B1c: does NOT warn about $32 when all layers are M3 (constant power)", async () => {
+    // Override all layers to constant power
+    useStore.setState({
+      grblLaserMode: false,
+      layers: DEFAULT_LAYERS.map((l) => ({ ...l, powerMode: "constant" as const })),
+    });
+    useStore.getState().addObject(makeRect("r1", 0, 0, 10, 10));
+
+    await generateGcode();
+
+    const warnings = useStore.getState().consoleLines.map((l) => l.text);
+    const has32Warning = warnings.some(
+      (t) => t.includes("$32") && t.includes("M4") && t.includes("variable power")
+    );
+    expect(has32Warning).toBe(false);
+  });
+
+  it("B1 regression: M3/constant layer emits unchanged layer settings (no silent M4 upgrade)", async () => {
+    useStore.setState({
+      layers: DEFAULT_LAYERS.map((l) => ({ ...l, powerMode: "constant" as const })),
+    });
+    useStore.getState().addObject(makeRect("r1", 0, 0, 10, 10));
+
+    await generateGcode();
+
+    const objects = sentCutObjects();
+    expect(objects).toHaveLength(1);
+    expect((objects[0].layer as Record<string, unknown>).powerMode).toBe("constant");
+  });
+});

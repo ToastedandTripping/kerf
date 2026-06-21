@@ -736,22 +736,25 @@ function AdvancedSettings({ layer, onUpdate }: { layer: Layer; onUpdate: (partia
               </SettingRow>
             </>
           )}
-          {layer.mode === "fill" && (
+          {(layer.mode === "fill" || layer.mode === "fillLine") && (
             <>
+              {/* B2: cap raised to 30mm; M4 is the primary fix, overscan is M3 fallback */}
               <SettingRow label="Overscan">
                 <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                  <input type="number" min="0" max="20" step="0.5" value={layer.overscan}
-                    onChange={(e) => onUpdate({ overscan: Math.max(0, Number(e.target.value)) })}
+                  <input type="number" min="0" max="30" step="0.5" value={layer.overscan}
+                    onChange={(e) => onUpdate({ overscan: Math.max(0, Math.min(30, Number(e.target.value))) })}
                     style={{ ...inputStyle, width: "50px", textAlign: "right" }}
                   />
                   <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>mm</span>
                 </div>
               </SettingRow>
+              {/* B3: Scan Offset (zipper fix) — enter half the measured reverse-row gap */}
               <SettingRow label="Scan Offset">
                 <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                   <input type="number" min="-5" max="5" step="0.01" value={layer.scanningOffset}
                     onChange={(e) => onUpdate({ scanningOffset: Number(e.target.value) })}
                     style={{ ...inputStyle, width: "50px", textAlign: "right" }}
+                    title="Bidirectional zipper fix: enter half the measured gap between forward and reverse rows"
                   />
                   <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>mm</span>
                 </div>

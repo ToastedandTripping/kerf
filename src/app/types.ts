@@ -194,15 +194,25 @@ const layerDefaults = {
   visible: true, locked: false, output: true, powerMin: 0, powerMode: "constant" as PowerMode,
   interval: 0.1, airAssist: true, cutInnerFirst: true, dither: "floydSteinberg" as const,
   scanAngle: 0, angleIncrement: 0,
-  overcut: 0, leadIn: 0, leadOut: 0, overscan: 2.5, bidirectional: true,
+  // B2: overscan raised from 2.5mm to 5mm — 2.5mm was ~10× short of the ~25mm
+  // accel distance at 6000 mm/min (v²/2a, a=200 mm/s²). 5mm is a sane M3
+  // fallback; M4 (variable power) is the primary fix for accel/decel unevenness.
+  // Cap is enforced in LayerPanel at 30mm (enough for slow feeds; avoids
+  // wasting bed on fast fills where M4 is already handling the accel zone).
+  overcut: 0, leadIn: 0, leadOut: 0, overscan: 5.0, bidirectional: true,
   crossHatch: false, scanningOffset: 0, tabSpacing: 0, tabWidth: 2,
   kerfOffset: 0, perforationCut: 0, perforationSkip: 0,
 };
 
 // Fix 4: Engrave-before-cut ordering (industry convention: engrave/score first
 // so pieces stay in place while being engraved, cut last to release them).
+//
+// B1: fill/fillLine layers default to powerMode "variable" (M4) so GRBL scales
+// laser power with feedrate through accel/decel — the root fix for surface
+// unevenness. Line layers keep "constant" (M3) for constant-speed through-cuts.
+// Saved projects carry their stored powerMode; this default only affects new layers.
 export const DEFAULT_LAYERS: Layer[] = [
-  { index: 0, name: "Engrave", color: "#e24a4a", mode: "fill", power: 50, speed: 6000, passes: 1, ...layerDefaults, airAssist: false },
+  { index: 0, name: "Engrave", color: "#e24a4a", mode: "fill", power: 50, speed: 6000, passes: 1, ...layerDefaults, airAssist: false, powerMode: "variable" as PowerMode },
   { index: 1, name: "Score", color: "#4ae28a", mode: "line", power: 30, speed: 3000, passes: 1, ...layerDefaults },
   { index: 2, name: "Cut", color: "#4a90e2", mode: "line", power: 100, speed: 1200, passes: 1, ...layerDefaults },
   { index: 3, name: "Custom 4", color: "#ff8000", mode: "line", power: 100, speed: 1200, passes: 1, ...layerDefaults },

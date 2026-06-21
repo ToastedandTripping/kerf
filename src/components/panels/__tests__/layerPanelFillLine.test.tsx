@@ -157,4 +157,28 @@ describe("LayerPanel — fillLine mode", () => {
     const { container } = render(<LayerPanel />);
     expect(container.textContent).toContain("fill+line");
   });
+
+  // B3: overscan and scan offset controls appear in fillLine advanced settings
+  it("B3: Overscan control is present in Advanced section for fillLine mode", () => {
+    const { container } = render(<LayerPanel />);
+    const toggleBtns = container.querySelectorAll("button[aria-expanded]");
+    fireEvent.click(toggleBtns[0]);
+    // Expand advanced settings
+    const advButtons = Array.from(container.querySelectorAll("button")).filter(
+      (b) => b.textContent?.includes("Advanced"),
+    );
+    if (advButtons.length > 0) fireEvent.click(advButtons[0]);
+    expect(container.textContent).toContain("Overscan");
+  });
+
+  it("B3: Scan Offset control is present in Advanced section for fillLine mode", () => {
+    const { container } = render(<LayerPanel />);
+    const toggleBtns = container.querySelectorAll("button[aria-expanded]");
+    fireEvent.click(toggleBtns[0]);
+    const advButtons = Array.from(container.querySelectorAll("button")).filter(
+      (b) => b.textContent?.includes("Advanced"),
+    );
+    if (advButtons.length > 0) fireEvent.click(advButtons[0]);
+    expect(container.textContent).toContain("Scan Offset");
+  });
 });

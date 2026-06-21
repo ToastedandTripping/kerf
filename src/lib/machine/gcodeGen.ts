@@ -548,7 +548,7 @@ export async function generateGcode(): Promise<GcodeResult> {
     store.addConsoleLine(w, "info");
   }
 
-  // M3 constant-power warnings
+  // M3 constant-power advisory
   for (const obj of cutObjects) {
     if (obj.layer.powerMode !== "variable") {
       store.addConsoleLine(
@@ -556,6 +556,22 @@ export async function generateGcode(): Promise<GcodeResult> {
         "warning",
       );
       break; // One warning is enough
+    }
+  }
+
+  // B1: $32=0 + M4 warning — connect-time grblLaserMode can go stale (user
+  // toggles $32 after connecting, or machine wasn't queried). Fire this warning
+  // at job-generation time so it's current. Without $32=1, GRBL treats M4 like
+  // M3 (constant power) and may fire the laser during S0/travel moves on some
+  // builds — defeating the M4 fix entirely.
+  if (!store.grblLaserMode) {
+    const hasVariableLayer = cutObjects.some((obj) => obj.layer.powerMode === "variable");
+    if (hasVariableLayer) {
+      store.addConsoleLine(
+        "M4 (variable power) is selected but GRBL laser mode ($32) is disabled. " +
+        "The laser will use constant power — run $32=1 in the console to enable dynamic power scaling.",
+        "warning",
+      );
     }
   }
 

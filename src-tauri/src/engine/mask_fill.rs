@@ -1362,4 +1362,135 @@ G1 X1.172 Y199.414 F6000 S0";
             first_rapid_y_top
         );
     }
+
+    // ─── B1 (Phase B) M4 + S0 bracketing invariant ───────────────────────────
+
+    /// B1d: Verify that M4 (variable power) maskFill runs still bracket each
+    /// engrave run with S0 overscan lead-in/out and end with M5 — confirming
+    /// the laser does NOT fire during travel or overscan under M4.
+    ///
+    /// Under GRBL M4 (laser mode, $32=1): the laser fires only when moving AND
+    /// S > 0. S0 under M4 holds the laser off, so the S0 overscan brackets
+    /// and the M5 per-run end are still necessary and correct with M4.
+    ///
+    /// This test asserts:
+    ///   1. Every engrave G1 move with S > 0 is preceded (in the same run) by
+    ///      an `M4 S<target>` command (not M3).
+    ///   2. Every run that starts ends with `M5`.
+    ///   3. The overscan lead-in G1 S0 precedes the M4 power-on command.
+    #[test]
+    fn m4_maskfill_brackets_s0_and_ends_with_m5() {
+        let mut params = base_scan_params();
+        params.power_cmd = "M4".to_string();
+        params.overscan = 1.0;
+        params.bidirectional = false;
+        params.width_mm = 6.0;
+        params.height_mm = 3.0;
+        params.interval = 1.0;
+        params.passes = 1;
+
+        // Simple 3-row 6-pixel-wide filled mask (all filled, no holes)
+        let w = 6usize;
+        let h = 3usize;
+        let pixels = vec![0u8; w * h]; // all black = all filled
+
+        let result = scan_mask_to_gcode(&pixels, w, h, &params)
+            .expect("M4 maskFill scan should succeed");
+
+        let lines: Vec<&str> = result.gcode.lines().collect();
+
+        // 1. Verify all power-on commands are M4 (not M3)
+        let m3_count = lines.iter().filter(|l| l.starts_with("M3 ")).count();
+        assert_eq!(
+            m3_count, 0,
+            "M4 maskFill must not emit any M3 commands; found {} M3 lines.\nG-code:\n{}",
+            m3_count, result.gcode
+        );
+        let m4_count = lines.iter().filter(|l| l.starts_with("M4 ")).count();
+        assert!(
+            m4_count > 0,
+            "M4 maskFill must emit at least one M4 command; found none.\nG-code:\n{}",
+            result.gcode
+        );
+
+        // 2. Every M5 must be present (one per engrave run)
+        let m5_count = lines.iter().filter(|l| l.trim() == "M5").count();
+        assert!(
+            m5_count > 0,
+            "M4 maskFill must emit M5 after each run to disable the laser; found none.\nG-code:\n{}",
+            result.gcode
+        );
+
+        // 3. The pattern within each run must be: G1 S0 (overscan) → M4 S<n> → G1 S<n> → M5.
+        //    Verify that every M4 command is immediately preceded by a G1 S0 line
+        //    (the overscan lead-in bracket).
+        for (i, line) in lines.iter().enumerate() {
+            if line.starts_with("M4 ") {
+                // Find the closest preceding G1 line
+                let prev_g1 = lines[..i].iter().rev().find(|l| l.starts_with("G1 "));
+                assert!(
+                    prev_g1.map(|l| l.contains("S0")).unwrap_or(false),
+                    "M4 power-on at line {} ({}) must be preceded by a G1 S0 overscan bracket; \
+                     preceding G1 was: {:?}\nFull G-code:\n{}",
+                    i, line, prev_g1, result.gcode
+                );
+            }
+        }
+
+        // 4. Every M4 command must be followed by M5 before the next G0 or end of output
+        for (i, line) in lines.iter().enumerate() {
+            if line.starts_with("M4 ") {
+                let rest = &lines[i + 1..];
+                let m5_before_g0 = rest.iter().any(|l| {
+                    if l.trim() == "M5" { return true; }
+                    if l.starts_with("G0 ") { return false; }
+                    false
+                });
+                // Walk rest to check ordering
+                let mut found_m5 = false;
+                for next in rest {
+                    if next.trim() == "M5" { found_m5 = true; break; }
+                    if next.starts_with("G0 ") { break; }
+                }
+                let _ = m5_before_g0; // silence unused-variable warning on the closure form
+                assert!(
+                    found_m5,
+                    "M4 command at line {} ({}) must be followed by M5 before next G0; \
+                     laser would remain enabled during travel.\nFull G-code:\n{}",
+                    i, line, result.gcode
+                );
+            }
+        }
+    }
+
+    /// B1 regression: M3 (constant power) maskFill run continues to emit M3,
+    /// not M4. The power_cmd path is parametric; this guards against accidental
+    /// hardcoding after B1 default-flip changes.
+    #[test]
+    fn m3_maskfill_still_emits_m3_not_m4() {
+        let mut params = base_scan_params();
+        params.power_cmd = "M3".to_string(); // explicit constant-power layer
+        params.overscan = 0.0;
+        params.bidirectional = false;
+        params.width_mm = 4.0;
+        params.height_mm = 2.0;
+        params.interval = 1.0;
+        params.passes = 1;
+
+        let w = 4usize;
+        let h = 2usize;
+        let pixels = vec![0u8; w * h]; // all filled
+
+        let result = scan_mask_to_gcode(&pixels, w, h, &params)
+            .expect("M3 maskFill scan should succeed");
+
+        assert!(
+            result.gcode.contains("M3 "),
+            "M3 (constant-power) maskFill must emit M3 commands; gcode:\n{}", result.gcode
+        );
+        assert!(
+            !result.gcode.contains("M4 "),
+            "M3 (constant-power) maskFill must NOT emit M4 commands; gcode:\n{}", result.gcode
+        );
+    }
 }

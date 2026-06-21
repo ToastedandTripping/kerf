@@ -92,6 +92,11 @@ export default function App() {
   const setDialogData = useStore((s) => s.setDialogData);
   const [recoveryOffer, setRecoveryOffer] = useState<{ timestamp: number } | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(shouldShowOnboarding);
+  // B5: MaterialLibrary and PropertiesPanel collapsed by default so LayerPanel
+  // (the primary working surface) gets more room. State is local — no Zustand
+  // selector, no new object/array return, no Error-185 risk.
+  const [materialLibraryOpen, setMaterialLibraryOpen] = useState(false);
+  const [propertiesPanelOpen, setPropertiesPanelOpen] = useState(false);
 
   useEffect(() => {
     startAutoSave(60000);
@@ -177,14 +182,68 @@ export default function App() {
             overflow: "hidden",
           }}
         >
-          {/* Scrollable upper zone: panels */}
+          {/* Scrollable upper zone: LayerPanel gets priority; secondary panels
+              are collapsible (closed by default) so expand/adjust knobs is comfortable. */}
           <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
             <LayerPanel />
-            <MaterialLibrary />
-            <PropertiesPanel />
+            {/* B5: collapsible header for MaterialLibrary — closed by default */}
+            <div>
+              <button
+                onClick={() => setMaterialLibraryOpen((v) => !v)}
+                style={{
+                  width: "100%",
+                  padding: "6px 12px",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  background: "none",
+                  border: "none",
+                  borderBottom: materialLibraryOpen ? "none" : "1px solid var(--border)",
+                  color: "var(--text-secondary)",
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.5px",
+                  cursor: "pointer",
+                  textAlign: "left",
+                }}
+              >
+                <span>Materials</span>
+                <span style={{ fontSize: "10px", opacity: 0.6 }}>{materialLibraryOpen ? "▲" : "▼"}</span>
+              </button>
+              {materialLibraryOpen && <MaterialLibrary />}
+            </div>
+            {/* B5: collapsible header for PropertiesPanel — closed by default */}
+            <div>
+              <button
+                onClick={() => setPropertiesPanelOpen((v) => !v)}
+                style={{
+                  width: "100%",
+                  padding: "6px 12px",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  background: "none",
+                  border: "none",
+                  borderBottom: propertiesPanelOpen ? "none" : "1px solid var(--border)",
+                  color: "var(--text-secondary)",
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.5px",
+                  cursor: "pointer",
+                  textAlign: "left",
+                }}
+              >
+                <span>Properties</span>
+                <span style={{ fontSize: "10px", opacity: 0.6 }}>{propertiesPanelOpen ? "▲" : "▼"}</span>
+              </button>
+              {propertiesPanelOpen && <PropertiesPanel />}
+            </div>
           </div>
-          {/* Fixed bottom zone: machine controls always visible */}
-          <div style={{ flexShrink: 0, borderTop: "1px solid var(--border)", maxHeight: "50%", overflow: "auto" }}>
+          {/* Fixed bottom zone: machine controls always visible; cap reduced from
+              50% to 40% since the layer panel now has more vertical room. */}
+          <div style={{ flexShrink: 0, borderTop: "1px solid var(--border)", maxHeight: "40%", overflow: "auto" }}>
             <MachinePanel />
           </div>
         </div>
