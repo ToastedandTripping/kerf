@@ -268,12 +268,12 @@ pub fn scan_mask_to_gcode<'a>(
                                 params.s_min + fraction * (params.s_max - params.s_min)
                             };
 
-                            // F4 fix: reverse rows count from orig_start (original run end),
-                            // not from run_start (the swapped position).
+                            // Forward rows count up from orig_start (left edge of run).
+                            // Reverse rows count DOWN from orig_end (right edge of run).
                             let px_img = if run_forward {
                                 params.origin_x + (*orig_start + i + 1) as f64 * interval + offset
                             } else {
-                                params.origin_x + (*orig_start as i64 - i as i64 - 1).max(0) as f64 * interval + offset
+                                params.origin_x + (*orig_end as i64 - i as i64 - 1).max(0) as f64 * interval + offset
                             };
 
                             let (px, py) = if has_rotation {
@@ -740,16 +740,97 @@ mod tests {
         );
     }
 
-    /// Phase 0: golden snapshot — verify the scanner correctly handles
-    /// bidirectional + grayscale-equivalent binary + overscan + rotation together.
+    /// Phase 0: EXACT X positions for grayscale bidirectional row pair.
     ///
-    /// This exercises the reverse-row index logic (F4 fix) AND the overscan
-    /// deceleration path in a single mask. A regression in extraction would
-    /// break this test.
+    /// Run at cols 2..5 (orig_start=2, orig_end=5).
+    /// Forward row (row 0) must emit X = [3.0, 4.0, 5.0] (counts up from orig_start).
+    /// Reverse row (row 1) must emit X = [4.0, 3.0, 2.0] (counts DOWN from orig_end).
     ///
-    /// Mask: 8×4 pixels, checkerboard-like pattern with distinct rows so a
-    /// reversed row index error produces a wrong X position.
-    /// Overscan: 1.0mm.  Bidirectional: true.  Rotation: 45° (has_rotation=true path).
+    /// With the regression (*orig_start instead of *orig_end in the reverse branch),
+    /// the reverse row would produce X = [1.0, 0.0, 0.0] — this test catches that.
+    ///
+    /// S-value filtering: grayscale_pixels[2..5] = 127 (mid-gray → S > 0).
+    /// We filter to G1 moves with S > 0 to exclude the initial S0 move each row emits.
+    #[test]
+    fn phase0_grayscale_bidi_exact_x_positions() {
+        let w = 10usize;
+        let h = 2usize;
+
+        // Mask: only pixels 2,3,4 are filled in each row (0=filled, 255=background)
+        let mut mask_pixels = vec![255u8; w * h];
+        mask_pixels[2] = 0; mask_pixels[3] = 0; mask_pixels[4] = 0;   // row 0
+        mask_pixels[w + 2] = 0; mask_pixels[w + 3] = 0; mask_pixels[w + 4] = 0; // row 1
+
+        // Grayscale data: mid-gray (127) at positions 2,3,4 → S > 0; rest white (255) → S=0
+        let mut gray_pixels = vec![255u8; w * h];
+        gray_pixels[2] = 127; gray_pixels[3] = 127; gray_pixels[4] = 127;
+        gray_pixels[w + 2] = 127; gray_pixels[w + 3] = 127; gray_pixels[w + 4] = 127;
+
+        let mut params = base_scan_params();
+        params.bidirectional = true;
+        params.height_mm = 2.0;
+        params.grayscale_pixels = Some(&gray_pixels);
+
+        let result = scan_mask_to_gcode(&mask_pixels, w, h, &params).expect("should succeed");
+
+        // Extract G1 moves with S > 0 (engrave moves, not S0 blanks)
+        let engrave_x: Vec<f64> = result.gcode.lines()
+            .filter(|l| l.starts_with("G1 X"))
+            .filter(|l| {
+                l.split_whitespace()
+                    .find(|t| t.starts_with("S"))
+                    .and_then(|t| t[1..].parse::<f64>().ok())
+                    .map(|s| s > 0.0)
+                    .unwrap_or(false)
+            })
+            .filter_map(|l| {
+                l.split_whitespace()
+                    .find(|t| t.starts_with("X"))
+                    .and_then(|t| t[1..].parse::<f64>().ok())
+            })
+            .collect();
+
+        assert_eq!(
+            engrave_x.len(), 6,
+            "Expected 6 engrave moves (3 forward + 3 reverse); got {:?}\ngcode:\n{}",
+            engrave_x, result.gcode
+        );
+
+        // First 3 = forward row: X must count UP from orig_start=2 → [3.0, 4.0, 5.0]
+        let forward_x = &engrave_x[..3];
+        assert_eq!(
+            forward_x, &[3.0f64, 4.0, 5.0],
+            "Forward row X positions wrong; got {:?}", forward_x
+        );
+
+        // Last 3 = reverse row: X must count DOWN from orig_end=5 → [4.0, 3.0, 2.0]
+        let reverse_x = &engrave_x[3..];
+        assert_eq!(
+            reverse_x, &[4.0f64, 3.0, 2.0],
+            "Reverse row X positions wrong (regression: orig_start used instead of orig_end); \
+             got {:?} — expected [4.0, 3.0, 2.0]",
+            reverse_x
+        );
+    }
+
+    /// Phase 0: golden byte snapshot — bidirectional + binary + overscan + rotation.
+    ///
+    /// True characterization test: asserts full G-code string equality so any
+    /// future scan-loop drift (wrong X formula, dropped overscan, missing M5, etc.)
+    /// produces an immediate failure with a visible diff.
+    ///
+    /// Parameters (frozen 2026-06-20, after FIX 1):
+    ///   Mask: 8×4 pixels (binary), four distinct row patterns:
+    ///     Row 0: cols 0–3 filled   (binary run [0,4))
+    ///     Row 1: cols 4–7 filled   (binary run [4,8), reverse row)
+    ///     Row 2: cols 1–5 filled   (binary run [1,6))
+    ///     Row 3: cols 2–6 filled   (binary run [2,7), reverse row)
+    ///   width_mm=8, height_mm=4, interval=1.0, overscan=1.0mm
+    ///   bidirectional=true, rotation=45° (π/4), workspace_height=200
+    ///
+    /// If this test fails, regenerate by temporarily adding `panic!("{}", result.gcode)`
+    /// after the `scan_mask_to_gcode` call, running with `-- --nocapture`, and freezing
+    /// the output here. Never update the snapshot without verifying the new output is correct.
     #[test]
     fn phase0_golden_bidi_overscan_rotation() {
         let mut params = base_scan_params();
@@ -774,31 +855,45 @@ mod tests {
 
         let result = scan_mask_to_gcode(&pixels, w, h, &params).expect("should succeed");
 
-        // Sanity: output must have G0 rapids, G1 engrave moves, and M5 laser-off
-        assert!(result.gcode.contains("G0 X"), "Expected rapid moves");
-        assert!(result.gcode.contains("G1 X"), "Expected engrave moves");
-        assert!(result.gcode.contains("M5"), "Expected laser-off");
+        // Frozen snapshot (generated post-fix, 2026-06-20).
+        // Coordinates reflect 45° rotation around mask centre (4.0, 2.0) in a 200mm workspace.
+        // Overscan S0 moves bracket each binary run; reverse rows have X decreasing.
+        let expected = "\
+G0 X1.586 Y202.243\n\
+G1 X2.586 Y202.243 F6000 S0\n\
+M3 S1000\n\
+G1 X5.414 Y199.414 F6000 S1000\n\
+M5\n\
+G1 X6.121 Y198.707 F6000 S0\n\
+G0 X8.536 Y195.879\n\
+G1 X7.536 Y195.879 F6000 S0\n\
+M3 S1000\n\
+G1 X4.707 Y198.707 F6000 S1000\n\
+M5\n\
+G1 X4.000 Y199.414 F6000 S0\n\
+G0 X0.879 Y200.121\n\
+G1 X1.879 Y200.121 F6000 S0\n\
+M3 S1000\n\
+G1 X5.414 Y196.586 F6000 S1000\n\
+M5\n\
+G1 X6.121 Y195.879 F6000 S0\n\
+G0 X6.414 Y195.172\n\
+G1 X5.414 Y195.172 F6000 S0\n\
+M3 S1000\n\
+G1 X1.879 Y198.707 F6000 S1000\n\
+M5\n\
+G1 X1.172 Y199.414 F6000 S0";
 
-        // With rotation, coordinates must NOT be simple integer mm values
-        // (if rotation were silently dropped, row 0 at y=0 would emit Y=200.000)
-        let has_non_integer_coords = result.gcode.lines()
-            .filter(|l| l.starts_with("G1 X"))
-            .any(|l| {
-                // Parse first X coordinate; if rotation is applied, it won't be a round .000
-                l.split_whitespace()
-                    .find(|t| t.starts_with("X"))
-                    .and_then(|t| t[1..].parse::<f64>().ok())
-                    .map(|x| (x - x.round()).abs() > 0.01)
-                    .unwrap_or(false)
-            });
-        assert!(
-            has_non_integer_coords,
-            "Rotated scan should produce non-integer coordinates; gcode:\n{}", result.gcode
+        assert_eq!(
+            result.gcode.trim(), expected.trim(),
+            "Golden snapshot mismatch — scan-loop output changed.\n\
+             If intentional, regenerate by temporarily adding panic!(\"{{}}\", result.gcode)\n\
+             after scan_mask_to_gcode and running with `-- --nocapture`.\n\n\
+             Actual:\n{}", result.gcode
         );
 
-        // Cut distance must be positive (rows had content)
+        // Structural sanity (belt-and-suspenders, not load-bearing — snapshot covers these)
         assert!(result.cut_distance > 0.0, "Expected positive cut distance");
-        // Time estimate must be positive
         assert!(result.estimated_time_secs > 0.0, "Expected positive time estimate");
     }
 

@@ -641,6 +641,82 @@ mod tests {
         );
     }
 
+    /// F4b: EXACT X positions for grayscale bidirectional row pair (delegation path).
+    ///
+    /// This test covers the same regression as `f4_grayscale_bidi_reverse_row_x_positions`
+    /// but asserts COMPLETE exact X sequences rather than a loose `any(x >= 4.0)` check.
+    /// It locks the `generate_scan_gcode → scan_mask_to_gcode` delegation path against
+    /// reverse-row index drift.
+    ///
+    /// Run at cols 2..5 (pixel values 127 = gray, so find_grayscale_runs picks them up).
+    /// Forward row X must be exactly [3.0, 4.0, 5.0]; reverse row X must be [4.0, 3.0, 2.0].
+    ///
+    /// With the regression (*orig_start instead of *orig_end in the reverse branch):
+    ///   reverse emits X = [1.0, 0.0, 0.0]  (i=0: (2-1)=1, i=1: (2-1-1)=0, i=2: clamped 0)
+    /// With the fix (*orig_end=5):
+    ///   reverse emits X = [4.0, 3.0, 2.0]  (i=0: (5-1)=4, i=1: (5-2)=3, i=2: (5-3)=2)
+    #[test]
+    fn f4b_grayscale_bidi_exact_x_positions() {
+        let mut req = base_req();
+        req.bidirectional = true;
+        req.width = 10.0;
+        req.height = 2.0;
+        req.interval = 1.0;
+        req.overscan = 0.0;
+        req.power = 100.0;
+        req.power_min = 0.0;
+        req.s_value_max = 1000.0;
+
+        let w = 10usize;
+        let h = 2usize;
+        // Row 0 and row 1: pixels 2,3,4 are mid-gray (127); rest white (255).
+        // find_grayscale_runs treats < 255 as a run → run (2, 5).
+        let mut pixels = vec![255u8; w * h];
+        pixels[2] = 127; pixels[3] = 127; pixels[4] = 127;
+        pixels[w + 2] = 127; pixels[w + 3] = 127; pixels[w + 4] = 127;
+
+        let result = generate_scan_gcode(&req, &pixels, w as u32, h as u32, true)
+            .expect("generate_scan_gcode should succeed");
+
+        let gcode = &result.gcode;
+
+        // Extract G1 engrave moves with S > 0 (skip S0 blanks)
+        let engrave_x: Vec<f64> = gcode.lines()
+            .filter(|l| l.starts_with("G1 X"))
+            .filter(|l| {
+                l.split_whitespace()
+                    .find(|t| t.starts_with("S"))
+                    .and_then(|t| t[1..].parse::<f64>().ok())
+                    .map(|s| s > 0.0)
+                    .unwrap_or(false)
+            })
+            .filter_map(|l| {
+                l.split_whitespace()
+                    .find(|t| t.starts_with("X"))
+                    .and_then(|t| t[1..].parse::<f64>().ok())
+            })
+            .collect();
+
+        assert_eq!(
+            engrave_x.len(), 6,
+            "Expected 6 engrave moves (3 forward + 3 reverse); got {:?}\ngcode:\n{}", engrave_x, gcode
+        );
+
+        let forward_x = &engrave_x[..3];
+        assert_eq!(
+            forward_x, &[3.0f64, 4.0, 5.0],
+            "Forward row X wrong; got {:?}", forward_x
+        );
+
+        let reverse_x = &engrave_x[3..];
+        assert_eq!(
+            reverse_x, &[4.0f64, 3.0, 2.0],
+            "Reverse row X wrong (regression: orig_start used instead of orig_end); \
+             got {:?} — expected [4.0, 3.0, 2.0]",
+            reverse_x
+        );
+    }
+
     // ─── F5: image rotation and mirror ───────────────────────────────────────
 
     /// F5: axis-aligned image (rotation=0, no mirror) — Y coordinate is workspace_height - y_mm.
