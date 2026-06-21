@@ -1,5 +1,5 @@
 import { useStore } from "../../app/store";
-import type { DesignObject, KerfProject, Layer, MaterialPreset, SubLayer } from "../../app/types";
+import type { DesignObject, KerfProject, Layer, MaterialPreset, LineOverlay } from "../../app/types";
 import { DEFAULT_LAYERS, KERF_FORMAT_VERSION } from "../../app/types";
 import { pointsBBox, rotatePathPoint, POINTS_EPSILON } from "../geometry";
 import { DEFAULT_MATERIALS } from "../materials";
@@ -93,6 +93,9 @@ export function loadProjectWithMigrations(project: KerfProject): void {
   if (v === undefined || v < 2) {  // speed mm/s → mm/min
     migrateSpeedToMmMin(project);
   }
+  if (v === undefined || v < 3) {  // sub-layers → fillLine
+    migrateSubLayersToFillLine(project);
+  }
   // Stamp AFTER migration completes successfully; a throw leaves version
   // unstamped so the file re-migrates on next load (never seal over partial state).
   project.formatVersion = KERF_FORMAT_VERSION;
@@ -168,8 +171,8 @@ export const fileOperations = {
           store.addConsoleLine(`Failed to load "${pathStr}": file is corrupted or not a valid Kerf project`, "error");
           return;
         }
-        // Track original content for .bak if a speed migration will run
-        if (project.formatVersion === undefined || project.formatVersion < 2) {
+        // Track original content for .bak if any migration will run
+        if (project.formatVersion === undefined || project.formatVersion < KERF_FORMAT_VERSION) {
           _pendingBakContent = content;
           _pendingBakPath = pathStr;
         }
@@ -229,8 +232,8 @@ export const fileOperations = {
         store.addConsoleLine(`Failed to load "${filePath}": file is corrupted or not a valid Kerf project`, "error");
         return;
       }
-      // Track original content for .bak if a speed migration will run
-      if (project.formatVersion === undefined || project.formatVersion < 2) {
+      // Track original content for .bak if any migration will run
+      if (project.formatVersion === undefined || project.formatVersion < KERF_FORMAT_VERSION) {
         _pendingBakContent = content;
         _pendingBakPath = filePath;
       }
@@ -367,16 +370,19 @@ async function saveToPath(path: string) {
  * upgrading. In-project materials[] ARE migrated via this gate.
  */
 export function migrateSpeedToMmMin(project: KerfProject): void {
-  // Migrate layers and their sub-layers
+  // Migrate layers and (legacy) sub-layers — sub-layers are a v2 concept removed
+  // in v3, but the v2→v3 migration has not run yet at this point in the load
+  // sequence, so we must still handle subLayers here.
   if (Array.isArray(project.layers)) {
     for (const layer of project.layers) {
       if (typeof (layer as Layer).speed === "number") {
         (layer as Layer).speed *= 60;
       }
-      if (Array.isArray((layer as Layer).subLayers)) {
-        for (const sub of (layer as Layer).subLayers!) {
-          if (typeof (sub as SubLayer).speed === "number") {
-            (sub as SubLayer).speed *= 60;
+      const legacyLayer = layer as Layer & { subLayers?: Array<{ speed?: number }> };
+      if (Array.isArray(legacyLayer.subLayers)) {
+        for (const sub of legacyLayer.subLayers) {
+          if (typeof sub.speed === "number") {
+            sub.speed *= 60;
           }
         }
       }
@@ -388,6 +394,101 @@ export function migrateSpeedToMmMin(project: KerfProject): void {
       if (typeof (mat as MaterialPreset).speed === "number") {
         (mat as MaterialPreset).speed *= 60;
       }
+    }
+  }
+}
+
+/**
+ * Sub-layer migration (v2 → v3): convert Layer.subLayers[] into the new
+ * first-class fillLine mode + LineOverlay model.
+ *
+ * Per layer with subLayers:
+ *  - Clean fill+line (exactly one fill-ish sub + one line sub, any order):
+ *    → layer.mode = "fillLine"; copy fill-sub settings onto layer fill fields;
+ *      set layer.lineOverlay from the line sub.
+ *  - Single sub:
+ *    → flatten — copy its settings onto the layer, set layer.mode = sub.mode.
+ *  - Pathological 3+ / two-fills / two-lines (UI-reachable via addSubLayer):
+ *    → collapse to fillLine using first fill-ish sub + first line sub;
+ *      console.warn a loud one-time notice. Recoverable via .bak (must-fix #1).
+ *
+ * ATOMICITY: per-layer try/catch — a malformed layer logs and passes through.
+ * Version stamp in the caller is written only after this returns normally.
+ */
+export function migrateSubLayersToFillLine(project: KerfProject): void {
+  if (!Array.isArray(project.layers)) return;
+
+  for (const layer of project.layers) {
+    try {
+      const l = layer as Layer & { subLayers?: Array<{ id?: string; mode?: string; power?: number; powerMin?: number; speed?: number; passes?: number; powerMode?: string; interval?: number }> };
+      if (!Array.isArray(l.subLayers) || l.subLayers.length === 0) continue;
+
+      const subs = l.subLayers;
+      const isFillIsh = (m?: string) => m === "fill" || m === "offsetFill";
+      const fillSubs = subs.filter((s) => isFillIsh(s.mode));
+      const lineSubs = subs.filter((s) => s.mode === "line");
+
+      if (subs.length === 1) {
+        // Single sub: flatten onto layer
+        const sub = subs[0];
+        if (typeof sub.mode === "string") l.mode = sub.mode as import("../../app/types").CutMode;
+        if (typeof sub.power === "number") l.power = sub.power;
+        if (typeof sub.powerMin === "number") l.powerMin = sub.powerMin;
+        if (typeof sub.speed === "number") l.speed = sub.speed;
+        if (typeof sub.passes === "number") l.passes = sub.passes;
+        if (typeof sub.powerMode === "string") l.powerMode = sub.powerMode as import("../../app/types").PowerMode;
+        if (typeof sub.interval === "number") l.interval = sub.interval;
+      } else if (fillSubs.length === 1 && lineSubs.length === 1) {
+        // Clean fill+line: convert to fillLine
+        const fillSub = fillSubs[0];
+        const lineSub = lineSubs[0];
+        l.mode = "fillLine";
+        if (typeof fillSub.power === "number") l.power = fillSub.power;
+        if (typeof fillSub.powerMin === "number") l.powerMin = fillSub.powerMin;
+        if (typeof fillSub.speed === "number") l.speed = fillSub.speed;
+        if (typeof fillSub.passes === "number") l.passes = fillSub.passes;
+        if (typeof fillSub.powerMode === "string") l.powerMode = fillSub.powerMode as import("../../app/types").PowerMode;
+        if (typeof fillSub.interval === "number") l.interval = fillSub.interval;
+        const overlay: LineOverlay = {
+          power: typeof lineSub.power === "number" ? lineSub.power : 100,
+          powerMin: typeof lineSub.powerMin === "number" ? lineSub.powerMin : 0,
+          speed: typeof lineSub.speed === "number" ? lineSub.speed : 1200,
+          passes: typeof lineSub.passes === "number" ? lineSub.passes : 1,
+          powerMode: (typeof lineSub.powerMode === "string" ? lineSub.powerMode : "constant") as import("../../app/types").PowerMode,
+        };
+        l.lineOverlay = overlay;
+      } else {
+        // Pathological: 3+ subs, two fills, two lines, etc.
+        // Collapse to fillLine using first fill-ish + first line sub; warn loudly.
+        const fillSub = fillSubs[0];
+        const lineSub = lineSubs[0];
+        console.warn(
+          `[Kerf migration v3] Layer "${l.name}" had ${subs.length} sub-layers (${subs.map((s) => s.mode).join(", ")}) — ` +
+          "collapsed to fillLine using first fill-ish + first line sub. Extra passes lost. " +
+          "A .bak backup was written before this save — restore it to recover.",
+        );
+        l.mode = "fillLine";
+        if (fillSub) {
+          if (typeof fillSub.power === "number") l.power = fillSub.power;
+          if (typeof fillSub.powerMin === "number") l.powerMin = fillSub.powerMin;
+          if (typeof fillSub.speed === "number") l.speed = fillSub.speed;
+          if (typeof fillSub.passes === "number") l.passes = fillSub.passes;
+          if (typeof fillSub.powerMode === "string") l.powerMode = fillSub.powerMode as import("../../app/types").PowerMode;
+          if (typeof fillSub.interval === "number") l.interval = fillSub.interval;
+        }
+        const overlay: LineOverlay = {
+          power: lineSub && typeof lineSub.power === "number" ? lineSub.power : 100,
+          powerMin: lineSub && typeof lineSub.powerMin === "number" ? lineSub.powerMin : 0,
+          speed: lineSub && typeof lineSub.speed === "number" ? lineSub.speed : 1200,
+          passes: lineSub && typeof lineSub.passes === "number" ? lineSub.passes : 1,
+          powerMode: (lineSub && typeof lineSub.powerMode === "string" ? lineSub.powerMode : "constant") as import("../../app/types").PowerMode,
+        };
+        l.lineOverlay = overlay;
+      }
+
+      delete l.subLayers;
+    } catch (e) {
+      console.error("Kerf migration v3: skipping malformed layer", (layer as { name?: string } | null)?.name, e);
     }
   }
 }
