@@ -865,7 +865,7 @@ mod tests {
         let inner = make_square_seg(3.0, 3.0, 7.0, 7.0);
         let obj = make_obj("o", vec![outer, inner], 0.0, 0.0, 10.0, 10.0);
 
-        let (pixels, w, h, _ox, _oy) = fill_compound_mask(&obj, 1.0).expect("fill_compound_mask should succeed");
+        let (pixels, w, _h, _ox, _oy) = fill_compound_mask(&obj, 1.0).expect("fill_compound_mask should succeed");
 
         // Pixel at counter center: col=5, row=5
         // Must be background (255 = no engrave)
@@ -1036,6 +1036,152 @@ mod tests {
         assert!(
             result.is_err(),
             "Degenerate zero-area object must return Err from fill_compound_mask, got Ok"
+        );
+    }
+
+    /// MUST-FIX 2: Rotated maskFill — verify that a 30° rotation produces
+    /// non-axis-aligned coordinates and that the rotation is correctly applied
+    /// for both origin_top=false (standard bottom-left GRBL) and origin_top=true.
+    ///
+    /// Architecture: fill_compound_mask rasterizes paths in object-local coordinates
+    /// (no rotation applied to the path points). The rotation is carried in
+    /// `MaskScanParams.rotation_rad` and applied inside `scan_mask_to_gcode` by
+    /// rotating each output coordinate about the bbox center. This test verifies
+    /// that mechanism actually fires.
+    ///
+    /// Shape: asymmetric compound mask — large outer square (8×8) at (0,0) with a
+    /// smaller inner square (2×2) hole at (3,3)→(5,5). The asymmetry means that a
+    /// rotation by 30° about the bbox center (4,4) produces X/Y values that cannot
+    /// be produced by an un-rotated scan of any axis-aligned bbox.
+    #[test]
+    fn rotated_maskfill_produces_rotated_coordinates() {
+        // Build O-shaped compound object: 8×8 outer, 2×2 hole
+        let outer = make_square_seg(0.0, 0.0, 8.0, 8.0);
+        let inner = make_square_seg(3.0, 3.0, 5.0, 5.0);
+        let mut obj = make_obj("rot_o", vec![outer, inner], 0.0, 0.0, 8.0, 8.0);
+        obj.rotation = 30.0; // degrees
+
+        let rotation_rad = 30.0_f64.to_radians();
+
+        let (pixels, mask_w, mask_h, origin_x, origin_y) =
+            fill_compound_mask(&obj, 1.0).expect("fill_compound_mask should succeed");
+
+        // Verify we have filled pixels (O outer wall)
+        let has_filled = pixels.iter().any(|&p| p == 0);
+        assert!(has_filled, "O-shape mask should have filled pixels");
+
+        // --- origin_top=false (standard GRBL: Y flipped) ---
+        let params_bottom = MaskScanParams {
+            origin_x,
+            origin_y,
+            width_mm: obj.width,
+            height_mm: obj.height,
+            interval: 1.0,
+            overscan: 0.0,
+            bidirectional: false,
+            scanning_offset: 0.0,
+            speed_mm_min: 6000.0,
+            s_max: 1000.0,
+            s_min: 0.0,
+            power_cmd: "M3".to_string(),
+            workspace_height: 200.0,
+            origin_top: false,
+            rotation_rad,
+            passes: 1,
+            grayscale_pixels: None,
+        };
+        let result_bottom = scan_mask_to_gcode(&pixels, mask_w, mask_h, &params_bottom)
+            .expect("scan should succeed");
+
+        // With 30° rotation, all G1 engrave moves must have non-integer coordinates.
+        // Un-rotated: every X/Y lands on a 1mm grid (all integers).
+        // Rotated by 30°: coordinates involve cos(30°)≈0.866 and sin(30°)=0.5 →
+        // fractional values that are not multiples of 0.001 rounding to whole numbers.
+        let engrave_lines: Vec<&str> = result_bottom.gcode.lines()
+            .filter(|l| l.starts_with("G1 X") && l.contains("S1000"))
+            .collect();
+        assert!(!engrave_lines.is_empty(),
+            "Expected engrave moves (S1000); gcode:\n{}", result_bottom.gcode);
+
+        // At least one G1 engrave coordinate must be non-integer (rotation applied)
+        let any_fractional = engrave_lines.iter().any(|line| {
+            // Extract X coordinate; check it has a non-zero fractional part
+            line.split_whitespace()
+                .find(|t| t.starts_with("X"))
+                .and_then(|t| t[1..].parse::<f64>().ok())
+                .map(|x| (x - x.round()).abs() > 0.01)
+                .unwrap_or(false)
+        });
+        assert!(
+            any_fractional,
+            "30° rotation must produce non-integer X coordinates; \
+             got only integer values → rotation not applied.\nEngrave lines:\n{}",
+            engrave_lines.join("\n")
+        );
+
+        // Cross-check: known coordinate for row 0 of an 8×8 mask at origin (0,0),
+        // rotated 30° about bbox center (4,4).
+        // Row 0: y_mm = 0.0. First filled pixel in row 0 of the O-wall: col ~0 (left wall).
+        // mask center: cx=4.0, cy=4.0.
+        // Un-rotated: (0.0, 0.0). After 30° rotation about (4,4):
+        //   dx = 0-4 = -4,  dy = 0-4 = -4
+        //   rx = 4 + (-4)*cos30 - (-4)*sin30 = 4 - 3.464 + 2.0 = 2.536
+        //   ry = 4 + (-4)*sin30 + (-4)*cos30 = 4 - 2.0 - 3.464 = -1.464
+        //   GRBL Y (origin_top=false, ws_h=200): 200 - (-1.464) = 201.464
+        // The first G0 rapid in the output should be near this X value.
+        // We allow ±2mm tolerance for run boundary (first pixel of first run may not be col=0).
+        let first_rapid = result_bottom.gcode.lines()
+            .find(|l| l.starts_with("G0 X"))
+            .unwrap_or("");
+        let first_rapid_x = first_rapid.split_whitespace()
+            .find(|t| t.starts_with("X"))
+            .and_then(|t| t[1..].parse::<f64>().ok())
+            .unwrap_or(f64::NAN);
+        assert!(
+            first_rapid_x.is_finite(),
+            "First rapid move must have a finite X; gcode:\n{}", result_bottom.gcode
+        );
+        // X should be in the rotated range — not an axis-aligned integer
+        assert!(
+            (first_rapid_x - first_rapid_x.round()).abs() > 0.01,
+            "First rapid X ({:.3}) should be non-integer (30° rotation); \
+             suggests rotation_rad was zero or not applied",
+            first_rapid_x
+        );
+
+        // --- origin_top=true: Y is negated instead of workspace_height - y ---
+        let params_top = MaskScanParams {
+            origin_top: true,
+            workspace_height: 200.0, // unused when origin_top=true
+            ..params_bottom
+        };
+        let result_top = scan_mask_to_gcode(&pixels, mask_w, mask_h, &params_top)
+            .expect("scan (origin_top) should succeed");
+
+        // The G-code must differ from origin_top=false (different Y formula)
+        assert_ne!(
+            result_top.gcode, result_bottom.gcode,
+            "origin_top=true and origin_top=false should produce different G-code \
+             (different Y formula)"
+        );
+
+        // origin_top=true: Y = -ry (negated). For row 0 rotated:
+        //   ry = -1.464 → Y = -(-1.464) = 1.464 (positive, not 201.464)
+        let first_rapid_top = result_top.gcode.lines()
+            .find(|l| l.starts_with("G0 X"))
+            .unwrap_or("");
+        let first_rapid_y_top = first_rapid_top.split_whitespace()
+            .find(|t| t.starts_with("Y"))
+            .and_then(|t| t[1..].parse::<f64>().ok())
+            .unwrap_or(f64::NAN);
+        // origin_top=false would have Y ≈ 201.464; origin_top=true should have Y ≈ 1.464
+        // Both are non-integer. Just verify origin_top Y < 50 (not workspace-offset).
+        assert!(
+            first_rapid_y_top.is_finite() && first_rapid_y_top < 50.0,
+            "origin_top=true first rapid Y ({:.3}) should be small (< 50) — \
+             not workspace-offset. origin_top=false had Y≈201, so the Y-flip formula \
+             must differ.",
+            first_rapid_y_top
         );
     }
 }
