@@ -2040,7 +2040,7 @@ dependencies = [
 
 [[package]]
 name = "kerf"
-version = "0.8.7"
+version = "0.8.8"
 dependencies = [
  "base64 0.22.1",
  "image 0.25.9",
