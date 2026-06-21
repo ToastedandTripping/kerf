@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { DesignObject, SubLayer } from "../types";
+import type { DesignObject } from "../types";
 import { DEFAULT_LAYERS, KERF_FORMAT_VERSION } from "../types";
 import { DEFAULT_MATERIALS } from "../../lib/materials";
 import { createGeometryActions } from "./geometryActions";
@@ -291,63 +291,22 @@ export const useStore = create<AppState>((set, get) => ({
         gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
       };
     }),
-  // F15: sub-layer writers do NOT route through updateLayer — each is a direct
-  // generation-input writer and stales G-code itself.
-  addSubLayer: (layerIndex) =>
+  // F15: updateLineOverlay is a direct generation-input writer — stales G-code.
+  // Lazily initialises lineOverlay with defaults if absent (lifecycle: entering
+  // fillLine mode initialises it only if absent; a mode change AWAY from fillLine
+  // does NOT delete it, preserving round-trip settings).
+  updateLineOverlay: (layerIndex, changes) =>
     set((state) => ({
       layers: state.layers.map((l) => {
         if (l.index !== layerIndex) return l;
-        const newSub: SubLayer = {
-          id: `sub_${generateId()}`,
-          mode: "line",
+        const existing = l.lineOverlay ?? {
           power: 100,
           powerMin: 0,
-          speed: 1200, // mm/min
+          speed: 1200,
           passes: 1,
-          powerMode: "constant",
-          interval: 0.1,
+          powerMode: "constant" as const,
         };
-        return { ...l, subLayers: [...(l.subLayers || []), newSub] };
-      }),
-      gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
-    })),
-  addSubLayers: (layerIndex, subs) =>
-    set((state) => ({
-      layers: state.layers.map((l) => {
-        if (l.index !== layerIndex) return l;
-        const newSubs: SubLayer[] = subs.map((s) => ({
-          id: `sub_${generateId()}`,
-          mode: s.mode ?? "line",
-          power: s.power ?? 100,
-          powerMin: s.powerMin ?? 0,
-          speed: s.speed ?? 1200, // mm/min
-          passes: s.passes ?? 1,
-          powerMode: s.powerMode ?? "constant",
-          interval: s.interval ?? 0.1,
-        }));
-        return { ...l, subLayers: [...(l.subLayers || []), ...newSubs] };
-      }),
-      gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
-    })),
-  removeSubLayer: (layerIndex, subLayerId) =>
-    set((state) => ({
-      layers: state.layers.map((l) => {
-        if (l.index !== layerIndex) return l;
-        const filtered = (l.subLayers || []).filter((s) => s.id !== subLayerId);
-        return { ...l, subLayers: filtered.length > 0 ? filtered : undefined };
-      }),
-      gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
-    })),
-  updateSubLayer: (layerIndex, subLayerId, changes) =>
-    set((state) => ({
-      layers: state.layers.map((l) => {
-        if (l.index !== layerIndex) return l;
-        return {
-          ...l,
-          subLayers: (l.subLayers || []).map((s) =>
-            s.id === subLayerId ? { ...s, ...changes } : s
-          ),
-        };
+        return { ...l, lineOverlay: { ...existing, ...changes } };
       }),
       gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
     })),

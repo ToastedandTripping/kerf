@@ -3,7 +3,7 @@ import type {
   ToolType,
   DesignObject,
   Layer,
-  SubLayer,
+  LineOverlay,
   CameraState,
   KerfProject,
   MaterialPreset,
@@ -50,10 +50,11 @@ export interface AppState {
   setActiveLayerIndex: (index: number) => void;
   updateLayer: (index: number, partial: Partial<Layer>) => void;
   reorderLayers: (fromIndex: number, toIndex: number) => void;
-  addSubLayer: (layerIndex: number) => void;
-  addSubLayers: (layerIndex: number, subs: Array<Partial<SubLayer>>) => void;
-  removeSubLayer: (layerIndex: number, subLayerId: string) => void;
-  updateSubLayer: (layerIndex: number, subLayerId: string, changes: Partial<SubLayer>) => void;
+  /** Update (or lazily create) the lineOverlay for a fillLine layer.
+   *  Initialises lineOverlay with defaults if absent, then applies changes.
+   *  Does NOT delete lineOverlay when mode changes away from fillLine — a
+   *  fill→fillLine→fill→fillLine round-trip preserves the user's settings. */
+  updateLineOverlay: (layerIndex: number, changes: Partial<LineOverlay>) => void;
 
   // Camera
   camera: CameraState;

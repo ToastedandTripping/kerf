@@ -103,11 +103,22 @@ export interface DesignObject {
   isTemplate?: boolean;
 }
 
-export type CutMode = "line" | "fill" | "offsetFill";
+export type CutMode = "line" | "fill" | "offsetFill" | "fillLine";
 // Internal-only mode used in toCutObjects and the Rust maskFill dispatch arm.
 // NOT persisted to disk — never appears in saved project files or Layer.mode.
 export type InternalCutMode = CutMode | "maskFill";
 export type PowerMode = "constant" | "variable"; // M3 vs M4
+
+/** Settings for the line-outline pass in a fillLine layer.
+ *  interval is intentionally excluded: line mode ignores scan interval.
+ *  Do not add interval here — it would create drift vs the fill-pass interval. */
+export interface LineOverlay {
+  power: number;     // 0-100
+  powerMin: number;  // 0-100
+  speed: number;     // mm/min
+  passes: number;
+  powerMode: PowerMode;
+}
 
 export interface Layer {
   index: number;
@@ -153,21 +164,10 @@ export interface Layer {
   kerfOffset: number; // mm - positive = outward, negative = inward, 0 = none
   perforationCut: number; // mm - length of each cut segment, 0 = disabled
   perforationSkip: number; // mm - length of each skip segment
-  // Sub-layers (Fill+Line workflows)
-  subLayers?: SubLayer[];
+  // Fill+Line overlay settings (fillLine mode only)
+  lineOverlay?: LineOverlay;
   // Material preset tracking
   activePreset?: string; // name of applied preset, undefined = custom settings
-}
-
-export interface SubLayer {
-  id: string;
-  mode: CutMode;
-  power: number;
-  powerMin: number;
-  speed: number; // mm/min
-  passes: number;
-  powerMode: PowerMode;
-  interval: number;
 }
 
 export interface MaterialPreset {
@@ -221,12 +221,18 @@ export type StartCorner = "bottomLeft" | "bottomRight" | "topLeft" | "topRight" 
  * 1 = post-W1b geometry fix. Layer speeds stored in mm/s (old unit). Forward-
  *   incompat vs pre-W1b binaries (children render wrong).
  *
- * 2 = speed unit mm/s → mm/min (this release). Load-time migration ×60 all
- *   speed fields. Forward-incompat vs v1 binaries: a v2 file re-read by a
- *   pre-switch binary would treat 1200 as 1200 mm/s (60× too fast — fire risk).
+ * 2 = speed unit mm/s → mm/min. Load-time migration ×60 all speed fields.
+ *   Forward-incompat vs v1 binaries: a v2 file re-read by a pre-switch binary
+ *   would treat 1200 as 1200 mm/s (60× too fast — fire risk).
  *   BACKUP: the first save over a migrating file writes a .bak sibling.
+ *
+ * 3 = sub-layers removed; first-class fillLine mode added. Load-time migration
+ *   converts Layer.subLayers[] → Layer.mode="fillLine" + Layer.lineOverlay.
+ *   Forward-incompat vs v2 binaries: a v3 file won't open correctly in a v2
+ *   binary (unknown mode "fillLine"). BACKUP: written whenever any migration
+ *   runs (gate is < KERF_FORMAT_VERSION, not < 2).
  */
-export const KERF_FORMAT_VERSION = 2;
+export const KERF_FORMAT_VERSION = 3;
 
 export interface KerfProject {
   version: string;
