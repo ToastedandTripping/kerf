@@ -11,7 +11,8 @@ use image::imageops::FilterType;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::dither::{DitherAlgorithm, dither_image};
-use crate::engine::gcode_gen::{GcodeMove, GcodeResult};
+use crate::engine::gcode_gen::GcodeResult;
+use crate::engine::mask_fill::{MaskScanParams, scan_mask_to_gcode};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -313,6 +314,8 @@ pub fn build_power_curve_lut(points: &[(f64, f64)]) -> [u8; 256] {
 /// F5: Transform image-local (x_img, y_img) coordinates to GRBL machine coordinates.
 /// Applies rotation about the image center, then the workspace Y-flip (unless origin_top).
 /// Mirrors are already applied to the pixel buffer in preview_dither, so no transform here.
+/// Used in tests to verify coordinate transform behavior independently of scan_mask_to_gcode.
+#[cfg(test)]
 fn image_to_grbl(
     x_img: f64,
     y_img: f64,
@@ -334,7 +337,14 @@ fn image_to_grbl(
     (rx, gy)
 }
 
-/// Generate scan-line G-code from dithered pixel data
+/// Generate scan-line G-code from dithered pixel data.
+///
+/// Delegates to `scan_mask_to_gcode` (mask_fill.rs) after building `MaskScanParams`
+/// from the request. The grayscale channel is passed via `grayscale_pixels` so
+/// per-pixel S-value emission and the F4 reverse-row pixel-index fix are preserved.
+///
+/// The image-specific preamble (G21/G90/M5) is prepended here — it belongs to the
+/// image G-code block, not to the shared scanner.
 fn generate_scan_gcode(
     req: &ImageEngraveRequest,
     pixels: &[u8],
@@ -342,255 +352,63 @@ fn generate_scan_gcode(
     height: u32,
     is_grayscale: bool,
 ) -> Result<GcodeResult, String> {
-    let mut lines: Vec<String> = Vec::new();
-    let mut moves: Vec<GcodeMove> = Vec::new();
-    let mut cut_distance = 0.0_f64;
-    let mut travel_distance = 0.0_f64;
-    let mut total_distance = 0.0_f64;
-    let mut cur_x = 0.0_f64;
-    let mut cur_y = 0.0_f64;
-
-    let speed_mm_min = req.speed; // canonical unit is mm/min
+    let interval = if req.interval > 0.0 { req.interval } else { 0.1 };
     let s_max = (req.power / 100.0 * req.s_value_max).round();
     let s_min = (req.power_min / 100.0 * req.s_value_max).round();
     let power_cmd = if req.power_mode == "variable" || is_grayscale { "M4" } else { "M3" };
-    let interval = if req.interval > 0.0 { req.interval } else { 0.1 };
-    let overscan = req.overscan.max(0.0);
-
-    let w = width as usize;
-    let h = height as usize;
-
-    // F5: rotation transform setup
     let rotation_rad = req.rotation.to_radians();
-    let has_rotation = req.rotation.abs() > 1e-6;
-    // Image center in workspace coords (before rotation)
-    let cx = req.x + req.width / 2.0;
-    let cy = req.y + req.height / 2.0;
 
-    // F9: self-contained preamble so image G-code is safe regardless of merge order.
-    // These are idempotent modal commands — harmless if the vector preamble follows.
-    lines.push("G21 ; mm mode".to_string());
-    lines.push("G90 ; absolute positioning".to_string());
-    lines.push("M5 ; laser off".to_string());
-    lines.push(format!("; Image engrave: {}x{} px, interval {}mm", width, height, interval));
+    // Build the shared scan params, wiring in grayscale pixels when applicable.
+    let params = MaskScanParams {
+        origin_x: req.x,
+        origin_y: req.y,
+        width_mm: req.width,
+        height_mm: req.height,
+        interval,
+        overscan: req.overscan.max(0.0),
+        bidirectional: req.bidirectional,
+        scanning_offset: req.scanning_offset,
+        speed_mm_min: req.speed,
+        s_max,
+        s_min,
+        power_cmd: power_cmd.to_string(),
+        workspace_height: req.workspace_height,
+        origin_top: req.origin_top,
+        rotation_rad,
+        passes: req.passes,
+        grayscale_pixels: if is_grayscale { Some(pixels) } else { None },
+    };
 
-    // Pre-compute which rows have content so sparse images skip pixel-scan work
-    // for empty bands rather than invoking find_*_runs per row.
-    let row_has_content: Vec<bool> = (0..h).map(|row| {
-        let row_start = row * w;
-        let row_pixels = &pixels[row_start..row_start + w];
-        if is_grayscale {
-            row_pixels.iter().any(|&p| p < 255)
-        } else {
-            row_pixels.contains(&0)
-        }
-    }).collect();
+    // F9: image-specific preamble (idempotent modal commands).
+    // Prepended here so image G-code is self-contained regardless of merge order.
+    // The shared scanner does not emit preamble lines (maskFill doesn't need them).
+    let mut preamble_lines = vec![
+        "G21 ; mm mode".to_string(),
+        "G90 ; absolute positioning".to_string(),
+        "M5 ; laser off".to_string(),
+        format!("; Image engrave: {}x{} px, interval {}mm", width, height, interval),
+    ];
 
-    for pass in 0..req.passes {
-        if req.passes > 1 {
-            lines.push(format!("; Pass {}/{}", pass + 1, req.passes));
-        }
+    let scan_result = scan_mask_to_gcode(pixels, width as usize, height as usize, &params)?;
 
-        let mut forward = true;
-
-        for (row, &has_row_content) in row_has_content.iter().enumerate() {
-            // Fast-path: skip empty rows without invoking full run-finding logic
-            if !has_row_content {
-                continue;
-            }
-
-            let y_mm = req.y + row as f64 * interval;
-
-            // Find runs of "on" pixels in this row
-            let row_start = row * w;
-            let row_pixels = &pixels[row_start..row_start + w];
-
-            let runs = if is_grayscale {
-                // For grayscale, find runs of non-white pixels (< 255 means some engraving)
-                find_grayscale_runs(row_pixels)
-            } else {
-                // For binary dithering, find runs of black pixels (0)
-                find_binary_runs(row_pixels)
-            };
-
-            if runs.is_empty() {
-                continue;
-            }
-
-            // For the row Y coordinate: axis-aligned (no rotation) uses direct Y-flip;
-            // rotated images use the image_to_grbl transform evaluated at the row center.
-            // We still need a scalar gy for the non-rotated overscan/decel moves.
-            let gy = if has_rotation {
-                // Row center x doesn't affect gy in axis-aligned case; we'll compute
-                // per-point coords below. For backward compat, use row left edge y.
-                image_to_grbl(req.x, y_mm, cx, cy, rotation_rad, req.workspace_height, req.origin_top).1
-            } else if req.origin_top {
-                -y_mm
-            } else {
-                req.workspace_height - y_mm
-            };
-
-            // Process runs in forward or reverse order based on bidirectional setting
-            let ordered_runs: Vec<(usize, usize, Option<&[u8]>)> = if forward {
-                runs.iter().map(|&(start, end)| {
-                    if is_grayscale {
-                        (start, end, Some(&row_pixels[start..end]))
-                    } else {
-                        (start, end, None)
-                    }
-                }).collect()
-            } else {
-                runs.iter().rev().map(|&(start, end)| {
-                    if is_grayscale {
-                        (end, start, Some(&row_pixels[start..end]))
-                    } else {
-                        (end, start, None)
-                    }
-                }).collect()
-            };
-
-            for (run_start, run_end, gray_data) in &ordered_runs {
-                let offset = if !forward { req.scanning_offset } else { 0.0 };
-
-                // Convert pixel positions to mm
-                let x_start_img = req.x + *run_start as f64 * interval + offset;
-                let x_end_img = req.x + *run_end as f64 * interval + offset;
-
-                // F5: apply rotation to get GRBL coordinates
-                let (x_start, gy_start) = if has_rotation {
-                    image_to_grbl(x_start_img, y_mm, cx, cy, rotation_rad, req.workspace_height, req.origin_top)
-                } else {
-                    (x_start_img, gy)
-                };
-                let (x_end, gy_end) = if has_rotation {
-                    image_to_grbl(x_end_img, y_mm, cx, cy, rotation_rad, req.workspace_height, req.origin_top)
-                } else {
-                    (x_end_img, gy)
-                };
-                // For axis-aligned (no rotation), gy_start == gy_end == gy.
-
-                // Overscan approach
-                let os_start = if forward { x_start - overscan } else { x_start + overscan };
-
-                // Rapid to overscan start
-                let dist = ((os_start - cur_x).powi(2) + (gy_start - cur_y).powi(2)).sqrt();
-                travel_distance += dist;
-                total_distance += dist;
-                lines.push(format!("G0 X{:.3} Y{:.3}", os_start, gy_start));
-                moves.push(GcodeMove { x: os_start, y: gy_start, move_type: "rapid".to_string(), speed: 3000.0, power: 0.0 });
-
-                // Accelerate through overscan zone
-                if overscan > 0.0 {
-                    travel_distance += overscan;
-                    total_distance += overscan;
-                    lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S0", x_start, gy_start, speed_mm_min));
-                    moves.push(GcodeMove { x: x_start, y: gy_start, move_type: "rapid".to_string(), speed: speed_mm_min, power: 0.0 });
-                }
-
-                // Engrave the run
-                if is_grayscale {
-                    // Variable power: emit segments with varying S values
-                    if let Some(data) = gray_data {
-                        let run_forward = run_end > run_start;
-                        let pixel_iter: Box<dyn Iterator<Item = &u8>> = if run_forward {
-                            Box::new(data.iter())
-                        } else {
-                            Box::new(data.iter().rev())
-                        };
-
-                        lines.push(format!("{} S0", power_cmd));
-
-                        for (i, &pixel) in pixel_iter.enumerate() {
-                            // Map pixel brightness to laser power
-                            // 0 = full power (black = engrave), 255 = no power (white = skip)
-                            let s_val = if pixel == 255 {
-                                0.0
-                            } else {
-                                let fraction = (255 - pixel) as f64 / 255.0;
-                                s_min + fraction * (s_max - s_min)
-                            };
-
-                            // F4 FIX: reverse rows must count from *run_start (the pixel-index
-                            // of the original run end), not *run_end (which is run start after
-                            // the swap). Before this fix every reverse row's pixel X positions
-                            // landed at the wrong end of the run.
-                            let px_img = if run_forward {
-                                req.x + (*run_start + i + 1) as f64 * interval + offset
-                            } else {
-                                req.x + (*run_start as i64 - i as i64 - 1).max(0) as f64 * interval + offset
-                            };
-
-                            let (px, py) = if has_rotation {
-                                image_to_grbl(px_img, y_mm, cx, cy, rotation_rad, req.workspace_height, req.origin_top)
-                            } else {
-                                (px_img, gy_start)
-                            };
-
-                            let d = interval;
-                            cut_distance += d;
-                            total_distance += d;
-                            lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{:.0}", px, py, speed_mm_min, s_val));
-                            moves.push(GcodeMove { x: px, y: py, move_type: "engrave".to_string(), speed: speed_mm_min, power: s_val });
-                        }
-                        lines.push("M5".to_string());
-                    }
-                } else {
-                    // Binary: single engrave line at full power.
-                    // Fix 2: when rotated, the endpoint Y is gy_end (from image_to_grbl),
-                    // not gy_start (the start point's Y). For axis-aligned images gy_end == gy_start.
-                    lines.push(format!("{} S{}", power_cmd, s_max));
-                    let scan_dist = (x_end - x_start).abs();
-                    cut_distance += scan_dist;
-                    total_distance += scan_dist;
-                    lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", x_end, gy_end, speed_mm_min, s_max));
-                    moves.push(GcodeMove { x: x_end, y: gy_end, move_type: "engrave".to_string(), speed: speed_mm_min, power: s_max });
-                    lines.push("M5".to_string());
-                }
-
-                // Deceleration overscan.
-                // Fix 2 (R3): when rotated, compute the decel endpoint in image space
-                // and transform through image_to_grbl so the overscan follows the
-                // scan direction rather than wandering off-axis.
-                if overscan > 0.0 {
-                    let (os_end_x, os_end_y) = if has_rotation {
-                        let x_os_img = if forward { x_end_img + overscan } else { x_end_img - overscan };
-                        image_to_grbl(x_os_img, y_mm, cx, cy, rotation_rad, req.workspace_height, req.origin_top)
-                    } else {
-                        let x_os = if forward { x_end + overscan } else { x_end - overscan };
-                        (x_os, gy)
-                    };
-                    travel_distance += overscan;
-                    total_distance += overscan;
-                    lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S0", os_end_x, os_end_y, speed_mm_min));
-                    moves.push(GcodeMove { x: os_end_x, y: os_end_y, move_type: "rapid".to_string(), speed: speed_mm_min, power: 0.0 });
-                    cur_x = os_end_x;
-                    cur_y = os_end_y;
-                } else {
-                    cur_x = x_end;
-                    cur_y = gy_end;
-                }
-            }
-
-            if req.bidirectional {
-                forward = !forward;
-            }
-        }
-    }
+    // Prepend preamble to the scanner's output
+    preamble_lines.push(scan_result.gcode);
+    let gcode = preamble_lines.join("\n");
+    let line_count = gcode.lines().count();
 
     Ok(GcodeResult {
-        gcode: lines.join("\n"),
-        moves,
-        total_distance,
-        cut_distance,
-        travel_distance,
-        // req.speed is mm/min (canonical unit); estimate_simple_time works in mm/s.
-        estimated_time_secs: estimate_simple_time(&cut_distance, &travel_distance, req.speed / 60.0),
-        line_count: lines.len(),
+        gcode,
+        moves: scan_result.moves,
+        total_distance: scan_result.total_distance,
+        cut_distance: scan_result.cut_distance,
+        travel_distance: scan_result.travel_distance,
+        estimated_time_secs: scan_result.estimated_time_secs,
+        line_count,
     })
 }
 
 /// Find runs of black pixels (value == 0) in a row
-fn find_binary_runs(row: &[u8]) -> Vec<(usize, usize)> {
+pub(crate) fn find_binary_runs(row: &[u8]) -> Vec<(usize, usize)> {
     let mut runs = Vec::new();
     let mut i = 0;
     while i < row.len() {
@@ -608,7 +426,7 @@ fn find_binary_runs(row: &[u8]) -> Vec<(usize, usize)> {
 }
 
 /// Find runs of non-white pixels (value < 255) in a row for grayscale mode
-fn find_grayscale_runs(row: &[u8]) -> Vec<(usize, usize)> {
+pub(crate) fn find_grayscale_runs(row: &[u8]) -> Vec<(usize, usize)> {
     let mut runs = Vec::new();
     let mut i = 0;
     while i < row.len() {

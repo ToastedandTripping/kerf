@@ -807,11 +807,13 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                     scanning_offset: layer.scanning_offset,
                                     speed_mm_min: speed_mm_min,
                                     s_max,
+                                    s_min: 0.0, // maskFill is always binary (constant power per run)
                                     power_cmd: power_cmd.to_string(),
                                     workspace_height,
                                     origin_top,
                                     rotation_rad,
                                     passes: 1, // outer pass loop already handles multi-pass
+                                    grayscale_pixels: None, // maskFill uses binary fill
                                 };
 
                                 match super::mask_fill::scan_mask_to_gcode(

@@ -17,7 +17,7 @@
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Transform};
 
 use crate::engine::gcode_gen::{CutObject, GcodeMove, GcodeResult, PathSegment};
-use crate::engine::image_gcode_gen::estimate_simple_time;
+use crate::engine::image_gcode_gen::{estimate_simple_time, find_binary_runs, find_grayscale_runs};
 
 // ─── Alpha threshold for filled-vs-background classification ──────────────────
 // Pixels with alpha >= 128 are treated as "filled" (engrave).
@@ -28,10 +28,17 @@ const FILLED_ALPHA_THRESHOLD: u8 = 128;
 
 // ─── Phase 0: MaskScanParams ───────────────────────────────────────────────────
 
-/// Parameters for scanning a binary mask into G-code scan rows.
-/// Extracted from `generate_scan_gcode` in `image_gcode_gen.rs` so it can be
-/// reused by both the image pipeline and the new mask-fill path.
-pub struct MaskScanParams {
+/// Parameters for scanning a mask into G-code scan rows.
+///
+/// Shared by the image-engrave pipeline (`generate_scan_gcode` in
+/// `image_gcode_gen.rs`) and the maskFill path. The `grayscale_pixels` field
+/// selects between the two emission modes:
+///
+/// - `None` → binary mode: constant S value (`s_max`) across each run.
+/// - `Some(data)` → grayscale mode: per-pixel S value interpolated between
+///   `s_min` and `s_max`, matching the F4 reverse-row pixel-index behavior from
+///   `image_gcode_gen.rs`. `data` must be the same length as `pixels` (`w × h`).
+pub struct MaskScanParams<'a> {
     /// Origin of the mask in workspace coordinates (mm), bottom-left of bbox.
     pub origin_x: f64,
     pub origin_y: f64,
@@ -51,6 +58,8 @@ pub struct MaskScanParams {
     pub speed_mm_min: f64,
     /// Maximum S value (GRBL $30 × power%).
     pub s_max: f64,
+    /// Minimum S value for grayscale mode.
+    pub s_min: f64,
     /// Power command string ("M3" or "M4").
     pub power_cmd: String,
     /// Workspace height in mm (for Y-flip).
@@ -62,27 +71,39 @@ pub struct MaskScanParams {
     pub rotation_rad: f64,
     /// Number of scan passes.
     pub passes: u32,
+    /// Grayscale pixel data for variable-power emission.
+    ///
+    /// When `Some(data)`, the scanner emits one G1 per pixel with S value
+    /// interpolated from `data[pixel_index]` between `s_min` and `s_max`.
+    /// `data` must have length `w × h` and use the same 0=black/255=white
+    /// convention as the dithered image buffer.
+    ///
+    /// When `None`, the scanner emits one G1 per run at constant `s_max` (binary).
+    pub grayscale_pixels: Option<&'a [u8]>,
 }
 
-/// Scan a binary mask (`pixels`, `w`×`h`) into G-code scan rows.
+/// Scan a mask (`pixels`, `w`×`h`) into G-code scan rows.
 ///
-/// `pixels` is a `Vec<u8>` in the same convention as `image_gcode_gen`'s binary
-/// dither output: 0 = filled (fire laser), 255 = background (no fire).
+/// `pixels` is the binary classification plane: 0 = filled (fire laser), 255 = background.
+/// For binary mode (`params.grayscale_pixels = None`), constant `s_max` is emitted per run.
+/// For grayscale mode (`params.grayscale_pixels = Some(data)`), per-pixel S values are
+/// interpolated between `s_min` and `s_max` from `data`, preserving the F4 reverse-row
+/// pixel-index fix from `image_gcode_gen.rs`.
+///
 /// Pixel (col, row) → workspace position:
 ///   x_img = params.origin_x + col * params.interval
 ///   y_img = params.origin_y + row * params.interval
 /// then rotated by `params.rotation_rad` around the mask center and Y-flipped
 /// to GRBL coordinates using `params.workspace_height`/`origin_top`.
 ///
-/// This is behavior-identical to the inner loop of `generate_scan_gcode`
-/// (image_gcode_gen.rs:389-577). The image pipeline delegates through
-/// `scan_mask_to_gcode` after dithering so both paths share one loop.
-#[allow(dead_code)]
-pub fn scan_mask_to_gcode(
+/// This is the single shared scanner used by both the maskFill path and (via delegation)
+/// `generate_scan_gcode` in `image_gcode_gen.rs`. Any scan-loop fix applied here is
+/// automatically inherited by both paths.
+pub fn scan_mask_to_gcode<'a>(
     pixels: &[u8],
     w: usize,
     h: usize,
-    params: &MaskScanParams,
+    params: &MaskScanParams<'a>,
 ) -> Result<GcodeResult, String> {
     let mut lines: Vec<String> = Vec::new();
     let mut moves: Vec<GcodeMove> = Vec::new();
@@ -94,6 +115,7 @@ pub fn scan_mask_to_gcode(
 
     let interval = if params.interval > 0.0 { params.interval } else { 0.1 };
     let overscan = params.overscan.max(0.0);
+    let is_grayscale = params.grayscale_pixels.is_some();
 
     // Center of the mask in workspace coordinates (for rotation pivot)
     let cx = params.origin_x + params.width_mm / 2.0;
@@ -119,7 +141,11 @@ pub fn scan_mask_to_gcode(
     let row_has_content: Vec<bool> = (0..h).map(|row| {
         let row_start = row * w;
         let row_pixels = &pixels[row_start..row_start + w];
-        row_pixels.contains(&0) // 0 = filled pixel
+        if is_grayscale {
+            row_pixels.iter().any(|&p| p < 255)
+        } else {
+            row_pixels.contains(&0) // 0 = filled pixel
+        }
     }).collect();
 
     for pass in 0..params.passes {
@@ -139,8 +165,13 @@ pub fn scan_mask_to_gcode(
             let row_start = row * w;
             let row_pixels = &pixels[row_start..row_start + w];
 
-            // find_binary_runs: runs of 0-valued pixels
-            let runs = find_mask_runs(row_pixels);
+            // Use the appropriate run-finder based on mode.
+            // find_binary_runs and find_grayscale_runs are pub(crate) in image_gcode_gen.rs.
+            let runs = if is_grayscale {
+                find_grayscale_runs(row_pixels)
+            } else {
+                find_binary_runs(row_pixels)
+            };
             if runs.is_empty() {
                 continue;
             }
@@ -155,14 +186,23 @@ pub fn scan_mask_to_gcode(
                 params.workspace_height - y_mm
             };
 
-            // Forward or reverse run order (bidirectional)
-            let ordered_runs: Vec<(usize, usize)> = if forward {
-                runs.clone()
+            // Forward or reverse run order (bidirectional).
+            // For grayscale mode, carry the original (start, end) for pixel indexing.
+            // For binary mode, swap start/end for reverse direction.
+            let ordered_runs: Vec<(usize, usize, Option<(usize, usize)>)> = if forward {
+                runs.iter().map(|&(s, e)| (s, e, if is_grayscale { Some((s, e)) } else { None })).collect()
             } else {
-                runs.iter().rev().map(|&(s, e)| (e, s)).collect()
+                runs.iter().rev().map(|&(s, e)| {
+                    // Swap run endpoints so x_start > x_end (rightward to leftward)
+                    if is_grayscale {
+                        (e, s, Some((s, e))) // (e, s) for position; (s, e) = original pixel bounds
+                    } else {
+                        (e, s, None)
+                    }
+                }).collect()
             };
 
-            for (run_start, run_end) in &ordered_runs {
+            for (run_start, run_end, orig_bounds) in &ordered_runs {
                 let offset = if !forward { params.scanning_offset } else { 0.0 };
 
                 let x_start_img = params.origin_x + *run_start as f64 * interval + offset;
@@ -201,18 +241,71 @@ pub fn scan_mask_to_gcode(
                     });
                 }
 
-                // Binary engrave: constant power across run
-                lines.push(format!("{} S{}", params.power_cmd, params.s_max));
-                let scan_dist = (x_end - x_start).abs();
-                cut_distance += scan_dist;
-                total_distance += scan_dist;
-                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}",
-                    x_end, gy_end, params.speed_mm_min, params.s_max));
-                moves.push(GcodeMove {
-                    x: x_end, y: gy_end,
-                    move_type: "engrave".to_string(), speed: params.speed_mm_min, power: params.s_max,
-                });
-                lines.push("M5".to_string());
+                if is_grayscale {
+                    // Grayscale mode: variable power — one G1 per pixel.
+                    // F4 fix: use original pixel bounds for index computation, regardless
+                    // of whether run_start/run_end were swapped for reverse direction.
+                    if let (Some(gray_data), Some((orig_start, orig_end))) =
+                        (params.grayscale_pixels, orig_bounds)
+                    {
+                        let gray_row = &gray_data[row_start..row_start + w];
+                        let run_pixel_slice = &gray_row[*orig_start..*orig_end];
+                        let run_forward = run_end > run_start; // true if not reversed
+
+                        lines.push(format!("{} S0", params.power_cmd));
+
+                        let pixel_iter: Box<dyn Iterator<Item = &u8>> = if run_forward {
+                            Box::new(run_pixel_slice.iter())
+                        } else {
+                            Box::new(run_pixel_slice.iter().rev())
+                        };
+
+                        for (i, &pixel) in pixel_iter.enumerate() {
+                            let s_val = if pixel == 255 {
+                                0.0
+                            } else {
+                                let fraction = (255 - pixel) as f64 / 255.0;
+                                params.s_min + fraction * (params.s_max - params.s_min)
+                            };
+
+                            // F4 fix: reverse rows count from orig_start (original run end),
+                            // not from run_start (the swapped position).
+                            let px_img = if run_forward {
+                                params.origin_x + (*orig_start + i + 1) as f64 * interval + offset
+                            } else {
+                                params.origin_x + (*orig_start as i64 - i as i64 - 1).max(0) as f64 * interval + offset
+                            };
+
+                            let (px, py) = if has_rotation {
+                                to_grbl(px_img, y_mm)
+                            } else {
+                                (px_img, gy_start)
+                            };
+
+                            cut_distance += interval;
+                            total_distance += interval;
+                            lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{:.0}", px, py, params.speed_mm_min, s_val));
+                            moves.push(GcodeMove {
+                                x: px, y: py,
+                                move_type: "engrave".to_string(), speed: params.speed_mm_min, power: s_val,
+                            });
+                        }
+                        lines.push("M5".to_string());
+                    }
+                } else {
+                    // Binary mode: constant power across the whole run.
+                    lines.push(format!("{} S{}", params.power_cmd, params.s_max));
+                    let scan_dist = (x_end - x_start).abs();
+                    cut_distance += scan_dist;
+                    total_distance += scan_dist;
+                    lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}",
+                        x_end, gy_end, params.speed_mm_min, params.s_max));
+                    moves.push(GcodeMove {
+                        x: x_end, y: gy_end,
+                        move_type: "engrave".to_string(), speed: params.speed_mm_min, power: params.s_max,
+                    });
+                    lines.push("M5".to_string());
+                }
 
                 // Deceleration overscan
                 if overscan > 0.0 {
@@ -253,25 +346,6 @@ pub fn scan_mask_to_gcode(
         estimated_time_secs: estimate_simple_time(&cut_distance, &travel_distance, params.speed_mm_min / 60.0),
         line_count: lines.len(),
     })
-}
-
-/// Find runs of filled pixels (value == 0) in a mask row.
-/// Identical convention to `find_binary_runs` in `image_gcode_gen.rs`.
-fn find_mask_runs(row: &[u8]) -> Vec<(usize, usize)> {
-    let mut runs = Vec::new();
-    let mut i = 0;
-    while i < row.len() {
-        if row[i] == 0 {
-            let start = i;
-            while i < row.len() && row[i] == 0 {
-                i += 1;
-            }
-            runs.push((start, i));
-        } else {
-            i += 1;
-        }
-    }
-    runs
 }
 
 // ─── Phase 2: rasterize compound shape to even-odd mask ──────────────────────
@@ -579,7 +653,7 @@ mod tests {
 
     // ─── Phase 0: scanner extraction correctness ─────────────────────────────
 
-    fn base_scan_params() -> MaskScanParams {
+    fn base_scan_params() -> MaskScanParams<'static> {
         MaskScanParams {
             origin_x: 0.0,
             origin_y: 0.0,
@@ -591,11 +665,13 @@ mod tests {
             scanning_offset: 0.0,
             speed_mm_min: 6000.0,
             s_max: 1000.0,
+            s_min: 0.0,
             power_cmd: "M3".to_string(),
             workspace_height: 100.0,
             origin_top: false,
             rotation_rad: 0.0,
             passes: 1,
+            grayscale_pixels: None,
         }
     }
 
