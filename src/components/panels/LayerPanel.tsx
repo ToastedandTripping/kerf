@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 import { useShallow } from "zustand/shallow";
 import { useStore } from "../../app/store";
-import type { Layer, CutMode, SubLayer, MaterialPreset } from "../../app/types";
+import type { Layer, CutMode, LineOverlay, MaterialPreset } from "../../app/types";
 import { PowerCurveEditor, PowerCurveThumbnail } from "./PowerCurveEditor";
 import type { CurvePoint } from "./PowerCurveEditor";
 
@@ -109,10 +109,7 @@ function LayerRow({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [curveEditorOpen, setCurveEditorOpen] = useState(false);
-  const addSubLayer = useStore((s) => s.addSubLayer);
-  const addSubLayers = useStore((s) => s.addSubLayers);
-  const removeSubLayer = useStore((s) => s.removeSubLayer);
-  const updateSubLayer = useStore((s) => s.updateSubLayer);
+  const updateLineOverlay = useStore((s) => s.updateLineOverlay);
   const layerObjects = useStore(useShallow((s) => s.objects.filter((o) => o.layerIndex === layer.index)));
   const selectedSet = useStore((s) => s.selectedSet);
   const setSelectedIds = useStore((s) => s.setSelectedIds);
@@ -132,7 +129,6 @@ function LayerRow({
     s.selectedIds.some((id) => s.objectsById.get(id)?.layerIndex === layer.index)
   );
 
-  const hasSubLayers = (layer.subLayers?.length ?? 0) > 0;
   const defaultCurve: CurvePoint[] = [{ x: 0, y: 100 }, { x: 255, y: 0 }];
 
   return (
@@ -202,30 +198,21 @@ function LayerRow({
           </span>
         )}
 
-        {/* Mode badge -- show sub-layer count if present, otherwise current mode */}
-        {hasSubLayers ? (
-          <span style={{
-            fontSize: "9px", padding: "1px 4px", borderRadius: "3px",
-            background: "rgba(226,165,74,0.2)",
-            color: "#e2c08a",
-            textTransform: "uppercase", fontWeight: 600,
-          }}>
-            {layer.subLayers!.length} ops
-          </span>
-        ) : (
-          <span style={{
-            fontSize: "9px", padding: "1px 4px", borderRadius: "3px",
-            background: layer.mode === "fill" ? "rgba(226,74,74,0.2)"
-              : layer.mode === "offsetFill" ? "rgba(74,226,138,0.2)"
-              : "rgba(74,144,226,0.2)",
-            color: layer.mode === "fill" ? "#e28a8a"
-              : layer.mode === "offsetFill" ? "#8ae2b4"
-              : "#8ab4e2",
-            textTransform: "uppercase", fontWeight: 600,
-          }}>
-            {layer.mode === "offsetFill" ? "offset" : layer.mode}
-          </span>
-        )}
+        {/* Mode badge */}
+        <span style={{
+          fontSize: "9px", padding: "1px 4px", borderRadius: "3px",
+          background: layer.mode === "fill" ? "rgba(226,74,74,0.2)"
+            : layer.mode === "offsetFill" ? "rgba(74,226,138,0.2)"
+            : layer.mode === "fillLine" ? "rgba(226,165,74,0.2)"
+            : "rgba(74,144,226,0.2)",
+          color: layer.mode === "fill" ? "#e28a8a"
+            : layer.mode === "offsetFill" ? "#8ae2b4"
+            : layer.mode === "fillLine" ? "#e2c08a"
+            : "#8ab4e2",
+          textTransform: "uppercase", fontWeight: 600,
+        }}>
+          {layer.mode === "offsetFill" ? "offset" : layer.mode === "fillLine" ? "fill+line" : layer.mode}
+        </span>
 
         {/* Compact power/speed readout */}
         <span style={{ fontSize: "9px", color: "var(--text-muted)", fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>
@@ -308,22 +295,7 @@ function LayerRow({
           {/* Material Preset Quick-Apply */}
           <PresetQuickApply layer={layer} onUpdate={onManualUpdate} />
 
-          {/* Sub-layers section -- replaces main cut controls when sub-layers exist */}
-          {hasSubLayers ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-              {layer.subLayers!.map((sub, i) => (
-                <SubLayerRow
-                  key={sub.id}
-                  sub={sub}
-                  index={i}
-                  layerColor={layer.color}
-                  onUpdate={(changes) => updateSubLayer(layer.index, sub.id, changes)}
-                  onRemove={() => removeSubLayer(layer.index, sub.id)}
-                />
-              ))}
-            </div>
-          ) : (
-            <>
+          <>
               {/* Mode */}
               <SettingRow label="Mode">
                 <select
@@ -333,6 +305,7 @@ function LayerRow({
                 >
                   <option value="line">Line (Vector Cut)</option>
                   <option value="fill">Fill (Raster Engrave)</option>
+                  <option value="fillLine">Fill + Line</option>
                   <option value="offsetFill">Offset Fill</option>
                 </select>
               </SettingRow>
@@ -410,7 +383,7 @@ function LayerRow({
               </SettingRow>
 
               {/* Fill-specific settings */}
-              {(layer.mode === "fill" || layer.mode === "offsetFill") && (
+              {(layer.mode === "fill" || layer.mode === "offsetFill" || layer.mode === "fillLine") && (
                 <>
                   <SettingRow label="Interval">
                     <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
@@ -423,7 +396,7 @@ function LayerRow({
                     </div>
                   </SettingRow>
 
-                  {layer.mode === "fill" && (
+                  {(layer.mode === "fill" || layer.mode === "fillLine") && (
                     <>
                       <SettingRow label="Dither">
                         <select
@@ -537,9 +510,9 @@ function LayerRow({
                 <ToggleChip label="Air Assist" active={layer.airAssist} onClick={() => onManualUpdate({ airAssist: !layer.airAssist })} />
                 <ToggleChip label="Inner First" active={layer.cutInnerFirst} onClick={() => onManualUpdate({ cutInnerFirst: !layer.cutInnerFirst })} />
                 <ToggleChip label="Lock" active={layer.locked} onClick={() => onManualUpdate({ locked: !layer.locked })} />
-                {(layer.mode === "fill" || layer.mode === "offsetFill") && (
+                {(layer.mode === "fill" || layer.mode === "offsetFill" || layer.mode === "fillLine") && (
                   <>
-                    {layer.mode === "fill" && (
+                    {(layer.mode === "fill" || layer.mode === "fillLine") && (
                       <>
                         <ToggleChip label="Bidir" active={layer.bidirectional} onClick={() => onManualUpdate({ bidirectional: !layer.bidirectional })} />
                         <ToggleChip label="Cross" active={layer.crossHatch} onClick={() => onManualUpdate({ crossHatch: !layer.crossHatch })} />
@@ -551,8 +524,16 @@ function LayerRow({
 
               {/* Advanced settings */}
               <AdvancedSettings layer={layer} onUpdate={onManualUpdate} />
+
+              {/* fillLine: line overlay settings */}
+              {layer.mode === "fillLine" && (
+                <LineOverlaySettings
+                  overlay={layer.lineOverlay}
+                  layerColor={layer.color}
+                  onUpdate={(changes) => updateLineOverlay(layer.index, changes)}
+                />
+              )}
             </>
-          )}
 
           {/* Power Curve Editor Modal */}
           <PowerCurveEditor
@@ -564,67 +545,24 @@ function LayerRow({
             }}
             onClose={() => setCurveEditorOpen(false)}
           />
-
-          {/* Add Sub-Layer button group */}
-          <div style={{ padding: "4px 0 0 0", display: "flex", gap: "4px" }}>
-            <button
-              onClick={() => addSubLayer(layer.index)}
-              style={{
-                flex: 1,
-                padding: "4px 8px",
-                fontSize: "11px",
-                background: "var(--bg-input)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius-sm)",
-                color: "var(--text-secondary)",
-                cursor: "pointer",
-              }}
-            >
-              Add Sub-Layer
-            </button>
-            {!hasSubLayers && (
-              <button
-                onClick={() => {
-                  // Fill+Line preset: add both sub-layers atomically
-                  addSubLayers(layer.index, [
-                    { mode: "fill", power: 50, speed: 6000 },
-                    { mode: "line", power: 100, speed: 1200 },
-                  ]);
-                }}
-                style={{
-                  flex: 1,
-                  padding: "4px 8px",
-                  fontSize: "11px",
-                  background: "var(--bg-input)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius-sm)",
-                  color: "var(--text-secondary)",
-                  cursor: "pointer",
-                }}
-              >
-                Fill+Line
-              </button>
-            )}
-          </div>
         </div>
       )}
     </div>
   );
 }
 
-function SubLayerRow({
-  sub,
-  index,
+/** Line overlay settings for fillLine mode. Shows power/speed/passes for the
+ *  perimeter cut pass. interval is intentionally absent (line mode ignores it). */
+function LineOverlaySettings({
+  overlay,
   layerColor,
   onUpdate,
-  onRemove,
 }: {
-  sub: SubLayer;
-  index: number;
+  overlay: LineOverlay | undefined;
   layerColor: string;
-  onUpdate: (changes: Partial<SubLayer>) => void;
-  onRemove: () => void;
+  onUpdate: (changes: Partial<LineOverlay>) => void;
 }) {
+  const ov = overlay ?? { power: 100, powerMin: 0, speed: 1200, passes: 1, powerMode: "constant" as const };
   return (
     <div
       style={{
@@ -640,54 +578,15 @@ function SubLayerRow({
         borderRadius: "0 var(--radius-sm) var(--radius-sm) 0",
       }}
     >
-      {/* Sub-layer header: number + mode badge + remove button */}
-      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-        <span style={{
-          fontSize: "9px", color: "var(--text-muted)", fontWeight: 600,
-          textTransform: "uppercase", letterSpacing: "0.3px", minWidth: "12px",
-        }}>
-          {index + 1}
-        </span>
-        <span style={{
-          fontSize: "9px", padding: "1px 4px", borderRadius: "3px",
-          background: sub.mode === "fill" ? "rgba(226,74,74,0.2)" : "rgba(74,144,226,0.2)",
-          color: sub.mode === "fill" ? "#e28a8a" : "#8ab4e2",
-          textTransform: "uppercase", fontWeight: 600,
-        }}>
-          {sub.mode}
-        </span>
-        <span style={{ flex: 1 }} />
-        <button
-          onClick={onRemove}
-          title="Remove sub-layer"
-          style={{
-            background: "none", border: "none",
-            color: "var(--text-muted)", cursor: "pointer",
-            fontSize: "12px", padding: "0 2px", lineHeight: 1,
-          }}
-        >
-          &times;
-        </button>
+      <div style={{ fontSize: "9px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.3px", fontWeight: 600 }}>
+        Line Pass
       </div>
-
-      {/* Mode select */}
-      <SettingRow label="Mode">
-        <select
-          value={sub.mode}
-          onChange={(e) => onUpdate({ mode: e.target.value as CutMode })}
-          style={selectStyle}
-        >
-          <option value="line">Line (Vector Cut)</option>
-          <option value="fill">Fill (Raster Engrave)</option>
-          <option value="offsetFill">Offset Fill</option>
-        </select>
-      </SettingRow>
 
       {/* Power */}
       <SettingRow label="Power">
         <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
           <input
-            type="number" min="0" max="100" value={sub.power}
+            type="number" min="0" max="100" value={ov.power}
             onChange={(e) => onUpdate({ power: Math.max(0, Math.min(100, Number(e.target.value))) })}
             style={{ ...inputStyle, width: "42px", textAlign: "right" }}
           />
@@ -699,7 +598,7 @@ function SubLayerRow({
       <SettingRow label="Speed">
         <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
           <input
-            type="number" min="1" max="100000" value={sub.speed}
+            type="number" min="1" max="100000" value={ov.speed}
             onChange={(e) => onUpdate({ speed: Math.max(1, Number(e.target.value)) })}
             style={{ ...inputStyle, width: "50px", textAlign: "right" }}
           />
@@ -710,7 +609,7 @@ function SubLayerRow({
       {/* Passes */}
       <SettingRow label="Passes">
         <input
-          type="number" min="1" max="100" value={sub.passes}
+          type="number" min="1" max="100" value={ov.passes}
           onChange={(e) => onUpdate({ passes: Math.max(1, Number(e.target.value)) })}
           style={{ ...inputStyle, width: "50px", textAlign: "right" }}
         />
