@@ -751,6 +751,95 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
 
                     lines.push("M5".to_string());
                 }
+                "maskFill" => {
+                    // Hole-aware bitmap-mask scanline fill (Phase 2).
+                    //
+                    // Even-odd fill rule: winding direction is IRRELEVANT here — do NOT
+                    // re-add CCW import normalization (Fix-2 in ImageTraceDialog) when
+                    // debugging hole issues. If a counter still burns, check the EvenOdd
+                    // probe test or the alpha-threshold in mask_fill.rs.
+                    lines.push(format!("; Mask Fill: {} ({}% @ {}mm/min, interval {}mm)",
+                        obj.id, layer.power, layer.speed, layer.interval));
+
+                    let interval = if layer.interval > 0.0 { layer.interval } else { 0.1 };
+
+                    // Combine object rotation + scan angle + per-pass increment.
+                    // Matches the "fill" arm's rotation convention exactly.
+                    let obj_rot = if obj.rotation.abs() > 0.001 { obj.rotation.to_radians() } else { 0.0 };
+                    let layer_angle = layer.scan_angle.to_radians()
+                        + (pass as f64) * layer.angle_increment.to_radians();
+                    let rotation_rad = obj_rot + layer_angle;
+
+                    // Rasterize the compound shape to an even-odd binary mask.
+                    // fill_compound_mask uses obj.x/y/width/height as the union bbox,
+                    // which was set by toCutObjects (Phase 1) to the union of all contours.
+                    // The mask origin and the CutObject bbox are therefore identical —
+                    // one source of truth, no drift to the optimizer (gcode.rs:88).
+                    let mask_result = super::mask_fill::fill_compound_mask(obj, interval);
+
+                    match mask_result {
+                        Err(e) => {
+                            // Degenerate / empty mask (critic must-fix #3): skip + warn.
+                            // Do not silently emit nothing — log the warning and continue.
+                            // This preserves the job for all other objects.
+                            eprintln!("[gcode_gen] maskFill skipped '{}': {}", obj.id, e);
+                            lines.push(format!("; maskFill skipped: {}", e));
+                        }
+                        Ok((pixels, mask_w, mask_h, origin_x, origin_y)) => {
+                            // Check for all-background mask (degenerate input after dilation)
+                            let has_content = pixels.iter().any(|&p| p == 0);
+                            if !has_content {
+                                eprintln!(
+                                    "[gcode_gen] maskFill: '{}' produced all-background mask \
+                                     (zero-area path after thin-stroke dilation). Skipping.",
+                                    obj.id
+                                );
+                                lines.push(format!("; maskFill skipped: all-background mask for '{}'", obj.id));
+                            } else {
+                                let scan_params = super::mask_fill::MaskScanParams {
+                                    origin_x,
+                                    origin_y,
+                                    width_mm: obj.width,
+                                    height_mm: obj.height,
+                                    interval,
+                                    overscan: layer.overscan.max(0.0),
+                                    bidirectional: layer.bidirectional,
+                                    scanning_offset: layer.scanning_offset,
+                                    speed_mm_min: speed_mm_min,
+                                    s_max,
+                                    power_cmd: power_cmd.to_string(),
+                                    workspace_height,
+                                    origin_top,
+                                    rotation_rad,
+                                    passes: 1, // outer pass loop already handles multi-pass
+                                };
+
+                                match super::mask_fill::scan_mask_to_gcode(
+                                    &pixels, mask_w, mask_h, &scan_params,
+                                ) {
+                                    Ok(scan_result) => {
+                                        for line in scan_result.gcode.lines() {
+                                            lines.push(line.to_string());
+                                        }
+                                        moves.extend(scan_result.moves.clone());
+                                        cut_distance += scan_result.cut_distance;
+                                        travel_distance += scan_result.travel_distance;
+                                        total_distance += scan_result.total_distance;
+                                        if !scan_result.moves.is_empty() {
+                                            let last = scan_result.moves.last().unwrap();
+                                            cur_x = last.x;
+                                            cur_y = last.y;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("[gcode_gen] maskFill scan error for '{}': {}", obj.id, e);
+                                        lines.push(format!("; maskFill scan error: {}", e));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
 
