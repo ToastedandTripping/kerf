@@ -5,7 +5,7 @@ import { useStore } from "../../app/store";
 import { getDirtyObjectIds, clearDirtyObjectIds, setCursorPosition } from "../../app/store";
 import type { DesignObject } from "../../app/types";
 import { hasPlaceholders } from "../../lib/variableText";
-import { handleViewportPointerDown, handleViewportPointerMove, handleViewportPointerUp, getMarqueeState, getSelectionBBox, handleViewportDoubleClick, hitTestHandle, isDraggingHandle, isPointerDragging } from "../../lib/tools/toolHandler";
+import { handleViewportPointerDown, handleViewportPointerMove, handleViewportPointerUp, getMarqueeState, getSelectionBBox, handleViewportDoubleClick, hitTestHandle, isDraggingRotateHandle, getActiveDragHandle, isPointerDragging } from "../../lib/tools/toolHandler";
 
 import { PX_PER_MM } from "../../lib/constants";
 import { composeGroupChild, orientedHandlePoints } from "../../lib/geometry";
@@ -568,6 +568,10 @@ export function Viewport() {
         const worldX = (e.clientX - rect.left - camera.x) / camera.zoom / PX_PER_MM;
         const worldY = (e.clientY - rect.top - camera.y) / camera.zoom / PX_PER_MM;
         handleViewportPointerDown(worldX, worldY, e);
+        // Jen-2: show grabbing cursor immediately on rotate-handle drag start
+        if (canvasRef.current && getActiveDragHandle() === "rotate") {
+          canvasRef.current.style.cursor = "grabbing";
+        }
       }
     },
     [camera]
@@ -632,8 +636,8 @@ export function Viewport() {
         marqueeRef.current = null;
       }
 
-      // R3: live rotation readout — surface current rotation during a rotate handle drag
-      if (isDraggingHandle()) {
+      // R3: live rotation readout — only during a rotate handle drag (not resize)
+      if (isDraggingRotateHandle()) {
         const curStore = useStore.getState();
         if (curStore.selectedIds.length === 1) {
           const obj = curStore.objectsById.get(curStore.selectedIds[0]);
@@ -745,12 +749,12 @@ export function Viewport() {
           bottom: "12px",
           left: "50%",
           transform: "translateX(-50%)",
-          background: "rgba(0,0,0,0.7)",
-          color: "#ffffff",
+          background: "var(--bg-panel)",
+          color: "var(--text-primary)",
           fontSize: "12px",
-          fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif",
           padding: "4px 10px",
-          borderRadius: "4px",
+          borderRadius: "var(--radius-sm)",
+          border: "1px solid var(--border)",
           pointerEvents: "none",
           zIndex: 10,
           letterSpacing: "0.3px",

@@ -372,5 +372,70 @@ describe("handle-resize (select tool pointer pipeline)", () => {
       // legacy: x=10, y=10, w=40, h=30 (SE drag from (30,30) to (50,40))
       expect(resized.transform).toMatchObject({ x: 10, y: 10, width: 40, height: 30 });
     });
+
+    // Razor NOTE-1: rotated PATH/line object at 45° — the rect above uses a
+    // primitive (no points), which cannot expose the preview==cut center invariant.
+    // This sibling test uses a points-bearing PATH at 45°; asserts opposite-edge
+    // world anchor is screen-fixed, rotation preserved, and the transform AABB
+    // center matches the points bbox center (the invariant that prevents cut/render desync).
+    it("rotated PATH 'e' resize: opposite edge screen-fixed, rotation preserved, preview==cut center invariant", () => {
+      const ROT = 45;
+      const cos45 = Math.cos(Math.PI / 4);
+      const sin45 = Math.sin(Math.PI / 4);
+
+      const obj = makePath("p2", ROT); // 20×20 bbox at (10,10), rotation=45
+      useStore.getState().addObject(obj);
+      useStore.getState().setSelectedIds(["p2"]);
+
+      const t0 = obj.transform;
+      // zoom=1, rotateOffset=20mm; use orientedHandlePoints to get exact handle positions
+      const handles0 = orientedHandlePoints(t0, 20);
+      const ePos = handles0.e;
+      const wPos = handles0.w;
+
+      // Drag 'e' by +5mm along local x-axis
+      const dragDelta = 5;
+      const toX = ePos.x + dragDelta * cos45;
+      const toY = ePos.y + dragDelta * sin45;
+
+      handleViewportPointerDown(ePos.x, ePos.y, pe());
+      handleViewportPointerMove(toX, toY, pe());
+      handleViewportPointerUp(toX, toY, pe());
+
+      const resized = getObj("p2");
+      const t1 = resized.transform;
+
+      // Width should grow by ~5mm along local x; height unchanged
+      expect(t1.width).toBeCloseTo(t0.width + dragDelta, 3);
+      expect(t1.height).toBeCloseTo(t0.height, 3);
+
+      // Rotation preserved
+      expect(t1.rotation).toBeCloseTo(ROT, 9);
+
+      // Opposite edge ('w') screen-fixed
+      const wNew = orientedHandlePoints(t1, 20).w;
+      expect(wNew.x).toBeCloseTo(wPos.x, 3);
+      expect(wNew.y).toBeCloseTo(wPos.y, 3);
+
+      // Preview==cut center invariant: transform AABB center == points bbox center.
+      // assertPointsInvariant checks transform.{x,y,width,height} == pointsBBox exactly.
+      assertPointsInvariant(resized);
+
+      // Extra: verify the center derived from transform matches center derived from
+      // the mapped points bbox (both representations agree on screen position).
+      const transformCx = t1.x + t1.width / 2;
+      const transformCy = t1.y + t1.height / 2;
+      const points = resized.points!;
+      const xs = points.map((p) => p.x);
+      const ys = points.map((p) => p.y);
+      const pMinX = Math.min(...xs);
+      const pMaxX = Math.max(...xs);
+      const pMinY = Math.min(...ys);
+      const pMaxY = Math.max(...ys);
+      const pointsCx = (pMinX + pMaxX) / 2;
+      const pointsCy = (pMinY + pMaxY) / 2;
+      expect(transformCx).toBeCloseTo(pointsCx, 3);
+      expect(transformCy).toBeCloseTo(pointsCy, 3);
+    });
   });
 });

@@ -86,6 +86,15 @@ export function isDraggingHandle(): boolean {
   return drag.isDragging && drag.activeHandle !== null;
 }
 
+// Jen-2/Jen-3: expose rotate-specific drag state.
+export function isDraggingRotateHandle(): boolean {
+  return drag.isDragging && drag.activeHandle === "rotate";
+}
+
+export function getActiveDragHandle(): HandleType {
+  return drag.activeHandle;
+}
+
 export function isPointerDragging(): boolean {
   return drag.isDragging;
 }
@@ -634,7 +643,9 @@ function handleResizeMove(worldX: number, worldY: number, e: React.PointerEvent)
         const obj = store.objectsById.get(id);
         if (!obj) continue;
 
-        // Cumulative angle from original (signed, not modulo — preserves direction)
+        // Cumulative angle from original: the math is correct via trig periodicity —
+        // cos/sin only see the angle mod 360, and the stored rotation is also mod 360,
+        // so the two cancel cleanly. prevApplied + delta is the right running delta.
         const prevApplied = obj.transform.rotation - objOrig.rotation;
         const cumulativeAngle = prevApplied + delta;
 
