@@ -621,3 +621,65 @@ export function offsetRingByDistance(
   if (result.length > 0) result.push([result[0][0], result[0][1]]);
   return result;
 }
+
+// --- R1a: orientedHandlePoints ---
+
+/**
+ * The 9 handle anchors (8 resize + 1 rotate) for a transform, positioned on
+ * the ROTATED rectangle in world-mm coordinates.
+ *
+ * Formula (local-to-world): L(dx, dy) = { cx + dx·cos − dy·sin, cy + dx·sin + dy·cos }
+ * where cx = x + w/2, cy = y + h/2 are the AABB center.
+ *
+ * Reduction guarantee: at rotation=0 (cos=1, sin=0) the formula degenerates to
+ * { cx + dx, cy + dy }, which places anchors exactly on the axis-aligned AABB
+ * corners/edges — byte-identical to today's screen-axis code.
+ *
+ * @param t               object transform (x, y, width, height, rotation degrees)
+ * @param rotateOffset    world-mm distance above the top-center for the rotate handle
+ */
+export interface OrientedHandles {
+  nw:     { x: number; y: number };
+  n:      { x: number; y: number };
+  ne:     { x: number; y: number };
+  w:      { x: number; y: number };
+  e:      { x: number; y: number };
+  sw:     { x: number; y: number };
+  s:      { x: number; y: number };
+  se:     { x: number; y: number };
+  rotate: { x: number; y: number };
+}
+
+export function orientedHandlePoints(
+  t: { x: number; y: number; width: number; height: number; rotation?: number },
+  rotateOffset: number,
+): OrientedHandles {
+  const rot = (t.rotation || 0) * Math.PI / 180;
+  const cos = Math.cos(rot);
+  const sin = Math.sin(rot);
+  const cx = t.x + t.width / 2;
+  const cy = t.y + t.height / 2;
+  const hw = t.width / 2;
+  const hh = t.height / 2;
+
+  // Local-to-world rotation about the AABB center
+  function L(dx: number, dy: number): { x: number; y: number } {
+    return {
+      x: cx + dx * cos - dy * sin,
+      y: cy + dx * sin + dy * cos,
+    };
+  }
+
+  return {
+    nw:     L(-hw, -hh),
+    n:      L(   0, -hh),
+    ne:     L( hw, -hh),
+    w:      L(-hw,    0),
+    e:      L( hw,    0),
+    sw:     L(-hw,  hh),
+    s:      L(   0,  hh),
+    se:     L( hw,  hh),
+    // Rotate handle: rotateOffset above the top-center in local-y direction
+    rotate: L(   0, -hh - rotateOffset),
+  };
+}

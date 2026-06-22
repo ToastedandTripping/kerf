@@ -1,7 +1,7 @@
 import { useStore, generateId } from "../../app/store";
 import type { DesignObject, PathPoint, ToolType } from "../../app/types";
 import { machineConnection } from "../machine/connection";
-import { movePartial, scalePartial, pointsPartial, pointsBBox, POINTS_EPSILON } from "../geometry";
+import { movePartial, scalePartial, pointsPartial, pointsBBox, POINTS_EPSILON, orientedHandlePoints } from "../geometry";
 import { computeAABB } from "../nesting";
 
 // Handle types for resize/rotate
@@ -78,6 +78,16 @@ export function getMarqueeState() {
     startY: drag.startY,
     direction: drag.marqueeDirection,
   };
+}
+
+// R2/R3: expose drag state so Viewport can gate cursor/readout logic without
+// needing access to the private drag object.
+export function isDraggingHandle(): boolean {
+  return drag.isDragging && drag.activeHandle !== null;
+}
+
+export function isPointerDragging(): boolean {
+  return drag.isDragging;
 }
 
 
@@ -251,16 +261,56 @@ function hitTest(worldX: number, worldY: number): string | null {
 }
 
 // Hit test for resize/rotate handles around selected objects
-function hitTestHandle(worldX: number, worldY: number, zoom: number): HandleType {
+// R1c: for single-select, test against orientedHandlePoints (rotated anchors).
+// Multi-select: keep the existing getSelectionBBox() AABB path unchanged.
+export function hitTestHandle(worldX: number, worldY: number, zoom: number): HandleType {
   const store = useStore.getState();
   if (store.selectedIds.length === 0) return null;
 
-  // Get bounding box of entire selection
-  const bbox = getSelectionBBox();
-  if (!bbox) return null;
-
   const handleSize = Math.max(12, 8) / zoom; // minimum 12 screen-pixel hit target
   const hs = handleSize / 2;
+  const rotateOffset = 20 / zoom; // mm above top-center in local-y
+
+  // --- Single-select: use oriented (rotated) handle anchors ---
+  if (store.selectedIds.length === 1) {
+    const obj = store.objectsById.get(store.selectedIds[0]);
+    if (!obj) return null;
+    const t = obj.transform;
+    const handles = orientedHandlePoints(t, rotateOffset);
+
+    // Rotation handle first (larger hit target)
+    if (Math.hypot(worldX - handles.rotate.x, worldY - handles.rotate.y) < hs * 2) {
+      return "rotate";
+    }
+
+    // Corners
+    const corners: [keyof typeof handles, HandleType][] = [
+      ["nw", "nw"], ["ne", "ne"], ["sw", "sw"], ["se", "se"],
+    ];
+    for (const [key, handle] of corners) {
+      const h = handles[key];
+      if (Math.abs(worldX - h.x) < hs && Math.abs(worldY - h.y) < hs) {
+        return handle;
+      }
+    }
+
+    // Edges
+    const edges: [keyof typeof handles, HandleType][] = [
+      ["n", "n"], ["s", "s"], ["w", "w"], ["e", "e"],
+    ];
+    for (const [key, handle] of edges) {
+      const h = handles[key];
+      if (Math.abs(worldX - h.x) < hs && Math.abs(worldY - h.y) < hs) {
+        return handle;
+      }
+    }
+
+    return null;
+  }
+
+  // --- Multi-select: unchanged AABB path ---
+  const bbox = getSelectionBBox();
+  if (!bbox) return null;
 
   // Rotation handle (above top center)
   const rotHandleY = bbox.y - 20 / zoom;
@@ -548,11 +598,13 @@ function handleResizeMove(worldX: number, worldY: number, e: React.PointerEvent)
   const shiftKey = e.shiftKey;
 
   if (handle === "rotate") {
-    // Rotation: angle from center of selection to cursor
+    // Rotation: cumulative angle from drag start to current cursor, about
+    // the selection center captured at drag start (orig.x/y/width/height).
     const cx = orig.x + orig.width / 2;
     const cy = orig.y + orig.height / 2;
     const startAngle = Math.atan2(drag.startY - cy, drag.startX - cx);
     const currentAngle = Math.atan2(worldY - cy, worldX - cx);
+    // delta is incremental (startX/Y reset each tick below)
     let delta = ((currentAngle - startAngle) * 180) / Math.PI;
 
     // Snap to 15 degree increments with shift
@@ -561,26 +613,175 @@ function handleResizeMove(worldX: number, worldY: number, e: React.PointerEvent)
     }
 
     const rotUpdates: Array<{ id: string; partial: Partial<DesignObject> }> = [];
-    for (const id of store.selectedIds) {
-      const objOrig = drag.originalTransforms.get(id);
-      if (!objOrig) continue;
-      const obj = store.objectsById.get(id);
-      if (!obj) continue;
-      rotUpdates.push({
-        id,
-        partial: {
-          transform: { ...obj.transform, rotation: ((obj.transform.rotation + delta) % 360 + 360) % 360 },
-        },
-      });
+
+    if (store.selectedIds.length > 1) {
+      // R4: multi-select orbit — compute cumulative angle from original snapshot
+      // (critic must-fix #3): the rotate branch resets drag.startX/Y each tick
+      // for incremental single-object rotation. For multi-select orbit we can't
+      // use per-tick delta to reposition centers (drift accumulates). Instead:
+      // cumulative angle = (current stored rotation − original rotation) + this delta.
+      // This reads the tick's increment (delta) and adds it to the already-applied
+      // total (stored rotation − original rotation), giving the correct cumulative
+      // without needing to store extra state. Apply rotation=original+cumulative
+      // and center=rotate(originalCenter about selectionCenter by cumulative) — pure
+      // snapshot arithmetic, invariant-safe.
+      const selCx = orig.x + orig.width / 2;
+      const selCy = orig.y + orig.height / 2;
+
+      for (const id of store.selectedIds) {
+        const objOrig = drag.originalTransforms.get(id);
+        if (!objOrig) continue;
+        const obj = store.objectsById.get(id);
+        if (!obj) continue;
+
+        // Cumulative angle from original (signed, not modulo — preserves direction)
+        const prevApplied = obj.transform.rotation - objOrig.rotation;
+        const cumulativeAngle = prevApplied + delta;
+
+        // Orbit the object's ORIGINAL center about the selection center
+        const origCx = objOrig.x + objOrig.width / 2;
+        const origCy = objOrig.y + objOrig.height / 2;
+        const cumRad = cumulativeAngle * Math.PI / 180;
+        const cosCum = Math.cos(cumRad);
+        const sinCum = Math.sin(cumRad);
+        const dx0 = origCx - selCx;
+        const dy0 = origCy - selCy;
+        const newCx = selCx + dx0 * cosCum - dy0 * sinCum;
+        const newCy = selCy + dx0 * sinCum + dy0 * cosCum;
+        const newX = newCx - objOrig.width / 2;
+        const newY = newCy - objOrig.height / 2;
+        const newRot = ((objOrig.rotation + cumulativeAngle) % 360 + 360) % 360;
+
+        // W1b: route through scalePartial to keep points in sync
+        const partial = scalePartial(obj, { x: newX, y: newY, width: objOrig.width, height: objOrig.height });
+        rotUpdates.push({
+          id,
+          partial: {
+            ...partial,
+            transform: { ...partial.transform, rotation: newRot },
+          },
+        });
+      }
+    } else {
+      // Single-object rotation: incremental (unchanged path)
+      for (const id of store.selectedIds) {
+        const obj = store.objectsById.get(id);
+        if (!obj) continue;
+        rotUpdates.push({
+          id,
+          partial: {
+            transform: { ...obj.transform, rotation: ((obj.transform.rotation + delta) % 360 + 360) % 360 },
+          },
+        });
+      }
     }
+
     if (rotUpdates.length > 0) store.updateObjects(rotUpdates);
-    // Reset start angle so rotation is incremental
+    // Reset start angle so rotation is incremental (for both single and multi)
     drag.startX = worldX;
     drag.startY = worldY;
     return;
   }
 
-  // Resize: calculate new bbox based on handle drag
+  // --- Resize ---
+
+  // R1d: Local-axis resize for a single rotated object.
+  // Gate: only fires when selectedIds.length === 1 AND rotation !== 0.
+  // At rot=0 or multi-select: fall through to the unchanged screen-axis code below.
+  // Axis-aligned safety is BY THE GATE — the new code never runs at rot=0.
+  if (store.selectedIds.length === 1) {
+    const id = store.selectedIds[0];
+    const objOrig = drag.originalTransforms.get(id);
+    const obj = store.objectsById.get(id);
+    if (objOrig && obj) {
+      const rot = objOrig.rotation || 0;
+      if (rot !== 0) {
+        const rad = rot * Math.PI / 180;
+        const cosR = Math.cos(rad);
+        const sinR = Math.sin(rad);
+        const ow = objOrig.width;
+        const oh = objOrig.height;
+
+        // World delta from drag start (drag.startX/Y is the drag origin for
+        // the resize branch — it does NOT get reset each tick like the rotate
+        // branch does; confirmed: only the rotate branch resets it)
+        const dxw = worldX - drag.startX;
+        const dyw = worldY - drag.startY;
+
+        // Project world delta into local frame
+        const dlx = dxw * cosR + dyw * sinR;
+        const dly = -dxw * sinR + dyw * cosR;
+
+        // Per-handle: new local size and which local corner is fixed (the opposite edge)
+        let nlw = ow;
+        let nlh = oh;
+        // Fixed-corner signs in local frame (used to reconstruct the anchor world pos)
+        // fixSx/fixSy: sign of the FIXED corner's offset from center (+1 or -1)
+        let fixSx = 0; // for edge-only handles the other axis is centered
+        let fixSy = 0;
+
+        switch (handle) {
+          case "se": nlw = ow + dlx; nlh = oh + dly; fixSx = -1; fixSy = -1; break;
+          case "sw": nlw = ow - dlx; nlh = oh + dly; fixSx =  1; fixSy = -1; break;
+          case "ne": nlw = ow + dlx; nlh = oh - dly; fixSx = -1; fixSy =  1; break;
+          case "nw": nlw = ow - dlx; nlh = oh - dly; fixSx =  1; fixSy =  1; break;
+          case "e":  nlw = ow + dlx;                 fixSx = -1; fixSy =  0; break;
+          case "w":  nlw = ow - dlx;                 fixSx =  1; fixSy =  0; break;
+          case "s":                  nlh = oh + dly; fixSx =  0; fixSy = -1; break;
+          case "n":                  nlh = oh - dly; fixSx =  0; fixSy =  1; break;
+        }
+
+        // Shift aspect-lock compares LOCAL deltas (critic must-fix #3)
+        if (shiftKey && ["nw", "ne", "sw", "se"].includes(handle)) {
+          const aspect = ow / oh;
+          if (Math.abs(dlx) > Math.abs(dly)) {
+            nlh = nlw / aspect;
+          } else {
+            nlw = nlh * aspect;
+          }
+        }
+
+        // Clamp BEFORE anchor solve (critic must-fix #2: use clamped extents)
+        nlw = Math.max(1, nlw);
+        nlh = Math.max(1, nlh);
+
+        // Anchor corner: the FIXED corner in world space (computed from original transform)
+        // The fixed corner in LOCAL frame is at offset (fixSx * ow/2, fixSy * oh/2)
+        const origCx = objOrig.x + objOrig.width / 2;
+        const origCy = objOrig.y + objOrig.height / 2;
+        const origFixLocalX = fixSx * ow / 2;
+        const origFixLocalY = fixSy * oh / 2;
+        const anchorWorldX = origCx + origFixLocalX * cosR - origFixLocalY * sinR;
+        const anchorWorldY = origCy + origFixLocalX * sinR + origFixLocalY * cosR;
+
+        // The same corner on the NEW rect has local offset (fixSx * nlw/2, fixSy * nlh/2)
+        // using CLAMPED half-extents — so the fixed corner doesn't drift at the 1mm floor
+        const newFixLocalX = fixSx * nlw / 2;
+        const newFixLocalY = fixSy * nlh / 2;
+
+        // Solve for new center: anchorWorld = newCenter + rotated(newFixLocal)
+        // newCx = anchorWorldX − (newFixLocalX·cos − newFixLocalY·sin)
+        // newCy = anchorWorldY − (newFixLocalX·sin + newFixLocalY·cos)
+        const newCx = anchorWorldX - (newFixLocalX * cosR - newFixLocalY * sinR);
+        const newCy = anchorWorldY - (newFixLocalX * sinR + newFixLocalY * cosR);
+        const newX = newCx - nlw / 2;
+        const newY = newCy - nlh / 2;
+
+        // scalePartial contract unchanged — we supply the new AABB rect + preserve rotation
+        const partial = scalePartial(obj, { x: newX, y: newY, width: nlw, height: nlh });
+        store.updateObjects([{
+          id,
+          partial: {
+            ...partial,
+            transform: { ...partial.transform, rotation: rot },
+          },
+        }]);
+        return;
+      }
+    }
+  }
+
+  // --- Screen-axis resize (rot=0 or multi-select — UNCHANGED from original) ---
   let newX = orig.x;
   let newY = orig.y;
   let newW = orig.width;

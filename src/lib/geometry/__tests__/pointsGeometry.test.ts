@@ -18,6 +18,7 @@ import {
   translatePoints,
   assertPointsInvariant,
   composeGroupChild,
+  orientedHandlePoints,
   POINTS_EPSILON,
   MIN_SCALE_TARGET,
 } from "../index";
@@ -402,5 +403,79 @@ describe("composeGroupChild (THE shared Viewport/gcodeGen flatten composition)",
     composeGroupChild(child, group);
     expect(pts[0]).toMatchObject({ x: 0, y: 0 });
     expect(child.transform.x).toBe(0);
+  });
+});
+
+// R1a: orientedHandlePoints
+describe("orientedHandlePoints (R1a)", () => {
+  it("rot=0 → handles land exactly on AABB corners/edges (byte-identical reduction)", () => {
+    // A 20×10 rect at (5, 3) unrotated. With rot=0, cos=1,sin=0 → local=world offset.
+    const t = { x: 5, y: 3, width: 20, height: 10, rotation: 0 };
+    const rotOff = 5; // mm above top-center
+    const h = orientedHandlePoints(t, rotOff);
+
+    // cx=15, cy=8
+    expect(h.nw).toEqual({ x:  5, y:  3 });
+    expect(h.ne).toEqual({ x: 25, y:  3 });
+    expect(h.sw).toEqual({ x:  5, y: 13 });
+    expect(h.se).toEqual({ x: 25, y: 13 });
+    expect(h.n).toEqual({ x: 15, y:  3 });
+    expect(h.s).toEqual({ x: 15, y: 13 });
+    expect(h.w).toEqual({ x:  5, y:  8 });
+    expect(h.e).toEqual({ x: 25, y:  8 });
+    // Rotate handle: 5mm above top-center in local-y → world (15, 3-5) = (15, -2)
+    expect(h.rotate).toEqual({ x: 15, y: -2 });
+  });
+
+  it("45° → rotated corners at center ± rotated half-extents", () => {
+    // 20×20 square at (0,0) rotated 45°. Center=(10,10). hw=hh=10.
+    // cos(45°)=sin(45°)=√2/2 ≈ 0.7071
+    // nw local offset (-10,-10): world = (10 + (-10)·cos − (-10)·sin, 10 + (-10)·sin + (-10)·cos)
+    //   = (10 + (-10)·√2/2 + 10·√2/2, 10 + (-10)·√2/2 + (-10)·√2/2)
+    //   = (10 + 0, 10 − 10√2) = (10, 10 − 14.142...)
+    const t = { x: 0, y: 0, width: 20, height: 20, rotation: 45 };
+    const h = orientedHandlePoints(t, 0);
+    const sq2 = Math.sqrt(2);
+    const cx = 10, cy = 10;
+    const cos = Math.cos(Math.PI / 4);
+    const sin = Math.sin(Math.PI / 4);
+    // nw: local (-10, -10)
+    expect(h.nw.x).toBeCloseTo(cx + (-10) * cos - (-10) * sin, 9);
+    expect(h.nw.y).toBeCloseTo(cy + (-10) * sin + (-10) * cos, 9);
+    // se: local (+10, +10)
+    expect(h.se.x).toBeCloseTo(cx + 10 * cos - 10 * sin, 9);
+    expect(h.se.y).toBeCloseTo(cy + 10 * sin + 10 * cos, 9);
+    // e: local (+10, 0) → (10 + 10·cos, 10 + 10·sin) = (10 + 10/√2, 10 + 10/√2)
+    expect(h.e.x).toBeCloseTo(cx + 10 * cos, 9);
+    expect(h.e.y).toBeCloseTo(cy + 10 * sin, 9);
+    // n: local (0, -10) → (10 − (−10)·sin, 10 + (−10)·cos) wait let's compute directly
+    // n: local (0, -hh=−10): x = cx + 0·cos − (−10)·sin = cx + 10·sin
+    //                         y = cy + 0·sin + (−10)·cos = cy − 10·cos
+    expect(h.n.x).toBeCloseTo(cx + 10 * sin, 9);
+    expect(h.n.y).toBeCloseTo(cy - 10 * cos, 9);
+    // Verify all 4 corners are equidistant from center (20×20 square → always √2·10)
+    for (const key of ["nw", "ne", "sw", "se"] as const) {
+      expect(Math.hypot(h[key].x - cx, h[key].y - cy)).toBeCloseTo(10 * sq2, 9);
+    }
+  });
+
+  it("90° → nw/ne/sw/se corners form the correct rotated square", () => {
+    // 10×6 rect at (0,0) rot=90°. Center=(5,3). hw=5, hh=3.
+    // cos(90°)=0, sin(90°)=1.
+    // nw local (-5,-3): world = (5 + (-5)·0 − (−3)·1, 3 + (−5)·1 + (−3)·0)
+    //                         = (5 + 3, 3 − 5) = (8, -2)
+    const t = { x: 0, y: 0, width: 10, height: 6, rotation: 90 };
+    const h = orientedHandlePoints(t, 0);
+    expect(h.nw.x).toBeCloseTo(8, 9);
+    expect(h.nw.y).toBeCloseTo(-2, 9);
+    // ne local (+5,-3): world = (5 + 5·0 − (−3)·1, 3 + 5·1 + (−3)·0) = (8, 8)
+    expect(h.ne.x).toBeCloseTo(8, 9);
+    expect(h.ne.y).toBeCloseTo(8, 9);
+    // sw local (-5,+3): world = (5 + (−5)·0 − 3·1, 3 + (−5)·1 + 3·0) = (2, -2)
+    expect(h.sw.x).toBeCloseTo(2, 9);
+    expect(h.sw.y).toBeCloseTo(-2, 9);
+    // se local (+5,+3): world = (5 + 5·0 − 3·1, 3 + 5·1 + 3·0) = (2, 8)
+    expect(h.se.x).toBeCloseTo(2, 9);
+    expect(h.se.y).toBeCloseTo(8, 9);
   });
 });

@@ -5,10 +5,10 @@ import { useStore } from "../../app/store";
 import { getDirtyObjectIds, clearDirtyObjectIds, setCursorPosition } from "../../app/store";
 import type { DesignObject } from "../../app/types";
 import { hasPlaceholders } from "../../lib/variableText";
-import { handleViewportPointerDown, handleViewportPointerMove, handleViewportPointerUp, getMarqueeState, getSelectionBBox, handleViewportDoubleClick } from "../../lib/tools/toolHandler";
+import { handleViewportPointerDown, handleViewportPointerMove, handleViewportPointerUp, getMarqueeState, getSelectionBBox, handleViewportDoubleClick, hitTestHandle, isDraggingHandle, isPointerDragging } from "../../lib/tools/toolHandler";
 
 import { PX_PER_MM } from "../../lib/constants";
-import { composeGroupChild } from "../../lib/geometry";
+import { composeGroupChild, orientedHandlePoints } from "../../lib/geometry";
 
 // Cache for GPU textures keyed by object ID (avoids retaining megabyte-sized base64 strings as Map keys)
 const textureCache = new Map<string, Texture>();
@@ -28,6 +28,8 @@ function getOrCreateTexture(id: string, imageData: string): Texture {
 
 export function Viewport() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  // R3: live rotation angle readout during rotate drag (null = not dragging rotate)
+  const [rotationReadout, setRotationReadout] = useState<number | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const appRef = useRef<Application | null>(null);
   const worldRef = useRef<Container | null>(null);
@@ -359,54 +361,95 @@ export function Viewport() {
     if (selectedTransforms.length > 0) {
       const bbox = getSelectionBBox();
       if (bbox) {
-        const bx = bbox.x * PX_PER_MM;
-        const by = bbox.y * PX_PER_MM;
-        const bw = bbox.w * PX_PER_MM;
-        const bh = bbox.h * PX_PER_MM;
-
         // Multi-selection bounding box
         if (selectedTransforms.length > 1) {
+          const bx = bbox.x * PX_PER_MM;
+          const by = bbox.y * PX_PER_MM;
+          const bw = bbox.w * PX_PER_MM;
+          const bh = bbox.h * PX_PER_MM;
           g.setStrokeStyle({ width: 1 / camera.zoom, color: 0x4a90e2, alpha: 0.4 });
           g.rect(bx, by, bw, bh).stroke();
         }
 
         const handleSize = 6 / camera.zoom;
         const hs = handleSize / 2;
-
-        // Corner handles
-        const corners = [
-          [bx, by], [bx + bw, by],
-          [bx, by + bh], [bx + bw, by + bh],
-        ];
-        for (const [cx, cy] of corners) {
-          g.rect(cx - hs, cy - hs, handleSize, handleSize).fill({ color: 0xffffff });
-          g.setStrokeStyle({ width: 1 / camera.zoom, color: 0x4a90e2, alpha: 1 });
-          g.rect(cx - hs, cy - hs, handleSize, handleSize).stroke();
-        }
-
-        // Edge midpoint handles (smaller)
         const edgeSize = 4 / camera.zoom;
         const ehs = edgeSize / 2;
-        const edges = [
-          [bx + bw / 2, by], [bx + bw / 2, by + bh], // N, S
-          [bx, by + bh / 2], [bx + bw, by + bh / 2],  // W, E
-        ];
-        for (const [cx, cy] of edges) {
-          g.rect(cx - ehs, cy - ehs, edgeSize, edgeSize).fill({ color: 0xffffff });
-          g.setStrokeStyle({ width: 0.5 / camera.zoom, color: 0x4a90e2, alpha: 1 });
-          g.rect(cx - ehs, cy - ehs, edgeSize, edgeSize).stroke();
-        }
+        const rotateOffsetMm = 20 / camera.zoom;
 
-        // Rotation handle (circle above top-center)
-        const rotY = by - 20 / camera.zoom;
-        const rotR = 4 / camera.zoom;
-        // Stem line
-        g.setStrokeStyle({ width: 0.5 / camera.zoom, color: 0x4a90e2, alpha: 0.6 });
-        g.moveTo(bx + bw / 2, by).lineTo(bx + bw / 2, rotY + rotR).stroke();
-        // Circle
-        g.circle(bx + bw / 2, rotY, rotR).fill({ color: 0xffffff });
-        g.setStrokeStyle({ width: 1 / camera.zoom, color: 0x4a90e2, alpha: 1 });
-        g.circle(bx + bw / 2, rotY, rotR).stroke();
+        if (selectedTransforms.length === 1) {
+          // R1b: single-select — draw handles on the ROTATED rectangle
+          const sel = selectedTransforms[0];
+          const t = sel.transform;
+          const handles = orientedHandlePoints(t, rotateOffsetMm);
+
+          // Helper: convert mm handle pos to px
+          const toPx = (pt: { x: number; y: number }) => ({ x: pt.x * PX_PER_MM, y: pt.y * PX_PER_MM });
+
+          // Corner handles
+          for (const key of ["nw", "ne", "sw", "se"] as const) {
+            const { x: cx, y: cy } = toPx(handles[key]);
+            g.rect(cx - hs, cy - hs, handleSize, handleSize).fill({ color: 0xffffff });
+            g.setStrokeStyle({ width: 1 / camera.zoom, color: 0x4a90e2, alpha: 1 });
+            g.rect(cx - hs, cy - hs, handleSize, handleSize).stroke();
+          }
+
+          // Edge midpoint handles
+          for (const key of ["n", "s", "w", "e"] as const) {
+            const { x: cx, y: cy } = toPx(handles[key]);
+            g.rect(cx - ehs, cy - ehs, edgeSize, edgeSize).fill({ color: 0xffffff });
+            g.setStrokeStyle({ width: 0.5 / camera.zoom, color: 0x4a90e2, alpha: 1 });
+            g.rect(cx - ehs, cy - ehs, edgeSize, edgeSize).stroke();
+          }
+
+          // Rotation handle — stem from top-center (handles.n) to rotate anchor
+          const { x: nx, y: ny } = toPx(handles.n);
+          const { x: rx, y: ry } = toPx(handles.rotate);
+          const rotR = 4 / camera.zoom;
+          g.setStrokeStyle({ width: 0.5 / camera.zoom, color: 0x4a90e2, alpha: 0.6 });
+          g.moveTo(nx, ny).lineTo(rx, ry + rotR).stroke();
+          g.circle(rx, ry, rotR).fill({ color: 0xffffff });
+          g.setStrokeStyle({ width: 1 / camera.zoom, color: 0x4a90e2, alpha: 1 });
+          g.circle(rx, ry, rotR).stroke();
+
+        } else {
+          // Multi-select: AABB-based handles (unchanged)
+          const bx = bbox.x * PX_PER_MM;
+          const by = bbox.y * PX_PER_MM;
+          const bw = bbox.w * PX_PER_MM;
+          const bh = bbox.h * PX_PER_MM;
+
+          // Corner handles
+          const corners = [
+            [bx, by], [bx + bw, by],
+            [bx, by + bh], [bx + bw, by + bh],
+          ];
+          for (const [cx, cy] of corners) {
+            g.rect(cx - hs, cy - hs, handleSize, handleSize).fill({ color: 0xffffff });
+            g.setStrokeStyle({ width: 1 / camera.zoom, color: 0x4a90e2, alpha: 1 });
+            g.rect(cx - hs, cy - hs, handleSize, handleSize).stroke();
+          }
+
+          // Edge midpoint handles
+          const edges = [
+            [bx + bw / 2, by], [bx + bw / 2, by + bh],
+            [bx, by + bh / 2], [bx + bw, by + bh / 2],
+          ];
+          for (const [cx, cy] of edges) {
+            g.rect(cx - ehs, cy - ehs, edgeSize, edgeSize).fill({ color: 0xffffff });
+            g.setStrokeStyle({ width: 0.5 / camera.zoom, color: 0x4a90e2, alpha: 1 });
+            g.rect(cx - ehs, cy - ehs, edgeSize, edgeSize).stroke();
+          }
+
+          // Rotation handle
+          const rotY = by - 20 / camera.zoom;
+          const rotR = 4 / camera.zoom;
+          g.setStrokeStyle({ width: 0.5 / camera.zoom, color: 0x4a90e2, alpha: 0.6 });
+          g.moveTo(bx + bw / 2, by).lineTo(bx + bw / 2, rotY + rotR).stroke();
+          g.circle(bx + bw / 2, rotY, rotR).fill({ color: 0xffffff });
+          g.setStrokeStyle({ width: 1 / camera.zoom, color: 0x4a90e2, alpha: 1 });
+          g.circle(bx + bw / 2, rotY, rotR).stroke();
+        }
       }
     }
     // --- Node editing overlay ---
@@ -557,6 +600,26 @@ export function Viewport() {
       setCursorPosition({ x: Math.round(worldX * 100) / 100, y: Math.round(worldY * 100) / 100 });
       handleViewportPointerMove(worldX, worldY, e);
 
+      // R2: hover cursor — single-select, select tool, not panning, not marquee.
+      // Written via direct DOM to avoid Error-185 (never return fresh object from useStore).
+      if (canvasRef.current && !isPanning.current) {
+        const store = useStore.getState();
+        const dragging = isPointerDragging();
+        const marqueeActive = getMarqueeState() !== null;
+        if (
+          store.activeTool === "select" &&
+          store.selectedIds.length === 1 &&
+          !dragging &&
+          !marqueeActive
+        ) {
+          const rot = store.objectsById.get(store.selectedIds[0])?.transform.rotation || 0;
+          const handle = hitTestHandle(worldX, worldY, store.camera.zoom);
+          canvasRef.current.style.cursor = getHandleCursor(handle, rot);
+        } else if (!dragging) {
+          canvasRef.current.style.cursor = getCursor(store.activeTool);
+        }
+      }
+
       // Update marquee overlay
       const marquee = getMarqueeState();
       if (marquee) {
@@ -567,6 +630,23 @@ export function Viewport() {
         marqueeRef.current = { x: sx, y: sy, w: sw, h: sh, dir: marquee.direction };
       } else {
         marqueeRef.current = null;
+      }
+
+      // R3: live rotation readout — surface current rotation during a rotate handle drag
+      if (isDraggingHandle()) {
+        const curStore = useStore.getState();
+        if (curStore.selectedIds.length === 1) {
+          const obj = curStore.objectsById.get(curStore.selectedIds[0]);
+          if (obj) {
+            setRotationReadout(Math.round(obj.transform.rotation));
+          } else {
+            setRotationReadout(null);
+          }
+        } else {
+          setRotationReadout(null);
+        }
+      } else {
+        setRotationReadout(null);
       }
     },
     [camera, setCamera]
@@ -590,6 +670,12 @@ export function Viewport() {
       const worldY = (e.clientY - rect.top - camera.y) / camera.zoom / PX_PER_MM;
       handleViewportPointerUp(worldX, worldY, e);
       marqueeRef.current = null;
+      // R3: clear rotation readout on pointer-up
+      setRotationReadout(null);
+      // R2: reset cursor to tool default after drag ends
+      if (canvasRef.current) {
+        canvasRef.current.style.cursor = getCursor(activeTool);
+      }
     },
     [camera, activeTool]
   );
@@ -651,6 +737,26 @@ export function Viewport() {
             onClose={() => setContextMenu(null)}
           />
         </>
+      )}
+      {/* R3: Live rotation readout during rotate drag */}
+      {rotationReadout !== null && (
+        <div style={{
+          position: "absolute",
+          bottom: "12px",
+          left: "50%",
+          transform: "translateX(-50%)",
+          background: "rgba(0,0,0,0.7)",
+          color: "#ffffff",
+          fontSize: "12px",
+          fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif",
+          padding: "4px 10px",
+          borderRadius: "4px",
+          pointerEvents: "none",
+          zIndex: 10,
+          letterSpacing: "0.3px",
+        }}>
+          {rotationReadout}°
+        </div>
       )}
       {/* Smart alignment guides */}
       {guides.map((g, i) =>
@@ -748,6 +854,40 @@ function getCursor(tool: string): string {
     case "node": return "default";
     case "text": return "text";
     default: return "crosshair";
+  }
+}
+
+/**
+ * R2: Map a handle type + object rotation to a CSS cursor.
+ * For resize handles: pick the CSS resize direction nearest the handle's actual
+ * screen orientation after applying the object's rotation.
+ * For the rotate handle: "grab".
+ * For null (no handle): "default".
+ */
+function getHandleCursor(handle: import("../../lib/tools/toolHandler").HandleType, rotationDeg: number): string {
+  if (!handle) return "default";
+  if (handle === "rotate") return "grab";
+
+  // Base screen angle for each handle in an unrotated object (degrees, 0=east, CCW)
+  const baseAngles: Record<string, number> = {
+    e:  0,   w:  180,
+    s:  270, n:  90,
+    se: 315, nw: 135,
+    ne: 45,  sw: 225,
+  };
+  const baseAngle = baseAngles[handle] ?? 0;
+  // Actual screen angle after rotation
+  const actualAngle = ((baseAngle + rotationDeg) % 360 + 360) % 360;
+
+  // Snap to the 4 CSS resize cursor directions (each spans 45° either side)
+  // 0°/180°=ew, 90°/270°=ns, 45°/225°=nesw, 135°/315°=nwse
+  const snapped = Math.round(actualAngle / 45) * 45 % 180;
+  switch (snapped) {
+    case 0:   return "ew-resize";
+    case 45:  return "nesw-resize";
+    case 90:  return "ns-resize";
+    case 135: return "nwse-resize";
+    default:  return "ew-resize";
   }
 }
 

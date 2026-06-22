@@ -9,6 +9,7 @@ import { useStore } from "../../../app/store";
 import type { DesignObject } from "../../../app/types";
 import {
   getSelectionBBox,
+  hitTestHandle,
   _testPointToSegmentDist,
   _testHitTest,
 } from "../toolHandler";
@@ -146,6 +147,66 @@ describe("toolHandler geometry helpers (TN2)", () => {
       useStore.getState().addObject(obj);
       const hit = _testHitTest(200, 200);
       expect(hit).toBeNull();
+    });
+  });
+
+  // R1c: hitTestHandle on rotated single-select object
+  describe("hitTestHandle (R1c) — rotated single-select anchors", () => {
+    beforeEach(() => {
+      useStore.setState({
+        objects: [],
+        objectsById: new Map(),
+        selectedIds: [],
+        selectedSet: new Set(),
+        undoStack: [],
+        redoStack: [],
+        camera: { x: 0, y: 0, zoom: 1 },
+      });
+    });
+
+    it("hits the rotated 'se' corner at its world position for a 45° rect", () => {
+      // 20×20 rect at (0,0) rotation=45°. Center=(10,10). hw=hh=10.
+      // se in local = (+10, +10). World = (10 + 10·cos45 − 10·sin45, 10 + 10·sin45 + 10·cos45)
+      //             = (10, 10 + 10√2) ≈ (10, 24.142)
+      const obj = makeRect("r1", 0, 0, 20, 20, 45);
+      useStore.getState().addObject(obj);
+      useStore.getState().setSelectedIds(["r1"]);
+
+      const cos = Math.cos(Math.PI / 4);
+      const sin = Math.sin(Math.PI / 4);
+      const cx = 10, cy = 10, hw = 10, hh = 10;
+      const seX = cx + hw * cos - hh * sin; // = 10 + 10·cos45 − 10·sin45 = 10
+      const seY = cy + hw * sin + hh * cos; // = 10 + 10·sin45 + 10·cos45 = 10 + 10√2
+
+      const handle = hitTestHandle(seX, seY, 1);
+      expect(handle).toBe("se");
+    });
+
+    it("returns null when clicking at the old (unrotated) AABB SE corner of a 45° rect", () => {
+      // For a 20×20 rect at (0,0) rotated 45°, the screen-axis AABB SE corner
+      // is at approximately (10 + 10√2, 10 + 10√2) ≈ (24.14, 24.14).
+      // That point is NOT one of the rotated handle positions — hitTestHandle should return null.
+      const obj = makeRect("r1", 0, 0, 20, 20, 45);
+      useStore.getState().addObject(obj);
+      useStore.getState().setSelectedIds(["r1"]);
+
+      const aabbEdge = 10 + 10 * Math.sqrt(2); // ≈ 24.14
+      const handle = hitTestHandle(aabbEdge, aabbEdge, 1);
+      // This point is far from any rotated handle center — should return null
+      expect(handle).toBeNull();
+    });
+
+    it("multi-select still uses AABB handles (unchanged path)", () => {
+      // Two unrotated rects — multi-select AABB SE is at (50, 50)
+      const r1 = makeRect("r1", 0, 0, 30, 30);
+      const r2 = makeRect("r2", 20, 20, 30, 30);
+      useStore.getState().addObject(r1);
+      useStore.getState().addObject(r2);
+      useStore.getState().setSelectedIds(["r1", "r2"]);
+
+      // Multi-select AABB: x=0,y=0,w=50,h=50 → SE corner at (50,50)
+      const handle = hitTestHandle(50, 50, 1);
+      expect(handle).toBe("se");
     });
   });
 });

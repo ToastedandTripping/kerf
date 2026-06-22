@@ -24,7 +24,7 @@ import {
   handleViewportPointerMove,
   handleViewportPointerUp,
 } from "../toolHandler";
-import { assertPointsInvariant } from "../../geometry";
+import { assertPointsInvariant, orientedHandlePoints } from "../../geometry";
 import { flattenObjectsForTest } from "../../machine/gcodeGen";
 
 function pe(opts: Partial<{ ctrlKey: boolean; shiftKey: boolean; button: number }> = {}): React.PointerEvent {
@@ -61,6 +61,22 @@ function makeRect(id: string, x: number, y: number, w: number, h: number): Desig
     type: "rectangle",
     name: `Rect ${id}`,
     transform: { x, y, width: w, height: h, rotation: 0, scaleX: 1, scaleY: 1 },
+    layerIndex: 0,
+    visible: true,
+    locked: false,
+    fill: null,
+    stroke: "#4a90e2",
+    strokeWidth: 1,
+    opacity: 1,
+  };
+}
+
+function makeRotatedRect(id: string, x: number, y: number, w: number, h: number, rotation: number): DesignObject {
+  return {
+    id,
+    type: "rectangle",
+    name: `Rect ${id}`,
+    transform: { x, y, width: w, height: h, rotation, scaleX: 1, scaleY: 1 },
     layerIndex: 0,
     visible: true,
     locked: false,
@@ -244,5 +260,117 @@ describe("handle-resize (select tool pointer pipeline)", () => {
     expect(undone.transform.rotation).toBe(0);
     expect(undone.points![0]).toMatchObject({ x: before.points![0].x, y: before.points![0].y });
     assertPointsInvariant(undone);
+  });
+
+  // R1 must-fix #1: non-square rect at non-90° angle — the only test that proves
+  // local-axis math (the existing 20×20 @ 90° test cannot distinguish local from
+  // screen-axis resize because its AABB is the same in both frames).
+  describe("R1 local-axis resize — non-square, non-90° (critic must-fix #1)", () => {
+    // Rect: 30×10 at (0,0), rotation=45°. AABB center = (15, 5).
+    // cos(45°) = sin(45°) = √2/2.
+    // "e" handle world pos: center + rotated(hw=15, 0) = (15 + 15·cos, 5 + 15·sin)
+    //   ≈ (15 + 10.607, 5 + 10.607) = (25.607, 15.607)
+    // "w" handle world pos (the FIXED corner for "e" drag): center + rotated(-hw=−15, 0)
+    //   = (15 − 10.607, 5 − 10.607) = (4.393, -5.607)
+    // "nw" corner world pos: center + rotated(-hw, -hh=-5) = (15 − 15·cos + 5·sin, 5 − 15·sin − 5·cos)
+    //   = (15 − 10.607 + 3.536, 5 − 10.607 − 3.536) = (7.929, -9.143)
+    // "se" corner world pos: center + rotated(+hw, +hh) = (15 + 10.607 − 3.536, 5 + 10.607 + 3.536)
+    //   = (22.071, 19.143)
+
+    const ROT = 45;
+    const cos45 = Math.cos(Math.PI / 4);
+    const sin45 = Math.sin(Math.PI / 4);
+
+    function makeR1Rect() {
+      return makeRotatedRect("r1", 0, 0, 30, 10, ROT);
+    }
+
+    function getHandlePos(t: { x: number; y: number; width: number; height: number; rotation?: number }, key: "e" | "w" | "nw" | "se" | "n" | "s" | "ne" | "sw" | "rotate") {
+      // zoom=1 so rotateOffset = 20/1 = 20mm
+      return orientedHandlePoints(t, 20)[key];
+    }
+
+    it("drag 'e': width grows along local x, height unchanged, rotation preserved, opposite edge (w) screen-fixed", () => {
+      const obj = makeR1Rect();
+      useStore.getState().addObject(obj);
+      useStore.getState().setSelectedIds(["r1"]);
+
+      const t0 = obj.transform;
+      const ePos = getHandlePos(t0, "e");
+      const wPos = getHandlePos(t0, "w");
+
+      // Drag 'e' handle by +5mm along local x-axis (local x direction = (cos45, sin45))
+      const dragDelta = 5;
+      const toX = ePos.x + dragDelta * cos45;
+      const toY = ePos.y + dragDelta * sin45;
+
+      // pointer down at 'e' handle, move to new position, up
+      handleViewportPointerDown(ePos.x, ePos.y, pe());
+      handleViewportPointerMove(toX, toY, pe());
+      handleViewportPointerUp(toX, toY, pe());
+
+      const resized = getObj("r1");
+      const t1 = resized.transform;
+
+      // Width should grow by ~5mm (local-axis drag), height unchanged
+      expect(t1.width).toBeCloseTo(t0.width + dragDelta, 3);
+      expect(t1.height).toBeCloseTo(t0.height, 3);
+
+      // Rotation preserved
+      expect(t1.rotation).toBeCloseTo(ROT, 9);
+
+      // Opposite edge ('w') should be screen-fixed:
+      // The 'w' handle on the new rect = newCenter + rotated(-newHw, 0)
+      const wNew = getHandlePos(t1, "w");
+      expect(wNew.x).toBeCloseTo(wPos.x, 3);
+      expect(wNew.y).toBeCloseTo(wPos.y, 3);
+    });
+
+    it("drag 'se': nw corner screen-fixed, rotation preserved, both dims grow", () => {
+      const obj = makeR1Rect();
+      useStore.getState().addObject(obj);
+      useStore.getState().setSelectedIds(["r1"]);
+
+      const t0 = obj.transform;
+      const sePos = getHandlePos(t0, "se");
+      const nwPos = getHandlePos(t0, "nw");
+
+      // Drag 'se' handle by (+3mm local x, +3mm local y)
+      const dLocal = 3;
+      const toX = sePos.x + dLocal * cos45 - dLocal * sin45;
+      const toY = sePos.y + dLocal * sin45 + dLocal * cos45;
+
+      handleViewportPointerDown(sePos.x, sePos.y, pe());
+      handleViewportPointerMove(toX, toY, pe());
+      handleViewportPointerUp(toX, toY, pe());
+
+      const resized = getObj("r1");
+      const t1 = resized.transform;
+
+      // Both dims grow by ~3mm
+      expect(t1.width).toBeCloseTo(t0.width + dLocal, 3);
+      expect(t1.height).toBeCloseTo(t0.height + dLocal, 3);
+
+      // Rotation preserved
+      expect(t1.rotation).toBeCloseTo(ROT, 9);
+
+      // Opposite corner ('nw') screen-fixed
+      const nwNew = getHandlePos(t1, "nw");
+      expect(nwNew.x).toBeCloseTo(nwPos.x, 3);
+      expect(nwNew.y).toBeCloseTo(nwPos.y, 3);
+    });
+
+    it("rot=0 rect resize is byte-identical to legacy (regression gate)", () => {
+      // A 20×20 rect at (10,10) unrotated. SE drag by (+20,+10) → legacy result.
+      const obj = makeRect("r1", 10, 10, 20, 20);
+      useStore.getState().addObject(obj);
+      useStore.getState().setSelectedIds(["r1"]);
+      handleViewportPointerDown(30, 30, pe()); // SE corner
+      handleViewportPointerMove(50, 40, pe()); // +20 x, +10 y
+      handleViewportPointerUp(50, 40, pe());
+      const resized = getObj("r1");
+      // legacy: x=10, y=10, w=40, h=30 (SE drag from (30,30) to (50,40))
+      expect(resized.transform).toMatchObject({ x: 10, y: 10, width: 40, height: 30 });
+    });
   });
 });
