@@ -26,10 +26,25 @@ export async function startAutoSave(intervalMs: number = 60000): Promise<void> {
       const recoveryPath = await getRecoveryPath();
       if (!recoveryPath) return;
       const fs = await import("@tauri-apps/plugin-fs");
+      // Ensure the appData directory exists before the first write — a missing
+      // dir would silently fail without this (the parent path must exist for
+      // writeTextFile to succeed).
+      if (appDataDir) {
+        try {
+          await fs.mkdir(appDataDir, { recursive: true });
+        } catch {
+          // "already exists" throws on some platforms — ignore, proceed to write
+        }
+      }
       const project = store.toProject();
       const json = JSON.stringify(project, null, 2);
       await fs.writeTextFile(recoveryPath, json);
-    } catch {}
+    } catch (e) {
+      // Do not toast every 60s — log once so it's diagnosable without pestering the user
+      console.error("[Kerf] Auto-save recovery write failed:", e);
+    }
+    // The interval must stay alive on error — a transient failure must not
+    // disable the recovery safety net for the rest of the session.
   }, intervalMs);
 }
 

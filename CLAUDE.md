@@ -8,9 +8,9 @@ Laser cutter CAD/CAM desktop app. Tauri v2 / React / Pixi.js / Rust.
 - Build: Vite, GitHub Actions CI for macOS/Linux releases
 
 ## Key files
-- `src/app/store.ts` -- Zustand store, all state
+- `src/app/store/index.ts` + `src/app/store/storeTypes.ts` -- Zustand store, all state
 - `src/app/types.ts` -- DesignObject, Layer, MaterialPreset types
-- `src/lib/fileOps.ts` -- SVG/DXF/image import/export
+- `src/lib/fileOps/index.ts` -- SVG/DXF/image import/export, save/load
 - `src/lib/machine/connection.ts` -- GRBL serial connection
 - `src/lib/machine/gcodeGen.ts` -- G-code generation
 - `src-tauri/src/engine/` -- Rust: tracer, dithering, gcode, optimizer

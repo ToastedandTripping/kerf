@@ -55,7 +55,9 @@ async function checkUnsavedChanges(): Promise<boolean> {
   if (result === "Cancel") return false;
 
   if (result === "Yes" || result === "Save") {
-    await fileOperations.saveProject();
+    const saved = await fileOperations.saveProject();
+    // If save failed, abort the destructive New/Open — unsaved work would be lost
+    if (!saved) return false;
   }
 
   return true;
@@ -183,33 +185,40 @@ export const fileOperations = {
     }
   },
 
-  async saveProject() {
+  async saveProject(): Promise<boolean> {
     const store = useStore.getState();
     if (store.projectPath) {
-      await saveToPath(store.projectPath);
-      addRecentFile(store.projectPath);
-      clearRecoveryFile();
+      const ok = await saveToPath(store.projectPath);
+      if (ok) {
+        addRecentFile(store.projectPath);
+        clearRecoveryFile();
+      }
+      return ok;
     } else {
-      await fileOperations.saveProjectAs();
+      return fileOperations.saveProjectAs();
     }
   },
 
-  async saveProjectAs() {
+  async saveProjectAs(): Promise<boolean> {
     const hasTauri = await ensureTauri();
     if (hasTauri && dialogModule && fsModule) {
       const path = await dialogModule.save({
         filters: [{ name: "Kerf Project", extensions: ["kerf"] }],
         defaultPath: `${useStore.getState().projectName}.kerf`,
       });
-      if (!path) return;
+      if (!path) return false;
       const pathStr = typeof path === "string" ? path : String(path);
-      await saveToPath(pathStr);
-      useStore.getState().setProjectPath(pathStr);
-      addRecentFile(pathStr);
-      clearRecoveryFile();
-      const name = pathStr.split("/").pop()?.replace(".kerf", "") || "Untitled";
-      useStore.getState().setProjectName(name);
+      const ok = await saveToPath(pathStr);
+      if (ok) {
+        useStore.getState().setProjectPath(pathStr);
+        addRecentFile(pathStr);
+        clearRecoveryFile();
+        const name = pathStr.split("/").pop()?.replace(".kerf", "") || "Untitled";
+        useStore.getState().setProjectName(name);
+      }
+      return ok;
     }
+    return false;
   },
 
   async openRecentFile(filePath: string) {
@@ -270,7 +279,14 @@ export const fileOperations = {
       if (!path) return;
       const pathStr = typeof path === "string" ? path : String(path);
       const svg = exportSvgContent();
-      await fsModule.writeTextFile(pathStr, svg);
+      try {
+        await fsModule.writeTextFile(pathStr, svg);
+        useStore.getState().addConsoleLine(`SVG exported: ${pathStr}`, "info");
+      } catch (e) {
+        const store = useStore.getState();
+        store.setStatusMessage("SVG export failed — check permissions or disk space");
+        store.addConsoleLine(`SVG export failed for "${pathStr}": ${e}`, "error");
+      }
     }
   },
 
@@ -332,14 +348,20 @@ export const fileOperations = {
       });
       if (!path) return;
       const pathStr = typeof path === "string" ? path : String(path);
-      await fsModule.writeTextFile(pathStr, store.gcodeResult.gcode);
-      store.addConsoleLine(`G-code exported: ${pathStr}`, "info");
+      try {
+        await fsModule.writeTextFile(pathStr, store.gcodeResult.gcode);
+        store.addConsoleLine(`G-code exported: ${pathStr}`, "info");
+      } catch (e) {
+        store.setStatusMessage("G-code export failed — check permissions or disk space");
+        store.addConsoleLine(`G-code export failed for "${pathStr}": ${e}`, "error");
+      }
     }
   },
 };
 
-async function saveToPath(path: string) {
-  if (!fsModule) return;
+async function saveToPath(path: string): Promise<boolean> {
+  const hasTauri = await ensureTauri();
+  if (!hasTauri || !fsModule) return false;
   // Write .bak before overwriting if this path has a pending backup from migration
   if (_pendingBakPath === path && _pendingBakContent !== null) {
     const content = _pendingBakContent;
@@ -348,8 +370,17 @@ async function saveToPath(path: string) {
     await writeBakIfMissing(path, content);
   }
   const project = useStore.getState().toProject();
-  await fsModule.writeTextFile(path, JSON.stringify(project, null, 2));
-  useStore.getState().setDirty(false);
+  try {
+    await fsModule.writeTextFile(path, JSON.stringify(project, null, 2));
+    useStore.getState().setDirty(false);
+    return true;
+  } catch (e) {
+    const store = useStore.getState();
+    store.setStatusMessage("Save failed — check permissions or disk space");
+    store.addConsoleLine(`Save failed for "${path}": ${e}`, "error");
+    // Do NOT setDirty(false) — the project is still unsaved
+    return false;
+  }
 }
 
 /**
@@ -509,8 +540,9 @@ async function writeBakIfMissing(originalPath: string, content: string): Promise
     // .bak does not exist — write it
     try {
       await fsModule.writeTextFile(bakPath, content);
-    } catch {
-      // Silently ignore write errors (read-only fs, disk full, etc.)
+    } catch (e) {
+      // Best-effort; do not toast (non-critical), but log so it's diagnosable
+      console.warn(`[Kerf] Failed to write .bak for "${originalPath}":`, e);
     }
   }
 }

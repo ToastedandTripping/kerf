@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "Default capabilities for the main window",
+  "description": "Default capabilities for the main window. Broad home-recursive fs scope: deliberate for a sole-user local desktop tool (owner decision 2026-06-22). Revisit runtime-persisted dialog scope (tighter) post-v0.9.",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -8,11 +8,14 @@
     "dialog:allow-open",
     "dialog:allow-save",
     "fs:default",
-    "fs:allow-read",
-    "fs:allow-write",
-    "fs:allow-exists",
+    "fs:allow-read-text-file",
+    "fs:allow-write-text-file",
+    "fs:allow-read-file",
+    "fs:allow-stat",
+    "fs:allow-remove",
     "fs:allow-mkdir",
-    "fs:scope-desktop",
-    "fs:scope-document"
+    "fs:allow-exists",
+    "fs:scope-home-recursive",
+    "fs:scope-appdata-recursive"
   ]
 }
