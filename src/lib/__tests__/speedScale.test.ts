@@ -136,13 +136,33 @@ describe("speedScale", () => {
   describe("round-trip (sliderPosToSpeed → speedToSliderPos)", () => {
     const MAX = 8000;
 
-    it("round-trips within ±1 position for typical speeds", () => {
-      for (let pos = 0; pos <= 1000; pos += 50) {
+    it("round-trips within ±2 positions across every integer slider position", () => {
+      // Step by 1 so the near-floor band (positions ~2–44, speeds ~51–63 mm/min)
+      // is actually exercised — stepping by 50 skips every position where the
+      // real error is 2.
+      //
+      // ±2 is the true maximum round-trip error: at very low speeds just above
+      // the 50 mm/min floor, log-scale compression causes the double-rounding
+      // (Math.round in both directions) to accumulate up to 2 positions of
+      // discrepancy. This is a known, benign artifact — the number field is
+      // authoritative for exact speeds, so a 2-position slider discrepancy at
+      // ~51–56 mm/min has no practical effect.
+      for (let pos = 0; pos <= 1000; pos++) {
         const speed = sliderPosToSpeed(pos, MAX);
         const posBack = speedToSliderPos(speed, MAX);
-        // Rounding in sliderPosToSpeed means the inverse may be off by 1
-        expect(Math.abs(posBack - pos)).toBeLessThanOrEqual(1);
+        expect(Math.abs(posBack - pos)).toBeLessThanOrEqual(2);
       }
+    });
+
+    it("endpoints are exact (pos=0 → floor → pos=0; pos=1000 → max → pos=1000)", () => {
+      // Floor endpoint
+      const speedAtFloor = sliderPosToSpeed(0, MAX);
+      expect(speedAtFloor).toBe(SPEED_SLIDER_FLOOR);
+      expect(speedToSliderPos(speedAtFloor, MAX)).toBe(0);
+      // Max endpoint
+      const speedAtMax = sliderPosToSpeed(1000, MAX);
+      expect(speedAtMax).toBe(MAX);
+      expect(speedToSliderPos(speedAtMax, MAX)).toBe(1000);
     });
   });
 
