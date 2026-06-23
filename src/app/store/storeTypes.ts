@@ -115,12 +115,15 @@ export interface AppState {
   grblLaserMode: boolean;
   grblAccelX: number;
   grblAccelY: number;
+  grblMaxFeedRateX: number;  // $110 — 0 = unknown (not yet connected/parsed)
+  grblMaxFeedRateY: number;  // $111 — 0 = unknown
   setMachineConnected: (connected: boolean) => void;
   setMachineState: (state: "idle" | "run" | "hold" | "alarm" | "door" | "disconnected") => void;
   setMachinePosition: (pos: { x: number; y: number; z: number }) => void;
   setGrblSValueMax: (v: number) => void;
   setGrblLaserMode: (v: boolean) => void;
   setGrblAccel: (x: number, y: number) => void;
+  setGrblMaxFeedRate: (x: number, y: number) => void;
 
   // Machine limit/homing flags (read from $20/$21/$22 on connect)
   grblSoftLimits: boolean;       // $20: soft limits enabled in firmware

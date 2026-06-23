@@ -25,6 +25,8 @@ function seedConnectedStore() {
     machinePosition: { x: 0, y: 0, z: 0 },
     grblLaserMode: false,
     grblSValueMax: 1000,
+    grblMaxFeedRateX: 0,
+    grblMaxFeedRateY: 0,
   });
 }
 
@@ -120,6 +122,42 @@ describe("connection.ts (TN3)", () => {
       await machineConnection.queryGrblSettings();
       // workspaceWidth must stay the same — both must be > 0 to update
       expect(useStore.getState().workspaceWidth).toBe(prev);
+    });
+
+    it("sets grblMaxFeedRateX/Y from $110/$111 when both are > 0", async () => {
+      mockInvoke.mockResolvedValueOnce({ responses: ["$110=8000", "$111=8000"], drained: [] });
+      await machineConnection.queryGrblSettings();
+
+      const state = useStore.getState();
+      expect(state.grblMaxFeedRateX).toBe(8000);
+      expect(state.grblMaxFeedRateY).toBe(8000);
+    });
+
+    it("sets grblMaxFeedRateX/Y when axes differ", async () => {
+      mockInvoke.mockResolvedValueOnce({ responses: ["$110=10000", "$111=8000"], drained: [] });
+      await machineConnection.queryGrblSettings();
+
+      const state = useStore.getState();
+      expect(state.grblMaxFeedRateX).toBe(10000);
+      expect(state.grblMaxFeedRateY).toBe(8000);
+    });
+
+    it("does not set feed rate if only one axis is present (both required)", async () => {
+      useStore.setState({ grblMaxFeedRateX: 0, grblMaxFeedRateY: 0 });
+      mockInvoke.mockResolvedValueOnce({ responses: ["$110=8000"], drained: [] });
+      await machineConnection.queryGrblSettings();
+
+      const state = useStore.getState();
+      expect(state.grblMaxFeedRateX).toBe(0);
+      expect(state.grblMaxFeedRateY).toBe(0);
+    });
+
+    it("logs 'Max feed rate' console line when $110/$111 parsed successfully", async () => {
+      mockInvoke.mockResolvedValueOnce({ responses: ["$110=8000", "$111=6000"], drained: [] });
+      await machineConnection.queryGrblSettings();
+
+      const texts = consoleTexts();
+      expect(texts.some((t) => t.includes("Max feed rate") && t.includes("8000") && t.includes("6000"))).toBe(true);
     });
 
     it("returns false when the response contains no $N=V lines", async () => {

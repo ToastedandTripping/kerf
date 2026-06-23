@@ -496,6 +496,7 @@ export const machineConnection = {
       for (const d of outcome.drained) surfaceUnsolicited(d);
       let parsedAny = false;
       let accelX = 0, accelY = 0;
+      let maxFeedRateX = 0, maxFeedRateY = 0;
       let maxTravelX = 0, maxTravelY = 0;
       for (const line of outcome.responses) {
         const match = line.match(/^\$(\d+)=([\d.]+)/);
@@ -523,6 +524,10 @@ export const machineConnection = {
           } else if (key === 32) {
             store.setGrblLaserMode(value === 1);
             store.addConsoleLine(`$32=${value} (laser mode ${value === 1 ? "enabled" : "disabled"})`, "info");
+          } else if (key === 110) {
+            maxFeedRateX = value;
+          } else if (key === 111) {
+            maxFeedRateY = value;
           } else if (key === 120) {
             accelX = value;
           } else if (key === 121) {
@@ -537,6 +542,10 @@ export const machineConnection = {
       if (accelX > 0 || accelY > 0) {
         store.setGrblAccel(accelX || 500, accelY || 500);
         store.addConsoleLine(`Acceleration: X=${accelX} Y=${accelY} mm/s²`, "info");
+      }
+      if (maxFeedRateX > 0 && maxFeedRateY > 0) {
+        store.setGrblMaxFeedRate(maxFeedRateX, maxFeedRateY);
+        store.addConsoleLine(`Max feed rate: X=${maxFeedRateX} Y=${maxFeedRateY} mm/min`, "info");
       }
       if (maxTravelX > 0 && maxTravelY > 0) {
         store.setWorkspaceSize(maxTravelX, maxTravelY);

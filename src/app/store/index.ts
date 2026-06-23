@@ -482,6 +482,8 @@ export const useStore = create<AppState>((set, get) => ({
   grblLaserMode: false,
   grblAccelX: 500,
   grblAccelY: 500,
+  grblMaxFeedRateX: 0,
+  grblMaxFeedRateY: 0,
   setMachineConnected: (connected) => set(connected
     ? { machineConnected: true }
     : { machineConnected: false, machineHomed: false, softLimitsActive: false }
@@ -501,6 +503,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
   setGrblLaserMode: (v) => set({ grblLaserMode: v }),
   setGrblAccel: (x, y) => set({ grblAccelX: x, grblAccelY: y }),
+  setGrblMaxFeedRate: (x, y) => set({ grblMaxFeedRateX: x, grblMaxFeedRateY: y }),
 
   // Workstream A: $20/$21/$22 + machineHomed + derived softLimitsActive
   grblSoftLimits: false,

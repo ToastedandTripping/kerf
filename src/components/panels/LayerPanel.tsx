@@ -4,6 +4,7 @@ import { useStore } from "../../app/store";
 import type { Layer, CutMode, LineOverlay, MaterialPreset } from "../../app/types";
 import { PowerCurveEditor, PowerCurveThumbnail } from "./PowerCurveEditor";
 import type { CurvePoint } from "./PowerCurveEditor";
+import { SpeedInput } from "./SpeedInput";
 
 const inputStyle: React.CSSProperties = {
   background: "var(--bg-input)",
@@ -349,19 +350,10 @@ function LayerRow({
 
               {/* Speed */}
               <SettingRow label="Speed">
-                <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
-                  <input
-                    type="range" min="1" max="20000" value={layer.speed}
-                    onChange={(e) => onManualUpdate({ speed: Number(e.target.value) })}
-                    style={{ flex: 1, accentColor: "var(--accent)" }}
-                  />
-                  <input
-                    type="number" min="1" max="100000" value={layer.speed}
-                    onChange={(e) => onManualUpdate({ speed: Math.max(1, Number(e.target.value)) })}
-                    style={{ ...inputStyle, width: "50px", textAlign: "right" }}
-                  />
-                  <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>mm/min</span>
-                </div>
+                <SpeedInput
+                  value={layer.speed}
+                  onChange={(v) => onManualUpdate({ speed: v })}
+                />
               </SettingRow>
 
               {/* Passes */}
@@ -621,19 +613,10 @@ function LineOverlaySettings({
 
       {/* Speed */}
       <SettingRow label="Speed">
-        <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
-          <input
-            type="range" min="1" max="20000" value={ov.speed}
-            onChange={(e) => onUpdate({ speed: Number(e.target.value) })}
-            style={{ flex: 1, accentColor: "var(--accent)" }}
-          />
-          <input
-            type="number" min="1" max="100000" value={ov.speed}
-            onChange={(e) => onUpdate({ speed: Math.max(1, Number(e.target.value)) })}
-            style={{ ...inputStyle, width: "50px", textAlign: "right" }}
-          />
-          <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>mm/min</span>
-        </div>
+        <SpeedInput
+          value={ov.speed}
+          onChange={(v) => onUpdate({ speed: v })}
+        />
       </SettingRow>
 
       {/* Passes */}

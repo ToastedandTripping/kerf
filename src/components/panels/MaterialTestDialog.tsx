@@ -3,6 +3,7 @@ import { useStore } from "../../app/store";
 import { machineConnection } from "../../lib/machine/connection";
 import { useEscapeClose } from "../../lib/hooks/useEscapeClose";
 import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
+import { effectiveMaxSpeed } from "../../lib/speedScale";
 
 interface Props {
   open: boolean;
@@ -131,6 +132,10 @@ export function MaterialTestDialog({ open, onClose }: Props) {
   const [mode, setMode] = useState<"cut" | "fill">("cut");
   const jobRunning = useStore((s) => s.jobRunning);
   const grblSValueMax = useStore((s) => s.grblSValueMax);
+  // TWO SEPARATE scalar selectors — never a single object selector (Error 185).
+  const grblMaxFeedRateX = useStore((s) => s.grblMaxFeedRateX);
+  const grblMaxFeedRateY = useStore((s) => s.grblMaxFeedRateY);
+  const effectiveSpeedMax = effectiveMaxSpeed(grblMaxFeedRateX, grblMaxFeedRateY);
 
   const dialogRef = useRef<HTMLDivElement>(null);
   useEscapeClose(open, onClose);
@@ -263,12 +268,12 @@ export function MaterialTestDialog({ open, onClose }: Props) {
           </div>
           <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
             <span style={labelStyle}>Min</span>
-            <input type="number" min="1" max="100000" value={speedMin}
-              onChange={(e) => setSpeedMin(Math.max(1, Number(e.target.value)))}
+            <input type="number" min="1" max={effectiveSpeedMax} value={speedMin}
+              onChange={(e) => setSpeedMin(Math.max(1, Math.min(effectiveSpeedMax, Number(e.target.value))))}
               style={inputStyle} />
             <span style={labelStyle}>Max</span>
-            <input type="number" min="1" max="100000" value={speedMax}
-              onChange={(e) => setSpeedMax(Math.max(1, Number(e.target.value)))}
+            <input type="number" min="1" max={effectiveSpeedMax} value={speedMax}
+              onChange={(e) => setSpeedMax(Math.max(1, Math.min(effectiveSpeedMax, Number(e.target.value))))}
               style={inputStyle} />
           </div>
           <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: "4px" }}>
