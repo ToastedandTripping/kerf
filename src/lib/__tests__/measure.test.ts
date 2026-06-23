@@ -96,6 +96,20 @@ describe("measureAngleDeg", () => {
 });
 
 // ========================================
+// formatMeasureLabel
+// ========================================
+describe("formatMeasureLabel", () => {
+  it("formats distance and angle to one decimal with units", () => {
+    expect(formatMeasureLabel(12.34, 45)).toBe("12.3 mm  ·  45.0°");
+  });
+
+  it("rounds each value to one decimal place", () => {
+    expect(formatMeasureLabel(7.86, 30.04)).toBe("7.9 mm  ·  30.0°");
+    expect(formatMeasureLabel(0, 0)).toBe("0.0 mm  ·  0.0°");
+  });
+});
+
+// ========================================
 // ellipseDiameter
 // ========================================
 describe("ellipseDiameter", () => {
