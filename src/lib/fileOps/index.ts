@@ -367,7 +367,10 @@ async function saveToPath(path: string): Promise<boolean> {
     const content = _pendingBakContent;
     _pendingBakContent = null;
     _pendingBakPath = null;
-    await writeBakIfMissing(path, content);
+    await writeBakIfMissing(path, content).catch(() => {
+      // .bak is best-effort; already logs via console.warn in writeBakIfMissing.
+      // Swallow here so a bak hiccup can never break saveToPath's boolean contract.
+    });
   }
   const project = useStore.getState().toProject();
   try {

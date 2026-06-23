@@ -58,6 +58,24 @@ vi.mock("@tauri-apps/api/path", () => ({
   appDataDir: vi.fn().mockResolvedValue("/mock/appdata/"),
 }));
 
+// ─── Module-level mocks for autoSave / recentFiles ───────────────────────────
+// These are hoisted by Vitest before any imports, so the named bindings in
+// fileOps/index.ts (`import { clearRecoveryFile } from "../autoSave"` etc.)
+// resolve to these mocks — guaranteeing spy interception regardless of how the
+// binding was captured at import time.  Without this, vi.spyOn on a named
+// import is non-intercepting when the callee holds a local copy of the binding.
+vi.mock("../../autoSave", () => ({
+  startAutoSave: vi.fn().mockResolvedValue(undefined),
+  stopAutoSave: vi.fn(),
+  checkRecoveryFile: vi.fn().mockResolvedValue(null),
+  clearRecoveryFile: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../../recentFiles", () => ({
+  getRecentFiles: vi.fn().mockReturnValue([]),
+  addRecentFile: vi.fn().mockReturnValue(undefined),
+  clearRecentFiles: vi.fn().mockReturnValue(undefined),
+}));
+
 // ─── Application imports ─────────────────────────────────────────────────────
 
 import { useStore } from "../../../app/store";
@@ -136,20 +154,36 @@ describe("saveProject: recovery + recent-file are not cleared/added on failure",
   });
 
   it("failed save does NOT call clearRecoveryFile", async () => {
+    // The module-level vi.mock above guarantees clearRecoveryFile is a mock fn
+    // so the spy WILL intercept.  Non-tautology: reverting the `if (ok)` guard
+    // in saveProject so clearRecoveryFile() is called unconditionally would make
+    // clearSpy.toHaveBeenCalled() — failing this test.  The isDirty assertion
+    // below provides a second, independent guard.
     mockWriteTextFile.mockRejectedValueOnce(new Error("disk full"));
     const clearSpy = vi.spyOn(autoSaveModule, "clearRecoveryFile").mockResolvedValue(undefined);
 
-    await fileOperations.saveProject();
+    const ok = await fileOperations.saveProject();
 
+    expect(ok).toBe(false);
+    // Project must remain dirty — the write failed
+    expect(useStore.getState().isDirty).toBe(true);
+    // clearRecoveryFile must NOT run on a failed save
     expect(clearSpy).not.toHaveBeenCalled();
   });
 
   it("failed save does NOT call addRecentFile", async () => {
+    // Same interception guarantee as clearRecoveryFile test above.
+    // Non-tautology: moving addRecentFile() before the `if (ok)` check would
+    // make recentSpy.toHaveBeenCalled() — failing this test.
     mockWriteTextFile.mockRejectedValueOnce(new Error("disk full"));
     const recentSpy = vi.spyOn(recentFilesModule, "addRecentFile").mockReturnValue(undefined);
 
-    await fileOperations.saveProject();
+    const ok = await fileOperations.saveProject();
 
+    expect(ok).toBe(false);
+    // Project must remain dirty
+    expect(useStore.getState().isDirty).toBe(true);
+    // addRecentFile must NOT run on a failed save
     expect(recentSpy).not.toHaveBeenCalled();
   });
 
