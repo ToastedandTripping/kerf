@@ -5,7 +5,8 @@ import { useStore } from "../../app/store";
 import { getDirtyObjectIds, clearDirtyObjectIds, setCursorPosition } from "../../app/store";
 import type { DesignObject } from "../../app/types";
 import { hasPlaceholders } from "../../lib/variableText";
-import { handleViewportPointerDown, handleViewportPointerMove, handleViewportPointerUp, getMarqueeState, getSelectionBBox, handleViewportDoubleClick, hitTestHandle, isDraggingRotateHandle, getActiveDragHandle, isPointerDragging } from "../../lib/tools/toolHandler";
+import { handleViewportPointerDown, handleViewportPointerMove, handleViewportPointerUp, getMarqueeState, getSelectionBBox, handleViewportDoubleClick, hitTestHandle, isDraggingRotateHandle, getActiveDragHandle, isPointerDragging, getMeasureState } from "../../lib/tools/toolHandler";
+import { measureDistance, measureAngleDeg, formatMeasureLabel } from "../../lib/measure";
 
 import { PX_PER_MM } from "../../lib/constants";
 import { composeGroupChild, orientedHandlePoints } from "../../lib/geometry";
@@ -30,6 +31,11 @@ export function Viewport() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   // R3: live rotation angle readout during rotate drag (null = not dragging rotate)
   const [rotationReadout, setRotationReadout] = useState<number | null>(null);
+  // Measure tool: scalar tick counter bumped on every pointer-move while measure is active.
+  // This is a scalar useState (NOT a new-object useStore selector) to avoid React Error 185.
+  // Adding it to the selectionOverlay dep array causes the overlay to redraw with the live
+  // measure preview. Mirrors the rotationReadout pattern exactly.
+  const [measureTick, setMeasureTick] = useState(0);
   const canvasRef = useRef<HTMLDivElement>(null);
   const appRef = useRef<Application | null>(null);
   const worldRef = useRef<Container | null>(null);
@@ -497,7 +503,76 @@ export function Viewport() {
         }
       }
     }
-  }, [selectedTransforms, camera.zoom, activeTool, nodeEditState]);
+    // --- Measure overlay ---
+    // Reads module-level measureState (NOT a useStore selector — Error-185-safe).
+    // measureTick in the dep array forces this effect to re-run on every hover move.
+    {
+      const ms = getMeasureState();
+      if (ms.active) {
+        if (ms.diameterLabel !== null) {
+          // Direct ellipse click: show diameter label at cursor center
+          // (no line, just a text readout near the center of the screen)
+          const labelStyle = new TextStyle({
+            fontSize: 12,
+            fill: 0xffd166,
+            fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif",
+          });
+          const label = new Text({ text: ms.diameterLabel, style: labelStyle });
+          // Position relative to the hoverPt if available, else center of canvas
+          if (ms.hoverPt) {
+            label.x = ms.hoverPt.x * PX_PER_MM + 8 / camera.zoom;
+            label.y = ms.hoverPt.y * PX_PER_MM - 16 / camera.zoom;
+          } else {
+            label.x = 8 / camera.zoom;
+            label.y = 8 / camera.zoom;
+          }
+          label.scale.set(1 / camera.zoom);
+          g.addChild(label as unknown as Parameters<typeof g.addChild>[0]);
+        } else if (ms.p1 !== null) {
+          // Line measurement: draw segment from p1 to p2 (or hoverPt for live preview)
+          const endPt = ms.p2 ?? ms.hoverPt;
+          if (endPt) {
+            const p1px = ms.p1.x * PX_PER_MM;
+            const p1py = ms.p1.y * PX_PER_MM;
+            const endpx = endPt.x * PX_PER_MM;
+            const endpy = endPt.y * PX_PER_MM;
+
+            // Draw measure line
+            g.setStrokeStyle({ width: 1 / camera.zoom, color: 0xffd166, alpha: 0.9 });
+            g.moveTo(p1px, p1py).lineTo(endpx, endpy).stroke();
+
+            // Endpoint dots
+            const dotR = 3 / camera.zoom;
+            g.circle(p1px, p1py, dotR).fill({ color: 0xffd166, alpha: 1 });
+            g.circle(endpx, endpy, dotR).fill({ color: 0xffd166, alpha: 1 });
+
+            // Label at midpoint
+            const midPx = (p1px + endpx) / 2;
+            const midPy = (p1py + endpy) / 2;
+            const dist = measureDistance(ms.p1, endPt);
+            const angle = measureAngleDeg(ms.p1, endPt);
+            const labelText = formatMeasureLabel(dist, angle);
+            const labelStyle = new TextStyle({
+              fontSize: 12,
+              fill: 0xffd166,
+              fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif",
+            });
+            const label = new Text({ text: labelText, style: labelStyle });
+            label.x = midPx + 6 / camera.zoom;
+            label.y = midPy - 16 / camera.zoom;
+            label.scale.set(1 / camera.zoom);
+            g.addChild(label as unknown as Parameters<typeof g.addChild>[0]);
+          } else {
+            // Only p1 set, no hover yet: draw p1 dot
+            const p1px = ms.p1.x * PX_PER_MM;
+            const p1py = ms.p1.y * PX_PER_MM;
+            const dotR = 3 / camera.zoom;
+            g.circle(p1px, p1py, dotR).fill({ color: 0xffd166, alpha: 1 });
+          }
+        }
+      }
+    }
+  }, [selectedTransforms, camera.zoom, activeTool, nodeEditState, measureTick]);
 
   // Track marquee box for HTML overlay rendering
   const marqueeRef = useRef<{ x: number; y: number; w: number; h: number; dir: "ltr" | "rtl" } | null>(null);
@@ -553,7 +628,10 @@ export function Viewport() {
   // Mouse handlers for pan + tools
   const handlePointerDown = useCallback(
     (e: React.PointerEvent) => {
-      if (e.button === 1 || (e.button === 0 && spaceHeld.current)) {
+      // Middle-button pan, spacebar-held pan, OR pan-tool left-drag all enter the same
+      // isPanning / panCameraRef deferred-write path (no new camera math).
+      const isPanTool = useStore.getState().activeTool === "pan";
+      if (e.button === 1 || (e.button === 0 && spaceHeld.current) || (e.button === 0 && isPanTool)) {
         isPanning.current = true;
         lastPan.current = { x: e.clientX, y: e.clientY };
         // P5: Initialize pan camera ref from current camera state
@@ -604,6 +682,13 @@ export function Viewport() {
       setCursorPosition({ x: Math.round(worldX * 100) / 100, y: Math.round(worldY * 100) / 100 });
       handleViewportPointerMove(worldX, worldY, e);
 
+      // Measure live-preview: bump the scalar tick so the selectionOverlay effect
+      // re-runs with the updated hoverPt. This is a scalar useState (not a new-object
+      // useStore selector) — Error-185-safe, mirrors the rotationReadout pattern.
+      if (useStore.getState().activeTool === "measure") {
+        setMeasureTick((t) => t + 1);
+      }
+
       // R2: hover cursor — single-select, select tool, not panning, not marquee.
       // Written via direct DOM to avoid Error-185 (never return fresh object from useStore).
       if (canvasRef.current && !isPanning.current) {
@@ -653,7 +738,7 @@ export function Viewport() {
         setRotationReadout(null);
       }
     },
-    [camera, setCamera]
+    [camera, setCamera, setMeasureTick]
   );
 
   const handlePointerUp = useCallback(
@@ -857,6 +942,8 @@ function getCursor(tool: string): string {
     case "pen": return "crosshair";
     case "node": return "default";
     case "text": return "text";
+    case "measure": return "crosshair";
+    case "pan": return "grab";
     default: return "crosshair";
   }
 }

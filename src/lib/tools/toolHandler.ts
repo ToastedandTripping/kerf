@@ -3,6 +3,8 @@ import type { DesignObject, PathPoint, ToolType } from "../../app/types";
 import { machineConnection } from "../machine/connection";
 import { movePartial, scalePartial, pointsPartial, pointsBBox, POINTS_EPSILON, orientedHandlePoints } from "../geometry";
 import { computeAABB } from "../nesting";
+import { findNearestSnapPoint, snapThresholdMm, ellipseDiameter } from "../measure";
+import { PX_PER_MM } from "../constants";
 
 // Handle types for resize/rotate
 export type HandleType =
@@ -70,6 +72,60 @@ const nodeDrag = {
   originalPoints: [] as PathPoint[],
 };
 
+// --- MEASURE TOOL STATE ---
+// Module-level (NOT a Zustand store field) to avoid Error-185.
+// The only React state added for measure is a scalar measureTick useState in Viewport.
+export interface MeasureState {
+  p1: { x: number; y: number } | null;
+  p2: { x: number; y: number } | null;
+  hoverPt: { x: number; y: number } | null;
+  active: boolean;
+  // When the user clicks an ellipse directly, we store the diameter label here
+  // instead of starting a segment.
+  diameterLabel: string | null;
+}
+
+export const measureState: MeasureState = {
+  p1: null,
+  p2: null,
+  hoverPt: null,
+  active: false,
+  diameterLabel: null,
+};
+
+function resetMeasureState() {
+  measureState.p1 = null;
+  measureState.p2 = null;
+  measureState.hoverPt = null;
+  measureState.active = false;
+  measureState.diameterLabel = null;
+}
+
+/** Snap worldX/worldY to nearest snap point, falling back to raw cursor. */
+function snapMeasurePoint(worldX: number, worldY: number): { x: number; y: number } {
+  const store = useStore.getState();
+  const thresh = snapThresholdMm(store.camera.zoom, PX_PER_MM);
+  const snapped = findNearestSnapPoint(worldX, worldY, thresh, store.objects);
+  return snapped ? { x: snapped.x, y: snapped.y } : { x: worldX, y: worldY };
+}
+
+/** Hit-test for an ellipse object (needed for diameter-readout on click). */
+function hitTestEllipse(worldX: number, worldY: number): DesignObject | null {
+  const { objects } = useStore.getState();
+  for (let i = objects.length - 1; i >= 0; i--) {
+    const obj = objects[i];
+    if (!obj.visible || obj.locked || obj.type !== "ellipse") continue;
+    const t = obj.transform;
+    if (
+      worldX >= t.x && worldX <= t.x + t.width &&
+      worldY >= t.y && worldY <= t.y + t.height
+    ) {
+      return obj;
+    }
+  }
+  return null;
+}
+
 // Expose marquee state for Viewport rendering
 export function getMarqueeState() {
   if (!drag.isMarquee || !drag.isDragging) return null;
@@ -78,6 +134,11 @@ export function getMarqueeState() {
     startY: drag.startY,
     direction: drag.marqueeDirection,
   };
+}
+
+/** Returns a snapshot of the current measure state for overlay rendering. */
+export function getMeasureState(): MeasureState {
+  return measureState;
 }
 
 // R2/R3: expose drag state so Viewport can gate cursor/readout logic without
@@ -135,6 +196,14 @@ export function handleViewportPointerDown(
     case "positionLaser":
       handlePositionLaserDown(worldX, worldY);
       break;
+    case "measure":
+      handleMeasureDown(worldX, worldY);
+      break;
+    case "pan":
+      // Pan tool left-button drag: handled entirely in Viewport's handlePointerDown
+      // using the isPanning / panCameraRef deferred-write mechanism.
+      // No toolHandler action needed on down for pan.
+      break;
   }
 }
 
@@ -159,6 +228,15 @@ export function handleViewportPointerMove(
     }
     return;
   }
+
+  // Measure tool tracks hover even without drag
+  if (tool === "measure") {
+    handleMeasureMove(worldX, worldY);
+    return;
+  }
+
+  // Pan tool: handled in Viewport's handlePointerMove via isPanning.
+  if (tool === "pan") return;
 
   if (!drag.isDragging) return;
 
@@ -198,6 +276,15 @@ export function handleViewportPointerUp(
       break;
     case "node":
       handleNodeUp();
+      break;
+    case "measure":
+      // No up-action; down-handler already committed the measurement.
+      break;
+    case "pan":
+      // Pan up: handled entirely in Viewport's handlePointerUp (P5 mechanism).
+      break;
+    case "positionLaser":
+    case "text":
       break;
   }
 
@@ -1591,6 +1678,51 @@ function handlePositionLaserDown(worldX: number, worldY: number) {
   machineConnection.jogTo(worldX, machineY);
 }
 
+// --- MEASURE TOOL ---
+
+function handleMeasureDown(worldX: number, worldY: number) {
+  // Reset on re-entry when already frozen (p1+p2 both set): start fresh.
+  if (measureState.p1 !== null && measureState.p2 !== null) {
+    resetMeasureState();
+  }
+
+  // Decision tree (explicit precedence per plan):
+  // 1. No p1 pending AND click hits an ellipse -> show diameter, don't start segment.
+  // 2. No p1 -> set p1 (snapped).
+  // 3. Has p1 -> set p2 (snapped) and freeze.
+  if (measureState.p1 === null) {
+    // Check for direct ellipse hit first
+    const ellipseObj = hitTestEllipse(worldX, worldY);
+    if (ellipseObj) {
+      resetMeasureState();
+      measureState.diameterLabel = ellipseDiameter(ellipseObj);
+      measureState.active = true;
+      // Store the click position as hoverPt so the overlay can position the label.
+      measureState.hoverPt = { x: worldX, y: worldY };
+      return;
+    }
+    // No ellipse hit: set p1
+    resetMeasureState();
+    measureState.p1 = snapMeasurePoint(worldX, worldY);
+    measureState.active = true;
+  } else {
+    // Set p2 and freeze
+    measureState.p2 = snapMeasurePoint(worldX, worldY);
+    measureState.hoverPt = null;
+  }
+}
+
+function handleMeasureMove(worldX: number, worldY: number) {
+  if (measureState.diameterLabel !== null) {
+    // Update label position as cursor moves after an ellipse click
+    measureState.hoverPt = { x: worldX, y: worldY };
+  } else if (measureState.p1 !== null && measureState.p2 === null) {
+    // Live preview: update snap-aware hover point
+    measureState.hoverPt = snapMeasurePoint(worldX, worldY);
+  }
+  // Note: the viewport bumps measureTick to trigger a redraw.
+}
+
 // --- TOOL CHANGE ---
 
 export function handleToolChange(newTool: ToolType, previousTool: ToolType) {
@@ -1603,6 +1735,10 @@ export function handleToolChange(newTool: ToolType, previousTool: ToolType) {
     nodeDrag.target = null;
     nodeDrag.originalPoints = [];
     useStore.getState().setNodeEditState({ pathId: null, selectedNodeIndex: null });
+  }
+  // Clear measure state whenever leaving the measure tool OR entering it fresh.
+  if (previousTool === "measure" || newTool === "measure") {
+    resetMeasureState();
   }
   if (newTool === "node") {
     // Auto-enter node editing if a path is selected
@@ -1650,6 +1786,15 @@ export function handleViewportKeyDown(e: KeyboardEvent): boolean {
       } else {
         store.setNodeEditState({ pathId: null, selectedNodeIndex: null });
       }
+      return true;
+    }
+  }
+
+  // Measure tool: Esc clears the current measurement without switching tools.
+  if (tool === "measure" && e.key === "Escape") {
+    if (measureState.active) {
+      e.preventDefault();
+      resetMeasureState();
       return true;
     }
   }

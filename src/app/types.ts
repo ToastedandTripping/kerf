@@ -40,7 +40,9 @@ export type ToolType =
   | "pen"
   | "text"
   | "node"
-  | "positionLaser";
+  | "positionLaser"
+  | "measure"
+  | "pan";
 
 export type ObjectType = "rectangle" | "ellipse" | "line" | "path" | "text" | "group" | "image";
 

@@ -1,5 +1,6 @@
 import { useStore } from "../../app/store";
 import type { ToolType } from "../../app/types";
+import { handleToolChange } from "../../lib/tools/toolHandler";
 
 const tools: { type: ToolType; label: string; shortcut: string }[] = [
   { type: "select", label: "Select", shortcut: "V" },
@@ -9,6 +10,8 @@ const tools: { type: ToolType; label: string; shortcut: string }[] = [
   { type: "pen", label: "Pen", shortcut: "P" },
   { type: "text", label: "Text", shortcut: "T" },
   { type: "node", label: "Node Edit", shortcut: "N" },
+  { type: "measure", label: "Measure", shortcut: "M" },
+  { type: "pan", label: "Pan", shortcut: "H" },
 ];
 
 export function Toolbar() {
@@ -35,7 +38,11 @@ export function Toolbar() {
           key={tool.type}
           tool={tool}
           active={activeTool === tool.type}
-          onClick={() => setActiveTool(tool.type)}
+          onClick={() => {
+            const previousTool = activeTool;
+            setActiveTool(tool.type);
+            handleToolChange(tool.type, previousTool);
+          }}
         />
       ))}
     </div>
@@ -134,5 +141,41 @@ function ToolIcon({ type }: { type: ToolType }) {
           <circle cx="9" cy="5" r="2" fill="none" stroke="currentColor" />
         </svg>
       );
+    case "positionLaser":
+      return (
+        <svg {...s} viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <circle cx="9" cy="9" r="3" />
+          <line x1="9" y1="2" x2="9" y2="5" />
+          <line x1="9" y1="13" x2="9" y2="16" />
+          <line x1="2" y1="9" x2="5" y2="9" />
+          <line x1="13" y1="9" x2="16" y2="9" />
+        </svg>
+      );
+    case "measure":
+      // Ruler icon: a horizontal ruler with tick marks
+      return (
+        <svg {...s} viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <rect x="2" y="6" width="14" height="6" rx="1" />
+          <line x1="5" y1="6" x2="5" y2="9" />
+          <line x1="9" y1="6" x2="9" y2="10" />
+          <line x1="13" y1="6" x2="13" y2="9" />
+        </svg>
+      );
+    case "pan":
+      // Hand icon: an open hand (5 fingers)
+      return (
+        <svg {...s} viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+          <path d="M9 14V7" />
+          <path d="M6.5 13.5V6" />
+          <path d="M11.5 13.5V6" />
+          <path d="M4 12.5V9" />
+          <path d="M14 12.5V9" />
+          <path d="M4 12.5C4 14.5 5 16 9 16C13 16 14 14.5 14 12.5" />
+        </svg>
+      );
+    default:
+      // assertNever: TypeScript will error here at compile time if a ToolType case is missing.
+      // At runtime this throws, making a missed case fail loud.
+      throw new Error(`ToolIcon: unhandled tool type "${type as string}"`);
   }
 }
