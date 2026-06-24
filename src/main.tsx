@@ -3,6 +3,12 @@ import type { ReactNode, ErrorInfo } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./app/App";
 import "./index.css";
+import { installKeepAwake } from "./lib/machine/keepAwake";
+
+// WS4: install the keep-awake subscription once at app startup.
+// This single listener covers both the main job loop (MachinePanel) and the
+// material-test grid (MaterialTestDialog) via the shared jobRunning flag.
+installKeepAwake();
 
 class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state: { error: Error | null } = { error: null };

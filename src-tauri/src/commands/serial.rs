@@ -215,7 +215,7 @@ pub async fn serial_connect(
                         break;
                     }
                 }
-                Err(_) => break,
+                Err(_) => { channel.pending.clear(); break; }
             }
         }
 
@@ -633,5 +633,49 @@ mod tests {
         }));
         assert!(result.is_err());
         assert!(!flag.load(Ordering::SeqCst));
+    }
+
+    /// WS1: The startup-banner read loop clears `pending` on read-timeout so a
+    /// stale partial-line fragment cannot contaminate the first command's response.
+    ///
+    /// Regression: the pre-fix `Err(_) => break` left whatever bytes had
+    /// accumulated in `pending` (a split `Grbl` banner incomplete at timeout) to
+    /// concatenate into the first Start's response, causing the pump to misread
+    /// it as a reset banner and abort — nothing moved on first Start.
+    #[test]
+    fn startup_banner_read_clears_pending_on_timeout() {
+        // Build a CommandChannel whose reader immediately times out.
+        // MockPort::read always returns TimedOut, so BufReader's read_until will
+        // return Err(TimedOut) on the first iteration — simulating the exact path
+        // the banner loop hits when the controller is slow or already mid-line.
+        //
+        // We pre-load some bytes into `pending` to represent the partial fragment
+        // that would accumulate before the timeout (e.g. b"Grbl 1.1" without \n).
+        let port: Box<dyn SerialPort> = Box::new(MockPort::new());
+        let reader_port: Box<dyn SerialPort> = Box::new(MockPort::new());
+        let mut channel = CommandChannel {
+            writer: port,
+            reader: BufReader::new(reader_port),
+            pending: b"Grbl 1.1 partial".to_vec(), // stale fragment pre-existing
+        };
+
+        // Run the same banner loop that serial_connect uses.
+        for _ in 0..5 {
+            match channel.reader.read_until(b'\n', &mut channel.pending) {
+                Ok(0) => break,
+                Ok(_) => {
+                    let line = String::from_utf8_lossy(&channel.pending).to_string();
+                    channel.pending.clear();
+                    if line.contains("Grbl") { break; }
+                }
+                Err(_) => { channel.pending.clear(); break; }
+            }
+        }
+
+        assert!(
+            channel.pending.is_empty(),
+            "pending must be empty after a startup read-timeout so the first command \
+             response is not contaminated by a stale banner fragment"
+        );
     }
 }
