@@ -178,6 +178,44 @@ pub async fn list_serial_ports() -> Result<Vec<PortInfo>, String> {
     .map_err(|e| format!("Task join error: {}", e))?
 }
 
+/// Drain the GRBL startup banner from `channel`, returning the accumulated
+/// banner text.  Guarantees `channel.pending` is empty on every return path:
+///
+/// - `Ok(n > 0)`: line consumed, `pending` cleared per iteration; when the
+///   `Grbl` sentinel is found the loop breaks with `pending` already clear.
+/// - `Ok(0)` (EOF): `pending` cleared before break so a partial fragment
+///   accumulated before EOF cannot contaminate the first command's response.
+/// - `Err(_)` (timeout or I/O): `pending` cleared before break for the same
+///   reason.
+///
+/// The function is `pub(crate)` so the startup-banner test can call it
+/// directly and guard the production path rather than a re-implementation.
+pub(crate) fn drain_startup_banner(channel: &mut CommandChannel) -> String {
+    let mut startup = String::new();
+    for _ in 0..5 {
+        match channel.reader.read_until(b'\n', &mut channel.pending) {
+            Ok(0) => {
+                channel.pending.clear();
+                break;
+            }
+            Ok(_) => {
+                let line = String::from_utf8_lossy(&channel.pending).to_string();
+                channel.pending.clear();
+                let done = line.contains("Grbl");
+                startup.push_str(&line);
+                if done {
+                    break;
+                }
+            }
+            Err(_) => {
+                channel.pending.clear();
+                break;
+            }
+        }
+    }
+    startup
+}
+
 /// Connect to a serial port
 #[tauri::command]
 pub async fn serial_connect(
@@ -202,22 +240,7 @@ pub async fn serial_connect(
 
         // Read the GRBL startup banner through THE persistent reader — no reader
         // is ever constructed after connect.
-        let mut startup = String::new();
-        for _ in 0..5 {
-            match channel.reader.read_until(b'\n', &mut channel.pending) {
-                Ok(0) => break,
-                Ok(_) => {
-                    let line = String::from_utf8_lossy(&channel.pending).to_string();
-                    channel.pending.clear();
-                    let done = line.contains("Grbl");
-                    startup.push_str(&line);
-                    if done {
-                        break;
-                    }
-                }
-                Err(_) => { channel.pending.clear(); break; }
-            }
-        }
+        let startup = drain_startup_banner(&mut channel);
 
         *inner
             .command
@@ -635,22 +658,23 @@ mod tests {
         assert!(!flag.load(Ordering::SeqCst));
     }
 
-    /// WS1: The startup-banner read loop clears `pending` on read-timeout so a
-    /// stale partial-line fragment cannot contaminate the first command's response.
+    /// WS1: `drain_startup_banner` clears `pending` on every return path so a
+    /// stale partial-line fragment cannot contaminate the first command's
+    /// response.
     ///
     /// Regression: the pre-fix `Err(_) => break` left whatever bytes had
     /// accumulated in `pending` (a split `Grbl` banner incomplete at timeout) to
     /// concatenate into the first Start's response, causing the pump to misread
     /// it as a reset banner and abort — nothing moved on first Start.
+    ///
+    /// This test calls the production `drain_startup_banner` directly, so any
+    /// future regression in the real function will be caught here rather than
+    /// slipping past a shadow copy of the loop.
     #[test]
     fn startup_banner_read_clears_pending_on_timeout() {
-        // Build a CommandChannel whose reader immediately times out.
-        // MockPort::read always returns TimedOut, so BufReader's read_until will
-        // return Err(TimedOut) on the first iteration — simulating the exact path
-        // the banner loop hits when the controller is slow or already mid-line.
-        //
-        // We pre-load some bytes into `pending` to represent the partial fragment
-        // that would accumulate before the timeout (e.g. b"Grbl 1.1" without \n).
+        // Timeout path: MockPort::read always returns TimedOut, so
+        // BufReader::read_until hits Err(TimedOut) on the first iteration.
+        // We pre-load `pending` with a partial fragment to prove it is cleared.
         let port: Box<dyn SerialPort> = Box::new(MockPort::new());
         let reader_port: Box<dyn SerialPort> = Box::new(MockPort::new());
         let mut channel = CommandChannel {
@@ -659,23 +683,82 @@ mod tests {
             pending: b"Grbl 1.1 partial".to_vec(), // stale fragment pre-existing
         };
 
-        // Run the same banner loop that serial_connect uses.
-        for _ in 0..5 {
-            match channel.reader.read_until(b'\n', &mut channel.pending) {
-                Ok(0) => break,
-                Ok(_) => {
-                    let line = String::from_utf8_lossy(&channel.pending).to_string();
-                    channel.pending.clear();
-                    if line.contains("Grbl") { break; }
-                }
-                Err(_) => { channel.pending.clear(); break; }
-            }
-        }
+        drain_startup_banner(&mut channel);
 
         assert!(
             channel.pending.is_empty(),
             "pending must be empty after a startup read-timeout so the first command \
              response is not contaminated by a stale banner fragment"
+        );
+    }
+
+    /// WS1 EOF path: `drain_startup_banner` clears `pending` on a clean EOF
+    /// (Ok(0)) so a partial fragment accumulated before EOF cannot survive.
+    ///
+    /// Pre-existing NOTE: the original `Ok(0) => break` did not call
+    /// `pending.clear()`, so any bytes already in `pending` before the EOF arm
+    /// fired would leak into the first command's response.
+    #[test]
+    fn startup_banner_read_clears_pending_on_eof() {
+        // EofPort returns Ok(0) on the first read, simulating a clean EOF.
+        struct EofPort;
+        impl std::io::Read for EofPort {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                Ok(0)
+            }
+        }
+        impl std::io::Write for EofPort {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl SerialPort for EofPort {
+            fn name(&self) -> Option<String> { Some("eof".to_string()) }
+            fn baud_rate(&self) -> serialport::Result<u32> { Ok(115200) }
+            fn data_bits(&self) -> serialport::Result<serialport::DataBits> { Ok(serialport::DataBits::Eight) }
+            fn flow_control(&self) -> serialport::Result<serialport::FlowControl> { Ok(serialport::FlowControl::None) }
+            fn parity(&self) -> serialport::Result<serialport::Parity> { Ok(serialport::Parity::None) }
+            fn stop_bits(&self) -> serialport::Result<serialport::StopBits> { Ok(serialport::StopBits::One) }
+            fn timeout(&self) -> Duration { Duration::from_millis(1000) }
+            fn set_baud_rate(&mut self, _: u32) -> serialport::Result<()> { Ok(()) }
+            fn set_data_bits(&mut self, _: serialport::DataBits) -> serialport::Result<()> { Ok(()) }
+            fn set_flow_control(&mut self, _: serialport::FlowControl) -> serialport::Result<()> { Ok(()) }
+            fn set_parity(&mut self, _: serialport::Parity) -> serialport::Result<()> { Ok(()) }
+            fn set_stop_bits(&mut self, _: serialport::StopBits) -> serialport::Result<()> { Ok(()) }
+            fn set_timeout(&mut self, _: Duration) -> serialport::Result<()> { Ok(()) }
+            fn write_request_to_send(&mut self, _: bool) -> serialport::Result<()> { Ok(()) }
+            fn write_data_terminal_ready(&mut self, _: bool) -> serialport::Result<()> { Ok(()) }
+            fn read_clear_to_send(&mut self) -> serialport::Result<bool> { Ok(false) }
+            fn read_data_set_ready(&mut self) -> serialport::Result<bool> { Ok(false) }
+            fn read_ring_indicator(&mut self) -> serialport::Result<bool> { Ok(false) }
+            fn read_carrier_detect(&mut self) -> serialport::Result<bool> { Ok(false) }
+            fn bytes_to_read(&self) -> serialport::Result<u32> { Ok(0) }
+            fn bytes_to_write(&self) -> serialport::Result<u32> { Ok(0) }
+            fn clear(&self, _: serialport::ClearBuffer) -> serialport::Result<()> { Ok(()) }
+            fn try_clone(&self) -> serialport::Result<Box<dyn SerialPort>> {
+                Ok(Box::new(EofPort))
+            }
+            fn set_break(&self) -> serialport::Result<()> { Ok(()) }
+            fn clear_break(&self) -> serialport::Result<()> { Ok(()) }
+        }
+
+        let port: Box<dyn SerialPort> = Box::new(EofPort);
+        let reader_port: Box<dyn SerialPort> = Box::new(EofPort);
+        let mut channel = CommandChannel {
+            writer: port,
+            reader: BufReader::new(reader_port),
+            pending: b"partial before eof".to_vec(), // fragment accumulated before EOF
+        };
+
+        drain_startup_banner(&mut channel);
+
+        assert!(
+            channel.pending.is_empty(),
+            "pending must be empty after a clean EOF so the first command \
+             response is not contaminated by a pre-EOF fragment"
         );
     }
 }
