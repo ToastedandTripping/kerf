@@ -68,6 +68,26 @@ describe("ActiveLayerStrip", () => {
     );
   });
 
+  it("speed number field change calls updateLayer with correct index and clears activePreset", () => {
+    const updateLayerSpy = vi.fn();
+    useStore.setState({ updateLayer: updateLayerSpy } as unknown as Parameters<typeof useStore.setState>[0]);
+
+    const { getAllByRole } = render(<ActiveLayerStrip />);
+    // SpeedInput renders a number input (type="spinbutton" in ARIA) — there are two:
+    // index 0 = power number input (value=50), index 1 = speed number input (value=6000).
+    const spinbuttons = getAllByRole("spinbutton");
+    const speedNumberInput = spinbuttons[1]; // SpeedInput's number field
+
+    fireEvent.change(speedNumberInput, { target: { value: "1500" } });
+
+    // handleSpeedChange(v) calls updateLayer(active.index, { speed: v, activePreset: undefined })
+    // clampSpeed(1500, effectiveMaxSpeed(0, 0)) = clampSpeed(1500, 30000) = 1500
+    expect(updateLayerSpy).toHaveBeenCalledWith(
+      0, // activeLayerIndex 0
+      expect.objectContaining({ speed: 1500, activePreset: undefined }),
+    );
+  });
+
   it("returns null when no layers match activeLayerIndex", () => {
     useStore.setState({ activeLayerIndex: 999 });
     const { container } = render(<ActiveLayerStrip />);

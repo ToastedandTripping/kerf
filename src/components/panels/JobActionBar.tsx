@@ -120,7 +120,7 @@ export function JobActionBar() {
       }
     }
 
-    const elapsed = job.estimatedTimeSecs * (jobProgress || 1);
+    const elapsed = job.estimatedTimeSecs * (useStore.getState().jobProgress || 1);
     if (endState === "complete") {
       // F19: after last ack, wait for machine to actually reach Idle before
       // re-enabling START — head is still decelerating at last-ack time.
