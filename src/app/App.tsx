@@ -112,6 +112,11 @@ export default function App() {
   const [dragOver, setDragOver] = useState(false);
 
   const onDragOver = useCallback((e: React.DragEvent) => {
+    // Only intercept drags that carry OS files. Internal element/text drags
+    // (layer-row reorder, slider grabs, accidental text selection drags) do NOT
+    // expose "Files" in dataTransfer.types, so we let them pass through
+    // unmolested so their own handlers keep working.
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
     e.preventDefault();
     e.stopPropagation();
     setDragOver(true);
@@ -126,6 +131,8 @@ export default function App() {
   }, []);
 
   const onDrop = useCallback((e: React.DragEvent) => {
+    // Same file-only guard as onDragOver — internal drops must fall through.
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
     e.preventDefault();
     e.stopPropagation();
     setDragOver(false);
