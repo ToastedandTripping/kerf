@@ -391,16 +391,17 @@ describe("B1 — M4 default and $32=0 warning at job generation", () => {
     }
   });
 
-  it("B1c: warns when M4 layer is in job but $32=0 (laser mode disabled)", async () => {
-    // Engrave layer is already powerMode='variable' in DEFAULT_LAYERS
+  it("B1c: warns when a fill layer is in job but $32=0 (laser mode disabled)", async () => {
+    // DEFAULT_LAYERS[0] is mode='fill', so any object on layer 0 triggers the warning
     useStore.setState({ grblLaserMode: false });
     useStore.getState().addObject(makeRect("r1", 0, 0, 10, 10));
 
     await generateGcode();
 
     const warnings = useStore.getState().consoleLines.map((l) => l.text);
+    // New wider warning: fires for any fill/raster layer; checks $32 + dynamic power mention
     const has32Warning = warnings.some(
-      (t) => t.includes("$32") && t.includes("M4") && t.includes("variable power")
+      (t) => t.includes("$32") && t.includes("M4") && t.includes("dynamic power"),
     );
     expect(has32Warning).toBe(true);
   });
@@ -413,13 +414,14 @@ describe("B1 — M4 default and $32=0 warning at job generation", () => {
 
     const warnings = useStore.getState().consoleLines.map((l) => l.text);
     const has32Warning = warnings.some(
-      (t) => t.includes("$32") && t.includes("M4") && t.includes("variable power")
+      (t) => t.includes("$32") && t.includes("M4") && t.includes("dynamic power"),
     );
     expect(has32Warning).toBe(false);
   });
 
-  it("B1c: does NOT warn about $32 when all layers are M3 (constant power)", async () => {
-    // Override all layers to constant power
+  it("B1c: warns for fill layer even with M3 (constant power) — $32=0 is unsafe for raster regardless", async () => {
+    // $32=0 causes G0 rapids to potentially fire the laser during lead-ins, regardless of power mode.
+    // The widened warning fires on fill-mode layer presence, not powerMode.
     useStore.setState({
       grblLaserMode: false,
       layers: DEFAULT_LAYERS.map((l) => ({ ...l, powerMode: "constant" as const })),
@@ -430,9 +432,9 @@ describe("B1 — M4 default and $32=0 warning at job generation", () => {
 
     const warnings = useStore.getState().consoleLines.map((l) => l.text);
     const has32Warning = warnings.some(
-      (t) => t.includes("$32") && t.includes("M4") && t.includes("variable power")
+      (t) => t.includes("$32") && t.includes("M4") && t.includes("dynamic power"),
     );
-    expect(has32Warning).toBe(false);
+    expect(has32Warning).toBe(true);
   });
 
   it("B1 regression: M3/constant layer emits unchanged layer settings (no silent M4 upgrade)", async () => {

@@ -206,45 +206,103 @@ pub fn scan_mask_to_gcode<'a>(
                 }).collect()
             };
 
-            for (run_start, run_end, orig_bounds) in &ordered_runs {
-                let offset = if !forward { params.scanning_offset } else { 0.0 };
+            // ── Continuous per-row sweep ──────────────────────────────────────────
+            // ONE G0 per row to the lead-in overscan position.
+            // Power command (M3/M4) emitted ONCE before the row runs.
+            // Gaps between runs are G1+S0 at engrave speed — NO G0, NO M5 mid-row.
+            // M5 is NOT emitted within a row; $32=1 G0-suppression handles rapid safety.
 
+            let offset = if !forward { params.scanning_offset } else { 0.0 };
+
+            // Resolve workspace coordinates for the first run's entry boundary and the
+            // last run's exit boundary. For reversed rows, ordered_runs endpoints are
+            // swapped (run_start > run_end), so:
+            //   forward  → first_run_start = left col of leftmost run
+            //              last_run_end    = right col of rightmost run
+            //   reversed → first_run_start = right col of rightmost run (swapped)
+            //              last_run_end    = left col of leftmost run (swapped)
+            let (first_run_start, _, _) = ordered_runs[0];
+            let (_, last_run_end, _)    = ordered_runs[ordered_runs.len() - 1];
+
+            let first_entry_img = params.origin_x + first_run_start as f64 * interval + offset;
+            let last_exit_img   = params.origin_x + last_run_end as f64 * interval + offset;
+
+            let (first_entry_x, row_gy) = if has_rotation {
+                to_grbl(first_entry_img, y_mm)
+            } else {
+                (first_entry_img, gy)
+            };
+            let (last_exit_x, _) = if has_rotation {
+                to_grbl(last_exit_img, y_mm)
+            } else {
+                (last_exit_img, gy)
+            };
+
+            // Lead-in G0: ONE rapid per row to the overscan approach position.
+            // forward:  approach from left  → G0 to (first_entry_x − overscan)
+            // reversed: approach from right → G0 to (first_entry_x + overscan)
+            let lead_in_x = if forward {
+                first_entry_x - overscan
+            } else {
+                first_entry_x + overscan
+            };
+
+            let dist = ((lead_in_x - cur_x).powi(2) + (row_gy - cur_y).powi(2)).sqrt();
+            travel_distance += dist;
+            total_distance += dist;
+            lines.push(format!("G0 X{:.3} Y{:.3}", lead_in_x, row_gy));
+            moves.push(GcodeMove {
+                x: lead_in_x, y: row_gy,
+                move_type: "rapid".to_string(), speed: 3000.0, power: 0.0,
+            });
+
+            // Accel overscan: G1 from lead-in to first run entry boundary, laser off.
+            if overscan > 0.0 {
+                travel_distance += overscan;
+                total_distance += overscan;
+                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S0", first_entry_x, row_gy, params.speed_mm_min));
+                moves.push(GcodeMove {
+                    x: first_entry_x, y: row_gy,
+                    move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0,
+                });
+            }
+
+            // Power command: emit M3/M4 ONCE per row (modal — stays active until M5 at job end).
+            lines.push(format!("{} S{}", params.power_cmd, params.s_max));
+
+            // Track the current X head position within the row (in workspace coords).
+            let mut row_cur_x = first_entry_x;
+
+            for (run_idx, (run_start, run_end, orig_bounds)) in ordered_runs.iter().enumerate() {
                 let x_start_img = params.origin_x + *run_start as f64 * interval + offset;
-                let x_end_img = params.origin_x + *run_end as f64 * interval + offset;
+                let x_end_img   = params.origin_x + *run_end as f64 * interval + offset;
 
-                let (x_start, gy_start) = if has_rotation {
+                let (x_start, _) = if has_rotation {
                     to_grbl(x_start_img, y_mm)
                 } else {
-                    (x_start_img, gy)
+                    (x_start_img, row_gy)
                 };
                 let (x_end, gy_end) = if has_rotation {
                     to_grbl(x_end_img, y_mm)
                 } else {
-                    (x_end_img, gy)
+                    (x_end_img, row_gy)
                 };
 
-                // Overscan approach
-                let os_start = if forward { x_start - overscan } else { x_start + overscan };
-
-                let dist = ((os_start - cur_x).powi(2) + (gy_start - cur_y).powi(2)).sqrt();
-                travel_distance += dist;
-                total_distance += dist;
-                lines.push(format!("G0 X{:.3} Y{:.3}", os_start, gy_start));
-                moves.push(GcodeMove {
-                    x: os_start, y: gy_start,
-                    move_type: "rapid".to_string(), speed: 3000.0, power: 0.0,
-                });
-
-                if overscan > 0.0 {
-                    travel_distance += overscan;
-                    total_distance += overscan;
-                    lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S0", x_start, gy_start, params.speed_mm_min));
+                // Gap transit: if the head is not already at this run's start, traverse the
+                // gap with G1+S0 at engrave speed (laser off, constant velocity).
+                // TODO: G0-skip for gaps > v²/$120 (accel-ramp safe threshold)
+                if run_idx > 0 && (x_start - row_cur_x).abs() > 1e-6 {
+                    let gap_dist = (x_start - row_cur_x).abs();
+                    travel_distance += gap_dist;
+                    total_distance += gap_dist;
+                    lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S0", x_start, row_gy, params.speed_mm_min));
                     moves.push(GcodeMove {
-                        x: x_start, y: gy_start,
+                        x: x_start, y: row_gy,
                         move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0,
                     });
                 }
 
+                // Engrave this run.
                 if is_grayscale {
                     // Grayscale mode: variable power — one G1 per pixel.
                     // F4 fix: use original pixel bounds for index computation, regardless
@@ -255,8 +313,6 @@ pub fn scan_mask_to_gcode<'a>(
                         let gray_row = &gray_data[row_start..row_start + w];
                         let run_pixel_slice = &gray_row[*orig_start..*orig_end];
                         let run_forward = run_end > run_start; // true if not reversed
-
-                        lines.push(format!("{} S0", params.power_cmd));
 
                         let pixel_iter: Box<dyn Iterator<Item = &u8>> = if run_forward {
                             Box::new(run_pixel_slice.iter())
@@ -283,7 +339,7 @@ pub fn scan_mask_to_gcode<'a>(
                             let (px, py) = if has_rotation {
                                 to_grbl(px_img, y_mm)
                             } else {
-                                (px_img, gy_start)
+                                (px_img, row_gy)
                             };
 
                             cut_distance += interval;
@@ -294,45 +350,48 @@ pub fn scan_mask_to_gcode<'a>(
                                 move_type: "engrave".to_string(), speed: params.speed_mm_min, power: s_val,
                             });
                         }
-                        lines.push("M5".to_string());
+                        row_cur_x = x_end;
                     }
                 } else {
                     // Binary mode: constant power across the whole run.
-                    lines.push(format!("{} S{}", params.power_cmd, params.s_max));
+                    // S=s_max on G1 to run end; M4/M3 is modal — no per-run power command needed.
                     let scan_dist = (x_end - x_start).abs();
                     cut_distance += scan_dist;
                     total_distance += scan_dist;
-                    lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}",
-                        x_end, gy_end, params.speed_mm_min, params.s_max));
+                    lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", x_end, gy_end, params.speed_mm_min, params.s_max));
                     moves.push(GcodeMove {
                         x: x_end, y: gy_end,
                         move_type: "engrave".to_string(), speed: params.speed_mm_min, power: params.s_max,
                     });
-                    lines.push("M5".to_string());
+                    row_cur_x = x_end;
                 }
+            }
 
-                // Deceleration overscan
-                if overscan > 0.0 {
-                    let (os_end_x, os_end_y) = if has_rotation {
-                        let x_os_img = if forward { x_end_img + overscan } else { x_end_img - overscan };
-                        to_grbl(x_os_img, y_mm)
-                    } else {
-                        let x_os = if forward { x_end + overscan } else { x_end - overscan };
-                        (x_os, gy)
-                    };
-                    travel_distance += overscan;
-                    total_distance += overscan;
-                    lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S0", os_end_x, os_end_y, params.speed_mm_min));
-                    moves.push(GcodeMove {
-                        x: os_end_x, y: os_end_y,
-                        move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0,
-                    });
-                    cur_x = os_end_x;
-                    cur_y = os_end_y;
+            // Decel overscan: G1 from last run exit boundary to overscan tail, laser off.
+            // forward:  tail = last_exit + overscan (rightward past rightmost run)
+            // reversed: tail = last_exit − overscan (leftward past leftmost run)
+            if overscan > 0.0 {
+                let tail_img = if forward { last_exit_img + overscan } else { last_exit_img - overscan };
+                let (os_tail_x, os_tail_y) = if has_rotation {
+                    to_grbl(tail_img, y_mm)
                 } else {
-                    cur_x = x_end;
-                    cur_y = gy_end;
-                }
+                    let tail_x = if forward { last_exit_x + overscan } else { last_exit_x - overscan };
+                    (tail_x, row_gy)
+                };
+                travel_distance += overscan;
+                total_distance += overscan;
+                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S0", os_tail_x, os_tail_y, params.speed_mm_min));
+                moves.push(GcodeMove {
+                    x: os_tail_x, y: os_tail_y,
+                    move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0,
+                });
+                cur_x = os_tail_x;
+                cur_y = os_tail_y;
+            } else {
+                // No overscan: head ends at the last run's exit position.
+                // row_cur_x was updated to x_end after each run (both binary and grayscale).
+                cur_x = row_cur_x;
+                cur_y = row_gy;
             }
 
             if params.bidirectional {
@@ -820,10 +879,10 @@ mod tests {
     /// Phase 0: golden byte snapshot — bidirectional + binary + overscan + rotation.
     ///
     /// True characterization test: asserts full G-code string equality so any
-    /// future scan-loop drift (wrong X formula, dropped overscan, missing M5, etc.)
+    /// future scan-loop drift (wrong X formula, dropped overscan, extra M5/G0, etc.)
     /// produces an immediate failure with a visible diff.
     ///
-    /// Parameters (frozen 2026-06-20, after FIX 1):
+    /// Parameters (frozen 2026-06-24, continuous-sweep rewrite):
     ///   Mask: 8×4 pixels (binary), four distinct row patterns:
     ///     Row 0: cols 0–3 filled   (binary run [0,4))
     ///     Row 1: cols 4–7 filled   (binary run [4,8), reverse row)
@@ -831,6 +890,12 @@ mod tests {
     ///     Row 3: cols 2–6 filled   (binary run [2,7), reverse row)
     ///   width_mm=8, height_mm=4, interval=1.0, overscan=1.0mm
     ///   bidirectional=true, rotation=45° (π/4), workspace_height=200
+    ///
+    /// Continuous-sweep invariants encoded in this snapshot:
+    ///   - ONE G0 per engraved row (4 rows → 4 G0 lines total)
+    ///   - NO M5 within any row (M5 absent entirely; laser powered down by S0 G1)
+    ///   - M3/M4 emitted once per row, before first engrave G1
+    ///   - Interior gaps (if any) are G1+S0, not G0
     ///
     /// If this test fails, regenerate by temporarily adding `panic!("{}", result.gcode)`
     /// after the `scan_mask_to_gcode` call, running with `-- --nocapture`, and freezing
@@ -859,33 +924,30 @@ mod tests {
 
         let result = scan_mask_to_gcode(&pixels, w, h, &params).expect("should succeed");
 
-        // Frozen snapshot (generated post-fix, 2026-06-20).
+        // Frozen snapshot (regenerated 2026-06-24, continuous-sweep rewrite).
         // Coordinates reflect 45° rotation around mask centre (4.0, 2.0) in a 200mm workspace.
-        // Overscan S0 moves bracket each binary run; reverse rows have X decreasing.
+        // Each row: one G0 lead-in → G1 S0 accel overscan → M3 S1000 once → G1 S1000 engrave
+        //   → G1 S0 decel overscan.  NO M5 within any row.
         let expected = "\
 G0 X1.586 Y202.243\n\
 G1 X2.586 Y202.243 F6000 S0\n\
 M3 S1000\n\
 G1 X5.414 Y199.414 F6000 S1000\n\
-M5\n\
 G1 X6.121 Y198.707 F6000 S0\n\
 G0 X8.536 Y195.879\n\
 G1 X7.536 Y195.879 F6000 S0\n\
 M3 S1000\n\
 G1 X4.707 Y198.707 F6000 S1000\n\
-M5\n\
 G1 X4.000 Y199.414 F6000 S0\n\
 G0 X0.879 Y200.121\n\
 G1 X1.879 Y200.121 F6000 S0\n\
 M3 S1000\n\
 G1 X5.414 Y196.586 F6000 S1000\n\
-M5\n\
 G1 X6.121 Y195.879 F6000 S0\n\
 G0 X6.414 Y195.172\n\
 G1 X5.414 Y195.172 F6000 S0\n\
 M3 S1000\n\
 G1 X1.879 Y198.707 F6000 S1000\n\
-M5\n\
 G1 X1.172 Y199.414 F6000 S0";
 
         assert_eq!(
@@ -1363,23 +1425,25 @@ G1 X1.172 Y199.414 F6000 S0";
         );
     }
 
-    // ─── B1 (Phase B) M4 + S0 bracketing invariant ───────────────────────────
+    // ─── B1 (Phase B) continuous-sweep M4 invariant ──────────────────────────
 
-    /// B1d: Verify that M4 (variable power) maskFill runs still bracket each
-    /// engrave run with S0 overscan lead-in/out and end with M5 — confirming
-    /// the laser does NOT fire during travel or overscan under M4.
+    /// B1d: Verify that M4 (variable power) maskFill uses the continuous-sweep
+    /// structure: M4 emitted ONCE per row, NO M5 within any row, laser held off
+    /// between runs by G1+S0 (not G0 or M5).
     ///
     /// Under GRBL M4 (laser mode, $32=1): the laser fires only when moving AND
-    /// S > 0. S0 under M4 holds the laser off, so the S0 overscan brackets
-    /// and the M5 per-run end are still necessary and correct with M4.
+    /// S > 0. S0 on a G1 move holds the laser off, so G1+S0 is the correct way
+    /// to traverse gaps and overscan regions without firing the laser. M5 is NOT
+    /// needed mid-row — it is only emitted at job end.
     ///
-    /// This test asserts:
-    ///   1. Every engrave G1 move with S > 0 is preceded (in the same run) by
-    ///      an `M4 S<target>` command (not M3).
-    ///   2. Every run that starts ends with `M5`.
-    ///   3. The overscan lead-in G1 S0 precedes the M4 power-on command.
+    /// This test asserts (continuous-sweep invariants):
+    ///   1. All power-on commands are M4 (not M3) — parametric power_cmd honored.
+    ///   2. M4 is emitted exactly once per engraved row (3 rows → 3 M4 lines).
+    ///   3. NO M5 appears anywhere in the output (laser off is S0 on G1, not M5).
+    ///   4. NO G0 appears after the first row's lead-in (only one G0 per row).
+    ///   5. Every M4 is preceded by a G1+S0 accel overscan move (laser-off bracket).
     #[test]
-    fn m4_maskfill_brackets_s0_and_ends_with_m5() {
+    fn m4_maskfill_continuous_sweep_invariants() {
         let mut params = base_scan_params();
         params.power_cmd = "M4".to_string();
         params.overscan = 1.0;
@@ -1399,7 +1463,7 @@ G1 X1.172 Y199.414 F6000 S0";
 
         let lines: Vec<&str> = result.gcode.lines().collect();
 
-        // 1. Verify all power-on commands are M4 (not M3)
+        // 1. All power commands must be M4 (not M3)
         let m3_count = lines.iter().filter(|l| l.starts_with("M3 ")).count();
         assert_eq!(
             m3_count, 0,
@@ -1413,51 +1477,40 @@ G1 X1.172 Y199.414 F6000 S0";
             result.gcode
         );
 
-        // 2. Every M5 must be present (one per engrave run)
-        let m5_count = lines.iter().filter(|l| l.trim() == "M5").count();
-        assert!(
-            m5_count > 0,
-            "M4 maskFill must emit M5 after each run to disable the laser; found none.\nG-code:\n{}",
-            result.gcode
+        // 2. M4 emitted exactly once per engraved row (3 rows → 3 M4 lines)
+        assert_eq!(
+            m4_count, h,
+            "Continuous-sweep: M4 must fire once per engraved row ({} rows); found {} M4 commands.\nG-code:\n{}",
+            h, m4_count, result.gcode
         );
 
-        // 3. The pattern within each run must be: G1 S0 (overscan) → M4 S<n> → G1 S<n> → M5.
-        //    Verify that every M4 command is immediately preceded by a G1 S0 line
-        //    (the overscan lead-in bracket).
+        // 3. NO M5 within the output (continuous-sweep: laser held off by S0, not M5)
+        let m5_count = lines.iter().filter(|l| l.trim() == "M5").count();
+        assert_eq!(
+            m5_count, 0,
+            "Continuous-sweep maskFill must NOT emit M5 mid-job; found {} M5 lines.\n\
+             Laser is held off by G1+S0, not M5.\nG-code:\n{}",
+            m5_count, result.gcode
+        );
+
+        // 4. Exactly one G0 per engraved row (3 rows → 3 G0 lines)
+        let g0_count = lines.iter().filter(|l| l.starts_with("G0 ")).count();
+        assert_eq!(
+            g0_count, h,
+            "Continuous-sweep: exactly one G0 per engraved row ({} rows); found {} G0 lines.\nG-code:\n{}",
+            h, g0_count, result.gcode
+        );
+
+        // 5. Every M4 command must be immediately preceded by a G1+S0 accel-overscan move.
+        //    (G1 ... S0 leads in; M4 S<n> then powers the laser on for the engrave run.)
         for (i, line) in lines.iter().enumerate() {
             if line.starts_with("M4 ") {
-                // Find the closest preceding G1 line
                 let prev_g1 = lines[..i].iter().rev().find(|l| l.starts_with("G1 "));
                 assert!(
                     prev_g1.map(|l| l.contains("S0")).unwrap_or(false),
-                    "M4 power-on at line {} ({}) must be preceded by a G1 S0 overscan bracket; \
+                    "M4 power-on at line {} ({}) must be preceded by a G1 S0 accel-overscan move; \
                      preceding G1 was: {:?}\nFull G-code:\n{}",
                     i, line, prev_g1, result.gcode
-                );
-            }
-        }
-
-        // 4. Every M4 command must be followed by M5 before the next G0 or end of output
-        for (i, line) in lines.iter().enumerate() {
-            if line.starts_with("M4 ") {
-                let rest = &lines[i + 1..];
-                let m5_before_g0 = rest.iter().any(|l| {
-                    if l.trim() == "M5" { return true; }
-                    if l.starts_with("G0 ") { return false; }
-                    false
-                });
-                // Walk rest to check ordering
-                let mut found_m5 = false;
-                for next in rest {
-                    if next.trim() == "M5" { found_m5 = true; break; }
-                    if next.starts_with("G0 ") { break; }
-                }
-                let _ = m5_before_g0; // silence unused-variable warning on the closure form
-                assert!(
-                    found_m5,
-                    "M4 command at line {} ({}) must be followed by M5 before next G0; \
-                     laser would remain enabled during travel.\nFull G-code:\n{}",
-                    i, line, result.gcode
                 );
             }
         }
@@ -1491,6 +1544,102 @@ G1 X1.172 Y199.414 F6000 S0";
         assert!(
             !result.gcode.contains("M4 "),
             "M3 (constant-power) maskFill must NOT emit M4 commands; gcode:\n{}", result.gcode
+        );
+    }
+
+    /// Regression guard for the continuous-sweep fix: two filled runs separated by a gap.
+    ///
+    /// This is the structural fix test. A single row with two filled regions (like the
+    /// crossbar of an "H" or the counter strokes of an "N") previously emitted:
+    ///   G0 run1_start → G1 S0 overscan → M3 S<n> → G1 S<n> run1 → M5 → G1 S0 decel →
+    ///   G0 run2_start → G1 S0 overscan → M3 S<n> → G1 S<n> run2 → M5 → G1 S0 decel
+    ///
+    /// The fix must produce:
+    ///   G0 lead-in → G1 S0 accel overscan → M3 S<n> →
+    ///   G1 S<n> run1 → G1 S0 gap → G1 S<n> run2 → G1 S0 decel overscan
+    ///
+    /// Assertions:
+    ///   - Exactly ONE G0 for the row (not two)
+    ///   - ZERO M5 in the output
+    ///   - The gap between runs is a G1+S0 (laser off, not G0)
+    ///   - Both runs fire at S=s_max
+    ///
+    /// Setup: 10-pixel wide mask, row 0 only.
+    ///   Run A: cols 1-3 (pixels[1]=0, pixels[2]=0, pixels[3]=0)
+    ///   Gap:   cols 4-5 (pixels[4]=255, pixels[5]=255)
+    ///   Run B: cols 6-8 (pixels[6]=0, pixels[7]=0, pixels[8]=0)
+    ///
+    /// This test would FAIL against the old per-run code (which emitted two G0 and two M5).
+    #[test]
+    fn continuous_sweep_two_runs_no_interior_g0() {
+        let mut params = base_scan_params();
+        params.bidirectional = false;
+        params.overscan = 0.5;
+        params.width_mm = 10.0;
+        params.height_mm = 1.0;
+        params.interval = 1.0;
+        params.passes = 1;
+        params.s_max = 1000.0;
+        params.power_cmd = "M3".to_string();
+
+        let w = 10usize;
+        let h = 1usize;
+        // Row 0: runs at cols [1,4) and [6,9), gap at [4,6).
+        //   find_binary_runs expects 0=filled, 255=background.
+        let mut pixels = vec![255u8; w * h];
+        pixels[1] = 0; pixels[2] = 0; pixels[3] = 0; // run A
+        pixels[6] = 0; pixels[7] = 0; pixels[8] = 0; // run B
+
+        let result = scan_mask_to_gcode(&pixels, w, h, &params)
+            .expect("two-run single-row scan should succeed");
+
+        let lines: Vec<&str> = result.gcode.lines().collect();
+
+        // 1. Exactly ONE G0 for this single engraved row.
+        let g0_lines: Vec<&str> = lines.iter().filter(|l| l.starts_with("G0 ")).copied().collect();
+        assert_eq!(
+            g0_lines.len(), 1,
+            "Continuous-sweep: single row with two runs must produce exactly 1 G0 (not 2).\n\
+             Found {} G0 lines: {:?}\nFull G-code:\n{}",
+            g0_lines.len(), g0_lines, result.gcode
+        );
+
+        // 2. ZERO M5 commands — laser held off by S0 on G1, not M5.
+        let m5_count = lines.iter().filter(|l| l.trim() == "M5").count();
+        assert_eq!(
+            m5_count, 0,
+            "Continuous-sweep: NO M5 allowed within a row; found {} M5 lines.\n\
+             Gap must be G1+S0, not M5+G0.\nFull G-code:\n{}",
+            m5_count, result.gcode
+        );
+
+        // 3. The gap between the two runs must be a G1+S0 (not a G0).
+        //    Find the two S=s_max engrave moves and verify what comes between them.
+        let engrave_indices: Vec<usize> = lines.iter().enumerate()
+            .filter(|(_, l)| l.starts_with("G1 ") && l.contains(&format!("S{}", params.s_max as u64)))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            engrave_indices.len(), 2,
+            "Expected 2 G1 engrave moves (one per run); found {}: {:?}\nFull G-code:\n{}",
+            engrave_indices.len(), engrave_indices, result.gcode
+        );
+
+        // Between the two engrave moves there must be at least one G1+S0 (gap transit).
+        let between = &lines[engrave_indices[0] + 1..engrave_indices[1]];
+        let has_g1_s0_gap = between.iter().any(|l| l.starts_with("G1 ") && l.contains("S0"));
+        assert!(
+            has_g1_s0_gap,
+            "Gap between runs must be a G1+S0 move (continuous speed, laser off).\n\
+             Lines between engrave moves: {:?}\nFull G-code:\n{}",
+            between, result.gcode
+        );
+        let has_g0_in_gap = between.iter().any(|l| l.starts_with("G0 "));
+        assert!(
+            !has_g0_in_gap,
+            "Gap between runs must NOT contain a G0 (continuous sweep).\n\
+             Lines between engrave moves: {:?}\nFull G-code:\n{}",
+            between, result.gcode
         );
     }
 }

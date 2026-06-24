@@ -483,6 +483,32 @@ export const machineConnection = {
     }
   },
 
+  /** Send $32=1 to enable GRBL laser mode and update the store on success.
+   * Must be called only when connected. Returns true if the setting was accepted
+   * (any "ok" in the response), false on error. */
+  async enableLaserMode(): Promise<boolean> {
+    const store = useStore.getState();
+    try {
+      store.addConsoleLine("$32=1", "sent");
+      const outcome = await invoke<SendOutcome>("serial_send", { command: "$32=1" });
+      for (const d of outcome.drained) surfaceUnsolicited(d);
+      const accepted = outcome.responses.some((r) => r.trim() === "ok");
+      if (accepted) {
+        store.setGrblLaserMode(true);
+        store.addConsoleLine("$32=1 — laser mode enabled", "info");
+      } else {
+        store.addConsoleLine(
+          `$32=1 may not have been accepted. Re-check with $$ in the console. Response: ${outcome.responses.join(", ")}`,
+          "warning",
+        );
+      }
+      return accepted;
+    } catch (e) {
+      store.addConsoleLine(`Failed to enable laser mode: ${e}`, "error");
+      return false;
+    }
+  },
+
   /** Query $$ and apply $30/$32/$120-131. Returns true when the response
    * parsed as settings (at least one `$N=V` line) — the $32 warning and the
    * "unverified" fallback in connect() key off this. */

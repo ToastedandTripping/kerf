@@ -58,6 +58,7 @@ export function MachinePanel() {
   const grblHoming = useStore((s) => s.grblHoming);
   const machineHomed = useStore((s) => s.machineHomed);
   const softLimitsActive = useStore((s) => s.softLimitsActive);
+  const grblLaserMode = useStore((s) => s.grblLaserMode);
   const workCoordOffset = useStore((s) => s.workCoordOffset);
   const workspaceVerified = useStore((s) => s.workspaceVerified);
   const setWorkspaceSize = useStore((s) => s.setWorkspaceSize);
@@ -79,6 +80,7 @@ export function MachinePanel() {
   const [bedHInput, setBedHInput] = useState("");
   const [softLimitsConfirmOpen, setSoftLimitsConfirmOpen] = useState(false);
   const [softLimitsEnabling, setSoftLimitsEnabling] = useState(false);
+  const [enablingLaserMode, setEnablingLaserMode] = useState(false);
 
   const refreshPorts = useCallback(async () => {
     const found = await machineConnection.listPorts();
@@ -480,6 +482,62 @@ export function MachinePanel() {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Lever 1: laser mode ($32) banner — two states: warning+action or confirmed */}
+          {machineConnected && !grblLaserMode && (
+            <div style={{
+              fontSize: "10px",
+              padding: "5px 8px",
+              borderRadius: "var(--radius-sm)",
+              border: "3px solid var(--danger)",
+              borderLeft: "3px solid var(--danger)",
+              background: "rgba(226,74,74,0.08)",
+              color: "var(--danger)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "4px",
+            }}>
+              <span style={{ fontWeight: 600 }}>
+                Laser mode ($32) is off — M4 dynamic power won't work and the laser can fire during travel
+              </span>
+              {!enablingLaserMode ? (
+                <button
+                  onClick={async () => {
+                    setEnablingLaserMode(true);
+                    await machineConnection.enableLaserMode();
+                    setEnablingLaserMode(false);
+                  }}
+                  style={{
+                    alignSelf: "flex-start",
+                    fontSize: "9px",
+                    padding: "2px 8px",
+                    background: "var(--danger)",
+                    border: "none",
+                    borderRadius: "var(--radius-sm)",
+                    color: "#fff",
+                    cursor: "pointer",
+                    fontWeight: 600,
+                  }}
+                >
+                  Enable Laser Mode ($32=1)
+                </button>
+              ) : (
+                <span style={{ color: "var(--text-muted)", fontSize: "9px" }}>Sending $32=1…</span>
+              )}
+            </div>
+          )}
+          {machineConnected && grblLaserMode && (
+            <div style={{
+              fontSize: "10px",
+              padding: "4px 8px",
+              borderRadius: "var(--radius-sm)",
+              border: "1px solid rgba(74,226,138,0.2)",
+              background: "rgba(74,226,138,0.06)",
+              color: "var(--success)",
+            }}>
+              Laser mode ($32=1) — M4 dynamic power active
             </div>
           )}
 

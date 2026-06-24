@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../app/store";
 import type { DesignObject, Layer, InternalCutMode } from "../../app/types";
 import { offsetRingByDistance, composeGroupChild, sampleBezierPath } from "../geometry";
+import { computeOverscan } from "./overscan";
 
 export interface GcodeMove {
   x: number;
@@ -483,6 +484,7 @@ async function generateImageGcodeByLayer(
   workspaceHeight: number,
   originTop: boolean,
   sValueMax: number,
+  accelX: number = 0,
 ): Promise<{ byLayer: Map<number, GcodeResult[]>; lockedCount: number }> {
   const layerOrder = new Map(layers.map((l, pos) => [l.index, pos]));
   const imageObjects = objects.filter(
@@ -524,7 +526,7 @@ async function generateImageGcodeByLayer(
           powerMode: layer.powerMode,
           interval: layer.interval,
           dither: layer.dither,
-          overscan: layer.overscan,
+          overscan: computeOverscan(layer.speed, accelX),
           bidirectional: layer.bidirectional,
           scanningOffset: layer.scanningOffset,
           brightness: adj.brightness,
@@ -715,6 +717,17 @@ export async function generateGcode(): Promise<GcodeResult> {
   const { objects: cutObjects, warnings } = toCutObjects(store.objects, store.layers);
   const layerOrder = new Map(store.layers.map((l, pos) => [l.index, pos]));
 
+  // Lever 3: apply v²/(2·$120) overscan to all fill/engrave/maskFill CutObjects,
+  // replacing the flat layer.overscan default. Line-mode objects keep their own
+  // overscan unchanged (overscan is not meaningful for line cutting).
+  const accelX = store.grblAccelX;
+  for (const obj of cutObjects) {
+    const m = obj.layer.mode;
+    if (m === "fill" || m === "fillLine" || m === "maskFill" || m === "offsetFill") {
+      obj.layer.overscan = computeOverscan(obj.layer.speed, accelX);
+    }
+  }
+
   // Surface warnings for skipped objects in the console panel
   for (const w of warnings) {
     store.addConsoleLine(w, "info");
@@ -731,17 +744,25 @@ export async function generateGcode(): Promise<GcodeResult> {
     }
   }
 
-  // B1: $32=0 + M4 warning — connect-time grblLaserMode can go stale (user
-  // toggles $32 after connecting, or machine wasn't queried). Fire this warning
-  // at job-generation time so it's current. Without $32=1, GRBL treats M4 like
-  // M3 (constant power) and may fire the laser during S0/travel moves on some
-  // builds — defeating the M4 fix entirely.
+  // B1: $32=0 warning — connect-time grblLaserMode can go stale (user toggles
+  // $32 after connecting, or machine wasn't queried). Fire at job-generation time
+  // so it's current. Without $32=1: M4 is a no-op (≡M3), per-row G0 lead-ins
+  // may fire the laser during rapids, and dynamic power scaling is completely
+  // disabled — all three failures apply to any fill/raster job regardless of
+  // power mode. Fires for any job that contains fill/raster layers.
   if (!store.grblLaserMode) {
-    const hasVariableLayer = cutObjects.some((obj) => obj.layer.powerMode === "variable");
-    if (hasVariableLayer) {
+    const hasFillLayer = cutObjects.some((obj) => {
+      const m = obj.layer.mode;
+      return m === "fill" || m === "fillLine" || m === "maskFill" || m === "offsetFill";
+    });
+    const hasImageLayer = store.objects.some(
+      (obj) => obj.type === "image" && obj.visible && obj.imageData,
+    );
+    if (hasFillLayer || hasImageLayer) {
       store.addConsoleLine(
-        "M4 (variable power) is selected but GRBL laser mode ($32) is disabled. " +
-        "The laser will use constant power — run $32=1 in the console to enable dynamic power scaling.",
+        "GRBL laser mode ($32) is disabled — M4 is a no-op, dynamic power scaling is off, " +
+        "and the laser may fire during G0 travel on fill/raster jobs. " +
+        "Use the 'Enable Laser Mode' button in the Machine panel, or run $32=1 in the console.",
         "warning",
       );
     }
@@ -809,6 +830,7 @@ export async function generateGcode(): Promise<GcodeResult> {
       store.workspaceHeight,
       store.originTop,
       sValueMax,
+      accelX,
     );
 
   if (lockedImageCount > 0) {
