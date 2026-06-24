@@ -173,9 +173,23 @@ export { flattenObjects as flattenObjectsForTest };
 /** Convert store objects to CutObjects for the Rust engine, sorted by layer order */
 function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutObject[]; warnings: string[] } {
   const flat = flattenObjects(objects);
-  // Sort by layer array position (cut sequence order)
+  // Sort by layer array position (cut sequence order).
+  // Orphan objects (unknown layerIndex) are clamped to end (layers.length) rather than
+  // silently sorting to position 0 (which would emit them first, potentially freeing a part
+  // before engraving). One warning per generation is added for orphans.
   const layerOrder = new Map(layers.map((l, pos) => [l.index, pos]));
-  flat.sort((a, b) => (layerOrder.get(a.layerIndex) ?? 0) - (layerOrder.get(b.layerIndex) ?? 0));
+  const orphanIds: string[] = [];
+  flat.sort((a, b) => {
+    const posA = layerOrder.has(a.layerIndex) ? layerOrder.get(a.layerIndex)! : layers.length;
+    const posB = layerOrder.has(b.layerIndex) ? layerOrder.get(b.layerIndex)! : layers.length;
+    return posA - posB;
+  });
+  // Track orphans for warning
+  for (const obj of flat) {
+    if (!layerOrder.has(obj.layerIndex)) {
+      orphanIds.push(obj.id);
+    }
+  }
   const result: CutObject[] = [];
   const warnings: string[] = [];
 
@@ -434,29 +448,55 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
     );
   }
 
+  // Orphan warning: objects with unknown layerIndex were clamped to end (emitted last).
+  if (orphanIds.length > 0) {
+    warnings.push(
+      `${orphanIds.length} object(s) have an unknown layer and will be emitted last: ${orphanIds.slice(0, 3).join(", ")}${orphanIds.length > 3 ? "..." : ""}`,
+    );
+  }
+
   return { objects: result, warnings };
 }
 
 /** Exported for unit testing — do not use in production code outside this module. */
 export { toCutObjects as toCutObjectsForTest };
 
-/** Generate G-code for image objects using the dedicated Rust image pipeline */
-async function generateImageGcode(sValueMax: number = 1000): Promise<GcodeResult | null> {
-  const store = useStore.getState();
-  // F11 parity: locked images are included in G-code (same as locked vectors).
-  // Locking protects position from accidental edits; use the layer Output toggle to exclude.
-  const imageObjects = store.objects.filter(
+/** Generate image G-code for visible output images, keyed by layer array position.
+ *
+ *  This replaces the old `generateImageGcode` which emitted ALL images first,
+ *  ignoring their layer position. Now each image result is stored under its
+ *  layer's position in the layers array so `assembleGcode` can interleave it
+ *  correctly with vector fragments.
+ *
+ *  Preserves Fix 3 (locked images included) and Fix 5 (powerScale) unchanged.
+ *
+ *  Returns a Map<layerPos, GcodeResult[]> — multiple images can share a layer.
+ */
+async function generateImageGcodeByLayer(
+  layers: Layer[],
+  objects: DesignObject[],
+  workspaceHeight: number,
+  originTop: boolean,
+  sValueMax: number,
+): Promise<{ byLayer: Map<number, GcodeResult[]>; lockedCount: number }> {
+  const layerOrder = new Map(layers.map((l, pos) => [l.index, pos]));
+  const imageObjects = objects.filter(
     (obj) => obj.type === "image" && obj.visible && obj.imageData,
   );
 
-  if (imageObjects.length === 0) return null;
+  const byLayer = new Map<number, GcodeResult[]>();
+  let lockedCount = 0;
 
-  let lockedImageCount = 0;
-  const results: GcodeResult[] = [];
   for (const obj of imageObjects) {
-    if (obj.locked) lockedImageCount++;
-    const layer = store.layers.find((l) => l.index === obj.layerIndex) || store.layers[0];
+    if (obj.locked) lockedCount++;
+    const layer = layers.find((l) => l.index === obj.layerIndex) || layers[0];
     if (!layer.visible || layer.output === false) continue;
+
+    // Orphan images with unknown layerIndex → clamp to end (layers.length)
+    const layerPos = layerOrder.has(obj.layerIndex)
+      ? layerOrder.get(obj.layerIndex)!
+      : layers.length;
+
     const adj = obj.imageAdjustments || { brightness: 0, contrast: 0, gamma: 1, invert: false, removeBackground: false, bgTolerance: 20 };
     // Fix 5: apply per-object powerScale (default 1) to image engraving power
     const powerScale = obj.powerScale ?? 1;
@@ -488,15 +528,21 @@ async function generateImageGcode(sValueMax: number = 1000): Promise<GcodeResult
           invert: adj.invert,
           removeBackground: adj.removeBackground ?? false,
           bgTolerance: adj.bgTolerance ?? 20,
-          workspaceHeight: store.workspaceHeight,
-          originTop: store.originTop,
+          workspaceHeight,
+          originTop,
           sValueMax,
           powerCurve: layer.powerCurve?.map((p) => [p.x, p.y] as [number, number]),
           newsprintCellSize: layer.newsprintCellSize,
           newsprintAngle: layer.newsprintAngle,
         },
       });
-      results.push(result);
+
+      const existing = byLayer.get(layerPos);
+      if (existing) {
+        existing.push(result);
+      } else {
+        byLayer.set(layerPos, [result]);
+      }
     } catch (e) {
       // Multi-image jobs: which image broke matters — wrap with the object
       // name. cause is set post-construction: the ErrorOptions constructor
@@ -507,28 +553,121 @@ async function generateImageGcode(sValueMax: number = 1000): Promise<GcodeResult
     }
   }
 
-  if (lockedImageCount > 0) {
-    console.info(
-      `Note: ${lockedImageCount} locked image(s) included in G-code — use layer Output toggle to exclude from cut`,
-    );
+  return { byLayer, lockedCount };
+}
+
+/** Sentinel strings emitted by the Rust engines to delimit preamble and footer.
+ *
+ *  Cross-reference: gcode_gen.rs emits "; KERF:PREAMBLE_END" after the header
+ *  block and "; KERF:FOOTER_BEGIN" before the M5/G0/M2 footer.
+ *  image_gcode_gen.rs emits "; KERF:PREAMBLE_END" after the preamble block.
+ *  Image fragments have no footer sentinel (no M2 emitted from the image engine).
+ *
+ *  If either engine changes its sentinel strings, update these constants too. */
+const SENTINEL_PREAMBLE_END = "; KERF:PREAMBLE_END";
+const SENTINEL_FOOTER_BEGIN = "; KERF:FOOTER_BEGIN";
+
+/** Strip the engine-emitted preamble and footer from a G-code fragment.
+ *
+ *  Uses the machine-readable sentinel comments rather than allow-listing prose
+ *  strings — so an engine that changes its human-readable labels doesn't
+ *  silently break the assembled document.
+ *
+ *  Strips:
+ *    - Everything from the start up to and including the PREAMBLE_END sentinel
+ *    - Everything from the FOOTER_BEGIN sentinel to the end (if present)
+ *
+ *  Image fragments have no FOOTER_BEGIN sentinel, so only preamble is stripped. */
+function stripFraming(gcode: string): string {
+  const lines = gcode.split("\n");
+
+  // Strip preamble: remove all lines up to and including PREAMBLE_END
+  const preambleEndIdx = lines.findIndex((l) => l.trim() === SENTINEL_PREAMBLE_END);
+  const bodyStart = preambleEndIdx >= 0 ? preambleEndIdx + 1 : 0;
+
+  // Strip footer: remove FOOTER_BEGIN and everything after
+  const footerBeginIdx = lines.findIndex((l) => l.trim() === SENTINEL_FOOTER_BEGIN);
+  const bodyEnd = footerBeginIdx >= 0 ? footerBeginIdx : lines.length;
+
+  return lines.slice(bodyStart, bodyEnd).join("\n");
+}
+
+/** Assemble ordered fragments into a single G-code document.
+ *
+ *  LASER-SAFETY CONTRACT:
+ *   - Exactly ONE preamble (G21/G90/M5/G0 X0 Y0) at the document start
+ *   - Exactly ONE footer (M5/G0 X0 Y0/M2) at the document end
+ *   - Exactly ONE "M5 ; laser off at layer seam" between every pair of fragments
+ *   - No mid-stream M2 (fragment footers are stripped before joining)
+ *
+ *  Each fragment is stripped of its own preamble/footer using sentinel comments
+ *  emitted by the Rust engines. This makes the JS↔Rust contract machine-readable
+ *  rather than dependent on fragile prose allow-lists. */
+function assembleGcode(fragments: GcodeResult[]): GcodeResult {
+  if (fragments.length === 0) {
+    // Should never happen in normal flow, but be safe
+    return {
+      gcode: "G21 ; mm mode\nG90 ; absolute positioning\nM5 ; laser off\nG0 X0 Y0 ; home\nM5 ; laser off\nG0 X0 Y0 ; return home\nM2 ; program end",
+      moves: [],
+      totalDistance: 0,
+      cutDistance: 0,
+      travelDistance: 0,
+      estimatedTimeSecs: 0,
+      lineCount: 7,
+    };
   }
 
-  return mergeGcodeResults(results);
-}
+  if (fragments.length === 1) {
+    // Single fragment: return as-is (already has correct preamble + footer)
+    return fragments[0];
+  }
 
-/** Merge multiple GcodeResults into one (concatenates G-code, sums distances) */
-function mergeGcodeResults(results: GcodeResult[]): GcodeResult {
-  if (results.length === 1) return results[0];
+  // Document preamble — emitted exactly once
+  const docPreamble = [
+    "; Generated by Kerf",
+    "G21 ; mm mode",
+    "G90 ; absolute positioning",
+    "M5 ; laser off",
+    "G0 X0 Y0 ; home",
+    "",
+  ].join("\n");
+
+  // Document footer — emitted exactly once
+  const docFooter = [
+    "",
+    "M5 ; laser off",
+    "G0 X0 Y0 ; return home",
+    "M2 ; program end",
+  ].join("\n");
+
+  // Strip each fragment's preamble/footer and join with M5 seams
+  const bodyParts: string[] = [];
+  for (let i = 0; i < fragments.length; i++) {
+    const body = stripFraming(fragments[i].gcode);
+    if (i === 0) {
+      bodyParts.push(body);
+    } else {
+      // M5 seam between fragments — laser-off between layers
+      bodyParts.push("M5 ; laser off at layer seam");
+      bodyParts.push(body);
+    }
+  }
+
+  const gcode = docPreamble + bodyParts.join("\n") + docFooter;
+
   return {
-    gcode: results.map((r) => r.gcode).join("\n"),
-    moves: results.flatMap((r) => r.moves),
-    totalDistance: results.reduce((s, r) => s + r.totalDistance, 0),
-    cutDistance: results.reduce((s, r) => s + r.cutDistance, 0),
-    travelDistance: results.reduce((s, r) => s + r.travelDistance, 0),
-    estimatedTimeSecs: results.reduce((s, r) => s + r.estimatedTimeSecs, 0),
-    lineCount: results.reduce((s, r) => s + r.lineCount, 0),
+    gcode,
+    moves: fragments.flatMap((f) => f.moves),
+    totalDistance: fragments.reduce((s, f) => s + f.totalDistance, 0),
+    cutDistance: fragments.reduce((s, f) => s + f.cutDistance, 0),
+    travelDistance: fragments.reduce((s, f) => s + f.travelDistance, 0),
+    estimatedTimeSecs: fragments.reduce((s, f) => s + f.estimatedTimeSecs, 0),
+    lineCount: gcode.split("\n").length,
   };
 }
+
+/** Exported for unit testing — do not use in production code outside this module. */
+export { stripFraming as stripFramingForTest, assembleGcode as assembleGcodeForTest };
 
 /** Generate G-code from the current design using the Rust backend.
  *
@@ -538,10 +677,17 @@ function mergeGcodeResults(results: GcodeResult[]): GcodeResult {
  *  perforation, overscan, offsetFill and scan-angle and let users run
  *  materially degraded cuts indefinitely). Callers MUST surface the error
  *  (the single caller, MachinePanel.handleGenerateGcode, logs to console and
- *  sets a status line). */
+ *  sets a status line).
+ *
+ *  WS2: strict layer-order for ALL operation types.
+ *  The old path emitted all images first regardless of layer position.
+ *  This path buckets both images and vectors by layer position and emits
+ *  them in strict ascending order. Within a tie (image + vector on the same
+ *  layer), images emit before the vector fragment. */
 export async function generateGcode(): Promise<GcodeResult> {
   const store = useStore.getState();
   const { objects: cutObjects, warnings } = toCutObjects(store.objects, store.layers);
+  const layerOrder = new Map(store.layers.map((l, pos) => [l.index, pos]));
 
   // Surface warnings for skipped objects in the console panel
   for (const w of warnings) {
@@ -575,28 +721,130 @@ export async function generateGcode(): Promise<GcodeResult> {
     }
   }
 
+  // WS2: Risky-order warning — if any "line" mode layer position is less than
+  // a later "fill"/"fillLine"/image layer position, warn once. A line cut frees
+  // the part; engraving/filling a freed part usually misregisters.
+  // fillLine layers are internally fine (fill-before-line runs within the layer).
+  // The risk is strictly cross-layer: line-mode layer emitting BEFORE a fill/image layer.
+  {
+    // Collect positions of each output-producing layer by mode
+    const lineModePositions: number[] = [];
+    const engraveModePositions: number[] = [];
+
+    for (const layer of store.layers) {
+      if (!layer.visible || layer.output === false) continue;
+      const pos = layerOrder.get(layer.index);
+      if (pos === undefined) continue;
+
+      // Does this layer have any objects?
+      const hasVectorObjs = cutObjects.some((obj) => obj.layerIndex === layer.index);
+      const hasImageObjs = store.objects.some(
+        (obj) => obj.type === "image" && obj.visible && obj.imageData &&
+          (store.layers.find((l) => l.index === obj.layerIndex) || store.layers[0]).index === layer.index &&
+          (store.layers.find((l) => l.index === obj.layerIndex) || store.layers[0]).output !== false,
+      );
+
+      if (!hasVectorObjs && !hasImageObjs) continue;
+
+      if (layer.mode === "line") {
+        lineModePositions.push(pos);
+      } else {
+        // fill, fillLine, or image layer
+        engraveModePositions.push(pos);
+      }
+    }
+
+    // Also treat any layer position that has images as an engrave position
+    // (already covered by checking layer.mode above since image layers are usually fill/engrave)
+
+    // Warn if ANY line-mode position < ANY engrave/fill/image position
+    // i.e. a cut fires before an engrave that comes after it in layer order
+    const riskyOrder = lineModePositions.some((linePos) =>
+      engraveModePositions.some((engravePos) => linePos < engravePos),
+    );
+
+    if (riskyOrder) {
+      store.addConsoleLine(
+        "Warning: a Cut/Line layer fires before an Engrave/Fill layer. " +
+        "The part may be freed before engraving completes. " +
+        "Drag the Engrave layer above the Cut layer to prevent this.",
+        "warning",
+      );
+    }
+  }
+
   const sValueMax = store.grblSValueMax;
 
-  // No try/catch: a failure here is a broken engine, and it must propagate
-  // loudly to the caller (rethrow-only semantics; an actual catch{throw}
-  // would only add a useless-catch lint warning). Nothing soft lives below —
-  // toCutObjects warnings already emitted above.
-  // Image engraving first (runs before vector cuts)
-  const imageResult = await generateImageGcode(sValueMax);
+  // Step 1: Generate image fragments keyed by layer position
+  const { byLayer: imageByLayer, lockedCount: lockedImageCount } =
+    await generateImageGcodeByLayer(
+      store.layers,
+      store.objects,
+      store.workspaceHeight,
+      store.originTop,
+      sValueMax,
+    );
 
-  const vectorResult = await invoke<GcodeResult>("generate_gcode", {
-    objects: cutObjects,
-    workspaceHeight: store.workspaceHeight,
-    sValueMax,
-    startCorner: store.startCorner || "bottomLeft",
-    workspaceWidth: store.workspaceWidth,
-    originTop: store.originTop,
-  });
-
-  if (imageResult) {
-    return mergeGcodeResults([imageResult, vectorResult]);
+  if (lockedImageCount > 0) {
+    console.info(
+      `Note: ${lockedImageCount} locked image(s) included in G-code — use layer Output toggle to exclude from cut`,
+    );
   }
-  return vectorResult;
+
+  // Step 2: Bucket vector CutObjects by layer position and call generate_gcode
+  // once per layer-position group (A4b fill-before-line + NN already run per layer
+  // by the Rust engine when it receives the per-layer subset).
+  const vectorByLayer = new Map<number, CutObject[]>();
+  for (const obj of cutObjects) {
+    const idx = obj.layerIndex;
+    const pos = (idx !== undefined && layerOrder.has(idx))
+      ? layerOrder.get(idx)!
+      : store.layers.length;
+    const existing = vectorByLayer.get(pos);
+    if (existing) {
+      existing.push(obj);
+    } else {
+      vectorByLayer.set(pos, [obj]);
+    }
+  }
+
+  // Step 3: Collect all layer positions that have content
+  const allPositions = new Set<number>([
+    ...imageByLayer.keys(),
+    ...vectorByLayer.keys(),
+  ]);
+  const sortedPositions = Array.from(allPositions).sort((a, b) => a - b);
+
+  // Step 4: Build ordered fragments list. For each layer position:
+  //   - image fragments first (within the position), then vector fragment
+  const fragments: GcodeResult[] = [];
+
+  for (const pos of sortedPositions) {
+    // Image fragments at this position (in object order — order already preserved)
+    const imgFragments = imageByLayer.get(pos);
+    if (imgFragments) {
+      for (const imgResult of imgFragments) {
+        fragments.push(imgResult);
+      }
+    }
+
+    // Vector fragment at this position
+    const vectorObjs = vectorByLayer.get(pos);
+    if (vectorObjs && vectorObjs.length > 0) {
+      const vectorResult = await invoke<GcodeResult>("generate_gcode", {
+        objects: vectorObjs,
+        workspaceHeight: store.workspaceHeight,
+        sValueMax,
+        startCorner: store.startCorner || "bottomLeft",
+        workspaceWidth: store.workspaceWidth,
+        originTop: store.originTop,
+      });
+      fragments.push(vectorResult);
+    }
+  }
+
+  // Step 5: Assemble into single document with correct framing and M5 seams
+  return assembleGcode(fragments);
 }
 
 /** Preview dithered image for a specific image object */

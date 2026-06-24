@@ -382,11 +382,18 @@ fn generate_scan_gcode(
     // F9: image-specific preamble (idempotent modal commands).
     // Prepended here so image G-code is self-contained regardless of merge order.
     // The shared scanner does not emit preamble lines (maskFill doesn't need them).
+    //
+    // NOTE: The preamble lines below are a JS↔Rust contract.
+    // assembleGcode() in gcodeGen.ts strips everything up to and including
+    // "; KERF:PREAMBLE_END" when merging multi-layer fragments.
+    // If you change any preamble line, update stripFraming() in gcodeGen.ts.
+    // Image fragments have no footer sentinel (no M2 emitted here).
     let mut preamble_lines = vec![
         "G21 ; mm mode".to_string(),
         "G90 ; absolute positioning".to_string(),
         "M5 ; laser off".to_string(),
         format!("; Image engrave: {}x{} px, interval {}mm", width, height, interval),
+        "; KERF:PREAMBLE_END".to_string(),
     ];
 
     let scan_result = scan_mask_to_gcode(pixels, width as usize, height as usize, &params)?;

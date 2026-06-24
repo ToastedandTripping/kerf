@@ -414,6 +414,7 @@ export function MachinePanel() {
               disabled={machineConnected}
               style={{
                 flex: 1,
+                minWidth: 0,
                 background: "var(--bg-input)",
                 border: "1px solid var(--border)",
                 borderRadius: "var(--radius-sm)",
@@ -424,8 +425,8 @@ export function MachinePanel() {
             >
               <option value="">Select port...</option>
               {ports.map((p) => (
-                <option key={p.name} value={p.name}>
-                  {p.name} ({p.portType})
+                <option key={p.name} value={p.name} title={p.portType}>
+                  {p.name}
                 </option>
               ))}
             </select>
@@ -441,6 +442,7 @@ export function MachinePanel() {
                 color: "var(--text-muted)",
                 cursor: machineConnected ? "not-allowed" : "pointer",
                 fontSize: "11px",
+                flexShrink: 0,
               }}
             >
               &#x21BB;
@@ -456,6 +458,8 @@ export function MachinePanel() {
                 cursor: "pointer",
                 background: machineConnected ? "rgba(226,74,74,0.2)" : "rgba(74,226,138,0.2)",
                 color: machineConnected ? "var(--danger)" : "var(--success)",
+                minWidth: "60px",
+                flexShrink: 0,
               }}
             >
               {machineConnected ? "Disconnect" : "Connect"}
