@@ -68,3 +68,11 @@ export function effectiveMaxSpeed(grblMaxX: number, grblMaxY: number): number {
   }
   return SPEED_FALLBACK_MAX;
 }
+
+/** Raster engraving sweeps along X, so the X-axis max feed is the true ceiling.
+ *  Falls back to the other axis if X is unknown, then to SPEED_FALLBACK_MAX. */
+export function rasterMaxSpeed(grblMaxX: number, grblMaxY: number): number {
+  if (grblMaxX > 0) return grblMaxX;
+  if (grblMaxY > 0) return grblMaxY;
+  return SPEED_FALLBACK_MAX;
+}

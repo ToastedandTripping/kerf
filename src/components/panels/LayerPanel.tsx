@@ -357,6 +357,7 @@ function LayerRow({
                 <SpeedInput
                   value={layer.speed}
                   onChange={(v) => onManualUpdate({ speed: v })}
+                  raster={layer.mode === "fill" || layer.mode === "fillLine"}
                 />
               </SettingRow>
 

@@ -705,6 +705,13 @@ export function MachinePanel() {
                 await machineConnection.send("M5");
               }}
             />
+            <ActionButton
+              label="Home"
+              color="var(--accent)"
+              disabled={!machineConnected || jobRunning || !grblHoming}
+              title={grblHoming ? "Home ($H)" : "Home disabled — machine has no limit switches ($22=0)"}
+              onClick={() => machineConnection.home()}
+            />
             <ActionButton label="Set Origin" color="var(--text-secondary)" disabled={!machineConnected || jobRunning} onClick={() => machineConnection.setOrigin()} />
             <button
               onClick={() => setActiveTool(activeTool === "positionLaser" ? "select" : "positionLaser")}
@@ -989,11 +996,12 @@ function StartCornerButton({
   );
 }
 
-function ActionButton({ label, color, onClick, disabled }: { label: string; color: string; onClick: () => void; disabled?: boolean }) {
+function ActionButton({ label, color, onClick, disabled, title }: { label: string; color: string; onClick: () => void; disabled?: boolean; title?: string }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
+      title={title}
       style={{
         padding: "4px 8px",
         borderRadius: "var(--radius-sm)",

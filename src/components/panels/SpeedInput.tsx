@@ -12,7 +12,7 @@
  */
 
 import { useStore } from "../../app/store";
-import { sliderPosToSpeed, speedToSliderPos, clampSpeed, effectiveMaxSpeed } from "../../lib/speedScale";
+import { sliderPosToSpeed, speedToSliderPos, clampSpeed, effectiveMaxSpeed, rasterMaxSpeed } from "../../lib/speedScale";
 
 // Matches the existing inputStyle in LayerPanel.tsx for visual parity.
 const numInputStyle: React.CSSProperties = {
@@ -29,13 +29,14 @@ const numInputStyle: React.CSSProperties = {
 interface SpeedInputProps {
   value: number;
   onChange: (v: number) => void;
+  raster?: boolean;
 }
 
-export function SpeedInput({ value, onChange }: SpeedInputProps) {
+export function SpeedInput({ value, onChange, raster = false }: SpeedInputProps) {
   // TWO SEPARATE scalar selectors — never a single object selector (Error 185).
   const mx = useStore((s) => s.grblMaxFeedRateX);
   const my = useStore((s) => s.grblMaxFeedRateY);
-  const effectiveMax = effectiveMaxSpeed(mx, my);
+  const effectiveMax = raster ? rasterMaxSpeed(mx, my) : effectiveMaxSpeed(mx, my);
 
   const sliderPos = speedToSliderPos(value, effectiveMax);
 

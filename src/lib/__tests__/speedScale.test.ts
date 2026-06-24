@@ -7,6 +7,7 @@ import {
   speedToSliderPos,
   clampSpeed,
   effectiveMaxSpeed,
+  rasterMaxSpeed,
 } from "../speedScale";
 
 describe("speedScale", () => {
@@ -29,6 +30,25 @@ describe("speedScale", () => {
     });
     it("coerces negative to fallback", () => {
       expect(safeNum(-5)).toBe(1);
+    });
+  });
+
+  // --- rasterMaxSpeed ---
+  describe("rasterMaxSpeed", () => {
+    it("returns X when both axes > 0 and X < Y (X wins, not min)", () => {
+      expect(rasterMaxSpeed(8000, 12000)).toBe(8000);
+    });
+    it("returns X when both axes > 0 and X > Y (X wins, not min)", () => {
+      expect(rasterMaxSpeed(12000, 8000)).toBe(12000);
+    });
+    it("returns X when both axes > 0 and X === Y", () => {
+      expect(rasterMaxSpeed(8000, 8000)).toBe(8000);
+    });
+    it("falls back to Y when X is 0", () => {
+      expect(rasterMaxSpeed(0, 8000)).toBe(8000);
+    });
+    it("falls back to SPEED_FALLBACK_MAX when both are 0", () => {
+      expect(rasterMaxSpeed(0, 0)).toBe(SPEED_FALLBACK_MAX);
     });
   });
 

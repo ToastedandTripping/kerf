@@ -39,7 +39,7 @@ export function CollapsibleSection({
         }}
       >
         <span>{title}</span>
-        <span style={{ fontSize: "10px", opacity: 0.6 }}>{open ? "▲" : "▼"}</span>
+        <span style={{ fontSize: "10px", opacity: 0.6 }}>{open ? "▼" : "▶"}</span>
       </button>
       {open && children}
     </div>
