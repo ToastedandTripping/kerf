@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useStore } from "../../app/store";
 import { machineConnection, type ConnectionError } from "../../lib/machine/connection";
 import { generateGcode } from "../../lib/machine/gcodeGen";
-import { canStartJob, movesExtents, frameTargets, isWithinBounds } from "../../lib/machine/canStartJob";
 import { MACHINE_STATE_COLORS } from "../../lib/machine/machineStateDisplay";
+import { CollapsibleSection } from "./CollapsibleSection";
 import type { StartCorner } from "../../app/types";
 
 /** Returns the fraction of non-transparent / non-white pixels in an image data URL.
@@ -44,9 +44,6 @@ export function MachinePanel() {
   const setPreviewVisible = useStore((s) => s.setPreviewVisible);
   const gcodeResult = useStore((s) => s.gcodeResult);
   const jobRunning = useStore((s) => s.jobRunning);
-  const setJobRunning = useStore((s) => s.setJobRunning);
-  const setJobProgress = useStore((s) => s.setJobProgress);
-  const jobProgress = useStore((s) => s.jobProgress);
   const activeTool = useStore((s) => s.activeTool);
   const setActiveTool = useStore((s) => s.setActiveTool);
   const startCorner = useStore((s) => s.startCorner);
@@ -54,10 +51,7 @@ export function MachinePanel() {
   const originTop = useStore((s) => s.originTop);
   const setOriginTop = useStore((s) => s.setOriginTop);
   const gcodeStale = useStore((s) => s.gcodeStale);
-  const workspaceWidth = useStore((s) => s.workspaceWidth);
-  const workspaceHeight = useStore((s) => s.workspaceHeight);
   const consoleLines = useStore((s) => s.consoleLines);
-  const setStatusMessage = useStore((s) => s.setStatusMessage);
   const grblSValueMax = useStore((s) => s.grblSValueMax);
   const setGrblSValueMax = useStore((s) => s.setGrblSValueMax);
   const grblSoftLimits = useStore((s) => s.grblSoftLimits);
@@ -68,10 +62,14 @@ export function MachinePanel() {
   const workspaceVerified = useStore((s) => s.workspaceVerified);
   const setWorkspaceSize = useStore((s) => s.setWorkspaceSize);
   const setWorkspaceVerified = useStore((s) => s.setWorkspaceVerified);
+  const workspaceWidth = useStore((s) => s.workspaceWidth);
+  const workspaceHeight = useStore((s) => s.workspaceHeight);
+  const setStatusMessage = useStore((s) => s.setStatusMessage);
 
   const [selectedPort, setSelectedPort] = useState("");
   const [ports, setPorts] = useState<Array<{ name: string; portType: string; vid: number | null; pid: number | null }>>([]);
   const [jogStep, setJogStep] = useState(10);
+  const [positioningOpen, setPositioningOpen] = useState(false);
   const [expanded, setExpanded] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [connectionError, setConnectionError] = useState<{ message: string; suggestions: string[] } | null>(null);
@@ -81,22 +79,6 @@ export function MachinePanel() {
   const [bedHInput, setBedHInput] = useState("");
   const [softLimitsConfirmOpen, setSoftLimitsConfirmOpen] = useState(false);
   const [softLimitsEnabling, setSoftLimitsEnabling] = useState(false);
-  const jobStartTimeRef = useRef<number>(0);
-  const [elapsedSecs, setElapsedSecs] = useState(0);
-
-  // Track job elapsed time
-  useEffect(() => {
-    if (jobRunning) {
-      if (jobStartTimeRef.current === 0) jobStartTimeRef.current = Date.now();
-      const timer = setInterval(() => {
-        setElapsedSecs(Math.floor((Date.now() - jobStartTimeRef.current) / 1000));
-      }, 1000);
-      return () => clearInterval(timer);
-    } else {
-      jobStartTimeRef.current = 0;
-      setElapsedSecs(0);
-    }
-  }, [jobRunning]);
 
   const refreshPorts = useCallback(async () => {
     const found = await machineConnection.listPorts();
@@ -188,136 +170,6 @@ export function MachinePanel() {
     }
   }
 
-  async function handleStartJob() {
-    // F15: pure pre-flight gate — bounds come from gcodeResult.moves (the true
-    // machine-frame extents), not rotation-blind object AABBs.
-    const gate = canStartJob(useStore.getState());
-    if (!gate.ok) {
-      addConsoleLine(gate.reason!, "error");
-      return;
-    }
-    const job = useStore.getState().gcodeResult!;
-
-    setJobRunning(true);
-    setJobProgress(0);
-    addConsoleLine("Sending job...", "info");
-
-    const lines = job.gcode
-      .split("\n")
-      .filter((l) => l.trim() && !l.startsWith(";"));
-
-    // F13/F17 line-response protocol: empty response or reset banner = the line
-    // was ABORTED, not acked; ALARM = controller locked, laser already
-    // de-energized by firmware.
-    let endState: "complete" | "cancelled" | "aborted" | "alarm" | "error" = "complete";
-
-    for (let i = 0; i < lines.length; i++) {
-      // Wait while paused. The wait ALSO exits when jobRunning goes false
-      // (STOP-while-PAUSED): emergencyStop's re-poll may write a fresh
-      // non-hold state, or the state may stay "hold" if the re-poll got
-      // nothing — either way the loop must un-park. The wait sits ABOVE the
-      // cancel check so every exit flows through it before any send; a stray
-      // post-reset line can never fire.
-      while (
-        useStore.getState().machineState === "hold" &&
-        useStore.getState().jobRunning
-      ) {
-        await new Promise((r) => setTimeout(r, 100));
-      }
-      if (!useStore.getState().jobRunning) {
-        addConsoleLine("Job cancelled", "error");
-        endState = "cancelled";
-        break;
-      }
-      const responses = await machineConnection.send(lines[i]);
-      setJobProgress((i + 1) / lines.length);
-
-      if (responses.length === 0 || responses.some((r) => r.startsWith("Grbl "))) {
-        addConsoleLine("Job aborted -- machine was reset mid-line", "error");
-        endState = "aborted";
-        break;
-      }
-      if (responses.some((r) => r.startsWith("ALARM"))) {
-        // NO M5+reset volley here: GRBL is locked and the laser is already off;
-        // the volley would only earn a confusing error:9.
-        endState = "alarm";
-        break;
-      }
-      if (responses.some((r) => r.startsWith("error:"))) {
-        addConsoleLine("Job stopped due to error", "error");
-        endState = "error";
-        // Detect disconnect
-        if (responses.some((r) => r === "error:disconnected")) {
-          useStore.getState().setMachineConnected(false);
-          useStore.getState().setMachineState("disconnected");
-        }
-        break;
-      }
-    }
-
-    const elapsed = job.estimatedTimeSecs * (jobProgress || 1);
-    if (endState === "complete") {
-      // F19: after last ack, wait for machine to actually reach Idle before
-      // re-enabling START — head is still decelerating at last-ack time.
-      const IDLE_TIMEOUT_MS = 30000;
-      const IDLE_POLL_MS = 200;
-      const idleDeadline = Date.now() + IDLE_TIMEOUT_MS;
-      let reachedIdle = false;
-      while (Date.now() < idleDeadline) {
-        await new Promise((r) => setTimeout(r, IDLE_POLL_MS));
-        try {
-          const report = await machineConnection.getStatusReport();
-          if (report && report.match(/^<Idle/i)) {
-            reachedIdle = true;
-            break;
-          }
-        } catch { /* port may be gone; fall through to timeout */ }
-      }
-      if (!reachedIdle) {
-        addConsoleLine("Job complete (Idle timeout — head may still be moving)", "warning");
-      } else {
-        addConsoleLine("Job complete", "info");
-      }
-      setStatusMessage(`Job complete -- ${formatTime(elapsed)}`);
-    } else if (endState === "alarm") {
-      addConsoleLine(
-        "Job stopped -- machine alarm (laser already off; unlock to continue)",
-        "error",
-      );
-    } else {
-      // Safety volley: ensure laser is off. SKIPPED when jobRunning is already
-      // false — the user pressed STOP and emergencyStop ran its own sequence; a
-      // second M5+0x18 would push another reset banner into the buffer.
-      if (useStore.getState().jobRunning) {
-        try { await machineConnection.send("M5"); } catch { /* port may be gone */ }
-        try { await machineConnection.softReset(); } catch { /* port may be gone */ }
-      }
-      addConsoleLine("Job aborted", "error");
-    }
-
-    setJobRunning(false);
-    setJobProgress(0);
-  }
-
-  async function handlePauseResume() {
-    if (machineState === "hold") {
-      // F16: re-enable laser power before resuming so $32=0 machines don't
-      // start cutting with the laser off.
-      try { await machineConnection.send("M3"); } catch { /* port may be gone */ }
-      await machineConnection.cycleResume();
-    } else {
-      await machineConnection.feedHold();
-      // F16: immediately send M5 after feed hold to prevent beam dwell under
-      // $32=0 (constant power mode keeps laser on at zero speed).
-      try { await machineConnection.send("M5"); } catch { /* port may be gone */ }
-    }
-  }
-
-  async function handleStop() {
-    setJobRunning(false);
-    await machineConnection.emergencyStop();
-  }
-
   return (
     <div style={{ borderBottom: "1px solid var(--border)" }}>
       <div
@@ -331,7 +183,7 @@ export function MachinePanel() {
           padding: "8px 12px",
           fontSize: "11px",
           fontWeight: 600,
-          color: "var(--text-secondary)",
+          color: "var(--text-primary)",
           textTransform: "uppercase",
           letterSpacing: "0.5px",
           cursor: "pointer",
@@ -789,50 +641,53 @@ export function MachinePanel() {
             )}
           </div>
 
-          {/* Jog controls */}
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "2px" }}>
-            <div style={{ fontSize: "10px", color: "var(--text-muted)", marginBottom: "2px" }}>
-              JOG ({jogStep}mm)
+          {/* Jog controls — collapsed by default */}
+          <CollapsibleSection
+            title={`Positioning (${jogStep}mm)`}
+            open={positioningOpen}
+            onToggle={() => setPositioningOpen((v) => !v)}
+          >
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "2px", padding: "8px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 32px)", gap: "2px" }}>
+                <div />
+                <JogButton label="&#x25B2;" onClick={() => machineConnection.jog("Y", jogStep)} title="Y+" disabled={machineState === "alarm"} />
+                <div />
+                <JogButton label="&#x25C0;" onClick={() => machineConnection.jog("X", -jogStep)} title="X-" disabled={machineState === "alarm"} />
+                <JogButton
+                  label="&#x2302;"
+                  onClick={() => machineConnection.home()}
+                  title={grblHoming ? "Home ($H)" : "Home disabled — machine has no limit switches ($22=0)"}
+                  accent={grblHoming}
+                  disabled={!grblHoming}
+                />
+                <JogButton label="&#x25B6;" onClick={() => machineConnection.jog("X", jogStep)} title="X+" disabled={machineState === "alarm"} />
+                <div />
+                <JogButton label="&#x25BC;" onClick={() => machineConnection.jog("Y", -jogStep)} title="Y-" disabled={machineState === "alarm"} />
+                <div />
+              </div>
+              {/* Step size */}
+              <div style={{ display: "flex", gap: "2px", marginTop: "4px" }}>
+                {[0.1, 1, 10, 50].map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setJogStep(s)}
+                    style={{
+                      padding: "2px 6px",
+                      borderRadius: "3px",
+                      fontSize: "9px",
+                      border: `1px solid ${jogStep === s ? "var(--accent)" : "var(--border)"}`,
+                      background: jogStep === s ? "rgba(74,144,226,0.15)" : "transparent",
+                      color: jogStep === s ? "var(--accent)" : "var(--text-muted)",
+                      cursor: "pointer",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 32px)", gap: "2px" }}>
-              <div />
-              <JogButton label="&#x25B2;" onClick={() => machineConnection.jog("Y", jogStep)} title="Y+" disabled={machineState === "alarm"} />
-              <div />
-              <JogButton label="&#x25C0;" onClick={() => machineConnection.jog("X", -jogStep)} title="X-" disabled={machineState === "alarm"} />
-              <JogButton
-                label="&#x2302;"
-                onClick={() => machineConnection.home()}
-                title={grblHoming ? "Home ($H)" : "Home disabled — machine has no limit switches ($22=0)"}
-                accent={grblHoming}
-                disabled={!grblHoming}
-              />
-              <JogButton label="&#x25B6;" onClick={() => machineConnection.jog("X", jogStep)} title="X+" disabled={machineState === "alarm"} />
-              <div />
-              <JogButton label="&#x25BC;" onClick={() => machineConnection.jog("Y", -jogStep)} title="Y-" disabled={machineState === "alarm"} />
-              <div />
-            </div>
-            {/* Step size */}
-            <div style={{ display: "flex", gap: "2px", marginTop: "4px" }}>
-              {[0.1, 1, 10, 50].map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setJogStep(s)}
-                  style={{
-                    padding: "2px 6px",
-                    borderRadius: "3px",
-                    fontSize: "9px",
-                    border: `1px solid ${jogStep === s ? "var(--accent)" : "var(--border)"}`,
-                    background: jogStep === s ? "rgba(74,144,226,0.15)" : "transparent",
-                    color: jogStep === s ? "var(--accent)" : "var(--text-muted)",
-                    cursor: "pointer",
-                    fontWeight: 600,
-                  }}
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-          </div>
+          </CollapsibleSection>
 
           {/* Action buttons */}
           <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
@@ -1021,164 +876,6 @@ export function MachinePanel() {
             </div>
           )}
 
-          {/* Job progress bar */}
-          {jobRunning && (
-            <div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10px", color: "var(--text-muted)", marginBottom: "2px" }}>
-                <span style={{ fontFamily: "var(--font-mono)" }}>
-                  {formatTimeMSS(elapsedSecs)}
-                  {jobProgress > 0.01 && (
-                    <span> / ~{formatTimeMSS(Math.round(elapsedSecs / jobProgress * (1 - jobProgress)))} est.</span>
-                  )}
-                </span>
-                <span>{Math.round(jobProgress * 100)}%</span>
-              </div>
-              <div style={{
-                background: "var(--bg-input)", borderRadius: "var(--radius-sm)",
-                height: "4px", overflow: "hidden",
-              }}>
-                <div style={{
-                  height: "100%",
-                  width: `${jobProgress * 100}%`,
-                  background: machineState === "hold" ? "var(--accent-warm)" : "var(--accent)",
-                  transition: "width 0.3s",
-                }} />
-              </div>
-            </div>
-          )}
-
-          {/* Start / Frame / Stop controls */}
-          {(() => {
-            const startGate = canStartJob({
-              machineConnected, machineState, jobRunning, gcodeResult, gcodeStale,
-              workspaceWidth, workspaceHeight, originTop, workspaceVerified,
-            });
-            // FRAME contract change (F15): framing traces the true G-code
-            // extents, so generated, non-stale G-code is now a prerequisite
-            // (it used to work from design bounds alone).
-            // WARNING-2: also block on unverified workspace — FRAME drives the
-            // head to G-code extents; if the bed size is wrong it can crash.
-            const frameDisabled =
-              !machineConnected || machineState === "alarm" || machineState !== "idle" || jobRunning ||
-              !gcodeResult || gcodeStale || !workspaceVerified;
-            const frameHint = !workspaceVerified
-              ? "Confirm bed size before framing"
-              : !gcodeResult
-                ? "Generate G-code first"
-                : gcodeStale
-                  ? "Design changed -- regenerate G-code"
-                  : undefined;
-            return (
-          <div style={{ display: "flex", gap: "4px" }}>
-            <button
-              onClick={handleStartJob}
-              disabled={!startGate.ok}
-              title={startGate.reason}
-              style={{
-                flex: 1,
-                padding: "6px",
-                borderRadius: "var(--radius-sm)",
-                border: "none",
-                fontSize: "11px",
-                fontWeight: 700,
-                cursor: startGate.ok ? "pointer" : "not-allowed",
-                background: "rgba(74,226,138,0.2)",
-                color: "var(--success)",
-                opacity: startGate.ok ? 1 : 0.4,
-              }}
-            >
-              START
-            </button>
-            <button
-              onClick={async () => {
-                // Machine-frame moves extents — the old design→machine Y-flip
-                // is deliberately DELETED, not ported: moves[] is already
-                // machine-frame, flipping again would trace a mirrored rect.
-                const storeState = useStore.getState();
-                // WARNING-2: explicit guard — frameDisabled already blocks the button,
-                // but guard here too so the handler is safe if called by other paths.
-                if (!storeState.workspaceVerified) {
-                  addConsoleLine("FRAME blocked: confirm bed size before framing", "error");
-                  return;
-                }
-                const moves = storeState.gcodeResult?.moves ?? [];
-                const targets = frameTargets(moves);
-                if (!targets) {
-                  addConsoleLine("Nothing to cut -- no moves in the generated G-code", "error");
-                  return;
-                }
-                // Bounds check: same gate that START uses — never send out-of-range G0s
-                const ext = movesExtents(moves)!; // targets non-null implies ext non-null
-                if (!isWithinBounds(ext, storeState.workspaceWidth, storeState.workspaceHeight, storeState.originTop)) {
-                  addConsoleLine(
-                    "FRAME blocked: G-code extends outside workspace bounds. Move or resize the design to fit.",
-                    "error",
-                  );
-                  return;
-                }
-                // F16: M5 guard before framing clears any stale M3 from a
-                // previous operation so bare G0 moves can't trace-cut.
-                await machineConnection.send("M5");
-                for (const t of targets) {
-                  await machineConnection.send(`G0 X${t.x.toFixed(3)} Y${t.y.toFixed(3)}`);
-                }
-                // F16: belt-and-suspenders M5 after final frame move.
-                await machineConnection.send("M5");
-              }}
-              disabled={frameDisabled}
-              title={frameHint}
-              style={{
-                flex: 1,
-                padding: "6px",
-                borderRadius: "var(--radius-sm)",
-                border: "1px solid var(--accent)",
-                fontSize: "11px",
-                fontWeight: 700,
-                cursor: frameDisabled ? "not-allowed" : "pointer",
-                background: "rgba(74,144,226,0.15)",
-                color: "var(--accent)",
-                opacity: frameDisabled ? 0.4 : 1,
-              }}
-            >
-              FRAME
-            </button>
-            <button
-              onClick={handlePauseResume}
-              disabled={!machineConnected || !jobRunning}
-              style={{
-                padding: "6px 10px",
-                borderRadius: "var(--radius-sm)",
-                border: "none",
-                fontSize: "11px",
-                fontWeight: 600,
-                cursor: machineConnected && jobRunning ? "pointer" : "not-allowed",
-                background: "rgba(196,165,123,0.2)",
-                color: "var(--accent-warm)",
-                opacity: !machineConnected || !jobRunning ? 0.4 : 1,
-              }}
-            >
-              {machineState === "hold" ? "RESUME" : "PAUSE"}
-            </button>
-            <button
-              onClick={handleStop}
-              disabled={!machineConnected}
-              style={{
-                padding: "6px 10px",
-                borderRadius: "var(--radius-sm)",
-                border: "none",
-                fontSize: "11px",
-                fontWeight: 700,
-                cursor: machineConnected && jobRunning ? "pointer" : "not-allowed",
-                background: "rgba(226,74,74,0.2)",
-                color: "var(--danger)",
-                opacity: !machineConnected ? 0.4 : !jobRunning ? 0.4 : 1,
-              }}
-            >
-              STOP
-            </button>
-          </div>
-            );
-          })()}
         </div>
       )}
     </div>
@@ -1192,13 +889,6 @@ function formatTime(secs: number): string {
   if (m < 60) return `${m}m ${s}s`;
   const h = Math.floor(m / 60);
   return `${h}h ${m % 60}m`;
-}
-
-/** Format seconds as M:SS for compact job timer display */
-function formatTimeMSS(totalSecs: number): string {
-  const m = Math.floor(totalSecs / 60);
-  const s = totalSecs % 60;
-  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 function JogButton({

@@ -49,7 +49,7 @@ export function LayerPanel() {
           padding: "8px 12px",
           fontSize: "11px",
           fontWeight: 600,
-          color: "var(--text-secondary)",
+          color: "var(--text-primary)",
           textTransform: "uppercase",
           letterSpacing: "0.5px",
           display: "flex",
@@ -218,9 +218,13 @@ function LayerRow({
           {layer.mode === "offsetFill" ? "offset" : layer.mode === "fillLine" ? "fill+line" : layer.mode}
         </span>
 
-        {/* Compact power/speed readout */}
-        <span style={{ fontSize: "9px", color: "var(--text-muted)", fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>
-          {layer.power}% {layer.speed}mm/min
+        {/* Compact power/speed readout — values primary, units muted */}
+        <span style={{ fontSize: "9px", fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}>
+          <span style={{ color: "var(--text-primary)" }}>{layer.power}</span>
+          <span style={{ color: "var(--text-muted)" }}>%</span>
+          {" "}
+          <span style={{ color: "var(--text-primary)" }}>{layer.speed}</span>
+          <span style={{ color: "var(--text-muted)" }}>mm/min</span>
         </span>
 
         {/* Output toggle */}

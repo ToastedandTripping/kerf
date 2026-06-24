@@ -26,6 +26,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../../app/store";
 import type { AppState } from "../../../app/store";
 import { DEFAULT_LAYERS } from "../../../app/types";
+import { JobActionBar } from "../JobActionBar";
 import { MachinePanel } from "../MachinePanel";
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>;
@@ -114,7 +115,7 @@ describe("MachinePanel job loop (F13/F17)", () => {
 
   it("completes a job when every line acks", async () => {
     mockSerial(() => ({ responses: ["ok"], drained: [] }));
-    const { getByText } = render(<MachinePanel />);
+    const { getByText } = render(<JobActionBar />);
 
     fireEvent.click(getByText("START"));
     await waitFor(() => expect(consoleTexts()).toContain("Job complete"));
@@ -126,7 +127,7 @@ describe("MachinePanel job loop (F13/F17)", () => {
     mockSerial((cmd) =>
       cmd.startsWith("G1") ? { responses: [], drained: [] } : { responses: ["ok"], drained: [] },
     );
-    const { getByText } = render(<MachinePanel />);
+    const { getByText } = render(<JobActionBar />);
 
     fireEvent.click(getByText("START"));
     await waitFor(() =>
@@ -145,7 +146,7 @@ describe("MachinePanel job loop (F13/F17)", () => {
         ? { responses: ["Grbl 1.1h ['$' for help]"], drained: [] }
         : { responses: ["ok"], drained: [] },
     );
-    const { getByText } = render(<MachinePanel />);
+    const { getByText } = render(<JobActionBar />);
 
     fireEvent.click(getByText("START"));
     await waitFor(() =>
@@ -158,7 +159,7 @@ describe("MachinePanel job loop (F13/F17)", () => {
     mockSerial((cmd) =>
       cmd.startsWith("G1") ? { responses: ["ALARM:1"], drained: [] } : { responses: ["ok"], drained: [] },
     );
-    const { getByText } = render(<MachinePanel />);
+    const { getByText } = render(<JobActionBar />);
 
     fireEvent.click(getByText("START"));
     await waitFor(() =>
@@ -181,7 +182,7 @@ describe("MachinePanel job loop (F13/F17)", () => {
       }
       return { responses: ["ok"], drained: [] };
     });
-    const { getByText } = render(<MachinePanel />);
+    const { getByText } = render(<JobActionBar />);
 
     fireEvent.click(getByText("START"));
     await waitFor(() => expect(consoleTexts()).toContain("Job aborted"));
@@ -198,7 +199,7 @@ describe("MachinePanel job loop (F13/F17)", () => {
       }
       return { responses: ["ok"], drained: [] };
     });
-    const { getByText } = render(<MachinePanel />);
+    const { getByText } = render(<JobActionBar />);
 
     fireEvent.click(getByText("START"));
     await waitFor(() => expect(sentCommands()).toContain("G1 X10 Y20"));
@@ -225,7 +226,7 @@ describe("MachinePanel job loop (F13/F17)", () => {
       }
       return { responses: ["ok"], drained: [] };
     });
-    const { getByText } = render(<MachinePanel />);
+    const { getByText } = render(<JobActionBar />);
 
     fireEvent.click(getByText("START"));
     await waitFor(() => expect(sentCommands()).toContain("G1 X10 Y20"));
@@ -239,7 +240,7 @@ describe("MachinePanel job loop (F13/F17)", () => {
     mockSerial((cmd) =>
       cmd.startsWith("G1") ? { responses: ["error:9"], drained: [] } : { responses: ["ok"], drained: [] },
     );
-    const { getByText } = render(<MachinePanel />);
+    const { getByText } = render(<JobActionBar />);
 
     fireEvent.click(getByText("START"));
     await waitFor(() => expect(consoleTexts()).toContain("Job stopped due to error"));
@@ -257,7 +258,7 @@ describe("MachinePanel START/FRAME gating (F15)", () => {
 
   it("disables START with the regenerate hint when G-code is stale", () => {
     useStore.setState({ gcodeStale: true });
-    const { getByText } = render(<MachinePanel />);
+    const { getByText } = render(<JobActionBar />);
     const start = getByText("START") as HTMLButtonElement;
     expect(start.disabled).toBe(true);
     expect(start.title).toBe("Design changed -- regenerate G-code");
@@ -265,20 +266,20 @@ describe("MachinePanel START/FRAME gating (F15)", () => {
 
   it("disables FRAME when G-code is stale or missing (contract change)", () => {
     useStore.setState({ gcodeStale: true });
-    const { getByText, rerender } = render(<MachinePanel />);
+    const { getByText, rerender } = render(<JobActionBar />);
     const frame = getByText("FRAME") as HTMLButtonElement;
     expect(frame.disabled).toBe(true);
     expect(frame.title).toBe("Design changed -- regenerate G-code");
 
     useStore.setState({ gcodeStale: false, gcodeResult: null });
-    rerender(<MachinePanel />);
+    rerender(<JobActionBar />);
     expect((getByText("FRAME") as HTMLButtonElement).disabled).toBe(true);
     expect((getByText("FRAME") as HTMLButtonElement).title).toBe("Generate G-code first");
   });
 
   it("FRAME traces the moves extents in MACHINE frame — no Y-flip", async () => {
     mockSerial(() => ({ responses: ["ok"], drained: [] }));
-    const { getByText } = render(<MachinePanel />);
+    const { getByText } = render(<JobActionBar />);
 
     fireEvent.click(getByText("FRAME"));
     // Extents of the seeded moves: X 10..50, Y 20..80. Under the deleted
@@ -301,7 +302,7 @@ describe("MachinePanel START/FRAME gating (F15)", () => {
   it("FRAME no-ops with a console error on empty moves (never G0 XInfinity)", async () => {
     useStore.setState({ gcodeResult: { ...gcodeWithMoves(), moves: [] } });
     mockSerial(() => ({ responses: ["ok"], drained: [] }));
-    const { getByText } = render(<MachinePanel />);
+    const { getByText } = render(<JobActionBar />);
 
     fireEvent.click(getByText("FRAME"));
     await waitFor(() =>
@@ -323,7 +324,7 @@ describe("MachinePanel START/FRAME gating (F15)", () => {
       },
     });
     mockSerial(() => ({ responses: ["ok"], drained: [] }));
-    const { getByText } = render(<MachinePanel />);
+    const { getByText } = render(<JobActionBar />);
 
     const start = getByText("START") as HTMLButtonElement;
     expect(start.disabled).toBe(true);

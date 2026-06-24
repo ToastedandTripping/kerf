@@ -7,6 +7,9 @@ import { LayerPanel } from "../components/panels/LayerPanel";
 import { MaterialLibrary } from "../components/panels/MaterialLibrary";
 import { PropertiesPanel } from "../components/panels/PropertiesPanel";
 import { MachinePanel } from "../components/panels/MachinePanel";
+import { ActiveLayerStrip } from "../components/panels/ActiveLayerStrip";
+import { JobActionBar } from "../components/panels/JobActionBar";
+import { CollapsibleSection } from "../components/panels/CollapsibleSection";
 import { StatusBar } from "../components/bottom/StatusBar";
 import { Console } from "../components/bottom/Console";
 import { JobPreview } from "../components/bottom/JobPreview";
@@ -33,47 +36,6 @@ import { OnboardingOverlay, shouldShowOnboarding } from "../components/panels/On
 import { useStore } from "./store";
 import { generateId } from "./store/storeTypes";
 
-/** Collapsible panel section with a consistent header style. */
-function CollapsibleSection({
-  title,
-  open,
-  onToggle,
-  children,
-}: {
-  title: string;
-  open: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <button
-        onClick={onToggle}
-        style={{
-          width: "100%",
-          padding: "6px 12px",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          background: "none",
-          border: "none",
-          borderBottom: "1px solid var(--border)",
-          color: "var(--text-secondary)",
-          fontSize: "11px",
-          fontWeight: 600,
-          textTransform: "uppercase",
-          letterSpacing: "0.5px",
-          cursor: "pointer",
-          textAlign: "left",
-        }}
-      >
-        <span>{title}</span>
-        <span style={{ fontSize: "10px", opacity: 0.6 }}>{open ? "▲" : "▼"}</span>
-      </button>
-      {open && children}
-    </div>
-  );
-}
 
 class ViewportErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state: { error: Error | null } = { error: null };
@@ -214,6 +176,7 @@ export default function App() {
           </div>
           <Console />
         </div>
+        {/* Right sidebar — 3-region flex column */}
         <div
           style={{
             width: "var(--panel-width)",
@@ -224,11 +187,13 @@ export default function App() {
             overflow: "hidden",
           }}
         >
-          {/* Scrollable upper zone: LayerPanel gets priority; secondary panels
-              are collapsible (closed by default) so expand/adjust knobs is comfortable. */}
+          {/* Region 1 — Pinned top: active layer quick controls */}
+          <ActiveLayerStrip />
+
+          {/* Region 2 — Scrollable middle: panels in workflow order */}
           <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
             <LayerPanel />
-            {/* B5: collapsible secondary panels — closed by default so LayerPanel gets room */}
+            <MachinePanel />
             <CollapsibleSection
               title="Materials"
               open={materialLibraryOpen}
@@ -244,11 +209,9 @@ export default function App() {
               <PropertiesPanel />
             </CollapsibleSection>
           </div>
-          {/* Fixed bottom zone: machine controls always visible; cap reduced from
-              50% to 40% since the layer panel now has more vertical room. */}
-          <div style={{ flexShrink: 0, borderTop: "1px solid var(--border)", maxHeight: "40%", overflow: "auto" }}>
-            <MachinePanel />
-          </div>
+
+          {/* Region 3 — Pinned bottom: job action buttons always visible */}
+          <JobActionBar />
         </div>
       </div>
       <StatusBar />

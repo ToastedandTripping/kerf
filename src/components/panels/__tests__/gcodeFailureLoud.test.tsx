@@ -20,6 +20,7 @@ import type { AppState } from "../../../app/store";
 import type { DesignObject } from "../../../app/types";
 import { DEFAULT_LAYERS } from "../../../app/types";
 import { MachinePanel } from "../MachinePanel";
+import { JobActionBar } from "../JobActionBar";
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>;
 
@@ -109,7 +110,7 @@ describe("Rust-engine failure is loud and blocking (fallback deleted)", () => {
   it("FIRST-generation failure: console + status line, gcodeResult stays null, START/FRAME blocked", async () => {
     mockBrokenEngine();
     useStore.getState().addObject(makeRect("r1"));
-    const { getByText } = render(<MachinePanel />);
+    const { getByText } = render(<><MachinePanel /><JobActionBar /></>);
 
     fireEvent.click(getByText("Generate G-code"));
     await waitFor(() =>
@@ -132,7 +133,7 @@ describe("Rust-engine failure is loud and blocking (fallback deleted)", () => {
     useStore.setState({ gcodeResult: prev });
     useStore.getState().addObject(makeRect("r1")); // objects write flips gcodeStale
     expect(useStore.getState().gcodeStale).toBe(true);
-    const { getByText } = render(<MachinePanel />);
+    const { getByText } = render(<><MachinePanel /><JobActionBar /></>);
 
     fireEvent.click(getByText("Regenerate G-code"));
     await waitFor(() =>
@@ -151,7 +152,7 @@ describe("Rust-engine failure is loud and blocking (fallback deleted)", () => {
   it("preview button does NOT open the preview when generation fails", async () => {
     mockBrokenEngine();
     useStore.getState().addObject(makeRect("r1"));
-    const { getByText } = render(<MachinePanel />);
+    const { getByText } = render(<><MachinePanel /><JobActionBar /></>);
 
     fireEvent.click(getByText("Preview"));
     await waitFor(() =>
