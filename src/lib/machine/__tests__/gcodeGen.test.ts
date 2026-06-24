@@ -99,7 +99,9 @@ describe("G-code generation (Rust contract + hard-fail)", () => {
       rotation: 0,
     });
     expect((objects[0].layer as Record<string, unknown>).mode).toBe(DEFAULT_LAYERS[0].mode);
-    expect(result).toBe(vector); // Rust result passes through untouched
+    // The assembled result carries the engine's cut metrics
+    expect(result.cutDistance).toBe(vector.cutDistance);
+    expect(result.moves).toEqual(vector.moves);
   });
 
   // Re-homed from "respects layer output=false" (fallback cutDistance===0):
@@ -575,18 +577,20 @@ describe("WS2 — stripFraming (sentinel-based framing removal)", () => {
 // ─── assembleGcode unit tests (framing-lock) ─────────────────────────────────
 
 describe("WS2 — assembleGcode (document framing lock)", () => {
-  it("single fragment: returns as-is (no double preamble, no extra seam)", () => {
+  it("single fragment: framing lock applies (exactly one preamble, one M2, no seam)", () => {
     const fragment = vectorFragment("solo");
     const result = assembleGcodeForTest([fragment]);
-    // Single fragment returns unchanged
-    expect(result.gcode).toBe(fragment.gcode);
     const lines = result.gcode.split("\n");
-    // Exactly one G21 — no duplication
+    // Exactly one G21 — no duplication from strip-and-assemble
     expect(lines.filter((l) => l === "G21 ; mm mode")).toHaveLength(1);
     // Exactly one M2 (program end)
     expect(lines.filter((l) => l === "M2 ; program end")).toHaveLength(1);
     // Exactly one G90
     expect(lines.filter((l) => l === "G90 ; absolute positioning")).toHaveLength(1);
+    // No seam lines (single fragment has no inter-fragment seam)
+    expect(lines.filter((l) => l === "M5 ; laser off at layer seam")).toHaveLength(0);
+    // Body content is present
+    expect(result.gcode).toContain("; Cut: solo");
   });
 
   it("two fragments: exactly one G21, one G90, one M2, and one M5 seam between them", () => {
@@ -878,18 +882,19 @@ describe("WS2 — generateGcode layer ordering", () => {
 
     const result = await generateGcode();
 
-    // The image fragment is the only content but should still have exactly one program end
-    // (since single-fragment path returns as-is, which has the image engine's M5 but no M2 —
-    //  wait: image engine doesn't emit M2; but assembleGcode single-fragment returns as-is)
-    // Actually: image-only job has no vector objects → no generate_gcode call.
-    // The single image fragment is returned as-is by assembleGcode.
-    // Image engine gcode does not include M2 (that's vector only).
-    // This is fine for the assembled doc — the assembleGcode wraps it when multiple fragments exist.
-    // For single fragment: returned as-is (no wrapping).
-    // This test verifies: no crash, gcode is non-empty, preamble lines present.
+    // Image-only job has no vector objects → no generate_gcode call.
+    // The single image fragment goes through strip-and-assemble (single-fragment
+    // fast path was removed). Image engine emits no M2 or return-home, so the
+    // assemble path's docFooter provides them — this is the regression fix.
     expect(result.gcode).toBeTruthy();
-    expect(result.gcode).toContain("G21");
     expect(result.gcode).toContain("; Scan line 1");
+    // Exactly one docPreamble G21 (not the engine's, which is stripped)
+    const lines = result.gcode.split("\n");
+    expect(lines.filter((l) => l === "G21 ; mm mode")).toHaveLength(1);
+    // Must have M2 (program end) — previously missing for image-only jobs
+    expect(result.gcode).toContain("M2 ; program end");
+    // Must have return-home — previously missing for image-only jobs
+    expect(result.gcode).toContain("G0 X0 Y0 ; return home");
     // Single image fragment → no vector invoke needed
     const vectorCalls = allVectorCalls();
     expect(vectorCalls).toHaveLength(0);
@@ -913,7 +918,7 @@ describe("WS2 — generateGcode layer ordering", () => {
     // Result has the expected framing
     expect(result.gcode).toContain("G21 ; mm mode");
     expect(result.gcode).toContain("; Cut: vector-only-result");
-    // Single fragment → returned as-is (has M2 from the vector engine)
+    // Single fragment still gets docFooter (M2 from assembleGcode, not the engine)
     expect(result.gcode).toContain("M2 ; program end");
   });
 

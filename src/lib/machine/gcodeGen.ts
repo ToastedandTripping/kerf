@@ -230,7 +230,12 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
     // Fill-mode (or fillLine) non-rect shapes with a groupId → coalesce into one maskFill CutObject.
     // Rectangles keep the AABB fill path (their bbox IS the shape, no coalescing needed).
     if ((layer.mode === "fill" || layer.mode === "fillLine") && isNonRectShape && obj.groupId) {
-      const key = `${obj.layerIndex ?? 0}:${obj.groupId}`;
+      // Use the resolved layer.index for the group key so orphan groups (unknown
+      // layerIndex → resolved to layers[0] above) are keyed on the same layer
+      // whose settings they actually use — not on the raw (possibly undefined)
+      // layerIndex value, which would produce key "0:..." even when layers[0]
+      // has a different index.
+      const key = `${layer.index}:${obj.groupId}`;
 
       // Build this contour's sampled path
       const contourPaths: CutObject["paths"] = [];
@@ -581,12 +586,30 @@ const SENTINEL_FOOTER_BEGIN = "; KERF:FOOTER_BEGIN";
 function stripFraming(gcode: string): string {
   const lines = gcode.split("\n");
 
+  // Bounded sentinel search — guards against a body G-code line that
+  // coincidentally equals a sentinel string silently eating body content.
+  // The Rust engines own these sentinel strings and never emit them in body
+  // G-code, but the bounded search makes that contract explicit and cheap.
+  //
+  // PREAMBLE_END must appear within the first 12 lines of any engine output;
+  // FOOTER_BEGIN must appear within the last 8 lines.
+  const PREAMBLE_SEARCH_LIMIT = 12;
+  const FOOTER_SEARCH_LIMIT = 8;
+
   // Strip preamble: remove all lines up to and including PREAMBLE_END
-  const preambleEndIdx = lines.findIndex((l) => l.trim() === SENTINEL_PREAMBLE_END);
+  const preambleSearchEnd = Math.min(PREAMBLE_SEARCH_LIMIT, lines.length);
+  const preambleEndIdx = lines
+    .slice(0, preambleSearchEnd)
+    .findIndex((l) => l.trim() === SENTINEL_PREAMBLE_END);
   const bodyStart = preambleEndIdx >= 0 ? preambleEndIdx + 1 : 0;
 
-  // Strip footer: remove FOOTER_BEGIN and everything after
-  const footerBeginIdx = lines.findIndex((l) => l.trim() === SENTINEL_FOOTER_BEGIN);
+  // Strip footer: remove FOOTER_BEGIN and everything after.
+  // Search only the tail of the file (last FOOTER_SEARCH_LIMIT lines).
+  const footerSearchStart = Math.max(0, lines.length - FOOTER_SEARCH_LIMIT);
+  const footerRelIdx = lines
+    .slice(footerSearchStart)
+    .findIndex((l) => l.trim() === SENTINEL_FOOTER_BEGIN);
+  const footerBeginIdx = footerRelIdx >= 0 ? footerSearchStart + footerRelIdx : -1;
   const bodyEnd = footerBeginIdx >= 0 ? footerBeginIdx : lines.length;
 
   return lines.slice(bodyStart, bodyEnd).join("\n");
@@ -606,21 +629,24 @@ function stripFraming(gcode: string): string {
 function assembleGcode(fragments: GcodeResult[]): GcodeResult {
   if (fragments.length === 0) {
     // Should never happen in normal flow, but be safe
+    const gcode =
+      "G21 ; mm mode\nG90 ; absolute positioning\nM5 ; laser off\nG0 X0 Y0 ; home\nM5 ; laser off\nG0 X0 Y0 ; return home\nM2 ; program end";
     return {
-      gcode: "G21 ; mm mode\nG90 ; absolute positioning\nM5 ; laser off\nG0 X0 Y0 ; home\nM5 ; laser off\nG0 X0 Y0 ; return home\nM2 ; program end",
+      gcode,
       moves: [],
       totalDistance: 0,
       cutDistance: 0,
       travelDistance: 0,
       estimatedTimeSecs: 0,
-      lineCount: 7,
+      lineCount: gcode.split("\n").length,
     };
   }
 
-  if (fragments.length === 1) {
-    // Single fragment: return as-is (already has correct preamble + footer)
-    return fragments[0];
-  }
+  // Always run the strip-and-assemble path for non-empty fragments.
+  // The single-fragment fast path that returned fragments[0] as-is was removed
+  // because image-only jobs produce a fragment with no M2 and no return-home —
+  // the image engine never emits those. The assemble path ensures every job
+  // (including image-only, single-layer) gets exactly one docPreamble + docFooter.
 
   // Document preamble — emitted exactly once
   const docPreamble = [
