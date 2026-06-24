@@ -1,6 +1,6 @@
 /**
  * ActiveLayerStrip — pinned-top ~40px strip showing the active layer's
- * color, name, Power slider+value, and Speed input.
+ * color, name, Power slider+value, and Speed bare number field.
  *
  * Error-185 audit:
  *   - layers: stable array ref (Zustand returns the same reference until
@@ -9,11 +9,11 @@
  *   - updateLayer: stable function ref
  *   Derivation of `active` happens OUTSIDE the selectors, after all three
  *   reads, mirroring the LayerPanel.tsx:30-33 pattern exactly.
- *   SpeedInput reads its own grblMaxFeedRateX/Y scalars internally.
+ *   Speed uses a bare number field (no log-scale slider) — the full
+ *   SpeedInput is too wide for the compact strip; it remains in LayerPanel.
  */
 
 import { useStore } from "../../app/store";
-import { SpeedInput } from "./SpeedInput";
 
 export function ActiveLayerStrip() {
   // SEPARATE scalar/stable-ref selectors — no object literal returned (Error-185 safe)
@@ -55,6 +55,7 @@ export function ActiveLayerStrip() {
             borderRadius: "2px",
             background: active.color,
             flexShrink: 0,
+            boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.15)",
           }}
         />
         <span
@@ -107,12 +108,28 @@ export function ActiveLayerStrip() {
         <span style={{ fontSize: "10px", color: "var(--text-muted)", flexShrink: 0 }}>%</span>
       </div>
 
-      {/* Row 3: Speed label + SpeedInput (log-scale slider + number + unit) */}
+      {/* Row 3: Speed label + bare number field + unit (full SpeedInput too wide for strip) */}
       <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
         <span style={{ fontSize: "10px", color: "var(--text-muted)", flexShrink: 0, width: "38px" }}>
           Speed
         </span>
-        <SpeedInput value={active.speed} onChange={handleSpeedChange} />
+        <input
+          type="number"
+          min="1"
+          value={active.speed}
+          onChange={(e) => handleSpeedChange(Number(e.target.value))}
+          style={{
+            flex: 1,
+            background: "var(--bg-input)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-sm)",
+            color: "var(--text-primary)",
+            padding: "2px 4px",
+            fontSize: "11px",
+            textAlign: "right",
+          }}
+        />
+        <span style={{ fontSize: "10px", color: "var(--text-muted)", flexShrink: 0 }}>mm/min</span>
       </div>
     </div>
   );

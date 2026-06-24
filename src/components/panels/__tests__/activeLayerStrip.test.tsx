@@ -73,10 +73,10 @@ describe("ActiveLayerStrip", () => {
     useStore.setState({ updateLayer: updateLayerSpy } as unknown as Parameters<typeof useStore.setState>[0]);
 
     const { getAllByRole } = render(<ActiveLayerStrip />);
-    // SpeedInput renders a number input (type="spinbutton" in ARIA) — there are two:
-    // index 0 = power number input (value=50), index 1 = speed number input (value=6000).
+    // Strip renders two number inputs (type="spinbutton" in ARIA):
+    // index 0 = power number input, index 1 = speed bare number field.
     const spinbuttons = getAllByRole("spinbutton");
-    const speedNumberInput = spinbuttons[1]; // SpeedInput's number field
+    const speedNumberInput = spinbuttons[1]; // speed bare number field
 
     fireEvent.change(speedNumberInput, { target: { value: "1500" } });
 

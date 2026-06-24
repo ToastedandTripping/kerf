@@ -240,7 +240,7 @@ export function JobActionBar() {
             flex: 1,
             padding: "6px",
             borderRadius: "var(--radius-sm)",
-            border: "none",
+            border: "1px solid rgba(74,226,138,0.5)",
             fontSize: "11px",
             fontWeight: 700,
             cursor: startGate.ok ? "pointer" : "not-allowed",
