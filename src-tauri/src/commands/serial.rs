@@ -344,6 +344,7 @@ pub async fn serial_send(
             &mut channel.writer,
             &mut channel.pending,
             DEFAULT_LIVENESS_TICKS,
+            serial_pump::DEFAULT_IDLE_STALL_TICKS,
         ) {
             Ok(out) => Ok(SendOutcome {
                 responses: out.lines,

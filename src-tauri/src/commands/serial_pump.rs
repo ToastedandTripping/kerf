@@ -36,6 +36,27 @@ pub const DEFAULT_LIVENESS_TICKS: u32 = 60;
 /// probe is rewritten once (covers a `?` eaten during the post-reset boot window).
 pub const STATUS_MAX_TICKS: u32 = 2;
 
+/// Consecutive Idle status replies (with no terminal in between) before concluding
+/// the terminal was lost on the wire and returning a recoverable stall.
+///
+/// At the production probe rate of ~1 Hz this is ~3 seconds of "machine reports
+/// Idle but no `ok` arrived." A legitimately-slow line reports `Run` while moving,
+/// so it is never affected. This value may need owner hardware tuning (ROADMAP WS6).
+pub const DEFAULT_IDLE_STALL_TICKS: u32 = 3;
+
+/// Extract the GRBL machine state token from a `<…>` status line.
+/// Returns `Some("Idle")`, `Some("Run")`, etc., or `None` if the line is not a
+/// well-formed status report.
+///
+/// GRBL status format: `<State|...>` where State is the first field.
+fn parse_machine_state(status_line: &str) -> Option<&str> {
+    // Strip the leading `<` and trailing `>`
+    let inner = status_line.strip_prefix('<')?.strip_suffix('>')?;
+    // The first field before `|` (or the whole inner string) is the state token.
+    let state = inner.split('|').next()?;
+    Some(state)
+}
+
 /// Writes the single-byte real-time `?` status probe.
 pub trait ProbeWriter {
     fn write_probe(&mut self) -> std::io::Result<()>;
@@ -120,14 +141,27 @@ pub enum PumpFailure {
 /// continues. On each timeout tick a `?` probe is written; `liveness_ticks`
 /// consecutive ticks with ZERO bytes received (partial bytes count as life) declare
 /// the port dead. Partial lines survive ticks in `pending`.
+///
+/// **Idle-wedge detector:** if GRBL answers probes with `<Idle|…>` status reports
+/// but the expected `ok`/`error` terminal never arrives, the terminal was lost on the
+/// wire. After `idle_stall_ticks` *consecutive* Idle-state replies (with no terminal
+/// and no non-Idle status in between) the pump concludes the command completed but
+/// the ack was silently dropped, and returns a recoverable `Disconnected` stall
+/// (same caller-visible outcome as the silence-based liveness timeout).
+/// A legitimately-slow line reports `Run` while the head is moving, which resets the
+/// counter — so slow engraving jobs are never incorrectly aborted.
+/// Use `DEFAULT_IDLE_STALL_TICKS` (3) for production; tests may inject smaller values.
 pub fn run_pump<R: BufRead, P: ProbeWriter>(
     reader: &mut R,
     probe: &mut P,
     pending: &mut Vec<u8>,
     liveness_ticks: u32,
+    idle_stall_ticks: u32,
 ) -> Result<PumpOutput, PumpFailure> {
     let mut lines: Vec<String> = Vec::new();
     let mut silent_ticks: u32 = 0;
+    // Consecutive Idle-state status replies with no terminal in between.
+    let mut consecutive_idle: u32 = 0;
 
     loop {
         let len_before = pending.len();
@@ -143,6 +177,25 @@ pub fn run_pump<R: BufRead, P: ProbeWriter>(
                     continue;
                 }
                 let class = classify_line(&line);
+                // Idle-wedge detector: track consecutive Idle status replies.
+                // Any non-Idle status, any non-status byte, or a terminal resets the counter.
+                if class == LineClass::Status {
+                    if parse_machine_state(&line) == Some("Idle") {
+                        consecutive_idle += 1;
+                        if consecutive_idle >= idle_stall_ticks {
+                            return Err(PumpFailure::Disconnected(format!(
+                                "terminal lost: GRBL reported Idle {} consecutive times with no ok",
+                                consecutive_idle
+                            )));
+                        }
+                    } else {
+                        // Non-Idle status (Run, Hold, Jog, …): head is moving, reset counter.
+                        consecutive_idle = 0;
+                    }
+                } else {
+                    // Any non-status line (including terminals) resets the counter.
+                    consecutive_idle = 0;
+                }
                 lines.push(line);
                 match class {
                     LineClass::Ok => return Ok(PumpOutput { lines, terminal: PumpTerminal::Ok }),
@@ -377,10 +430,18 @@ mod tests {
     }
 
     fn pump(steps: Vec<Step>, ticks: u32) -> (Result<PumpOutput, PumpFailure>, u32, Vec<u8>) {
+        pump_with_idle(steps, ticks, DEFAULT_IDLE_STALL_TICKS)
+    }
+
+    fn pump_with_idle(
+        steps: Vec<Step>,
+        ticks: u32,
+        idle_stall_ticks: u32,
+    ) -> (Result<PumpOutput, PumpFailure>, u32, Vec<u8>) {
         let mut reader = ScriptReader::new(steps);
         let mut probe = CountingProbe::new();
         let mut pending = Vec::new();
-        let result = run_pump(&mut reader, &mut probe, &mut pending, ticks);
+        let result = run_pump(&mut reader, &mut probe, &mut pending, ticks, idle_stall_ticks);
         (result, probe.probes, pending)
     }
 
@@ -526,7 +587,7 @@ mod tests {
 
         // The NEXT command's pump sees only its own fresh ack — zero misattribution.
         let mut probe = CountingProbe::new();
-        let out = run_pump(&mut reader, &mut probe, &mut pending, 5).unwrap();
+        let out = run_pump(&mut reader, &mut probe, &mut pending, 5, DEFAULT_IDLE_STALL_TICKS).unwrap();
         assert_eq!(out.terminal, PumpTerminal::Ok);
         assert_eq!(out.lines, vec!["ok"]);
     }
@@ -594,7 +655,7 @@ mod tests {
         let mut pending = Vec::new();
 
         // Line 1
-        let out = run_pump(&mut reader, &mut probe, &mut pending, 60).unwrap();
+        let out = run_pump(&mut reader, &mut probe, &mut pending, 60, DEFAULT_IDLE_STALL_TICKS).unwrap();
         assert_eq!(out.terminal, PumpTerminal::Ok);
         assert_eq!(out.lines.len(), 1, "no empty-ack advance");
 
@@ -610,7 +671,7 @@ mod tests {
         steps.push(Step::Timeout);
         steps.push(Step::Data(b"k\n"));
         let mut reader = ScriptReader::new(steps);
-        let out = run_pump(&mut reader, &mut probe, &mut pending, 60).unwrap();
+        let out = run_pump(&mut reader, &mut probe, &mut pending, 60, DEFAULT_IDLE_STALL_TICKS).unwrap();
         assert_eq!(out.terminal, PumpTerminal::Ok);
         assert_eq!(out.lines.last().map(String::as_str), Some("ok"));
         assert_eq!(
@@ -626,7 +687,7 @@ mod tests {
             // Stale debris that lands AFTER the banner (post-reset MSG + delayed junk)
             Step::Data(b"[MSG:'$H'|'$X' to unlock]\nok\n"),
         ]);
-        let out = run_pump(&mut reader, &mut probe, &mut pending, 60).unwrap();
+        let out = run_pump(&mut reader, &mut probe, &mut pending, 60, DEFAULT_IDLE_STALL_TICKS).unwrap();
         assert_eq!(out.terminal, PumpTerminal::Banner, "reset banner = aborted, never acked");
 
         // Line 4: the drain consumes the leftover debris before the next write …
@@ -636,7 +697,7 @@ mod tests {
 
         // … so the fresh command attributes only its own ack.
         let mut reader = ScriptReader::new(vec![Step::Data(b"ok\n")]);
-        let out = run_pump(&mut reader, &mut probe, &mut pending, 60).unwrap();
+        let out = run_pump(&mut reader, &mut probe, &mut pending, 60, DEFAULT_IDLE_STALL_TICKS).unwrap();
         assert_eq!(out.terminal, PumpTerminal::Ok);
         assert_eq!(out.lines, vec!["ok"]);
     }
@@ -651,5 +712,65 @@ mod tests {
         assert_eq!(classify_line("[MSG:Check Door]"), LineClass::Msg);
         assert_eq!(classify_line("$32=1"), LineClass::Other);
         assert_eq!(classify_line("[GC:G0 G54]"), LineClass::Other);
+    }
+
+    // Idle-wedge test 1: pump receives only <Idle|…> status replies and no ok.
+    // After DEFAULT_IDLE_STALL_TICKS (3) consecutive Idle reports it must return a
+    // Disconnected stall — never Ok, never an infinite loop.
+    #[test]
+    fn run_pump_stalls_on_idle_status_without_ok() {
+        // Inject 5 Idle status replies and no terminal; stall threshold is 3.
+        // The pump must stop at 3 and return Disconnected without consuming the rest.
+        let (result, _, _) = pump_with_idle(
+            vec![
+                Step::Data(b"<Idle|MPos:0.000,0.000,0.000|FS:0,0>\n"),
+                Step::Data(b"<Idle|MPos:0.000,0.000,0.000|FS:0,0>\n"),
+                Step::Data(b"<Idle|MPos:0.000,0.000,0.000|FS:0,0>\n"),
+                // These would only be reached if the stall detector failed:
+                Step::Data(b"<Idle|MPos:0.000,0.000,0.000|FS:0,0>\n"),
+                Step::Data(b"<Idle|MPos:0.000,0.000,0.000|FS:0,0>\n"),
+            ],
+            DEFAULT_LIVENESS_TICKS,
+            3, // stall threshold
+        );
+        match result {
+            Err(PumpFailure::Disconnected(msg)) => {
+                assert!(
+                    msg.contains("Idle") || msg.contains("terminal lost"),
+                    "error message should mention Idle wedge: {msg}"
+                );
+            }
+            Ok(out) => panic!("expected Disconnected stall, got Ok with terminal {:?}", out.terminal),
+            Err(PumpFailure::Io(e)) => panic!("expected Disconnected stall, got Io error: {e}"),
+        }
+    }
+
+    // Idle-wedge test 2: pump receives <Run|…> replies while the head moves, then ok.
+    // The Run state must NOT trigger the stall — a legitimately-slow line completes
+    // normally and the pump must return Ok.
+    #[test]
+    fn run_pump_waits_through_run_status() {
+        // 5 Run replies (head moving), then ok. Stall threshold is 3, but Run is NOT
+        // Idle so the consecutive_idle counter stays at 0 throughout.
+        let (result, _, _) = pump_with_idle(
+            vec![
+                Step::Data(b"<Run|MPos:1.000,0.000,0.000|FS:500,0>\n"),
+                Step::Data(b"<Run|MPos:2.000,0.000,0.000|FS:500,0>\n"),
+                Step::Data(b"<Run|MPos:3.000,0.000,0.000|FS:500,0>\n"),
+                Step::Data(b"<Run|MPos:4.000,0.000,0.000|FS:500,0>\n"),
+                Step::Data(b"<Run|MPos:5.000,0.000,0.000|FS:500,0>\n"),
+                Step::Data(b"ok\n"),
+            ],
+            DEFAULT_LIVENESS_TICKS,
+            3, // stall threshold — must NOT fire on Run state
+        );
+        let out = result.expect("pump should complete Ok after Run replies");
+        assert_eq!(out.terminal, PumpTerminal::Ok, "Run replies must not trigger stall");
+        assert_eq!(out.lines.last().map(String::as_str), Some("ok"));
+        assert_eq!(
+            out.lines.iter().filter(|l| l.starts_with("<Run")).count(),
+            5,
+            "all Run status reports should be collected"
+        );
     }
 }

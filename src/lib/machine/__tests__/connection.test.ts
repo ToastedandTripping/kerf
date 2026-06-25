@@ -269,6 +269,8 @@ describe("connection.ts (TN3)", () => {
     function mockMachine(settings: string[]) {
       mockInvoke.mockImplementation(async (cmd: string, args?: { command?: string }) => {
         if (cmd === "serial_connect") return "Grbl 1.1h ['$' for help]";
+        // Soft-reset byte sent during connect — accept and ignore
+        if (cmd === "serial_send_byte") return undefined;
         if (cmd === "serial_send" && args?.command === "$$")
           return { responses: settings, drained: [] };
         if (cmd === "serial_send") return { responses: ["ok"], drained: [] };
@@ -288,8 +290,10 @@ describe("connection.ts (TN3)", () => {
       vi.useFakeTimers(); // keep the 250ms poller from firing during the test
       mockMachine(["$30=255", "$32=0"]);
 
-      // Manual path
-      await machineConnection.connect("/dev/ttyUSB0", 115200);
+      // Manual path — advance past the 2000ms soft-reset settle delay
+      const connectPromise1 = machineConnection.connect("/dev/ttyUSB0", 115200);
+      await vi.advanceTimersByTimeAsync(2000);
+      await connectPromise1;
       const manualLines = useStore.getState().consoleLines.map((l) => `${l.type}|${l.text}`);
       expect(useStore.getState().grblSValueMax).toBe(255);
       await machineConnection.disconnect();
@@ -297,7 +301,9 @@ describe("connection.ts (TN3)", () => {
       // Auto path (connect() saved the port to localStorage above)
       seedConnectedStore();
       useStore.setState({ machineConnected: false, grblSValueMax: 1000 });
-      const ok = await machineConnection.autoConnect();
+      const autoPromise = machineConnection.autoConnect();
+      await vi.advanceTimersByTimeAsync(2000);
+      const ok = await autoPromise;
       expect(ok).toBe(true);
       const autoLines = useStore.getState().consoleLines.map((l) => `${l.type}|${l.text}`);
       await machineConnection.disconnect();
@@ -314,7 +320,9 @@ describe("connection.ts (TN3)", () => {
       vi.useFakeTimers();
       mockMachine(["error:9"]);
 
-      await machineConnection.connect("/dev/ttyUSB0", 115200);
+      const connectPromise = machineConnection.connect("/dev/ttyUSB0", 115200);
+      await vi.advanceTimersByTimeAsync(2000);
+      await connectPromise;
       const texts = consoleTexts();
       expect(texts.some((t) => t.includes("settings unverified"))).toBe(true);
       // grblLaserMode defaults false — warning off the default would be spurious.
@@ -326,10 +334,50 @@ describe("connection.ts (TN3)", () => {
       vi.useFakeTimers();
       mockMachine(["$30=1000", "$32=1"]);
 
-      await machineConnection.connect("/dev/ttyUSB0", 115200);
+      const connectPromise = machineConnection.connect("/dev/ttyUSB0", 115200);
+      await vi.advanceTimersByTimeAsync(2000);
+      await connectPromise;
       const texts = consoleTexts();
       expect(texts.some((t) => t.includes("laser mode ($32) is disabled"))).toBe(false);
       expect(texts.some((t) => t.includes("settings unverified"))).toBe(false);
+      await machineConnection.disconnect();
+    });
+
+    // Soft-reset on connect: 0x18 must reach the wire BEFORE $$ is sent.
+    // Standard GRBL senders (UGS, LaserGRBL) all soft-reset on connect;
+    // skipping it leaves GRBL in stale modal/planner state on DTR-less adapters,
+    // causing the first job to desync (the second always works because the user's
+    // first Stop sends 0x18 — confirmed on hardware).
+    it("sends 0x18 soft-reset byte before the $$ settings query on connect", async () => {
+      vi.useFakeTimers();
+      const invokeOrder: string[] = [];
+      mockInvoke.mockImplementation(async (cmd: string, args?: { command?: string; byte?: number }) => {
+        if (cmd === "serial_connect") return "Grbl 1.1h ['$' for help]";
+        if (cmd === "serial_send_byte") {
+          invokeOrder.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
+          return undefined;
+        }
+        if (cmd === "serial_send" && args?.command === "$$") {
+          invokeOrder.push("send($$)");
+          return { responses: ["$30=1000", "$32=1"], drained: [] };
+        }
+        if (cmd === "serial_send") return { responses: ["ok"], drained: [] };
+        if (cmd === "serial_get_status")
+          return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
+        if (cmd === "serial_disconnect") return undefined;
+        return undefined;
+      });
+
+      const connectPromise = machineConnection.connect("/dev/ttyUSB0", 115200);
+      await vi.advanceTimersByTimeAsync(2000);
+      await connectPromise;
+
+      // 0x18 must appear in the log before $$
+      const resetIdx = invokeOrder.indexOf("byte(18)");
+      const settingsIdx = invokeOrder.indexOf("send($$)");
+      expect(resetIdx).toBeGreaterThanOrEqual(0);
+      expect(settingsIdx).toBeGreaterThan(resetIdx);
+
       await machineConnection.disconnect();
     });
   });

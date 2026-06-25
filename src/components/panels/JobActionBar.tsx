@@ -75,6 +75,7 @@ export function JobActionBar() {
     // was ABORTED, not acked; ALARM = controller locked, laser already
     // de-energized by firmware.
     let endState: "complete" | "cancelled" | "aborted" | "alarm" | "error" = "complete";
+    let portDisconnected = false;
 
     for (let i = 0; i < lines.length; i++) {
       // Wait while paused. The wait ALSO exits when jobRunning goes false
@@ -115,6 +116,7 @@ export function JobActionBar() {
         if (responses.some((r) => r === "error:disconnected")) {
           useStore.getState().setMachineConnected(false);
           useStore.getState().setMachineState("disconnected");
+          portDisconnected = true;
         }
         break;
       }
@@ -162,6 +164,13 @@ export function JobActionBar() {
 
     setJobRunning(false);
     setJobProgress(0);
+
+    // Tear down the serial port on disconnect so a subsequent reconnect
+    // (which now sends 0x18) doesn't fail with "port busy". Runs AFTER the
+    // safety volley above so M5 has already been attempted before teardown.
+    if (portDisconnected) {
+      try { await machineConnection.disconnect(); } catch { /* port already gone */ }
+    }
   }
 
   async function handlePauseResume() {
