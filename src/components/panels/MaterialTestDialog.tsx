@@ -10,6 +10,8 @@ interface Props {
   onClose: () => void;
 }
 
+type PowerMode = "M3" | "M4";
+
 interface MaterialTestOptions {
   powerMin: number;
   powerMax: number;
@@ -21,7 +23,35 @@ interface MaterialTestOptions {
   cellHeight: number;
   cellGap: number;
   mode: "cut" | "fill";
+  powerMode: PowerMode;
 }
+
+const PRESETS: Record<string, MaterialTestOptions> = {
+  "Quick Cut": {
+    powerMin: 50, powerMax: 100, powerSteps: 4,
+    speedMin: 300, speedMax: 800, speedSteps: 4,
+    cellWidth: 8, cellHeight: 8, cellGap: 1.5,
+    mode: "cut", powerMode: "M3",
+  },
+  "Quick Engrave": {
+    powerMin: 20, powerMax: 60, powerSteps: 4,
+    speedMin: 3000, speedMax: 12000, speedSteps: 4,
+    cellWidth: 8, cellHeight: 8, cellGap: 1.5,
+    mode: "fill", powerMode: "M4",
+  },
+  "Full Cut": {
+    powerMin: 10, powerMax: 100, powerSteps: 10,
+    speedMin: 100, speedMax: 1200, speedSteps: 10,
+    cellWidth: 10, cellHeight: 10, cellGap: 2,
+    mode: "cut", powerMode: "M3",
+  },
+  "Full Engrave": {
+    powerMin: 10, powerMax: 80, powerSteps: 10,
+    speedMin: 1000, speedMax: 18000, speedSteps: 10,
+    cellWidth: 10, cellHeight: 10, cellGap: 2,
+    mode: "fill", powerMode: "M4",
+  },
+};
 
 function generateMaterialTestGcode(opts: MaterialTestOptions, sValueMax: number): string {
   const lines: string[] = [];
@@ -67,29 +97,41 @@ function generateMaterialTestGcode(opts: MaterialTestOptions, sValueMax: number)
       lines.push(`; Cell P${power}% S${speed}mm/min`);
 
       if (opts.mode === "cut") {
-        // Rectangle outline
+        // Rectangle outline — power on once, off once
         lines.push(`G0 X${cx.toFixed(3)} Y${cy.toFixed(3)}`);
-        lines.push(`M4 S${sValue}`);
+        lines.push(`${opts.powerMode} S${sValue}`);
         lines.push(`G1 X${(cx + opts.cellWidth).toFixed(3)} Y${cy.toFixed(3)} F${feedRate} S${sValue}`);
         lines.push(`G1 X${(cx + opts.cellWidth).toFixed(3)} Y${(cy + opts.cellHeight).toFixed(3)} F${feedRate} S${sValue}`);
         lines.push(`G1 X${cx.toFixed(3)} Y${(cy + opts.cellHeight).toFixed(3)} F${feedRate} S${sValue}`);
         lines.push(`G1 X${cx.toFixed(3)} Y${cy.toFixed(3)} F${feedRate} S${sValue}`);
         lines.push("M5");
       } else {
-        // Filled rectangle (horizontal scan lines at 0.1mm interval)
+        // Filled rectangle — continuous bidirectional sweep.
+        // Power on ONCE before all scan lines, M5 ONCE after, no G0 between lines.
+        // This eliminates the per-line M4/M5 accel spike pattern.
         const interval = 0.1;
         let forward = true;
         let y = cy;
-        while (y <= cy + opts.cellHeight) {
-          const sx = forward ? cx : cx + opts.cellWidth;
+
+        // Lead-in: position before power-on
+        lines.push(`G0 X${cx.toFixed(3)} Y${y.toFixed(3)}`);
+        lines.push(`${opts.powerMode} S${sValue}`);
+
+        while (y <= cy + opts.cellHeight + 1e-9) {
           const ex = forward ? cx + opts.cellWidth : cx;
-          lines.push(`G0 X${sx.toFixed(3)} Y${y.toFixed(3)}`);
-          lines.push(`M4 S${sValue}`);
           lines.push(`G1 X${ex.toFixed(3)} Y${y.toFixed(3)} F${feedRate} S${sValue}`);
-          lines.push("M5");
           y += interval;
-          forward = !forward;
+          if (y <= cy + opts.cellHeight + 1e-9) {
+            // Step to next line at feed rate (no G0, no M5 — continuous beam)
+            forward = !forward;
+            const nextX = forward ? cx : cx + opts.cellWidth;
+            lines.push(`G1 X${nextX.toFixed(3)} Y${y.toFixed(3)} F${feedRate} S${sValue}`);
+          } else {
+            forward = !forward;
+          }
         }
+
+        lines.push("M5");
       }
       lines.push("");
     }
@@ -99,6 +141,21 @@ function generateMaterialTestGcode(opts: MaterialTestOptions, sValueMax: number)
   lines.push("G0 X0 Y0 ; return home");
   lines.push("M2 ; program end");
 
+  return lines.join("\n");
+}
+
+function generateFrameGcode(totalWidth: number, totalHeight: number): string {
+  const lines: string[] = [];
+  lines.push("; Frame trace -- laser off");
+  lines.push("G21");
+  lines.push("G90");
+  lines.push("M5");
+  lines.push("G0 X10 Y10");
+  lines.push(`G1 X${(10 + totalWidth).toFixed(3)} Y10 F3000`);
+  lines.push(`G1 X${(10 + totalWidth).toFixed(3)} Y${(10 + totalHeight).toFixed(3)} F3000`);
+  lines.push(`G1 X10 Y${(10 + totalHeight).toFixed(3)} F3000`);
+  lines.push("G1 X10 Y10 F3000");
+  lines.push("G0 X0 Y0");
   return lines.join("\n");
 }
 
@@ -123,18 +180,21 @@ export function MaterialTestDialog({ open, onClose }: Props) {
   const [powerMin, setPowerMin] = useState(10);
   const [powerMax, setPowerMax] = useState(100);
   const [powerSteps, setPowerSteps] = useState(5);
-  const [speedMin, setSpeedMin] = useState(3000);
-  const [speedMax, setSpeedMax] = useState(30000);
+  const [speedMin, setSpeedMin] = useState(300);
+  const [speedMax, setSpeedMax] = useState(3000);
   const [speedSteps, setSpeedSteps] = useState(5);
   const [cellWidth, setCellWidth] = useState(10);
   const [cellHeight, setCellHeight] = useState(10);
   const [cellGap, setCellGap] = useState(2);
   const [mode, setMode] = useState<"cut" | "fill">("cut");
+  const [powerMode, setPowerMode] = useState<PowerMode>("M4");
+
+  // Scalar selectors only — never return a new object/array (React Error 185)
   const jobRunning = useStore((s) => s.jobRunning);
   const grblSValueMax = useStore((s) => s.grblSValueMax);
-  // TWO SEPARATE scalar selectors — never a single object selector (Error 185).
   const grblMaxFeedRateX = useStore((s) => s.grblMaxFeedRateX);
   const grblMaxFeedRateY = useStore((s) => s.grblMaxFeedRateY);
+  const grblLaserMode = useStore((s) => s.grblLaserMode);
   const effectiveSpeedMax = effectiveMaxSpeed(grblMaxFeedRateX, grblMaxFeedRateY);
 
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -143,20 +203,72 @@ export function MaterialTestDialog({ open, onClose }: Props) {
 
   if (!open) return null;
 
-  const totalWidth = speedSteps * (cellWidth + cellGap) - cellGap + 10;
-  const totalHeight = powerSteps * (cellHeight + cellGap) - cellGap + 10;
+  const totalWidth = speedSteps * (cellWidth + cellGap) - cellGap;
+  const totalHeight = powerSteps * (cellHeight + cellGap) - cellGap;
   const store = useStore.getState();
   const workspaceW = store.workspaceWidth;
   const workspaceH = store.workspaceHeight;
-  const exceedsWorkspace = totalWidth > workspaceW || totalHeight > workspaceH;
+  const exceedsWorkspace = (totalWidth + 10) > workspaceW || (totalHeight + 10) > workspaceH;
+
+  function applyPreset(name: string) {
+    const p = PRESETS[name];
+    if (!p) return;
+    setPowerMin(p.powerMin);
+    setPowerMax(p.powerMax);
+    setPowerSteps(p.powerSteps);
+    setSpeedMin(p.speedMin);
+    setSpeedMax(p.speedMax);
+    setSpeedSteps(p.speedSteps);
+    setCellWidth(p.cellWidth);
+    setCellHeight(p.cellHeight);
+    setCellGap(p.cellGap);
+    setMode(p.mode);
+    setPowerMode(p.powerMode);
+  }
+
+  async function sendLines(gcode: string, label: string) {
+    const connected = useStore.getState().machineConnected;
+    if (!connected) {
+      store.addConsoleLine("Machine not connected", "error");
+      return;
+    }
+    if (useStore.getState().jobRunning) {
+      store.addConsoleLine(`Cannot start ${label} while a job is running`, "error");
+      return;
+    }
+    const lines = gcode.split("\n").filter((l) => l.trim() && !l.startsWith(";"));
+    store.addConsoleLine(`Sending ${label} (${lines.length} commands)...`, "info");
+    store.setJobRunning(true);
+    store.setSerialBusy(true);
+    store.setJobProgress(0);
+
+    let aborted = false;
+    for (let i = 0; i < lines.length; i++) {
+      if (!useStore.getState().jobRunning) break;
+      const responses = await machineConnection.send(lines[i]);
+      const errorLine = responses.find((r) => r.startsWith("error:") || r.startsWith("ALARM"));
+      if (errorLine) {
+        store.addConsoleLine(`${label} aborted: ${errorLine}`, "error");
+        await machineConnection.send("M5");
+        aborted = true;
+        break;
+      }
+      store.setJobProgress((i + 1) / lines.length);
+    }
+    store.setSerialBusy(false);
+    store.setJobRunning(false);
+    store.setJobProgress(0);
+    if (!aborted) {
+      store.addConsoleLine(`${label} complete`, "info");
+    }
+  }
 
   function handleGenerate(target: "clipboard" | "send") {
-    const sMax = grblSValueMax;
     const gcode = generateMaterialTestGcode({
       powerMin, powerMax, powerSteps,
       speedMin, speedMax, speedSteps,
-      cellWidth, cellHeight, cellGap, mode,
-    }, sMax);
+      cellWidth, cellHeight, cellGap, mode, powerMode,
+    }, grblSValueMax);
 
     if (target === "clipboard") {
       navigator.clipboard.writeText(gcode).then(() => {
@@ -164,50 +276,18 @@ export function MaterialTestDialog({ open, onClose }: Props) {
       }).catch(() => { /* clipboard may be denied */ });
       onClose();
     } else {
-      const connected = useStore.getState().machineConnected;
-      if (!connected) {
-        store.addConsoleLine("Machine not connected", "error");
-        return;
-      }
-      // F18: block if a job is already running
-      if (useStore.getState().jobRunning) {
-        store.addConsoleLine("Cannot start material test while a job is running", "error");
-        return;
-      }
-      // Send line by line
-      const lines = gcode.split("\n").filter((l) => l.trim() && !l.startsWith(";"));
-      store.addConsoleLine(`Sending material test (${lines.length} commands)...`, "info");
-      store.setJobRunning(true);
-      store.setSerialBusy(true);
-      store.setJobProgress(0);
-
-      (async () => {
-        let aborted = false;
-        for (let i = 0; i < lines.length; i++) {
-          // F18: abort if jobRunning was cleared externally (e.g. emergency stop)
-          if (!useStore.getState().jobRunning) break;
-          const responses = await machineConnection.send(lines[i]);
-          // Fix 4: abort on GRBL error or ALARM in any response line
-          const errorLine = responses.find((r) => r.startsWith("error:") || r.startsWith("ALARM"));
-          if (errorLine) {
-            store.addConsoleLine(`Material test aborted: ${errorLine}`, "error");
-            await machineConnection.send("M5");
-            aborted = true;
-            break;
-          }
-          store.setJobProgress((i + 1) / lines.length);
-        }
-        store.setSerialBusy(false);
-        store.setJobRunning(false);
-        store.setJobProgress(0);
-        if (!aborted) {
-          store.addConsoleLine("Material test complete", "info");
-        }
-      })();
-
+      sendLines(gcode, "material test");
       onClose();
     }
   }
+
+  function handleFrame() {
+    const gcode = generateFrameGcode(totalWidth, totalHeight);
+    sendLines(gcode, "frame");
+    onClose();
+  }
+
+  const showLaserWarning = powerMode === "M4" && !grblLaserMode;
 
   return (
     <div
@@ -234,8 +314,51 @@ export function MaterialTestDialog({ open, onClose }: Props) {
           overflow: "auto",
         }}
       >
-        <div id="material-test-dialog-title" style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "16px" }}>
+        <div id="material-test-dialog-title" style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "12px" }}>
           Material Test Grid
+        </div>
+
+        {/* $32=0 warning banner */}
+        {showLaserWarning && (
+          <div style={{
+            background: "rgba(226,167,74,0.15)",
+            border: "1px solid rgba(226,167,74,0.4)",
+            borderRadius: "var(--radius-sm)",
+            padding: "8px 10px",
+            marginBottom: "12px",
+            fontSize: "11px",
+            color: "var(--warning, #e2a74a)",
+            lineHeight: 1.4,
+          }}>
+            Laser mode ($32) is disabled -- M4 won't fire. Enable with $32=1 in the console.
+          </div>
+        )}
+
+        {/* Presets */}
+        <div style={{ marginBottom: "14px" }}>
+          <div style={{ fontSize: "10px", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "6px", fontWeight: 600 }}>
+            Presets
+          </div>
+          <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+            {Object.keys(PRESETS).map((name) => (
+              <button
+                key={name}
+                onClick={() => applyPreset(name)}
+                style={{
+                  padding: "3px 8px",
+                  borderRadius: "var(--radius-sm)",
+                  fontSize: "11px",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  border: "1px solid var(--border)",
+                  background: "transparent",
+                  color: "var(--text-secondary)",
+                }}
+              >
+                {name}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Power range */}
@@ -307,7 +430,7 @@ export function MaterialTestDialog({ open, onClose }: Props) {
           </div>
         </div>
 
-        {/* Mode */}
+        {/* Mode + Power mode */}
         <div style={{ marginBottom: "16px" }}>
           <div style={{ fontSize: "10px", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "6px", fontWeight: 600 }}>
             Mode
@@ -333,6 +456,28 @@ export function MaterialTestDialog({ open, onClose }: Props) {
                 {m}
               </button>
             ))}
+            <div style={{ width: "1px", background: "var(--border)", margin: "0 4px" }} />
+            {(["M3", "M4"] as const).map((pm) => (
+              <button
+                key={pm}
+                onClick={() => setPowerMode(pm)}
+                title={pm === "M3" ? "Constant power" : "Variable power (laser mode)"}
+                style={{
+                  flex: 1,
+                  padding: "4px 8px",
+                  borderRadius: "var(--radius-sm)",
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  border: `1px solid ${powerMode === pm ? "var(--accent)" : "var(--border)"}`,
+                  background: powerMode === pm ? "rgba(74,144,226,0.15)" : "transparent",
+                  color: powerMode === pm ? "var(--accent)" : "var(--text-muted)",
+                  textTransform: "uppercase",
+                }}
+              >
+                {pm === "M3" ? "M3 Const" : "M4 Var"}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -348,13 +493,13 @@ export function MaterialTestDialog({ open, onClose }: Props) {
         </div>
 
         {/* Actions */}
-        <div style={{ display: "flex", gap: "8px" }}>
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
           <button
             onClick={() => handleGenerate("send")}
             disabled={jobRunning}
             title={jobRunning ? "Cannot start while a job is running" : undefined}
             style={{
-              flex: 1,
+              flex: "1 1 auto",
               padding: "6px 12px",
               borderRadius: "var(--radius-sm)",
               border: "none",
@@ -369,9 +514,28 @@ export function MaterialTestDialog({ open, onClose }: Props) {
             Send to Machine
           </button>
           <button
+            onClick={handleFrame}
+            disabled={jobRunning}
+            title={jobRunning ? "Cannot frame while a job is running" : "Trace the grid outline without firing the laser"}
+            style={{
+              flex: "1 1 auto",
+              padding: "6px 12px",
+              borderRadius: "var(--radius-sm)",
+              border: "1px solid var(--border)",
+              fontSize: "11px",
+              fontWeight: 600,
+              cursor: jobRunning ? "not-allowed" : "pointer",
+              background: "transparent",
+              color: "var(--text-secondary)",
+              opacity: jobRunning ? 0.4 : 1,
+            }}
+          >
+            Frame
+          </button>
+          <button
             onClick={() => handleGenerate("clipboard")}
             style={{
-              flex: 1,
+              flex: "1 1 auto",
               padding: "6px 12px",
               borderRadius: "var(--radius-sm)",
               border: "1px solid var(--border)",
