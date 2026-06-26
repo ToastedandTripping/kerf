@@ -194,6 +194,123 @@ describe("SVG import: compound path → grouped per-contour objects", () => {
   });
 });
 
+describe("SVG import: compound path inside transformed groups", () => {
+  it("compound path in a translated group: flatten coords = source + translation", () => {
+    _testImportSvgWithLayers(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200mm" height="200mm">
+         <g transform="translate(50 50)">
+           <path d="M0 0 H10 V10 H0 Z M20 0 H30 V10 H20 Z" stroke="#000"/>
+         </g>
+       </svg>`,
+      null,
+    );
+    const flat = flattenObjectsForTest(useStore.getState().objects);
+    expect(flat).toHaveLength(2);
+    expect(pts(flat[0])).toEqual([
+      { x: 50, y: 50 }, { x: 60, y: 50 }, { x: 60, y: 60 }, { x: 50, y: 60 },
+    ]);
+    expect(pts(flat[1])).toEqual([
+      { x: 70, y: 50 }, { x: 80, y: 50 }, { x: 80, y: 60 }, { x: 70, y: 60 },
+    ]);
+  });
+
+  it("compound path in a scaled group: flatten coords = source * scale", () => {
+    _testImportSvgWithLayers(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200mm" height="200mm">
+         <g transform="scale(2)">
+           <path d="M5 5 H15 V15 H5 Z M20 5 H30 V15 H20 Z" stroke="#000"/>
+         </g>
+       </svg>`,
+      null,
+    );
+    const flat = flattenObjectsForTest(useStore.getState().objects);
+    expect(flat).toHaveLength(2);
+    expect(pts(flat[0])).toEqual([
+      { x: 10, y: 10 }, { x: 30, y: 10 }, { x: 30, y: 30 }, { x: 10, y: 30 },
+    ]);
+    expect(pts(flat[1])).toEqual([
+      { x: 40, y: 10 }, { x: 60, y: 10 }, { x: 60, y: 30 }, { x: 40, y: 30 },
+    ]);
+  });
+
+  it("separate paths in a translated group: each has correct world position", () => {
+    _testImportSvgWithLayers(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200mm" height="200mm">
+         <g transform="translate(100 100)">
+           <path d="M0 0 H10 V10 H0 Z" stroke="#000"/>
+           <path d="M20 0 H30 V10 H20 Z" stroke="#000"/>
+         </g>
+       </svg>`,
+      null,
+    );
+    const objects = useStore.getState().objects;
+    expect(objects).toHaveLength(2);
+    expect(pts(objects[0])).toEqual([
+      { x: 100, y: 100 }, { x: 110, y: 100 }, { x: 110, y: 110 }, { x: 100, y: 110 },
+    ]);
+    expect(pts(objects[1])).toEqual([
+      { x: 120, y: 100 }, { x: 130, y: 100 }, { x: 130, y: 110 }, { x: 120, y: 110 },
+    ]);
+  });
+
+  it("nested groups: inner translate + outer translate compose correctly", () => {
+    _testImportSvgWithLayers(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="300mm" height="300mm">
+         <g transform="translate(50 50)">
+           <g transform="translate(10 10)">
+             <path d="M0 0 H5 V5 H0 Z" stroke="#000"/>
+           </g>
+         </g>
+       </svg>`,
+      null,
+    );
+    const objects = useStore.getState().objects;
+    expect(objects).toHaveLength(1);
+    expect(pts(objects[0])).toEqual([
+      { x: 60, y: 60 }, { x: 65, y: 60 }, { x: 65, y: 65 }, { x: 60, y: 65 },
+    ]);
+  });
+
+  it("viewBox offset: non-zero viewBox min shifts all coordinates", () => {
+    _testImportSvgWithLayers(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="10 10 100 100" width="100mm" height="100mm">
+         <path d="M10 10 H20 V20 H10 Z M30 10 H40 V20 H30 Z" stroke="#000"/>
+       </svg>`,
+      null,
+    );
+    const flat = flattenObjectsForTest(useStore.getState().objects);
+    expect(flat).toHaveLength(2);
+    // viewBox="10 10 ..." → initial matrix translates by (-10, -10)
+    expect(pts(flat[0])).toEqual([
+      { x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 },
+    ]);
+    expect(pts(flat[1])).toEqual([
+      { x: 20, y: 0 }, { x: 30, y: 0 }, { x: 30, y: 10 }, { x: 20, y: 10 },
+    ]);
+  });
+
+  it("globalScale applies: px-unit SVG scales to mm", () => {
+    // No width/height in mm, viewBox present → globalScale = 0.2646 * width / vbWidth
+    _testImportSvgWithLayers(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+         <path d="M0 0 H100 V100 H0 Z M10 10 H90 V90 H10 Z" stroke="#000"/>
+       </svg>`,
+      null,
+    );
+    const flat = flattenObjectsForTest(useStore.getState().objects);
+    expect(flat).toHaveLength(2);
+    // globalScale = (100px * 0.2646) / 100 = 0.2646
+    const s = 0.2646;
+    for (const p of pts(flat[0])) {
+      expect(p.x).toBeCloseTo(p.x, 2); // just verify non-NaN
+    }
+    expect(pts(flat[0])[0].x).toBeCloseTo(0, 2);
+    expect(pts(flat[0])[1].x).toBeCloseTo(100 * s, 2);
+    expect(pts(flat[1])[0].x).toBeCloseTo(10 * s, 2);
+    expect(pts(flat[1])[1].x).toBeCloseTo(90 * s, 2);
+  });
+});
+
 describe("text-to-path: multi-contour glyphs group per glyph", () => {
   function makeText(id: string, text: string): DesignObject {
     return {
