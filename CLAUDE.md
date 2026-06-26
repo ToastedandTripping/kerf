@@ -21,6 +21,26 @@ Laser cutter CAD/CAM desktop app. Tauri v2 / React / Pixi.js / Rust.
 - Layers are color-coded, 6 default (Cut, Engrave, Score + 3)
 - Dark mode, minimal chrome, Apple-esque design
 
+## Testing SOP (mandatory)
+Every relay and fix MUST be verified in the running app before declaring complete.
+
+**Dev server:** `npm run dev` starts the Vite dev server. Open in Chrome and visually
+confirm the change works (golden path + edge cases). Use Chrome DevTools MCP for
+interaction testing (click, drag, type, screenshot).
+
+**What's testable in-browser:** All UI interactions, tool behavior, rendering,
+drag/drop, text editing, panel layout, keyboard shortcuts, Pixi.js canvas behavior.
+
+**What's NOT testable (hardware-only):** Serial/GRBL communication, file system dialogs
+(Tauri plugin), keep-awake, actual laser operation. For these, explicitly flag
+"owner hardware test required" with specific test steps.
+
+**When:** After implementation (before review), and again after review fixes. Never
+declare a relay stage complete based only on `tsc --noEmit` + test pass.
+
+**Tracking:** Any feature that can't be browser-tested gets logged in the ROADMAP
+`next` section with explicit owner-test steps. Nothing gets silently skipped.
+
 ## Critical: Zustand Selector Rules (React Error 185)
 **NEVER** return a new object/array from a `useStore` selector. This causes infinite re-render loops (React Error 185) that crash the app with a blank screen. This bug has appeared 3 times.
 

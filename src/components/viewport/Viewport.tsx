@@ -323,6 +323,7 @@ export function Viewport() {
     if (!selectionOverlayRef.current) return;
     const g = selectionOverlayRef.current;
     g.clear();
+    g.removeChildren();
 
     // Per-object selection outlines (color-coded by layer)
     const layers = useStore.getState().layers;
