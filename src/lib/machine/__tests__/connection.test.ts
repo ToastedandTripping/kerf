@@ -343,13 +343,9 @@ describe("connection.ts (TN3)", () => {
       await machineConnection.disconnect();
     });
 
-    // Soft-reset on connect: 0x18 must reach the wire BEFORE $$ is sent.
-    // Standard GRBL senders (UGS, LaserGRBL) all soft-reset on connect;
-    // skipping it leaves GRBL in stale modal/planner state on DTR-less adapters,
-    // causing the first job to desync (the second always works because the user's
-    // first Stop sends 0x18 — confirmed on hardware).
-    it("sends 0x18 soft-reset byte before the $$ settings query on connect", async () => {
-      vi.useFakeTimers();
+    // DTR hardware-reset + 0x18 soft-reset now happen inside Rust's
+    // serial_connect (before it returns). The TS side just queries $$ after.
+    it("queries GRBL settings immediately after connect (reset is Rust-side)", async () => {
       const invokeOrder: string[] = [];
       mockInvoke.mockImplementation(async (cmd: string, args?: { command?: string; byte?: number }) => {
         if (cmd === "serial_connect") return "Grbl 1.1h ['$' for help]";
@@ -368,15 +364,12 @@ describe("connection.ts (TN3)", () => {
         return undefined;
       });
 
-      const connectPromise = machineConnection.connect("/dev/ttyUSB0", 115200);
-      await vi.advanceTimersByTimeAsync(2000);
-      await connectPromise;
+      await machineConnection.connect("/dev/ttyUSB0", 115200);
 
-      // 0x18 must appear in the log before $$
-      const resetIdx = invokeOrder.indexOf("byte(18)");
-      const settingsIdx = invokeOrder.indexOf("send($$)");
-      expect(resetIdx).toBeGreaterThanOrEqual(0);
-      expect(settingsIdx).toBeGreaterThan(resetIdx);
+      // No TS-side 0x18 — reset is handled in Rust before connect returns
+      expect(invokeOrder.filter((o) => o === "byte(18)")).toHaveLength(0);
+      // $$ must still be sent
+      expect(invokeOrder).toContain("send($$)");
 
       await machineConnection.disconnect();
     });

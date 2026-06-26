@@ -109,18 +109,8 @@ export const machineConnection = {
         localStorage.setItem(LAST_BAUD_KEY, String(baudRate));
       } catch {}
 
-      // Soft-reset on connect: adapters that don't assert DTR on port-open leave
-      // GRBL in stale parser/modal/planner state from the previous session. The
-      // first job stream then desyncs and the pump wedges on a lost `ok`. Sending
-      // 0x18 here mirrors what UGS and LaserGRBL do — both reset on connect.
-      // The 2000ms wait lets GRBL reboot and emit its banner before `$$` runs;
-      // drain_classified in queryGrblSettings() consumes any leftover banner lines.
-      // On homing-enabled machines ($22=1) GRBL boots into ALARM — expected and
-      // already handled: the post-settings getStatusReport() reflects it, and
-      // canStartJob gates on alarm. Do NOT auto-clear alarm or auto-home.
-      console.info("Soft reset on connect — clean GRBL state");
-      await this.sendByte(0x18);
-      await new Promise((r) => setTimeout(r, 2000));
+      // DTR hardware-reset + 0x18 soft-reset now happen in Rust during
+      // serial_connect, before it returns. No TS-side reset needed.
 
       // Start status polling
       statusPollInterval = setInterval(() => this.pollStatus(), 250);

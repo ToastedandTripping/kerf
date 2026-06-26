@@ -225,10 +225,19 @@ pub async fn serial_connect(
 ) -> Result<String, String> {
     let inner = state.0.clone();
     tokio::task::spawn_blocking(move || {
-        let port = serialport::new(&port_name, baud_rate)
+        let mut port = serialport::new(&port_name, baud_rate)
             .timeout(Duration::from_millis(1000))
             .open()
             .map_err(|e| format!("Failed to open port '{}': {}", port_name, e))?;
+
+        // Hardware-reset the GRBL controller via DTR toggle. Arduino boards
+        // connect DTR to RESET through a 100nF cap — the falling edge (assert)
+        // pulses the MCU reset line. Deassert first to guarantee an edge
+        // regardless of the adapter's initial DTR state.
+        let _ = port.write_data_terminal_ready(false);
+        std::thread::sleep(Duration::from_millis(50));
+        let _ = port.write_data_terminal_ready(true);
+        std::thread::sleep(Duration::from_millis(1500));
 
         let realtime = port.try_clone().map_err(|e| e.to_string())?;
         let reader_port = port.try_clone().map_err(|e| e.to_string())?;
@@ -242,6 +251,20 @@ pub async fn serial_connect(
         // is ever constructed after connect.
         let startup = drain_startup_banner(&mut channel);
 
+        // Soft-reset fallback for non-Arduino boards (STM32, ESP32, etc.)
+        // that lack the DTR-to-RESET capacitor circuit.
+        let _ = channel.writer.write_all(b"\x18");
+        let _ = channel.writer.flush();
+        std::thread::sleep(Duration::from_millis(500));
+        let soft_banner = drain_startup_banner(&mut channel);
+
+        // Prefer the hardware-reset banner; fall back to soft-reset banner.
+        let banner = if !startup.trim().is_empty() {
+            startup
+        } else {
+            soft_banner
+        };
+
         *inner
             .command
             .lock()
@@ -252,10 +275,10 @@ pub async fn serial_connect(
             .map_err(|e| format!("Lock failed: {}", e))? = Some(realtime);
         inner.connected.store(true, Ordering::SeqCst);
 
-        if startup.trim().is_empty() {
+        if banner.trim().is_empty() {
             Ok(format!("Connected to {} at {} baud", port_name, baud_rate))
         } else {
-            Ok(startup.trim().to_string())
+            Ok(banner.trim().to_string())
         }
     })
     .await
