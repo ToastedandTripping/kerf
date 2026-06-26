@@ -24,32 +24,34 @@ interface MaterialTestOptions {
   cellGap: number;
   mode: "cut" | "fill";
   powerMode: PowerMode;
+  labels: boolean;
+  cutBorder: boolean;
 }
 
 const PRESETS: Record<string, MaterialTestOptions> = {
   "Quick Cut": {
     powerMin: 50, powerMax: 100, powerSteps: 4,
     speedMin: 300, speedMax: 800, speedSteps: 4,
-    cellWidth: 8, cellHeight: 8, cellGap: 1.5,
-    mode: "cut", powerMode: "M3",
+    cellWidth: 8, cellHeight: 8, cellGap: 3,
+    mode: "cut", powerMode: "M3", labels: true, cutBorder: true,
   },
   "Quick Engrave": {
     powerMin: 20, powerMax: 60, powerSteps: 4,
     speedMin: 3000, speedMax: 12000, speedSteps: 4,
-    cellWidth: 8, cellHeight: 8, cellGap: 1.5,
-    mode: "fill", powerMode: "M4",
+    cellWidth: 8, cellHeight: 8, cellGap: 3,
+    mode: "fill", powerMode: "M4", labels: true, cutBorder: true,
   },
   "Full Cut": {
     powerMin: 10, powerMax: 100, powerSteps: 10,
     speedMin: 100, speedMax: 1200, speedSteps: 10,
-    cellWidth: 10, cellHeight: 10, cellGap: 2,
-    mode: "cut", powerMode: "M3",
+    cellWidth: 10, cellHeight: 10, cellGap: 3,
+    mode: "cut", powerMode: "M3", labels: true, cutBorder: true,
   },
   "Full Engrave": {
     powerMin: 10, powerMax: 80, powerSteps: 10,
     speedMin: 1000, speedMax: 18000, speedSteps: 10,
-    cellWidth: 10, cellHeight: 10, cellGap: 2,
-    mode: "fill", powerMode: "M4",
+    cellWidth: 10, cellHeight: 10, cellGap: 3,
+    mode: "fill", powerMode: "M4", labels: true, cutBorder: true,
   },
 };
 
@@ -80,8 +82,39 @@ function generateMaterialTestGcode(opts: MaterialTestOptions, sValueMax: number)
     );
   }
 
-  const startX = 10; // mm offset from origin
-  const startY = 10;
+  const labelMargin = opts.labels ? 5 : 0;
+  const startX = 10 + labelMargin;
+  const startY = 10 + labelMargin;
+
+  // Column headers (speed values) — light engrave above the grid
+  if (opts.labels) {
+    const labelS = Math.round(sValueMax * 0.12);
+    const labelFeed = 3000;
+    lines.push("; --- Column headers (speed) ---");
+    for (let si = 0; si < speeds.length; si++) {
+      const speed = Math.round(speeds[si]);
+      const cx = startX + si * (opts.cellWidth + opts.cellGap);
+      const ly = startY - 2;
+      lines.push(`G0 X${cx.toFixed(3)} Y${ly.toFixed(3)}`);
+      lines.push(`${opts.powerMode} S${labelS}`);
+      lines.push(`G1 X${(cx + opts.cellWidth * 0.8).toFixed(3)} Y${ly.toFixed(3)} F${labelFeed} S${labelS}`);
+      lines.push("M5");
+      lines.push(`; ${speed}mm/min`);
+    }
+    // Row headers (power values) — light engrave left of the grid
+    lines.push("; --- Row headers (power) ---");
+    for (let pi = 0; pi < powers.length; pi++) {
+      const power = Math.round(powers[pi]);
+      const cy = startY + pi * (opts.cellHeight + opts.cellGap);
+      const lx = startX - 2;
+      lines.push(`G0 X${(lx - 3).toFixed(3)} Y${(cy + opts.cellHeight / 2).toFixed(3)}`);
+      lines.push(`${opts.powerMode} S${labelS}`);
+      lines.push(`G1 X${lx.toFixed(3)} Y${(cy + opts.cellHeight / 2).toFixed(3)} F${labelFeed} S${labelS}`);
+      lines.push("M5");
+      lines.push(`; P${power}%`);
+    }
+    lines.push("");
+  }
 
   for (let pi = 0; pi < powers.length; pi++) {
     for (let si = 0; si < speeds.length; si++) {
@@ -137,6 +170,28 @@ function generateMaterialTestGcode(opts: MaterialTestOptions, sValueMax: number)
     }
   }
 
+  // Cut border — surrounds the entire grid for a reusable test card
+  if (opts.cutBorder) {
+    const gridW = opts.speedSteps * (opts.cellWidth + opts.cellGap) - opts.cellGap;
+    const gridH = opts.powerSteps * (opts.cellHeight + opts.cellGap) - opts.cellGap;
+    const margin = 3;
+    const bx = startX - margin - labelMargin;
+    const by = startY - margin - labelMargin;
+    const bw = gridW + 2 * margin + labelMargin;
+    const bh = gridH + 2 * margin + labelMargin;
+    const borderS = sValueMax;
+    const borderFeed = 200;
+    lines.push("; --- Cut border (reusable test card) ---");
+    lines.push(`G0 X${bx.toFixed(3)} Y${by.toFixed(3)}`);
+    lines.push(`M3 S${borderS}`);
+    lines.push(`G1 X${(bx + bw).toFixed(3)} Y${by.toFixed(3)} F${borderFeed} S${borderS}`);
+    lines.push(`G1 X${(bx + bw).toFixed(3)} Y${(by + bh).toFixed(3)} F${borderFeed} S${borderS}`);
+    lines.push(`G1 X${bx.toFixed(3)} Y${(by + bh).toFixed(3)} F${borderFeed} S${borderS}`);
+    lines.push(`G1 X${bx.toFixed(3)} Y${by.toFixed(3)} F${borderFeed} S${borderS}`);
+    lines.push("M5");
+    lines.push("");
+  }
+
   lines.push("M5 ; laser off");
   lines.push("G0 X0 Y0 ; return home");
   lines.push("M2 ; program end");
@@ -188,6 +243,8 @@ export function MaterialTestDialog({ open, onClose }: Props) {
   const [cellGap, setCellGap] = useState(2);
   const [mode, setMode] = useState<"cut" | "fill">("cut");
   const [powerMode, setPowerMode] = useState<PowerMode>("M4");
+  const [labels, setLabels] = useState(true);
+  const [cutBorder, setCutBorder] = useState(true);
 
   // Scalar selectors only — never return a new object/array (React Error 185)
   const jobRunning = useStore((s) => s.jobRunning);
@@ -203,8 +260,12 @@ export function MaterialTestDialog({ open, onClose }: Props) {
 
   if (!open) return null;
 
-  const totalWidth = speedSteps * (cellWidth + cellGap) - cellGap;
-  const totalHeight = powerSteps * (cellHeight + cellGap) - cellGap;
+  const gridWidth = speedSteps * (cellWidth + cellGap) - cellGap;
+  const gridHeight = powerSteps * (cellHeight + cellGap) - cellGap;
+  const lm = labels ? 5 : 0;
+  const bm = cutBorder ? 3 : 0;
+  const totalWidth = gridWidth + lm + 2 * bm;
+  const totalHeight = gridHeight + lm + 2 * bm;
   const store = useStore.getState();
   const workspaceW = store.workspaceWidth;
   const workspaceH = store.workspaceHeight;
@@ -224,6 +285,8 @@ export function MaterialTestDialog({ open, onClose }: Props) {
     setCellGap(p.cellGap);
     setMode(p.mode);
     setPowerMode(p.powerMode);
+    setLabels(p.labels);
+    setCutBorder(p.cutBorder);
   }
 
   async function sendLines(gcode: string, label: string) {
@@ -267,7 +330,7 @@ export function MaterialTestDialog({ open, onClose }: Props) {
     const gcode = generateMaterialTestGcode({
       powerMin, powerMax, powerSteps,
       speedMin, speedMax, speedSteps,
-      cellWidth, cellHeight, cellGap, mode, powerMode,
+      cellWidth, cellHeight, cellGap, mode, powerMode, labels, cutBorder,
     }, grblSValueMax);
 
     if (target === "clipboard") {
@@ -479,6 +542,18 @@ export function MaterialTestDialog({ open, onClose }: Props) {
               </button>
             ))}
           </div>
+        </div>
+
+        {/* Options */}
+        <div style={{ display: "flex", gap: "12px", marginBottom: "12px" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "11px", color: "var(--text-secondary)", cursor: "pointer" }}>
+            <input type="checkbox" checked={labels} onChange={(e) => setLabels(e.target.checked)} />
+            Labels
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "11px", color: "var(--text-secondary)", cursor: "pointer" }}>
+            <input type="checkbox" checked={cutBorder} onChange={(e) => setCutBorder(e.target.checked)} />
+            Cut border
+          </label>
         </div>
 
         {/* Grid size info */}
