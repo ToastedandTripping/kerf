@@ -262,6 +262,52 @@ export function PropertiesPanel() {
             </div>
           </PropertyGroup>
 
+          {/* Text properties */}
+          {obj.type === "text" && (
+            <PropertyGroup label="Text">
+              <PropertyRow label="Content">
+                <input
+                  value={obj.text ?? ""}
+                  onChange={(e) => updateObject(obj.id, { text: e.target.value })}
+                  onFocus={beginEdit}
+                  onBlur={commitEdit}
+                  style={inputStyle}
+                />
+              </PropertyRow>
+              <NumberField
+                label="Size"
+                value={obj.fontSize ?? 16}
+                onChange={(v) => updateObject(obj.id, { fontSize: Math.max(1, v) })}
+                unit="px"
+                step={1}
+                onFocus={beginEdit}
+                onBlur={commitEdit}
+              />
+              <PropertyRow label="Font">
+                <select
+                  value={obj.fontFamily ?? "sans-serif"}
+                  onChange={(e) => updateObject(obj.id, { fontFamily: e.target.value })}
+                  onFocus={beginEdit}
+                  onBlur={commitEdit}
+                  style={{
+                    ...inputStyle,
+                    appearance: "none",
+                    WebkitAppearance: "none",
+                    backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath d='M0 2l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.5'/%3E%3C/svg%3E")`,
+                    backgroundRepeat: "no-repeat",
+                    backgroundPosition: "right 6px center",
+                    paddingRight: "20px",
+                    cursor: "pointer",
+                  }}
+                >
+                  <option value="sans-serif">Sans-serif</option>
+                  <option value="serif">Serif</option>
+                  <option value="monospace">Monospace</option>
+                </select>
+              </PropertyRow>
+            </PropertyGroup>
+          )}
+
           {/* Image adjustments */}
           {obj.type === "image" && (
             <PropertyGroup label="Image">

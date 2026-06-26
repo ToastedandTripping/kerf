@@ -51,6 +51,11 @@ export function Viewport() {
   const panCameraRef = useRef({ x: 0, y: 0, zoom: 1 });
   // Persistent display object cache: maps object ID to its Pixi Container
   const displayCacheRef = useRef<Map<string, Container>>(new Map());
+  // Text editing: tracks whether a commit/cancel is already in-progress so onBlur
+  // doesn't double-fire when Enter/Escape already handled the action.
+  const textEditCommittingRef = useRef(false);
+  // Stores the original text content when entering edit mode, for Escape-revert.
+  const textEditOriginalRef = useRef<string>("");
 
   const camera = useStore((s) => s.camera);
   const setCamera = useStore((s) => s.setCamera);
@@ -65,6 +70,12 @@ export function Viewport() {
   const nodeEditState = useStore((s) => s.nodeEditState);
   const setNodeEditState = useStore((s) => s.setNodeEditState);
   const guides = useStore((s) => s.guides);
+  // Text editing — scalar selectors only (never return new objects/arrays from useStore)
+  const textEditingId = useStore((s) => s.textEditingId);
+  const setTextEditingId = useStore((s) => s.setTextEditingId);
+  const updateObject = useStore((s) => s.updateObject);
+  const removeObjects = useStore((s) => s.removeObjects);
+  const setActiveTool = useStore((s) => s.setActiveTool);
 
   // P7: Derived slice -- re-renders selection overlay when selected objects change.
   // Returns original store references so useShallow's === comparison is stable.
@@ -600,6 +611,14 @@ export function Viewport() {
     };
   }, [activeTool]);
 
+  // Capture original text content when entering text edit mode (for Escape-revert)
+  useEffect(() => {
+    if (textEditingId) {
+      const obj = useStore.getState().objectsById.get(textEditingId);
+      textEditOriginalRef.current = obj?.text ?? "";
+    }
+  }, [textEditingId]);
+
   // Zoom with scroll wheel
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
@@ -642,6 +661,9 @@ export function Viewport() {
       }
 
       if (e.button === 0) {
+        // If text editing is active, let the input's blur handler commit the edit.
+        // Bail here to avoid processing a canvas action before blur fires.
+        if (useStore.getState().textEditingId !== null) return;
         const rect = canvasRef.current?.getBoundingClientRect();
         if (!rect) return;
         const worldX = (e.clientX - rect.left - camera.x) / camera.zoom / PX_PER_MM;
@@ -770,6 +792,11 @@ export function Viewport() {
     [camera, activeTool]
   );
 
+  // Derive the object currently being text-edited (stable: objects array is already selected above)
+  const textEditingObj = textEditingId != null
+    ? objects.find((o) => o.id === textEditingId) ?? null
+    : null;
+
   // Compute marquee screen rect for overlay
   const mq = marqueeRef.current;
   const marqueeStyle: React.CSSProperties | null = mq ? {
@@ -869,6 +896,96 @@ export function Viewport() {
           }} />
         )
       )}
+      {/* Text editing HTML overlay — absolutely positioned over the canvas, not a Pixi object */}
+      {textEditingObj && (() => {
+        const fontSize = textEditingObj.fontSize ?? 16;
+        const screenX = textEditingObj.transform.x * PX_PER_MM * camera.zoom + camera.x;
+        const screenY = textEditingObj.transform.y * PX_PER_MM * camera.zoom + camera.y;
+
+        const handleCommit = () => {
+          const store = useStore.getState();
+          const obj = store.textEditingId ? store.objectsById.get(store.textEditingId) : null;
+          if (obj && (!obj.text || !obj.text.trim())) {
+            removeObjects([obj.id]);
+          }
+          setTextEditingId(null);
+          setActiveTool("select");
+        };
+
+        const handleCancel = () => {
+          const store = useStore.getState();
+          const obj = store.textEditingId ? store.objectsById.get(store.textEditingId) : null;
+          if (obj) {
+            const original = textEditOriginalRef.current;
+            if (!original || !original.trim()) {
+              // New empty object — delete it
+              removeObjects([obj.id]);
+            } else {
+              // Existing object — revert to original text
+              updateObject(obj.id, { text: original });
+            }
+          }
+          setTextEditingId(null);
+          setActiveTool("select");
+        };
+
+        return (
+          <input
+            key={textEditingObj.id}
+            type="text"
+            autoFocus
+            value={textEditingObj.text ?? ""}
+            style={{
+              position: "absolute",
+              left: screenX,
+              top: screenY,
+              fontSize: `${fontSize * camera.zoom}px`,
+              fontFamily: textEditingObj.fontFamily ?? "sans-serif",
+              color: textEditingObj.fill || "#e8e8e8",
+              background: "transparent",
+              border: "none",
+              outline: "none",
+              minWidth: "80px",
+              zIndex: 20,
+              pointerEvents: "all",
+              padding: 0,
+              margin: 0,
+              lineHeight: 1,
+            }}
+            onChange={(e) => {
+              const text = e.target.value;
+              const fs = textEditingObj.fontSize ?? 16;
+              updateObject(textEditingObj.id, {
+                text,
+                transform: {
+                  ...textEditingObj.transform,
+                  width: Math.max(fs * 2, text.length * fs * 0.6),
+                  height: fs * 1.3,
+                },
+              });
+            }}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") {
+                e.preventDefault();
+                textEditCommittingRef.current = true;
+                handleCommit();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                textEditCommittingRef.current = true;
+                handleCancel();
+              }
+            }}
+            onBlur={() => {
+              if (textEditCommittingRef.current) {
+                textEditCommittingRef.current = false;
+                return;
+              }
+              handleCommit();
+            }}
+          />
+        );
+      })()}
     </div>
   );
 }

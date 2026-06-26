@@ -246,6 +246,10 @@ export interface AppState {
   nodeEditState: { pathId: string | null; selectedNodeIndex: number | null };
   setNodeEditState: (state: { pathId: string | null; selectedNodeIndex: number | null }) => void;
 
+  // Text editing
+  textEditingId: string | null;
+  setTextEditingId: (id: string | null) => void;
+
   // Dialog state
   openDialogs: Set<string>;
   openDialog: (name: string) => void;

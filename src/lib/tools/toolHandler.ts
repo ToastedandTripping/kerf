@@ -1581,6 +1581,18 @@ export function handleViewportDoubleClick(worldX: number, worldY: number) {
     return;
   }
 
+  // Double-click on a text object in select mode: enter text edit
+  if (tool === "select") {
+    const hitId = hitTest(worldX, worldY);
+    if (hitId) {
+      const hitObj = store.objectsById.get(hitId);
+      if (hitObj && hitObj.type === "text") {
+        store.setTextEditingId(hitId);
+        return;
+      }
+    }
+  }
+
   if (tool === "node" && store.nodeEditState.pathId) {
     const hit = hitTestNodeHandles(worldX, worldY, store.camera.zoom);
     if (hit && hit.target === "node") {
@@ -1641,6 +1653,7 @@ export function handleViewportDoubleClick(worldX: number, worldY: number) {
 
 function handleTextDown(worldX: number, worldY: number) {
   const store = useStore.getState();
+  const fontSize = 18;
   const obj: DesignObject = {
     id: generateId(),
     type: "text",
@@ -1648,8 +1661,8 @@ function handleTextDown(worldX: number, worldY: number) {
     transform: {
       x: worldX,
       y: worldY,
-      width: 0,
-      height: 0,
+      width: fontSize * 4,
+      height: fontSize * 1.3,
       rotation: 0,
       scaleX: 1,
       scaleY: 1,
@@ -1661,13 +1674,13 @@ function handleTextDown(worldX: number, worldY: number) {
     stroke: "#e8e8e8",
     strokeWidth: 0,
     opacity: 1,
-    text: "Text",
-    fontSize: 18,
+    text: "",
+    fontSize,
     fontFamily: "sans-serif",
   };
   store.addObject(obj);
   store.setSelectedIds([obj.id]);
-  store.setActiveTool("select");
+  store.setTextEditingId(obj.id);
 }
 
 function handlePositionLaserDown(worldX: number, worldY: number) {

@@ -728,6 +728,10 @@ export const useStore = create<AppState>((set, get) => ({
   nodeEditState: { pathId: null, selectedNodeIndex: null },
   setNodeEditState: (state) => set({ nodeEditState: state }),
 
+  // Text editing
+  textEditingId: null,
+  setTextEditingId: (id) => set({ textEditingId: id }),
+
   // Dialog state
   openDialogs: new Set(),
   openDialog: (name) => set((state) => {
