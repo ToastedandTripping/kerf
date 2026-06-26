@@ -592,6 +592,8 @@ export function Viewport() {
   // Space key for pan mode
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const tag = document.activeElement?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if (e.code === "Space" && !e.repeat) {
         spaceHeld.current = true;
         if (canvasRef.current) canvasRef.current.style.cursor = "grab";
@@ -612,10 +614,13 @@ export function Viewport() {
   }, [activeTool]);
 
   // Capture original text content when entering text edit mode (for Escape-revert)
+  // and snapshot the store for undo.
   useEffect(() => {
     if (textEditingId) {
-      const obj = useStore.getState().objectsById.get(textEditingId);
+      const store = useStore.getState();
+      const obj = store.objectsById.get(textEditingId);
       textEditOriginalRef.current = obj?.text ?? "";
+      store.beginPropertyEdit();
     }
   }, [textEditingId]);
 
@@ -908,6 +913,7 @@ export function Viewport() {
           if (obj && (!obj.text || !obj.text.trim())) {
             removeObjects([obj.id]);
           }
+          store.commitPropertyEdit();
           setTextEditingId(null);
           setActiveTool("select");
         };
@@ -918,13 +924,12 @@ export function Viewport() {
           if (obj) {
             const original = textEditOriginalRef.current;
             if (!original || !original.trim()) {
-              // New empty object — delete it
               removeObjects([obj.id]);
             } else {
-              // Existing object — revert to original text
               updateObject(obj.id, { text: original });
             }
           }
+          store.commitPropertyEdit();
           setTextEditingId(null);
           setActiveTool("select");
         };

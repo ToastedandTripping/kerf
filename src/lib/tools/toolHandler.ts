@@ -1680,6 +1680,11 @@ function handleTextDown(worldX: number, worldY: number) {
   };
   store.addObject(obj);
   store.setSelectedIds([obj.id]);
+  store.pushCommand({
+    type: "add",
+    undo: () => useStore.getState().removeObjects([obj.id]),
+    redo: () => useStore.getState().addObject(obj),
+  });
   store.setTextEditingId(obj.id);
 }
 
