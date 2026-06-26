@@ -1,7 +1,11 @@
+import { useState } from "react";
 import { useStore } from "../../app/store";
 import type { ImageAdjustments } from "../../app/types";
 import { openDitherPreview } from "../../app/App";
 import { movePartial, scalePartial } from "../../lib/geometry";
+
+const MM_PER_INCH = 25.4;
+const UNITS_KEY = "kerf-display-units";
 
 export function PropertiesPanel() {
   const selectedIds = useStore((s) => s.selectedIds);
@@ -11,6 +15,21 @@ export function PropertiesPanel() {
   const moveObjectsToLayer = useStore((s) => s.moveObjectsToLayer);
   const beginEdit = useStore((s) => s.beginPropertyEdit);
   const commitEdit = useStore((s) => s.commitPropertyEdit);
+
+  const [displayUnit, setDisplayUnit] = useState<"mm" | "in">(() => {
+    try { return (localStorage.getItem(UNITS_KEY) as "mm" | "in") || "mm"; } catch { return "mm"; }
+  });
+  const [aspectLocked, setAspectLocked] = useState(false);
+
+  const toggleUnit = () => {
+    const next = displayUnit === "mm" ? "in" : "mm";
+    setDisplayUnit(next);
+    try { localStorage.setItem(UNITS_KEY, next); } catch {}
+  };
+
+  const toDisplay = (mm: number) => displayUnit === "in" ? mm / MM_PER_INCH : mm;
+  const fromDisplay = (v: number) => displayUnit === "in" ? v * MM_PER_INCH : v;
+  const unitLabel = displayUnit;
 
   const selected = objects.filter((o) => selectedIds.includes(o.id));
 
@@ -117,47 +136,86 @@ export function PropertiesPanel() {
           <PropertyGroup label="Position">
             <NumberField
               label="X"
-              value={obj.transform.x}
-              onChange={(v) => updateObject(obj.id, movePartial(obj, v, obj.transform.y))}
-              unit="mm"
+              value={toDisplay(obj.transform.x)}
+              onChange={(v) => updateObject(obj.id, movePartial(obj, fromDisplay(v), obj.transform.y))}
+              unit={unitLabel}
+              step={displayUnit === "in" ? 0.01 : 1}
               onFocus={beginEdit}
               onBlur={commitEdit}
             />
             <NumberField
               label="Y"
-              value={obj.transform.y}
-              onChange={(v) => updateObject(obj.id, movePartial(obj, obj.transform.x, v))}
-              unit="mm"
+              value={toDisplay(obj.transform.y)}
+              onChange={(v) => updateObject(obj.id, movePartial(obj, obj.transform.x, fromDisplay(v)))}
+              unit={unitLabel}
+              step={displayUnit === "in" ? 0.01 : 1}
               onFocus={beginEdit}
               onBlur={commitEdit}
             />
           </PropertyGroup>
 
           {/* Size */}
-          <PropertyGroup label="Size">
+          <PropertyGroup label="Size" trailing={
+            <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+              <button
+                onClick={() => setAspectLocked(!aspectLocked)}
+                title={aspectLocked ? "Unlock aspect ratio" : "Lock aspect ratio"}
+                style={{
+                  background: aspectLocked ? "var(--accent, #4a90e2)" : "none",
+                  border: "1px solid var(--border)", borderRadius: "var(--radius-sm)",
+                  cursor: "pointer", padding: "1px 4px",
+                  color: aspectLocked ? "#fff" : "var(--text-muted)",
+                  fontSize: "9px", lineHeight: 1,
+                }}
+              >
+                {aspectLocked ? "1:1" : "W/H"}
+              </button>
+              <button
+                onClick={toggleUnit}
+                title={`Switch to ${displayUnit === "mm" ? "inches" : "millimeters"}`}
+                style={{
+                  background: "none", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)",
+                  cursor: "pointer", padding: "1px 4px",
+                  color: "var(--text-muted)", fontSize: "9px", lineHeight: 1,
+                }}
+              >
+                {displayUnit}
+              </button>
+            </div>
+          }>
             <NumberField
               label="W"
-              value={obj.transform.width}
-              onChange={(v) =>
+              value={toDisplay(obj.transform.width)}
+              onChange={(v) => {
+                const newW = Math.max(0, fromDisplay(v));
+                const newH = aspectLocked && obj.transform.width > 0
+                  ? obj.transform.height * (newW / obj.transform.width)
+                  : obj.transform.height;
                 updateObject(obj.id, scalePartial(obj, {
                   x: obj.transform.x, y: obj.transform.y,
-                  width: Math.max(0, v), height: obj.transform.height,
-                }))
-              }
-              unit="mm"
+                  width: newW, height: newH,
+                }));
+              }}
+              unit={unitLabel}
+              step={displayUnit === "in" ? 0.01 : 1}
               onFocus={beginEdit}
               onBlur={commitEdit}
             />
             <NumberField
               label="H"
-              value={obj.transform.height}
-              onChange={(v) =>
+              value={toDisplay(obj.transform.height)}
+              onChange={(v) => {
+                const newH = Math.max(0, fromDisplay(v));
+                const newW = aspectLocked && obj.transform.height > 0
+                  ? obj.transform.width * (newH / obj.transform.height)
+                  : obj.transform.width;
                 updateObject(obj.id, scalePartial(obj, {
                   x: obj.transform.x, y: obj.transform.y,
-                  width: obj.transform.width, height: Math.max(0, v),
-                }))
-              }
-              unit="mm"
+                  width: newW, height: newH,
+                }));
+              }}
+              unit={unitLabel}
+              step={displayUnit === "in" ? 0.01 : 1}
               onFocus={beginEdit}
               onBlur={commitEdit}
             />
@@ -215,9 +273,10 @@ export function PropertiesPanel() {
             <PropertyGroup label="Corners">
               <NumberField
                 label="Radius"
-                value={obj.cornerRadius || 0}
-                onChange={(v) => updateObject(obj.id, { cornerRadius: Math.max(0, v) })}
-                unit="mm"
+                value={toDisplay(obj.cornerRadius || 0)}
+                onChange={(v) => updateObject(obj.id, { cornerRadius: Math.max(0, fromDisplay(v)) })}
+                unit={unitLabel}
+                step={displayUnit === "in" ? 0.01 : 1}
                 onFocus={beginEdit}
                 onBlur={commitEdit}
               />
@@ -456,9 +515,11 @@ export function PropertiesPanel() {
 function PropertyGroup({
   label,
   children,
+  trailing,
 }: {
   label: string;
   children: React.ReactNode;
+  trailing?: React.ReactNode;
 }) {
   return (
     <div style={{ marginBottom: "8px" }}>
@@ -469,9 +530,13 @@ function PropertyGroup({
           marginBottom: "4px",
           textTransform: "uppercase",
           letterSpacing: "0.3px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
         }}
       >
         {label}
+        {trailing}
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
         {children}
