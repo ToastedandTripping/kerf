@@ -61,10 +61,12 @@ export function parsePathD(d: string): ParsedSubpath[] {
     let cmd = tokens[i];
 
     if (!isNaN(Number(cmd))) {
-      // SVG spec: numbers after Z/z start a new subpath (implicit M/m).
-      // Without this, lastCmd==="Z" would set cmd="Z" and i never advances → infinite loop.
-      if (lastCmd === "M" || lastCmd === "Z") cmd = "M";
-      else if (lastCmd === "m" || lastCmd === "z") cmd = "m";
+      // SVG spec: after M/m, subsequent coordinate pairs are implicit L/l
+      // (lineto), NOT more M/m. After Z/z, numbers start a new subpath.
+      if (lastCmd === "M") cmd = "L";
+      else if (lastCmd === "m") cmd = "l";
+      else if (lastCmd === "Z") cmd = "M";
+      else if (lastCmd === "z") cmd = "m";
       else cmd = lastCmd;
     } else {
       i++;
