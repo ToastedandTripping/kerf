@@ -20,16 +20,17 @@
 //! job loop (`MachinePanel.tsx`) AND the material-test grid (`MaterialTestDialog.tsx`),
 //! so the inhibitor covers both job types without separate wiring.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::State;
 
 /// Managed state wrapping the optional keep-awake guard.
 /// `Default` constructs with no guard held (no OS assertion).
-pub struct KeepAwakeState(pub Mutex<Option<keepawake::KeepAwake>>);
+/// Arc-wrapped so the Mutex can be cloned into spawn_blocking closures.
+pub struct KeepAwakeState(pub Arc<Mutex<Option<keepawake::KeepAwake>>>);
 
 impl Default for KeepAwakeState {
     fn default() -> Self {
-        Self(Mutex::new(None))
+        Self(Arc::new(Mutex::new(None)))
     }
 }
 
@@ -39,29 +40,32 @@ impl Default for KeepAwakeState {
 /// the OS refuses the assertion; the JS caller swallows this and logs a warning
 /// so a headless-Linux D-Bus miss never terminates the job.
 #[tauri::command]
-pub fn keep_awake_acquire(state: State<'_, KeepAwakeState>) -> Result<(), String> {
-    let mut guard = state
-        .0
-        .lock()
-        .map_err(|e| format!("keep-awake lock poisoned: {}", e))?;
+pub async fn keep_awake_acquire(state: State<'_, KeepAwakeState>) -> Result<(), String> {
+    let inner = state.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut guard = inner
+            .lock()
+            .map_err(|e| format!("keep-awake lock poisoned: {}", e))?;
 
-    if guard.is_some() {
-        // Already holding an assertion — no-op.
-        return Ok(());
-    }
+        if guard.is_some() {
+            return Ok(());
+        }
 
-    let awake = keepawake::Builder::default()
-        .display(false)
-        .idle(true)
-        .sleep(true)
-        .reason("Laser job in progress")
-        .app_name("Kerf")
-        .app_reverse_domain("io.github.kerf")
-        .create()
-        .map_err(|e| format!("keep-awake acquire failed: {}", e))?;
+        let awake = keepawake::Builder::default()
+            .display(false)
+            .idle(true)
+            .sleep(true)
+            .reason("Laser job in progress")
+            .app_name("Kerf")
+            .app_reverse_domain("io.github.kerf")
+            .create()
+            .map_err(|e| format!("keep-awake acquire failed: {}", e))?;
 
-    *guard = Some(awake);
-    Ok(())
+        *guard = Some(awake);
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 /// Release the OS sleep-inhibitor after a job completes (or is stopped).
@@ -69,13 +73,16 @@ pub fn keep_awake_acquire(state: State<'_, KeepAwakeState>) -> Result<(), String
 /// If no guard is held this is a no-op (idempotent). Dropping the `KeepAwake`
 /// guard releases the OS power assertion immediately.
 #[tauri::command]
-pub fn keep_awake_release(state: State<'_, KeepAwakeState>) -> Result<(), String> {
-    let mut guard = state
-        .0
-        .lock()
-        .map_err(|e| format!("keep-awake lock poisoned: {}", e))?;
+pub async fn keep_awake_release(state: State<'_, KeepAwakeState>) -> Result<(), String> {
+    let inner = state.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut guard = inner
+            .lock()
+            .map_err(|e| format!("keep-awake lock poisoned: {}", e))?;
 
-    // Drop the guard — releases the OS assertion on Drop.
-    *guard = None;
-    Ok(())
+        *guard = None;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
