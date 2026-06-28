@@ -375,8 +375,8 @@ export function ImageTraceDialog({ open, onClose }: Props) {
   const zoomBtnStyle = (disabled: boolean): React.CSSProperties => ({
     background: "var(--bg-input)", border: "1px solid var(--border)",
     color: disabled ? "var(--text-muted)" : "var(--text-secondary)",
-    width: "24px", height: "24px", borderRadius: "var(--radius-sm)",
-    cursor: disabled ? "default" : "pointer", fontSize: "13px",
+    width: "32px", height: "24px", borderRadius: "var(--radius-sm)",
+    cursor: disabled ? "not-allowed" : "pointer", fontSize: "13px",
     display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
     opacity: disabled ? 0.4 : 1,
   });
@@ -506,7 +506,7 @@ export function ImageTraceDialog({ open, onClose }: Props) {
             disabled={zoomIndex === 0}
             aria-label="Zoom out"
           >−</button>
-          <span style={{ fontSize: "11px", color: "var(--text-muted)", minWidth: "36px", textAlign: "center" }}>
+          <span style={{ fontSize: "11px", color: "var(--text-muted)", minWidth: "36px", textAlign: "center", fontFamily: "var(--font-mono)" }}>
             {currentZoom}%
           </span>
           <button
@@ -521,22 +521,57 @@ export function ImageTraceDialog({ open, onClose }: Props) {
             style={{
               background: "var(--bg-input)", border: "1px solid var(--border)",
               color: preview ? "var(--text-secondary)" : "var(--text-muted)",
-              padding: "2px 8px", borderRadius: "var(--radius-sm)",
+              padding: "4px 10px", borderRadius: "var(--radius-sm)",
               cursor: preview ? "pointer" : "default", fontSize: "11px",
               opacity: preview ? 1 : 0.4,
             }}
           >Fit</button>
-          {preview && (
-            <span style={{ marginLeft: "auto", fontSize: "11px", color: "var(--text-muted)" }}>
-              {preview.pathCount} contour{preview.pathCount !== 1 ? "s" : ""} · {preview.widthPx}×{preview.heightPx}px
-            </span>
-          )}
         </div>
+
+        {/* Info strip */}
+        {preview && (
+          <div style={{
+            display: "flex",
+            gap: 16,
+            background: "var(--bg-input)",
+            borderRadius: "var(--radius-sm)",
+            padding: "6px 10px",
+            marginBottom: "6px",
+          }}>
+            <div>
+              <span style={{
+                color: "var(--text-muted)",
+                fontSize: 9,
+                textTransform: "uppercase",
+                letterSpacing: 0.3,
+                display: "block",
+                marginBottom: 1,
+              }}>Contours</span>
+              <span style={{ color: "var(--text-primary)", fontSize: 11, fontFamily: "var(--font-mono)" }}>
+                {preview.pathCount}
+              </span>
+            </div>
+            <div>
+              <span style={{
+                color: "var(--text-muted)",
+                fontSize: 9,
+                textTransform: "uppercase",
+                letterSpacing: 0.3,
+                display: "block",
+                marginBottom: 1,
+              }}>Resolution</span>
+              <span style={{ color: "var(--text-primary)", fontSize: 11, fontFamily: "var(--font-mono)" }}>
+                {preview.widthPx}×{preview.heightPx}px
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Preview — scrollable at high zoom, full-res for typical images */}
         <div style={{
           background: "#1a1a2e", borderRadius: "var(--radius-sm)", height: "360px",
           marginBottom: "12px", position: "relative", overflow: "auto",
+          border: "1px solid var(--border)",
         }}>
           {loading && (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
@@ -545,18 +580,20 @@ export function ImageTraceDialog({ open, onClose }: Props) {
           )}
           {!loading && error && (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
-              <span style={{ color: "#e24a4a", fontSize: "12px" }}>{error}</span>
+              <span style={{ color: "var(--danger)", fontSize: "12px" }}>{error}</span>
             </div>
           )}
           {!loading && previewSvgUrl && preview && (() => {
             const scaledW = Math.round(preview.widthPx * currentZoom / 100);
             const scaledH = Math.round(preview.heightPx * currentZoom / 100);
             return (
-              <img
-                src={previewSvgUrl}
-                style={{ width: scaledW, height: scaledH, display: "block" }}
-                alt="Trace preview"
-              />
+              <div style={{ minWidth: "100%", minHeight: "100%", display: "flex", alignItems: "flex-start", justifyContent: "flex-start" }}>
+                <img
+                  src={previewSvgUrl}
+                  style={{ width: scaledW, height: scaledH, display: "block" }}
+                  alt="Trace preview"
+                />
+              </div>
             );
           })()}
         </div>
