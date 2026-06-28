@@ -298,6 +298,8 @@ export function ImageTraceDialog({ open, onClose }: Props) {
     }, 400);
 
     return () => clearTimeout(timer);
+    // `preview` is intentionally excluded: adaptiveScale reads prior dims via stale closure
+    // so preview updates don't re-trigger the trace effect (avoids infinite loop).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, mode, threshold, thresholdLow, cornerThreshold, filterSpeckle, invert,
       blurRadius, smoothness, ignoreArea, useAdaptiveThreshold, adaptiveBlockSize,
