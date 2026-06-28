@@ -975,7 +975,7 @@ mod tests {
             for x in 0..bw {
                 // Thin black ring at rows 3-16 / cols 3-16; interior and exterior white
                 let on_ring = (y == 3 || y == 16 || x == 3 || x == 16)
-                              && x >= 3 && x <= 16 && y >= 3 && y <= 16;
+                              && (3..=16).contains(&x) && (3..=16).contains(&y);
                 canny_binary.put_pixel(x, y, Luma([if on_ring { 0u8 } else { 255u8 }]));
             }
         }

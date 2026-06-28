@@ -123,6 +123,38 @@ export function buildTracedPathObjects(
   return [buildGroupObject(allPathObjects, generateId(), groupName, layerIndex)];
 }
 
+// ─── Preview zoom ─────────────────────────────────────────────────────────────
+
+export const ZOOM_STEPS = [25, 50, 100, 200, 400];
+const PREVIEW_BUDGET_PX = 1600;
+
+/**
+ * Finds the largest ZOOM_STEPS index whose value fits the image inside the
+ * container at that zoom level. Mirrors DitherPreviewDialog fit logic.
+ *
+ * @param containerW  Preview container width in px
+ * @param containerH  Preview container height in px
+ * @param imgW        Image pixel width (widthPx from TraceResult)
+ * @param imgH        Image pixel height (heightPx from TraceResult)
+ * @returns Index into ZOOM_STEPS
+ */
+export function computeFitZoomIndex(
+  containerW: number,
+  containerH: number,
+  imgW: number,
+  imgH: number,
+): number {
+  if (imgW === 0 || imgH === 0) return 2; // default to 100%
+  const fitPct = Math.min(containerW / imgW, containerH / imgH) * 100;
+  let best = 0;
+  for (let i = 0; i < ZOOM_STEPS.length; i++) {
+    if (ZOOM_STEPS[i] <= fitPct) best = i;
+  }
+  return best;
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
+
 type TraceMode = "standard" | "sketch";
 type Preset = "auto" | "logo" | "photo" | "detailed" | "custom";
 
@@ -139,9 +171,12 @@ const PRESETS: Record<Exclude<Preset, "custom">, {
   useAdaptiveThreshold: boolean; adaptiveBlockSize: number; morphRadius: number;
 }> = {
   auto: {
+    // useAdaptiveThreshold off: clean binary art bypasses via is_near_binary anyway;
+    // this protects the anti-aliased case from adaptive halos. morphRadius 0: open()
+    // was eroding fine strokes. blurRadius 0.5: lighter noise reduction. ignoreArea 15.
     mode: "standard", threshold: 128, thresholdLow: 0, cornerThreshold: 60,
-    filterSpeckle: 4, blurRadius: 1.0, smoothness: 0.8, ignoreArea: 20,
-    useAdaptiveThreshold: true, adaptiveBlockSize: 15, morphRadius: 1,
+    filterSpeckle: 4, blurRadius: 0.5, smoothness: 0.8, ignoreArea: 15,
+    useAdaptiveThreshold: false, adaptiveBlockSize: 15, morphRadius: 0,
   },
   logo: {
     mode: "standard", threshold: 128, thresholdLow: 0, cornerThreshold: 40,
@@ -156,9 +191,13 @@ const PRESETS: Record<Exclude<Preset, "custom">, {
   detailed: {
     mode: "standard", threshold: 128, thresholdLow: 0, cornerThreshold: 30,
     filterSpeckle: 2, blurRadius: 0.5, smoothness: 0.4, ignoreArea: 5,
-    useAdaptiveThreshold: true, adaptiveBlockSize: 11, morphRadius: 0,
+    useAdaptiveThreshold: false, adaptiveBlockSize: 11, morphRadius: 0,
   },
 };
+
+// Preview container inner dimensions (dialog 580px - 40px padding = 540px wide, 360px tall)
+const PREVIEW_CONTAINER_W = 540;
+const PREVIEW_CONTAINER_H = 360;
 
 export function ImageTraceDialog({ open, onClose }: Props) {
   const [preset, setPreset] = useState<Preset>("auto");
@@ -168,19 +207,20 @@ export function ImageTraceDialog({ open, onClose }: Props) {
   const [cornerThreshold, setCornerThreshold] = useState(60);
   const [filterSpeckle, setFilterSpeckle] = useState(4);
   const [invert, setInvert] = useState(false);
-  const [blurRadius, setBlurRadius] = useState(1.0);
+  const [blurRadius, setBlurRadius] = useState(0.5);
   const [smoothness, setSmoothness] = useState(0.8);
-  const [ignoreArea, setIgnoreArea] = useState(20);
-  const [useAdaptiveThreshold, setUseAdaptiveThreshold] = useState(true);
+  const [ignoreArea, setIgnoreArea] = useState(15);
+  const [useAdaptiveThreshold, setUseAdaptiveThreshold] = useState(false);
   const [adaptiveBlockSize, setAdaptiveBlockSize] = useState(15);
-  const [morphRadius, setMorphRadius] = useState(1);
+  const [morphRadius, setMorphRadius] = useState(0);
   const [traceTransparency, setTraceTransparency] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  const [preview, setPreview] = useState<{ svg: string; pathCount: number } | null>(null);
+  const [preview, setPreview] = useState<{ svg: string; pathCount: number; widthPx: number; heightPx: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [committing, setCommitting] = useState(false);
+  const [zoomIndex, setZoomIndex] = useState(2); // default: 100%
 
   const generationRef = useRef(0);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -228,18 +268,28 @@ export function ImageTraceDialog({ open, onClose }: Props) {
     };
   }
 
-  // Preview with debounce
+  // Preview with debounce.
+  // Adaptive scale: full-res for images ≤ PREVIEW_BUDGET_PX on long side; capped
+  // for huge scans to bound latency. Uses dims from previous preview if available,
+  // falls back to 0.25 for first render so there's something to show quickly.
+  // Commit always uses scale 1.0 (buildParams(1.0) in handleCommit).
   useEffect(() => {
     if (!open || !selectedImage?.imageData) return;
     const generation = ++generationRef.current;
     setLoading(true);
     setError(null);
 
+    const prevDims = preview;
+    const adaptiveScale = prevDims
+      ? Math.min(1.0, PREVIEW_BUDGET_PX / Math.max(prevDims.widthPx, prevDims.heightPx, 1))
+      : 0.25;
+
     const timer = setTimeout(async () => {
       try {
-        const result = await invoke<TraceResult>("trace_image_command", { params: buildParams(0.25) });
+        const result = await invoke<TraceResult>("trace_image_command", { params: buildParams(adaptiveScale) });
         if (generation === generationRef.current) {
-          setPreview({ svg: result.svg, pathCount: result.pathCount });
+          setPreview({ svg: result.svg, pathCount: result.pathCount, widthPx: result.widthPx, heightPx: result.heightPx });
+          setZoomIndex(computeFitZoomIndex(PREVIEW_CONTAINER_W, PREVIEW_CONTAINER_H, result.widthPx, result.heightPx));
           setLoading(false);
         }
       } catch (e) {
@@ -248,6 +298,7 @@ export function ImageTraceDialog({ open, onClose }: Props) {
     }, 400);
 
     return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, mode, threshold, thresholdLow, cornerThreshold, filterSpeckle, invert,
       blurRadius, smoothness, ignoreArea, useAdaptiveThreshold, adaptiveBlockSize,
       morphRadius, traceTransparency, selectedImage?.id]);
@@ -319,6 +370,15 @@ export function ImageTraceDialog({ open, onClose }: Props) {
     padding: "4px 10px", borderRadius: "var(--radius-sm)", cursor: "pointer", fontSize: "11px",
   });
 
+  const zoomBtnStyle = (disabled: boolean): React.CSSProperties => ({
+    background: "var(--bg-input)", border: "1px solid var(--border)",
+    color: disabled ? "var(--text-muted)" : "var(--text-secondary)",
+    width: "24px", height: "24px", borderRadius: "var(--radius-sm)",
+    cursor: disabled ? "default" : "pointer", fontSize: "13px",
+    display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+    opacity: disabled ? 0.4 : 1,
+  });
+
   const sliderRow = (label: string, value: number, min: number, max: number, step: number, onChange: (v: number) => void, unit?: string) => (
     <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
       <span style={{ fontSize: "11px", color: "var(--text-secondary)", minWidth: "70px" }}>{label}</span>
@@ -334,6 +394,8 @@ export function ImageTraceDialog({ open, onClose }: Props) {
   const previewSvgUrl = preview?.svg
     ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(preview.svg)}` : null;
 
+  const currentZoom = ZOOM_STEPS[zoomIndex];
+
   return (
     <>
       <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999 }} />
@@ -344,7 +406,7 @@ export function ImageTraceDialog({ open, onClose }: Props) {
         aria-labelledby="image-trace-main-dialog-title"
         style={{
         position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
-        width: "460px", maxHeight: "85vh", overflow: "auto",
+        width: "580px", maxHeight: "85vh", overflow: "auto",
         background: "var(--bg-panel)", border: "1px solid var(--border)",
         borderRadius: "var(--radius-lg)", boxShadow: "var(--shadow-modal)", zIndex: 10000, padding: "20px",
       }}>
@@ -434,23 +496,67 @@ export function ImageTraceDialog({ open, onClose }: Props) {
           </div>
         )}
 
-        {/* Preview */}
+        {/* Zoom controls + info strip */}
+        <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "6px" }}>
+          <button
+            style={zoomBtnStyle(zoomIndex === 0)}
+            onClick={() => setZoomIndex((i) => Math.max(0, i - 1))}
+            disabled={zoomIndex === 0}
+            aria-label="Zoom out"
+          >−</button>
+          <span style={{ fontSize: "11px", color: "var(--text-muted)", minWidth: "36px", textAlign: "center" }}>
+            {currentZoom}%
+          </span>
+          <button
+            style={zoomBtnStyle(zoomIndex === ZOOM_STEPS.length - 1)}
+            onClick={() => setZoomIndex((i) => Math.min(ZOOM_STEPS.length - 1, i + 1))}
+            disabled={zoomIndex === ZOOM_STEPS.length - 1}
+            aria-label="Zoom in"
+          >+</button>
+          <button
+            onClick={() => preview && setZoomIndex(computeFitZoomIndex(PREVIEW_CONTAINER_W, PREVIEW_CONTAINER_H, preview.widthPx, preview.heightPx))}
+            disabled={!preview}
+            style={{
+              background: "var(--bg-input)", border: "1px solid var(--border)",
+              color: preview ? "var(--text-secondary)" : "var(--text-muted)",
+              padding: "2px 8px", borderRadius: "var(--radius-sm)",
+              cursor: preview ? "pointer" : "default", fontSize: "11px",
+              opacity: preview ? 1 : 0.4,
+            }}
+          >Fit</button>
+          {preview && (
+            <span style={{ marginLeft: "auto", fontSize: "11px", color: "var(--text-muted)" }}>
+              {preview.pathCount} contour{preview.pathCount !== 1 ? "s" : ""} · {preview.widthPx}×{preview.heightPx}px
+            </span>
+          )}
+        </div>
+
+        {/* Preview — scrollable at high zoom, full-res for typical images */}
         <div style={{
-          background: "#1a1a2e", borderRadius: "var(--radius-sm)", height: "200px",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          marginBottom: "12px", position: "relative", overflow: "hidden",
+          background: "#1a1a2e", borderRadius: "var(--radius-sm)", height: "360px",
+          marginBottom: "12px", position: "relative", overflow: "auto",
         }}>
-          {loading && <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>Processing...</span>}
-          {!loading && error && <span style={{ color: "#e24a4a", fontSize: "12px" }}>{error}</span>}
-          {!loading && previewSvgUrl && (
-            <img src={previewSvgUrl} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} alt="Trace preview" />
+          {loading && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
+              <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>Processing...</span>
+            </div>
           )}
-          {!loading && preview && (
-            <span style={{
-              position: "absolute", bottom: "8px", right: "8px", fontSize: "11px", color: "var(--text-muted)",
-              background: "rgba(0,0,0,0.5)", padding: "2px 6px", borderRadius: "var(--radius-sm)",
-            }}>{preview.pathCount} path{preview.pathCount !== 1 ? "s" : ""}</span>
+          {!loading && error && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
+              <span style={{ color: "#e24a4a", fontSize: "12px" }}>{error}</span>
+            </div>
           )}
+          {!loading && previewSvgUrl && preview && (() => {
+            const scaledW = Math.round(preview.widthPx * currentZoom / 100);
+            const scaledH = Math.round(preview.heightPx * currentZoom / 100);
+            return (
+              <img
+                src={previewSvgUrl}
+                style={{ width: scaledW, height: scaledH, display: "block" }}
+                alt="Trace preview"
+              />
+            );
+          })()}
         </div>
 
         {/* Hint */}
