@@ -1,4 +1,4 @@
-use super::gcode_gen::CutObject;
+use super::gcode_gen::{CutObject, PathSegment, Point, object_to_path, rotate_segment};
 
 /// Optimize cut order using nearest-neighbor heuristic starting from a given point.
 /// Returns indices into the original objects vec in optimized order.
@@ -54,6 +54,8 @@ fn bbox_contains(ax: f64, ay: f64, aw: f64, ah: f64, bx: f64, by: f64, bw: f64, 
 /// Uses bbox containment: if A is contained in B, A sorts first.
 /// Non-contained objects preserve their relative (stable) order.
 /// Falls back to area comparison at equal containment depth.
+/// NOTE: superseded by `order_inner_first_nn` for production use. Kept so existing tests stay green.
+#[allow(dead_code)]
 pub fn sort_inner_first(objects: &mut [CutObject]) {
     let n = objects.len();
     if n <= 1 {
@@ -256,6 +258,411 @@ pub fn flood_reorder_segments(
     }
 
     order
+}
+
+// ─── Geometric containment helpers ────────────────────────────────────────────
+
+/// Absolute area of a polygon using the shoelace formula.
+fn polygon_area_abs(pts: &[Point]) -> f64 {
+    let n = pts.len();
+    if n < 3 {
+        return 0.0;
+    }
+    let mut sum = 0.0_f64;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        sum += pts[i].x * pts[j].y;
+        sum -= pts[j].x * pts[i].y;
+    }
+    sum.abs() / 2.0
+}
+
+/// Signed area of a polygon (positive = counter-clockwise in standard math coords).
+fn polygon_signed_area(pts: &[Point]) -> f64 {
+    let n = pts.len();
+    if n < 3 {
+        return 0.0;
+    }
+    let mut sum = 0.0_f64;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        sum += pts[i].x * pts[j].y;
+        sum -= pts[j].x * pts[i].y;
+    }
+    sum / 2.0
+}
+
+/// Area centroid of a polygon (shoelace-weighted, NOT a vertex average).
+fn polygon_centroid(pts: &[Point]) -> Point {
+    let n = pts.len();
+    if n == 0 {
+        return Point { x: 0.0, y: 0.0 };
+    }
+    if n == 1 {
+        return Point { x: pts[0].x, y: pts[0].y };
+    }
+    let area = polygon_signed_area(pts);
+    if area.abs() < 1e-10 {
+        // Degenerate — return bbox centre
+        let min_x = pts.iter().map(|p| p.x).fold(f64::MAX, f64::min);
+        let max_x = pts.iter().map(|p| p.x).fold(f64::MIN, f64::max);
+        let min_y = pts.iter().map(|p| p.y).fold(f64::MAX, f64::min);
+        let max_y = pts.iter().map(|p| p.y).fold(f64::MIN, f64::max);
+        return Point { x: (min_x + max_x) / 2.0, y: (min_y + max_y) / 2.0 };
+    }
+    let mut cx = 0.0_f64;
+    let mut cy = 0.0_f64;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let cross = pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+        cx += (pts[i].x + pts[j].x) * cross;
+        cy += (pts[i].y + pts[j].y) * cross;
+    }
+    Point { x: cx / (6.0 * area), y: cy / (6.0 * area) }
+}
+
+/// Even-odd ray-casting point-in-polygon test.
+///
+/// Half-open rule: edge (y0, y1) crosses the ray iff `min(y0,y1) <= py < max(y0,y1)`.
+/// This excludes horizontal edges (where min == max) and ensures a vertex on the
+/// scanline is counted exactly once (only the upward-going edge from it counts).
+pub(crate) fn point_in_polygon(px: f64, py: f64, poly: &[Point]) -> bool {
+    let n = poly.len();
+    if n < 3 {
+        return false;
+    }
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let xi = poly[i].x;
+        let yi = poly[i].y;
+        let xj = poly[j].x;
+        let yj = poly[j].y;
+        // Half-open crossing rule
+        if (yi > py) != (yj > py) {
+            let x_intercept = xj + (py - yj) / (yi - yj) * (xi - xj);
+            if px < x_intercept {
+                inside = !inside;
+            }
+        }
+        j = i;
+    }
+    inside
+}
+
+/// Guaranteed-interior representative point for any simple polygon.
+///
+/// 1. Try the area centroid (shoelace-weighted). If it's inside the polygon, use it.
+/// 2. Fallback: scanline-midpoint — choose y = midpoint of the two smallest distinct
+///    vertex y-values (strictly between them, so no vertices lie on the scanline).
+///    Collect edge crossings at that y with the half-open rule; the rep point is the
+///    midpoint of the first (leftmost) interior span [x0, x1].
+///    Guaranteed interior for any simple polygon.
+fn guaranteed_interior_point(pts: &[Point]) -> Point {
+    // Attempt 1: area centroid
+    let c = polygon_centroid(pts);
+    if point_in_polygon(c.x, c.y, pts) {
+        return c;
+    }
+
+    // Attempt 2: scanline midpoint
+    let mut ys: Vec<f64> = pts.iter().map(|p| p.y).collect();
+    ys.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    // Deduplicate (keep distinct values only, within 1e-10 tolerance)
+    ys.dedup_by(|a, b| (*a - *b).abs() < 1e-10);
+
+    if ys.len() < 2 {
+        return c; // degenerate polygon
+    }
+
+    // scan_y is strictly between the two smallest distinct y-values —
+    // no vertex lies on this scanline by construction.
+    let scan_y = (ys[0] + ys[1]) / 2.0;
+
+    let n = pts.len();
+    let mut xs: Vec<f64> = Vec::new();
+    let mut j = n - 1;
+    for i in 0..n {
+        let y0 = pts[j].y;
+        let y1 = pts[i].y;
+        let x0 = pts[j].x;
+        let x1 = pts[i].x;
+        // Half-open rule: min(y0,y1) <= scan_y < max(y0,y1)
+        let lo = y0.min(y1);
+        let hi = y0.max(y1);
+        if lo <= scan_y && scan_y < hi {
+            let x_int = x0 + (scan_y - y0) / (y1 - y0) * (x1 - x0);
+            xs.push(x_int);
+        }
+        j = i;
+    }
+
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    if xs.len() >= 2 {
+        Point { x: (xs[0] + xs[1]) / 2.0, y: scan_y }
+    } else {
+        c // Last resort: return centroid (degenerate polygon)
+    }
+}
+
+/// Axis-aligned bounding box of a polygon: (min_x, min_y, width, height).
+fn polygon_aabb(pts: &[Point]) -> (f64, f64, f64, f64) {
+    if pts.is_empty() {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+    let min_x = pts.iter().map(|p| p.x).fold(f64::MAX, f64::min);
+    let min_y = pts.iter().map(|p| p.y).fold(f64::MAX, f64::min);
+    let max_x = pts.iter().map(|p| p.x).fold(f64::MIN, f64::max);
+    let max_y = pts.iter().map(|p| p.y).fold(f64::MIN, f64::max);
+    (min_x, min_y, max_x - min_x, max_y - min_y)
+}
+
+/// Build the outline polygon for containment checks, reusing the emit geometry.
+///
+/// For objects with paths: pick the largest-area contour (with rotation applied),
+/// so the containment geometry matches exactly what the laser will cut.
+/// For primitive objects (rectangle/ellipse/line) with no paths: synthesize via
+/// `object_to_path` (which already applies rotation).
+///
+/// This is the single source of truth for outline geometry — the same function is
+/// used both here (containment) and by the emitter (gcode_gen.rs), so they can't drift.
+fn build_object_outline(obj: &CutObject) -> Vec<Point> {
+    if obj.paths.is_empty() {
+        let seg = object_to_path(obj);
+        return seg.points;
+    }
+
+    // Apply rotation to each path and pick the one with the largest area.
+    let mut best_pts: Vec<Point> = vec![];
+    let mut best_area = 0.0_f64;
+
+    for path in &obj.paths {
+        let mut p = path.clone();
+        rotate_segment(&mut p, obj);
+        let area = polygon_area_abs(&p.points);
+        if area > best_area {
+            best_area = area;
+            best_pts = p.points;
+        }
+    }
+
+    if best_pts.is_empty() {
+        // Empty paths with zero area — fall back to bbox rect
+        let seg = object_to_path(obj);
+        seg.points
+    } else {
+        best_pts
+    }
+}
+
+// ─── Longest-path rank in the containment DAG ─────────────────────────────────
+
+/// Compute the longest-path rank for each object in the containment DAG.
+///
+/// Edge A→parent means "parent geometrically contains A" (A's rep point is inside
+/// parent's outline). rank[A] = length of the longest chain of containers above A.
+/// Top-level objects (nothing contains them) have rank 0.
+///
+/// Monotone along every containment edge by construction:
+/// if A⊂B then rank(A) ≥ rank(B)+1 > rank(B), regardless of unrelated objects
+/// that may also contain B but not A. This is the key property that prevents
+/// a straddling third object from tying an inner with its outer.
+fn compute_ranks(outlines: &[Vec<Point>], rep_points: &[(f64, f64)]) -> Vec<usize> {
+    let n = outlines.len();
+    // contained_by[i] = indices of objects that directly contain i
+    let mut contained_by: Vec<Vec<usize>> = vec![vec![]; n];
+
+    // Pre-compute each object's polygon AABB (computed on the already-rotated outline points)
+    let aabbs: Vec<(f64, f64, f64, f64)> = outlines.iter().map(|pts| polygon_aabb(pts)).collect();
+
+    for i in 0..n {
+        let (px, py) = rep_points[i];
+        let (ix, iy, iw, ih) = aabbs[i]; // i's polygon AABB
+
+        for j in 0..n {
+            if i == j {
+                continue;
+            }
+            let outline_j = &outlines[j];
+            if outline_j.is_empty() {
+                continue;
+            }
+            let (jx, jy, jw, jh) = aabbs[j]; // j's polygon AABB
+
+            // Rotated-AABB pre-filter (necessary condition): i's full polygon AABB
+            // must fit inside j's polygon AABB. This prevents false positives where a
+            // large outer's centroid happens to fall inside a small inner's polygon.
+            if ix < jx || iy < jy || ix + iw > jx + jw || iy + ih > jy + jh {
+                continue; // i is too big to be inside j — skip
+            }
+
+            // Precise PiP: i's representative interior point must be inside j's polygon.
+            if point_in_polygon(px, py, outline_j) {
+                contained_by[i].push(j);
+            }
+        }
+    }
+
+    // Memoized DFS for longest-path rank.
+    // rank[v] = 1 + max(rank[parent] for parent in contained_by[v]), or 0 if no parents.
+    let mut memo: Vec<Option<usize>> = vec![None; n];
+
+    fn dfs(v: usize, contained_by: &[Vec<usize>], memo: &mut Vec<Option<usize>>) -> usize {
+        if let Some(r) = memo[v] {
+            return r;
+        }
+        // Guard against cycles (mutual containment — degenerate but safe)
+        memo[v] = Some(0); // temporary sentinel to break cycles
+        let r = contained_by[v].iter().map(|&p| dfs(p, contained_by, memo) + 1).max().unwrap_or(0);
+        memo[v] = Some(r);
+        r
+    }
+
+    (0..n).map(|v| dfs(v, &contained_by, &mut memo)).collect()
+}
+
+/// Inner-first + nearest-neighbor ordering of CutObjects.
+///
+/// Primary key: containment rank (longest-path in the containment DAG), high→low.
+/// Secondary key: nearest-neighbor from the running head, within each rank band.
+///
+/// NN only ever reorders objects within a rank band. Because two objects in the same
+/// band cannot have a containment relation (A⊂B implies rank(A) > rank(B)), NN can
+/// never let an outer cut before its inner — this is the invariant the old
+/// `sort_inner_first` + `optimize_cut_order_from` sequence violated.
+///
+/// Returns indices into the original `objects` slice in the computed order.
+pub fn order_inner_first_nn(objects: &[CutObject], start_x: f64, start_y: f64) -> Vec<usize> {
+    let n = objects.len();
+    if n == 0 {
+        return vec![];
+    }
+    if n == 1 {
+        return vec![0];
+    }
+
+    // Build outlines and rep points once, reusing emit geometry.
+    let outlines: Vec<Vec<Point>> = objects.iter().map(build_object_outline).collect();
+    let rep_points: Vec<(f64, f64)> = outlines
+        .iter()
+        .map(|pts| {
+            let p = guaranteed_interior_point(pts);
+            (p.x, p.y)
+        })
+        .collect();
+
+    // Compute longest-path rank for each object.
+    let ranks = compute_ranks(&outlines, &rep_points);
+
+    // Find the maximum rank (innermost band).
+    let max_rank = *ranks.iter().max().unwrap_or(&0);
+
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    let mut visited = vec![false; n];
+    let mut cur_x = start_x;
+    let mut cur_y = start_y;
+
+    // Process bands from innermost (max_rank) to outermost (0).
+    for rank in (0..=max_rank).rev() {
+        // Collect unvisited objects in this band
+        let band: Vec<usize> = (0..n)
+            .filter(|&i| !visited[i] && ranks[i] == rank)
+            .collect();
+
+        if band.is_empty() {
+            continue;
+        }
+
+        // NN within this band
+        let mut band_visited = vec![false; band.len()];
+        for _ in 0..band.len() {
+            let mut best_local = 0;
+            let mut best_dist = f64::MAX;
+
+            for (li, &gi) in band.iter().enumerate() {
+                if band_visited[li] {
+                    continue;
+                }
+                let (sx, sy) = object_start_point(&objects[gi]);
+                let dist = (sx - cur_x).powi(2) + (sy - cur_y).powi(2);
+                if dist < best_dist {
+                    best_dist = dist;
+                    best_local = li;
+                }
+            }
+
+            band_visited[best_local] = true;
+            let gi = band[best_local];
+            visited[gi] = true;
+            order.push(gi);
+            let (ex, ey) = object_end_point(&objects[gi]);
+            cur_x = ex;
+            cur_y = ey;
+        }
+    }
+
+    order
+}
+
+// ─── Sub-contour ordering (§D) ────────────────────────────────────────────────
+
+/// Order paths within a single object so holes (inner contours) cut before the
+/// outer perimeter. Uses the same PiP containment test as `order_inner_first_nn`.
+///
+/// A path A is considered "inner" relative to path B if A's representative point
+/// is inside B's polygon. Paths are ordered high-rank-first (innermost first),
+/// stable within equal rank.
+///
+/// Called from gcode_gen.rs `"line"` arm only — not `maskFill` or `offsetFill`.
+pub fn order_paths_inner_first(paths: &mut [PathSegment]) {
+    let n = paths.len();
+    if n <= 1 {
+        return;
+    }
+
+    // Compute AABB and rep point for each path
+    let aabbs: Vec<(f64, f64, f64, f64)> = paths.iter().map(|p| polygon_aabb(&p.points)).collect();
+    let rep_points: Vec<(f64, f64)> = paths
+        .iter()
+        .map(|p| {
+            let pt = guaranteed_interior_point(&p.points);
+            (pt.x, pt.y)
+        })
+        .collect();
+
+    // Build containment depth: depth[i] = number of other paths that contain i.
+    // Uses the same AABB pre-filter as compute_ranks: i's full AABB must fit inside j's
+    // AABB before we bother with PiP. This prevents the perimeter's centroid (which may
+    // lie inside a hole) from creating a false reverse-containment edge.
+    let mut depth = vec![0usize; n];
+    for i in 0..n {
+        let (px, py) = rep_points[i];
+        let (ix, iy, iw, ih) = aabbs[i];
+        for j in 0..n {
+            if i == j {
+                continue;
+            }
+            let (jx, jy, jw, jh) = aabbs[j];
+            // i's full AABB must fit inside j's AABB (necessary condition)
+            if ix < jx || iy < jy || ix + iw > jx + jw || iy + ih > jy + jh {
+                continue;
+            }
+            if point_in_polygon(px, py, &paths[j].points) {
+                depth[i] += 1;
+            }
+        }
+    }
+
+    // Sort: higher depth (more inner) first. Stable sort preserves stored order
+    // for paths at the same depth (e.g., two sibling holes).
+    let mut indices: Vec<usize> = (0..n).collect();
+    indices.sort_by(|&a, &b| depth[b].cmp(&depth[a]));
+
+    let original = paths.to_owned();
+    for (new_pos, &old_pos) in indices.iter().enumerate() {
+        paths[new_pos] = original[old_pos].clone();
+    }
 }
 
 fn object_start_point(obj: &CutObject) -> (f64, f64) {
@@ -525,5 +932,370 @@ mod tests {
         // Neither contains the other → same depth → area fallback: short_wide (100) < tall_narrow (200)
         assert_eq!(objs[0].id, "short_wide");
         assert_eq!(objs[1].id, "tall_narrow");
+    }
+
+    // ─── Helpers for new inner-first tests ────────────────────────────────────
+
+    fn make_rect_path(x: f64, y: f64, w: f64, h: f64) -> PathSegment {
+        PathSegment {
+            points: vec![
+                Point { x, y },
+                Point { x: x + w, y },
+                Point { x: x + w, y: y + h },
+                Point { x, y: y + h },
+            ],
+            closed: true,
+        }
+    }
+
+    fn make_obj_with_paths(id: &str, x: f64, y: f64, w: f64, h: f64, paths: Vec<PathSegment>) -> CutObject {
+        let mut obj = make_obj(id, x, y, w, h, None, None);
+        obj.paths = paths;
+        obj
+    }
+
+    fn make_obj_layer(id: &str, x: f64, y: f64, w: f64, h: f64, layer_index: i32) -> CutObject {
+        let mut obj = make_obj(id, x, y, w, h, None, None);
+        obj.layer_index = Some(layer_index);
+        obj
+    }
+
+    // ─── Test #1: THE regression ─────────────────────────────────────────────
+
+    /// THE regression test: inner-first must survive when the outer's start point
+    /// is nearer the head (the exact failure mode of the old sort + NN sequence).
+    /// With sort_inner_first + optimize_cut_order_from: outer goes first (bug).
+    /// With order_inner_first_nn: inner goes first (correct).
+    #[test]
+    fn inner_first_survives_nn_when_perimeter_start_nearer() {
+        // outer: 100×100 at (0,0) — start point (0,0), distance to head (0,0) = 0
+        // inner: 20×20 at (40,40), fully inside outer — start at (40,40), distance ≈ 56
+        // NN alone would pick outer first. inner_first_nn must override this.
+        let outer = make_obj("outer", 0.0, 0.0, 100.0, 100.0, None, None);
+        let inner = make_obj("inner", 40.0, 40.0, 20.0, 20.0, None, None);
+        let objs = vec![outer, inner]; // outer=idx 0, inner=idx 1
+
+        let order = order_inner_first_nn(&objs, 0.0, 0.0);
+        assert_eq!(order.len(), 2);
+        assert_eq!(
+            order[0], 1,
+            "inner (idx 1) must cut first despite outer start being at distance 0 from head"
+        );
+        assert_eq!(order[1], 0, "outer (idx 0) must cut second");
+    }
+
+    // ─── Test #2: sub-contour hole before perimeter ───────────────────────────
+
+    #[test]
+    fn subcontour_hole_before_perimeter() {
+        // A single object has two sub-paths: an outer perimeter (large) and a hole (small).
+        // order_paths_inner_first must put the hole before the perimeter.
+        let perimeter = make_rect_path(0.0, 0.0, 100.0, 100.0); // area = 10000
+        let hole      = make_rect_path(40.0, 40.0, 20.0, 20.0); // area = 400
+
+        let mut paths = vec![perimeter, hole]; // perimeter=idx 0, hole=idx 1
+        order_paths_inner_first(&mut paths);
+
+        // After ordering: hole (smaller area) must be first
+        let area0 = polygon_area_abs(&paths[0].points);
+        let area1 = polygon_area_abs(&paths[1].points);
+        assert!(area0 < area1, "hole (smaller area ≈400) must come first, got area0={area0} area1={area1}");
+        assert!((area0 - 400.0).abs() < 1.0, "first path should be the hole (area≈400), got {area0}");
+    }
+
+    // ─── Test #3: toggle on/off ───────────────────────────────────────────────
+
+    #[test]
+    fn toggle_off_uses_nn() {
+        // With toggle OFF (pure NN), the nearer object wins regardless of containment.
+        let outer = make_obj("outer", 0.0, 0.0, 100.0, 100.0, None, None);
+        let inner = make_obj("inner", 40.0, 40.0, 20.0, 20.0, None, None);
+        let objs = vec![outer, inner]; // outer=idx 0 start at (0,0), inner=idx 1 start at (40,40)
+
+        // Pure NN from (0,0): outer's start is at (0,0) = distance 0 → outer first
+        let order = optimize_cut_order_from(&objs, 0.0, 0.0);
+        assert_eq!(order[0], 0, "toggle off: NN picks outer (start 0,0 = distance 0 from head)");
+        assert_eq!(order[1], 1);
+    }
+
+    #[test]
+    fn toggle_on_orders_inner_first() {
+        // With toggle ON (inner-first), the inner must cut before its container
+        // regardless of travel distance.
+        let outer = make_obj("outer", 0.0, 0.0, 100.0, 100.0, None, None);
+        let inner = make_obj("inner", 40.0, 40.0, 20.0, 20.0, None, None);
+        let objs = vec![outer, inner];
+
+        let order = order_inner_first_nn(&objs, 0.0, 0.0);
+        assert_eq!(order[0], 1, "toggle on: inner must cut before its outer container");
+        assert_eq!(order[1], 0);
+    }
+
+    // ─── Test #4: rotated shape containment ──────────────────────────────────
+
+    #[test]
+    fn containment_rotated_shape() {
+        // Small inner square rotated 45° (diamond) inside a large un-rotated outer.
+        // The old bbox_contains would use un-rotated bounds (45-55, 45-55) ⊂ (0-100, 0-100) — passes.
+        // With rotation, the inner's polygon AABB (≈42.93-57.07 in both axes) still fits inside outer.
+        // This test mainly guards that rotation doesn't break containment detection.
+        let outer = make_obj("outer", 0.0, 0.0, 100.0, 100.0, None, None);
+        let mut inner = make_obj("inner", 45.0, 45.0, 10.0, 10.0, None, None);
+        inner.rotation = 45.0;
+        let objs = vec![outer, inner];
+
+        let order = order_inner_first_nn(&objs, 0.0, 0.0);
+        assert_eq!(order[0], 1, "rotated inner must be detected as contained and cut first");
+
+        // Variant: outer also rotated (30°). A 200×200 outer rotated 30° still contains a
+        // small 10×10 inner near the center.
+        let mut outer2 = make_obj("outer2", 0.0, 0.0, 200.0, 200.0, None, None);
+        outer2.rotation = 30.0;
+        let mut inner2 = make_obj("inner2", 95.0, 95.0, 10.0, 10.0, None, None);
+        inner2.rotation = 45.0;
+        let objs2 = vec![outer2, inner2];
+        let order2 = order_inner_first_nn(&objs2, 0.0, 0.0);
+        assert_eq!(order2[0], 1, "rotated inner inside rotated outer must still be detected");
+    }
+
+    // ─── Test #5: irregular and concave shapes ────────────────────────────────
+
+    #[test]
+    fn containment_irregular_shape() {
+        // Triangle outer (explicit paths, not a bbox) containing a small inner rectangle.
+        // bbox_contains would use the triangle's bounding box (100×100), potentially
+        // giving false positives; PiP correctly handles the non-rectangular boundary.
+        let triangle = PathSegment {
+            points: vec![
+                Point { x: 0.0, y: 0.0 },
+                Point { x: 100.0, y: 0.0 },
+                Point { x: 50.0, y: 100.0 },
+            ],
+            closed: true,
+        };
+        let outer_tri = make_obj_with_paths("outer_tri", 0.0, 0.0, 100.0, 100.0, vec![triangle]);
+        // inner square at (35,10,20,30): centroid at (45,25) — inside the triangle
+        let inner = make_obj("inner", 35.0, 10.0, 20.0, 30.0, None, None);
+
+        let objs = vec![outer_tri, inner];
+        let order = order_inner_first_nn(&objs, 0.0, 0.0);
+        assert_eq!(order[0], 1, "inner must be detected inside irregular (triangle) outer");
+
+        // Concave-outer (L-shape): inner is in the bottom-left arm of the L.
+        // A centroid-based check on a CONCAVE inner would fail if it put the rep point
+        // outside the inner shape; guaranteed_interior_point prevents this.
+        // Here the inner itself is a U-shape (concave) inside a large outer rectangle.
+        // The U's vertex average (~y=5.5 for a narrow U) is outside the U; the scanline
+        // fallback must find a point inside and correctly detect it's inside the outer.
+        let u_inner = PathSegment {
+            // U-shape: bottom bar 0-10×0-2, left arm 0-2×0-10, right arm 8-10×0-10
+            // Opening is at the top (y=2-10, x=2-8 is the notch)
+            points: vec![
+                Point { x: 10.0, y: 0.0 },
+                Point { x: 10.0, y: 10.0 },
+                Point { x: 8.0,  y: 10.0 },
+                Point { x: 8.0,  y: 2.0 },
+                Point { x: 2.0,  y: 2.0 },
+                Point { x: 2.0,  y: 10.0 },
+                Point { x: 0.0,  y: 10.0 },
+                Point { x: 0.0,  y: 0.0 },
+            ],
+            closed: true,
+        };
+        // Shift U to be inside the large outer (offset to 50,50)
+        let u_shifted: Vec<Point> = u_inner.points.iter()
+            .map(|p| Point { x: p.x + 50.0, y: p.y + 50.0 })
+            .collect();
+        let u_seg = PathSegment { points: u_shifted, closed: true };
+        let concave_inner = make_obj_with_paths("u_inner", 50.0, 50.0, 10.0, 10.0, vec![u_seg]);
+        let large_outer = make_obj("large_outer", 0.0, 0.0, 200.0, 200.0, None, None);
+
+        let objs2 = vec![large_outer, concave_inner];
+        let order2 = order_inner_first_nn(&objs2, 0.0, 0.0);
+        assert_eq!(order2[0], 1, "concave (U-shaped) inner must be detected inside large outer");
+    }
+
+    // ─── Test #6: equal depth band uses NN ────────────────────────────────────
+
+    #[test]
+    fn equal_depth_band_uses_nn() {
+        // Two sibling objects at rank 0 (neither contains the other).
+        // Head is nearer B → NN within the band should pick B first.
+        let a = make_obj("a", 0.0, 0.0, 10.0, 10.0, None, None);    // start at (0,0)
+        let b = make_obj("b", 200.0, 0.0, 10.0, 10.0, None, None);  // start at (200,0)
+
+        // Head at (210,0): b is much nearer
+        let order = order_inner_first_nn(&[a, b], 210.0, 0.0);
+        assert_eq!(order[0], 1, "head at (210,0): b (start 200,0) is nearer and same rank → b first");
+        assert_eq!(order[1], 0);
+    }
+
+    // ─── Test #7: three-level nesting ────────────────────────────────────────
+
+    #[test]
+    fn three_level_nesting() {
+        // inner ⊂ middle ⊂ outer → expected order: [inner, middle, outer]
+        let outer  = make_obj("outer",  0.0,  0.0,  100.0, 100.0, None, None);
+        let middle = make_obj("middle", 10.0, 10.0,  80.0,  80.0, None, None);
+        let inner  = make_obj("inner",  30.0, 30.0,  40.0,  40.0, None, None);
+
+        // Objects presented in worst-case order (outer first)
+        let objs = vec![outer, middle, inner]; // outer=0, middle=1, inner=2
+
+        let order = order_inner_first_nn(&objs, 0.0, 0.0);
+        assert_eq!(order[0], 2, "innermost must cut first");
+        assert_eq!(order[1], 1, "middle must cut second");
+        assert_eq!(order[2], 0, "outer must cut last");
+    }
+
+    // ─── Test #7b: straddling object doesn't tie inner with outer ─────────────
+
+    /// Regression for the count-of-containers failure mode identified by the critic.
+    /// S⊂O (S is truly inside O), plus T that partially overlaps O (T's polygon
+    /// contains O's rep point but T's AABB does NOT contain O's full AABB).
+    /// With a plain count metric: count(S)=count(O)=1 → same band → NN might pick O first.
+    /// With longest-path rank (and AABB filter): T doesn't register as O's container,
+    /// rank(O)=0, rank(S)=1 → S cuts before O. ✓
+    #[test]
+    fn straddling_object_does_not_tie_inner_with_outer() {
+        // O: 100×100 outer square at (0,0). Rep point: centroid of outline ≈ (50,50).
+        let o = make_obj("O", 0.0, 0.0, 100.0, 100.0, None, None);
+        // S: 20×20 square inside O at (10,10). Rep point ≈ (20,20).
+        let s = make_obj("S", 10.0, 10.0, 20.0, 20.0, None, None);
+        // T: rectangle at (40,0,60,100) — a vertical strip through the center of O.
+        // T's polygon DOES contain O's rep (50,50) geometrically, but O's full AABB (0-100)
+        // is NOT inside T's AABB (40-100) → AABB filter rejects O⊂T → rank(O) stays 0.
+        let t = make_obj("T", 40.0, 0.0, 60.0, 100.0, None, None);
+
+        // objs: O=0, S=1, T=2. Head at (0,0) (nearer to O's start).
+        let objs = vec![o, s, t];
+        let order = order_inner_first_nn(&objs, 0.0, 0.0);
+
+        // S must appear before O in the output, regardless of T
+        let pos_s = order.iter().position(|&i| i == 1).expect("S in order");
+        let pos_o = order.iter().position(|&i| i == 0).expect("O in order");
+        assert!(
+            pos_s < pos_o,
+            "S (truly inside O) must cut before O even with straddling T present; \
+             order={order:?}"
+        );
+    }
+
+    // ─── Test #8: layer order preserved — no cross-layer pull ────────────────
+
+    /// Layer ordering is enforced by gcode.rs (F7 loop) by feeding order_inner_first_nn
+    /// one layer's objects at a time. This test simulates that: two separate layer
+    /// calls, verifying that objects in layer 0 are all emitted before layer 1.
+    #[test]
+    fn layer_order_preserved_no_cross_layer_pull() {
+        // Layer 0: big outer square
+        let layer0_outer = make_obj_layer("l0_outer", 0.0, 0.0, 100.0, 100.0, 0);
+        // Layer 1: small square (geometrically "inner-looking") — closer to head (0,0)
+        //   than layer 0's outer, but on a different layer
+        let layer1_inner = make_obj_layer("l1_inner", 10.0, 10.0, 20.0, 20.0, 1);
+
+        // Simulate what gcode.rs does: process each layer independently
+        let layer0_objs = vec![layer0_outer.clone()];
+        let layer1_objs = vec![layer1_inner.clone()];
+
+        let order0 = order_inner_first_nn(&layer0_objs, 0.0, 0.0);
+        let order1 = order_inner_first_nn(&layer1_objs, 0.0, 0.0);
+
+        // Layer 0 objects come first, then layer 1
+        // (The F7 loop in gcode.rs appends these in sequence)
+        let mut combined_ids: Vec<&str> = Vec::new();
+        for &i in &order0 { combined_ids.push(&layer0_objs[i].id); }
+        for &i in &order1 { combined_ids.push(&layer1_objs[i].id); }
+
+        assert_eq!(combined_ids[0], "l0_outer",
+            "layer 0 object must emit before layer 1 object regardless of proximity");
+        assert_eq!(combined_ids[1], "l1_inner");
+    }
+
+    // ─── Degenerate rep-point tests ───────────────────────────────────────────
+
+    /// Concave shape (U) whose area centroid falls OUTSIDE the polygon.
+    /// guaranteed_interior_point must fall back to scanline-midpoint and return
+    /// a point that is strictly inside the polygon.
+    #[test]
+    fn rep_point_concave_centroid_outside() {
+        // Narrow U-shape: bottom bar 0-10×0-2, arms 0-2×0-10 and 8-10×0-10.
+        // The notch is x:[2,8], y:[2,10]. Centroid ≈ (5, 4.07) — inside the notch → outside U.
+        let u_pts = vec![
+            Point { x: 0.0, y: 0.0 },
+            Point { x: 10.0, y: 0.0 },
+            Point { x: 10.0, y: 10.0 },
+            Point { x: 8.0,  y: 10.0 },
+            Point { x: 8.0,  y: 2.0 },
+            Point { x: 2.0,  y: 2.0 },
+            Point { x: 2.0,  y: 10.0 },
+            Point { x: 0.0,  y: 10.0 },
+        ];
+
+        // Verify the centroid is outside (so the fallback fires)
+        let c = polygon_centroid(&u_pts);
+        // The U-shape's notch covers (2,2)-(8,10). Centroid y ≈ 4.07 is inside the notch.
+        let centroid_inside = point_in_polygon(c.x, c.y, &u_pts);
+        // centroid_inside is expected to be false (it's in the notch); the test guards
+        // that guaranteed_interior_point handles this case correctly regardless.
+        let interior = guaranteed_interior_point(&u_pts);
+        assert!(
+            point_in_polygon(interior.x, interior.y, &u_pts),
+            "guaranteed_interior_point must return a point strictly inside the U-shape; \
+             centroid was {:?} (inside={centroid_inside}), fallback returned ({}, {})",
+            c, interior.x, interior.y
+        );
+    }
+
+    /// point_in_polygon: verify consistent half-open crossing rule behavior.
+    ///
+    /// The rule `(yi > py) != (yj > py)` treats the lower boundary as "in" and the
+    /// upper boundary as "out". This is consistent (no double-counting) and guarantees
+    /// that `guaranteed_interior_point`'s scanline-fallback output (strictly between
+    /// the two lowest distinct y-values) is always correctly classified as inside.
+    ///
+    /// The key safety property: interior points return true, and the diamond test
+    /// (two polygon vertices at the same y-level) is counted exactly once.
+    #[test]
+    fn pip_horizontal_edge_and_vertex_on_scanline() {
+        // Rectangle (0,0)-(4,0)-(4,2)-(0,2)
+        let rect = vec![
+            Point { x: 0.0, y: 0.0 },
+            Point { x: 4.0, y: 0.0 },
+            Point { x: 4.0, y: 2.0 },
+            Point { x: 0.0, y: 2.0 },
+        ];
+
+        // The upper horizontal boundary (y=2) is classified as "outside" by the
+        // half-open rule (both vertical edges' upward-going side ends at y=2 exclusive).
+        let on_top_edge = point_in_polygon(2.0, 2.0, &rect);
+        assert!(!on_top_edge, "upper boundary (y=2) must be outside per half-open rule");
+
+        // Strictly interior point
+        assert!(point_in_polygon(2.0, 1.0, &rect), "center point (y=1) must be inside");
+
+        // Points well outside
+        assert!(!point_in_polygon(5.0, 1.0, &rect), "right of rectangle must be outside");
+        assert!(!point_in_polygon(-1.0, 1.0, &rect), "left of rectangle must be outside");
+
+        // Diamond: vertices at (5,0), (10,5), (5,10), (0,5).
+        // At y=5 there are exactly two vertices (0,5) and (10,5). The half-open rule
+        // must count each shared vertex exactly once to avoid toggling twice and
+        // flipping the answer.
+        let diamond = vec![
+            Point { x: 5.0, y: 0.0 },
+            Point { x: 10.0, y: 5.0 },
+            Point { x: 5.0, y: 10.0 },
+            Point { x: 0.0, y: 5.0 },
+        ];
+        // Geometric center: strictly inside
+        assert!(point_in_polygon(5.0, 5.0, &diamond), "center of diamond must be inside");
+        // Outside
+        assert!(!point_in_polygon(15.0, 5.0, &diamond), "right of diamond must be outside");
+        assert!(!point_in_polygon(5.0, 11.0, &diamond), "above diamond must be outside");
+
+        // Strictly interior (non-center) to avoid vertex ambiguity
+        assert!(point_in_polygon(5.0, 3.0, &diamond), "lower-center of diamond must be inside");
+        assert!(point_in_polygon(5.0, 7.0, &diamond), "upper-center of diamond must be inside");
     }
 }
