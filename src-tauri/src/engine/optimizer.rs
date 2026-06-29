@@ -437,6 +437,10 @@ fn build_object_outline(obj: &CutObject) -> Vec<Point> {
     let mut best_pts: Vec<Point> = vec![];
     let mut best_area = 0.0_f64;
 
+    // Invariant: an object's outer perimeter is its largest-area sub-path. Holds for all
+    // standard SVG/DXF imports (holes are strictly smaller than their container). A
+    // pathological import that violates this would degrade containment to a false-negative
+    // (outer-before-inner = old behavior), never an incorrect cut of valid geometry.
     for path in &obj.paths {
         let mut p = path.clone();
         rotate_segment(&mut p, obj);
@@ -1297,5 +1301,55 @@ mod tests {
         // Strictly interior (non-center) to avoid vertex ambiguity
         assert!(point_in_polygon(5.0, 3.0, &diamond), "lower-center of diamond must be inside");
         assert!(point_in_polygon(5.0, 7.0, &diamond), "upper-center of diamond must be inside");
+    }
+
+    /// AABB pre-filter cycle-prevention: two partially-overlapping rectangles must not
+    /// produce a mutual-containment cycle in `compute_ranks`.
+    ///
+    /// Setup: A=(0,0,60,60) and B=(20,20,60,60) share a 40×40 intersection region.
+    ///
+    /// Without the AABB pre-filter, the PiP check alone would register a cycle:
+    ///   - A's centroid (30,30) is inside B's polygon  → contained_by[A] = [B]
+    ///   - B's centroid (50,50) is inside A's polygon  → contained_by[B] = [A]
+    ///
+    /// The DFS cycle guard (sentinel) prevents an infinite loop, but assigns
+    /// non-zero ranks ([2, 1] with DFS-visit order [A, B]), incorrectly treating
+    /// one object as "inner" relative to the other.
+    ///
+    /// With the AABB pre-filter both checks short-circuit:
+    ///   - A's AABB left-edge (0) < B's AABB left-edge (20)  → skip
+    ///   - B's AABB right-edge (80) > A's AABB right-edge (60) → skip
+    ///
+    /// Neither is classified as contained → both get rank 0 → pure NN ordering.
+    ///
+    /// This test would fail on the rank assertions if the AABB filter were removed.
+    #[test]
+    fn partial_overlap_no_false_containment_cycle() {
+        let a = make_obj("A", 0.0, 0.0, 60.0, 60.0, None, None);
+        let b = make_obj("B", 20.0, 20.0, 60.0, 60.0, None, None);
+        let objects = vec![a, b];
+
+        // (a) Terminates — calling the function is sufficient proof; a hang would stall
+        // the test runner. Verify both objects appear in the result.
+        let order = order_inner_first_nn(&objects, 0.0, 0.0);
+        assert_eq!(order.len(), 2, "both objects must appear in the result");
+
+        // (b) Same rank band — neither object is considered inside the other.
+        // compute_ranks is the internal function under test; accessible via `use super::*`.
+        let outlines: Vec<Vec<Point>> = objects.iter().map(build_object_outline).collect();
+        let rep_points: Vec<(f64, f64)> = outlines
+            .iter()
+            .map(|pts| {
+                let p = guaranteed_interior_point(pts);
+                (p.x, p.y)
+            })
+            .collect();
+        let ranks = compute_ranks(&outlines, &rep_points);
+        assert_eq!(ranks[0], 0, "A must have rank 0 (not considered inside B)");
+        assert_eq!(ranks[1], 0, "B must have rank 0 (not considered inside A)");
+
+        // NN from (0,0): A's start point (0,0) beats B's (20,20) — A comes first.
+        assert_eq!(order[0], 0, "A (nearest to origin) must be first in pure NN order");
+        assert_eq!(order[1], 1, "B must follow");
     }
 }

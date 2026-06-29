@@ -111,6 +111,9 @@ pub async fn generate_gcode(
                 // Operational note: cut_inner_first defaults true, so existing line layers
                 // switch from plain NN to inner-first order on first generate — intended.
                 // Toggle off is the instant escape hatch if a real-world cut regresses.
+                // All objects in this layer group share one layer definition; reading the
+                // first object's flag is correct. (If per-object overrides are ever added,
+                // this becomes a per-object branch rather than a group-level read.)
                 let inner_first = line_group.first().map(|o| o.layer.cut_inner_first).unwrap_or(true);
                 let line_order = if inner_first {
                     optimizer::order_inner_first_nn(&line_group, cur_x, cur_y)
@@ -131,6 +134,9 @@ pub async fn generate_gcode(
 
                 // Pure-fill layers stay pure NN even with the toggle on (is_line_mode guard).
                 let order = if is_line_mode {
+                    // All objects in this layer group share one layer definition; reading the
+                    // first object's flag is correct. (If per-object overrides are ever added,
+                    // this becomes a per-object branch rather than a group-level read.)
                     let inner_first = layer_objs.first().map(|o| o.layer.cut_inner_first).unwrap_or(true);
                     if inner_first {
                         optimizer::order_inner_first_nn(&layer_objs, cur_x, cur_y)
