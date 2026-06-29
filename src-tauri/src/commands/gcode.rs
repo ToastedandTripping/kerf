@@ -67,7 +67,7 @@ pub async fn generate_gcode(
         let mut cur_y = start_y;
 
         for &li in &layer_order {
-            let mut layer_objs: Vec<CutObject> = sorted.iter()
+            let layer_objs: Vec<CutObject> = sorted.iter()
                 .filter(|o| o.layer_index.unwrap_or(0) == li)
                 .cloned()
                 .collect();
@@ -92,7 +92,7 @@ pub async fn generate_gcode(
                     .filter(|o| is_fill_ish(&o.layer.mode))
                     .cloned()
                     .collect();
-                let mut line_group: Vec<CutObject> = layer_objs.iter()
+                let line_group: Vec<CutObject> = layer_objs.iter()
                     .filter(|o| o.layer.mode == "line")
                     .cloned()
                     .collect();
@@ -106,9 +106,17 @@ pub async fn generate_gcode(
                     final_objects.push(obj.clone());
                 }
 
-                // Line: inner-first then NN, starting from where fills ended
-                optimizer::sort_inner_first(&mut line_group);
-                let line_order = optimizer::optimize_cut_order_from(&line_group, cur_x, cur_y);
+                // Line: inner-first (toggle on, default) or pure NN (toggle off),
+                // starting from where fills ended.
+                // Operational note: cut_inner_first defaults true, so existing line layers
+                // switch from plain NN to inner-first order on first generate — intended.
+                // Toggle off is the instant escape hatch if a real-world cut regresses.
+                let inner_first = line_group.first().map(|o| o.layer.cut_inner_first).unwrap_or(true);
+                let line_order = if inner_first {
+                    optimizer::order_inner_first_nn(&line_group, cur_x, cur_y)
+                } else {
+                    optimizer::optimize_cut_order_from(&line_group, cur_x, cur_y)
+                };
                 for &idx in &line_order {
                     let obj = &line_group[idx];
                     cur_x = obj.x + obj.width;
@@ -121,11 +129,17 @@ pub async fn generate_gcode(
                     .map(|o| o.layer.mode.as_str() == "line")
                     .unwrap_or(false);
 
-                if is_line_mode {
-                    optimizer::sort_inner_first(&mut layer_objs);
-                }
-
-                let order = optimizer::optimize_cut_order_from(&layer_objs, cur_x, cur_y);
+                // Pure-fill layers stay pure NN even with the toggle on (is_line_mode guard).
+                let order = if is_line_mode {
+                    let inner_first = layer_objs.first().map(|o| o.layer.cut_inner_first).unwrap_or(true);
+                    if inner_first {
+                        optimizer::order_inner_first_nn(&layer_objs, cur_x, cur_y)
+                    } else {
+                        optimizer::optimize_cut_order_from(&layer_objs, cur_x, cur_y)
+                    }
+                } else {
+                    optimizer::optimize_cut_order_from(&layer_objs, cur_x, cur_y)
+                };
                 for &idx in &order {
                     let obj = &layer_objs[idx];
                     cur_x = obj.x + obj.width;

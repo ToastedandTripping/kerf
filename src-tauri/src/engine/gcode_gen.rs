@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use super::optimizer;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Point {
@@ -320,7 +321,8 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
     lines.push("; KERF:PREAMBLE_END".to_string());
     lines.push(String::new());
 
-    // Objects arrive pre-sorted by commands/gcode.rs (inner-first + nearest-neighbor). Do not re-sort.
+    // Objects arrive pre-sorted by commands/gcode.rs (inner-first via longest-path rank + nearest-neighbor within rank bands).
+    // Within each object, sub-contours are also ordered inner-first (holes before perimeter) in the "line" arm below.
 
     for obj in objects {
         let layer = &obj.layer;
@@ -350,7 +352,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                         s_max
                     };
 
-                    let paths = if obj.paths.is_empty() {
+                    let mut paths = if obj.paths.is_empty() {
                         vec![object_to_path(obj)]
                     } else {
                         let mut paths = obj.paths.clone();
@@ -359,6 +361,14 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                         }
                         paths
                     };
+
+                    // §D: order sub-contours inner-first (holes before perimeter) within a single object.
+                    // Only applied when cut_inner_first is set and the object has multiple paths.
+                    // This fixes the case where a shape imported as one object (perimeter + holes as
+                    // sub-paths) would otherwise emit them in stored order.
+                    if layer.cut_inner_first && paths.len() > 1 {
+                        optimizer::order_paths_inner_first(&mut paths);
+                    }
 
                     for path in &paths {
                         if path.points.len() < 2 { continue; }
@@ -1322,7 +1332,7 @@ mod tests {
 }
 
 /// Rotate a point around a center
-fn rotate_point(px: f64, py: f64, cx: f64, cy: f64, angle_rad: f64) -> Point {
+pub(crate) fn rotate_point(px: f64, py: f64, cx: f64, cy: f64, angle_rad: f64) -> Point {
     let dx = px - cx;
     let dy = py - cy;
     Point {
@@ -1332,7 +1342,7 @@ fn rotate_point(px: f64, py: f64, cx: f64, cy: f64, angle_rad: f64) -> Point {
 }
 
 /// Apply rotation to all points in a path segment
-fn rotate_segment(segment: &mut PathSegment, obj: &CutObject) {
+pub(crate) fn rotate_segment(segment: &mut PathSegment, obj: &CutObject) {
     if obj.rotation.abs() > 0.001 {
         let cx = obj.x + obj.width / 2.0;
         let cy = obj.y + obj.height / 2.0;
@@ -1345,8 +1355,10 @@ fn rotate_segment(segment: &mut PathSegment, obj: &CutObject) {
     }
 }
 
-/// Convert object geometry to a path (with rotation applied)
-fn object_to_path(obj: &CutObject) -> PathSegment {
+/// Convert object geometry to a path (with rotation applied).
+/// pub(crate) so optimizer.rs can reuse the same geometry for containment checks,
+/// ensuring containment is computed on identical geometry to what is actually cut.
+pub(crate) fn object_to_path(obj: &CutObject) -> PathSegment {
     let mut segment = match obj.obj_type.as_str() {
         "rectangle" => {
             let x = obj.x;
