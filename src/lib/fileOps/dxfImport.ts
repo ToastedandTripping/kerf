@@ -95,7 +95,6 @@ function parseDxfManual(content: string) {
           case 6: unitsScale = 1000.0; break;       // m → mm
           default: unitsScale = 1.0; break;         // treat unknown as mm
         }
-        foundInsunits = false;
         break;
       }
     }
@@ -159,7 +158,8 @@ function parseDxfManual(content: string) {
       const pts: Array<{ x: number; y: number }> = [];
       const bulges: number[] = [];
       let closed = false;
-      let currentX = 0, currentY = 0;
+      let currentX = 0;
+      let currentY: number;
       let pendingBulge = 0;
       let vertexCount = 0;
       while (i < lines.length) {

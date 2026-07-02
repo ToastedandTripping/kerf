@@ -635,7 +635,7 @@ function parseSvgElementForImport(
       const textContent = el.textContent || "";
       if (!textContent.trim()) return null;
       let fontSize = parseFloat(getResolvedStyle(el, "font-size", styleMap) || "16");
-      let fontFamily = (getResolvedStyle(el, "font-family", styleMap) || "sans-serif").replace(/['"]/g, "");
+      const fontFamily = (getResolvedStyle(el, "font-family", styleMap) || "sans-serif").replace(/['"]/g, "");
       const pos = applyMatrix(matrix, x, y); const ms = getMatrixScale(matrix);
       fontSize = fontSize * ms.sy * scale;
       const estWidth = textContent.length * fontSize * 0.55, estHeight = fontSize * 1.3;

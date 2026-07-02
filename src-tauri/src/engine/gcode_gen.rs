@@ -842,15 +842,14 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                         for line in scan_result.gcode.lines() {
                                             lines.push(line.to_string());
                                         }
-                                        moves.extend(scan_result.moves.clone());
                                         cut_distance += scan_result.cut_distance;
                                         travel_distance += scan_result.travel_distance;
                                         total_distance += scan_result.total_distance;
-                                        if !scan_result.moves.is_empty() {
-                                            let last = scan_result.moves.last().unwrap();
+                                        if let Some(last) = scan_result.moves.last() {
                                             cur_x = last.x;
                                             cur_y = last.y;
                                         }
+                                        moves.extend(scan_result.moves);
                                     }
                                     Err(e) => {
                                         eprintln!("[gcode_gen] maskFill scan error for '{}': {}", obj.id, e);
@@ -891,6 +890,152 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
         estimated_time_secs: estimated_time,
         line_count: lines.len(),
     }
+}
+
+/// Rotate a point around a center
+pub(crate) fn rotate_point(px: f64, py: f64, cx: f64, cy: f64, angle_rad: f64) -> Point {
+    let dx = px - cx;
+    let dy = py - cy;
+    Point {
+        x: cx + dx * angle_rad.cos() - dy * angle_rad.sin(),
+        y: cy + dx * angle_rad.sin() + dy * angle_rad.cos(),
+    }
+}
+
+/// Apply rotation to all points in a path segment
+pub(crate) fn rotate_segment(segment: &mut PathSegment, obj: &CutObject) {
+    if obj.rotation.abs() > 0.001 {
+        let cx = obj.x + obj.width / 2.0;
+        let cy = obj.y + obj.height / 2.0;
+        let rad = obj.rotation.to_radians();
+        for pt in &mut segment.points {
+            let rotated = rotate_point(pt.x, pt.y, cx, cy, rad);
+            pt.x = rotated.x;
+            pt.y = rotated.y;
+        }
+    }
+}
+
+/// Convert object geometry to a path (with rotation applied).
+/// pub(crate) so optimizer.rs can reuse the same geometry for containment checks,
+/// ensuring containment is computed on identical geometry to what is actually cut.
+pub(crate) fn object_to_path(obj: &CutObject) -> PathSegment {
+    let mut segment = match obj.obj_type.as_str() {
+        "rectangle" => {
+            let x = obj.x;
+            let y = obj.y;
+            let w = obj.width;
+            let h = obj.height;
+
+            let is_rounded = obj.corner_radius.is_some_and(|r| r > 0.0);
+            if is_rounded {
+                let r = obj.corner_radius.unwrap().min(w / 2.0).min(h / 2.0);
+                let mut points = Vec::new();
+                points.push(Point { x: x + r, y });
+                points.push(Point { x: x + w - r, y });
+                arc_points(&mut points, x + w - r, y + r, r, -90.0, 0.0, 8);
+                points.push(Point { x: x + w, y: y + h - r });
+                arc_points(&mut points, x + w - r, y + h - r, r, 0.0, 90.0, 8);
+                points.push(Point { x: x + r, y: y + h });
+                arc_points(&mut points, x + r, y + h - r, r, 90.0, 180.0, 8);
+                points.push(Point { x, y: y + r });
+                arc_points(&mut points, x + r, y + r, r, 180.0, 270.0, 8);
+                PathSegment { points, closed: true }
+            } else {
+                PathSegment {
+                    points: vec![
+                        Point { x, y },
+                        Point { x: x + w, y },
+                        Point { x: x + w, y: y + h },
+                        Point { x, y: y + h },
+                    ],
+                    closed: true,
+                }
+            }
+        }
+        "ellipse" => {
+            let cx = obj.x + obj.width / 2.0;
+            let cy = obj.y + obj.height / 2.0;
+            let rx = obj.width / 2.0;
+            let ry = obj.height / 2.0;
+            let segments = 64;
+            let mut points = Vec::with_capacity(segments);
+            for i in 0..segments {
+                let angle = 2.0 * std::f64::consts::PI * (i as f64) / (segments as f64);
+                points.push(Point {
+                    x: cx + rx * angle.cos(),
+                    y: cy + ry * angle.sin(),
+                });
+            }
+            PathSegment { points, closed: true }
+        }
+        "line" => {
+            PathSegment {
+                points: vec![
+                    Point { x: obj.x, y: obj.y },
+                    Point { x: obj.x + obj.width, y: obj.y + obj.height },
+                ],
+                closed: false,
+            }
+        }
+        _ => PathSegment { points: vec![], closed: false },
+    };
+
+    rotate_segment(&mut segment, obj);
+    segment
+}
+
+/// Generate arc points for rounded corners
+fn arc_points(points: &mut Vec<Point>, cx: f64, cy: f64, r: f64, start_deg: f64, end_deg: f64, segments: usize) {
+    let start_rad = start_deg.to_radians();
+    let end_rad = end_deg.to_radians();
+    for i in 0..=segments {
+        let t = i as f64 / segments as f64;
+        let angle = start_rad + (end_rad - start_rad) * t;
+        points.push(Point {
+            x: cx + r * angle.cos(),
+            y: cy + r * angle.sin(),
+        });
+    }
+}
+
+/// Estimate job time accounting for acceleration curves
+fn estimate_time(moves: &[GcodeMove], accel: f64) -> f64 {
+    let mut total_time = 0.0_f64;
+    let mut prev_x = 0.0_f64;
+    let mut prev_y = 0.0_f64;
+
+    for m in moves {
+        let dist = ((m.x - prev_x).powi(2) + (m.y - prev_y).powi(2)).sqrt();
+        if dist < 0.001 {
+            prev_x = m.x;
+            prev_y = m.y;
+            continue;
+        }
+
+        let max_speed = m.speed / 60.0; // mm/min to mm/s
+
+        // Time with trapezoidal acceleration profile
+        // Distance to accelerate to max speed: d = v^2 / (2*a)
+        let accel_dist = max_speed * max_speed / (2.0 * accel);
+
+        if dist < 2.0 * accel_dist {
+            // Triangle profile: never reaches max speed
+            // t = 2 * sqrt(d / a)
+            total_time += 2.0 * (dist / accel).sqrt();
+        } else {
+            // Trapezoidal: accel + cruise + decel
+            let accel_time = max_speed / accel;
+            let cruise_dist = dist - 2.0 * accel_dist;
+            let cruise_time = cruise_dist / max_speed;
+            total_time += 2.0 * accel_time + cruise_time;
+        }
+
+        prev_x = m.x;
+        prev_y = m.y;
+    }
+
+    total_time
 }
 
 #[cfg(test)]
@@ -1329,150 +1474,4 @@ mod tests {
             result.gcode
         );
     }
-}
-
-/// Rotate a point around a center
-pub(crate) fn rotate_point(px: f64, py: f64, cx: f64, cy: f64, angle_rad: f64) -> Point {
-    let dx = px - cx;
-    let dy = py - cy;
-    Point {
-        x: cx + dx * angle_rad.cos() - dy * angle_rad.sin(),
-        y: cy + dx * angle_rad.sin() + dy * angle_rad.cos(),
-    }
-}
-
-/// Apply rotation to all points in a path segment
-pub(crate) fn rotate_segment(segment: &mut PathSegment, obj: &CutObject) {
-    if obj.rotation.abs() > 0.001 {
-        let cx = obj.x + obj.width / 2.0;
-        let cy = obj.y + obj.height / 2.0;
-        let rad = obj.rotation.to_radians();
-        for pt in &mut segment.points {
-            let rotated = rotate_point(pt.x, pt.y, cx, cy, rad);
-            pt.x = rotated.x;
-            pt.y = rotated.y;
-        }
-    }
-}
-
-/// Convert object geometry to a path (with rotation applied).
-/// pub(crate) so optimizer.rs can reuse the same geometry for containment checks,
-/// ensuring containment is computed on identical geometry to what is actually cut.
-pub(crate) fn object_to_path(obj: &CutObject) -> PathSegment {
-    let mut segment = match obj.obj_type.as_str() {
-        "rectangle" => {
-            let x = obj.x;
-            let y = obj.y;
-            let w = obj.width;
-            let h = obj.height;
-
-            let is_rounded = obj.corner_radius.is_some_and(|r| r > 0.0);
-            if is_rounded {
-                let r = obj.corner_radius.unwrap().min(w / 2.0).min(h / 2.0);
-                let mut points = Vec::new();
-                points.push(Point { x: x + r, y });
-                points.push(Point { x: x + w - r, y });
-                arc_points(&mut points, x + w - r, y + r, r, -90.0, 0.0, 8);
-                points.push(Point { x: x + w, y: y + h - r });
-                arc_points(&mut points, x + w - r, y + h - r, r, 0.0, 90.0, 8);
-                points.push(Point { x: x + r, y: y + h });
-                arc_points(&mut points, x + r, y + h - r, r, 90.0, 180.0, 8);
-                points.push(Point { x, y: y + r });
-                arc_points(&mut points, x + r, y + r, r, 180.0, 270.0, 8);
-                PathSegment { points, closed: true }
-            } else {
-                PathSegment {
-                    points: vec![
-                        Point { x, y },
-                        Point { x: x + w, y },
-                        Point { x: x + w, y: y + h },
-                        Point { x, y: y + h },
-                    ],
-                    closed: true,
-                }
-            }
-        }
-        "ellipse" => {
-            let cx = obj.x + obj.width / 2.0;
-            let cy = obj.y + obj.height / 2.0;
-            let rx = obj.width / 2.0;
-            let ry = obj.height / 2.0;
-            let segments = 64;
-            let mut points = Vec::with_capacity(segments);
-            for i in 0..segments {
-                let angle = 2.0 * std::f64::consts::PI * (i as f64) / (segments as f64);
-                points.push(Point {
-                    x: cx + rx * angle.cos(),
-                    y: cy + ry * angle.sin(),
-                });
-            }
-            PathSegment { points, closed: true }
-        }
-        "line" => {
-            PathSegment {
-                points: vec![
-                    Point { x: obj.x, y: obj.y },
-                    Point { x: obj.x + obj.width, y: obj.y + obj.height },
-                ],
-                closed: false,
-            }
-        }
-        _ => PathSegment { points: vec![], closed: false },
-    };
-
-    rotate_segment(&mut segment, obj);
-    segment
-}
-
-/// Generate arc points for rounded corners
-fn arc_points(points: &mut Vec<Point>, cx: f64, cy: f64, r: f64, start_deg: f64, end_deg: f64, segments: usize) {
-    let start_rad = start_deg.to_radians();
-    let end_rad = end_deg.to_radians();
-    for i in 0..=segments {
-        let t = i as f64 / segments as f64;
-        let angle = start_rad + (end_rad - start_rad) * t;
-        points.push(Point {
-            x: cx + r * angle.cos(),
-            y: cy + r * angle.sin(),
-        });
-    }
-}
-
-/// Estimate job time accounting for acceleration curves
-fn estimate_time(moves: &[GcodeMove], accel: f64) -> f64 {
-    let mut total_time = 0.0_f64;
-    let mut prev_x = 0.0_f64;
-    let mut prev_y = 0.0_f64;
-
-    for m in moves {
-        let dist = ((m.x - prev_x).powi(2) + (m.y - prev_y).powi(2)).sqrt();
-        if dist < 0.001 {
-            prev_x = m.x;
-            prev_y = m.y;
-            continue;
-        }
-
-        let max_speed = m.speed / 60.0; // mm/min to mm/s
-
-        // Time with trapezoidal acceleration profile
-        // Distance to accelerate to max speed: d = v^2 / (2*a)
-        let accel_dist = max_speed * max_speed / (2.0 * accel);
-
-        if dist < 2.0 * accel_dist {
-            // Triangle profile: never reaches max speed
-            // t = 2 * sqrt(d / a)
-            total_time += 2.0 * (dist / accel).sqrt();
-        } else {
-            // Trapezoidal: accel + cruise + decel
-            let accel_time = max_speed / accel;
-            let cruise_dist = dist - 2.0 * accel_dist;
-            let cruise_time = cruise_dist / max_speed;
-            total_time += 2.0 * accel_time + cruise_time;
-        }
-
-        prev_x = m.x;
-        prev_y = m.y;
-    }
-
-    total_time
 }

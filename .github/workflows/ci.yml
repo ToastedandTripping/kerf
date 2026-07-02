@@ -27,6 +27,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev
 
+      - name: Assert version files agree
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAURI_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          CARGO_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)
+          echo "package.json:      $PKG_VERSION"
+          echo "tauri.conf.json:   $TAURI_VERSION"
+          echo "Cargo.toml:        $CARGO_VERSION"
+          if [ "$PKG_VERSION" != "$TAURI_VERSION" ] || [ "$PKG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "::error::Version drift detected. Run: node scripts/bump-version.mjs <version>"
+            exit 1
+          fi
+
       - run: npm ci
 
       - run: npx tsc --noEmit
@@ -38,5 +51,19 @@ jobs:
       - run: cargo test
         working-directory: src-tauri
 
-      - run: cargo clippy -- -D warnings
+      - run: cargo clippy --all-targets -- -D warnings
         working-directory: src-tauri
+
+      - name: npm audit (advisory)
+        run: npm audit
+        continue-on-error: true
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+        continue-on-error: true
+
+      - name: cargo audit (advisory)
+        run: cargo audit
+        working-directory: src-tauri
+        continue-on-error: true

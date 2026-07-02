@@ -252,7 +252,7 @@ export function Viewport() {
         }
       } else {
         // Create new display object
-        let el: Container | null = null;
+        let el: Container | null;
         if (obj.type === "text") {
           el = renderTextObject(obj);
           if (el) contentHashCache.set(key, contentHash(obj));

@@ -1,17 +1,18 @@
 ---
 status: active
-current: "Cut-order inner-first fix + v0.8.21/v0.8.22/v0.8.23 releases (this session, 2026-06-28, relay kerf-cut-order). Owner reported parts cut FREE of the stock before their interior cuts finish — the freed piece shifts and is damaged; the 'Inner First' layer toggle did nothing. Root-caused to 5 compounding bugs: cut_inner_first was never read; nearest-neighbor (optimize_cut_order_from) ran AFTER sort_inner_first and re-sorted by travel distance, DISCARDING inner-first; a single imported shape's sub-contours (holes) were never ordered; containment was axis-aligned-bbox-only (post-kerf); the correct algorithm sat as dead code. Owner decision: 'LAYER ORDER WINS' — within-layer fix only, no cross-layer reordering (structurally safe: gcodeGen.ts already calls generate_gcode once per layer). FIX (Rust, all gated by cut_inner_first, default true): order_inner_first_nn bands objects by LONGEST-PATH RANK in the containment DAG (not a container count — a count isn't monotone; a straddling object could tie an inner with its outer), NN only within a rank band; real geometric containment via even-odd point_in_polygon + rotated-AABB pre-filter with a guaranteed-interior representative point (area centroid → scanline-midpoint fallback); order_paths_inner_first sorts a single object's holes before its perimeter (line arm only — maskFill/offsetFill untouched); toggle wired at both line sites (off → pure NN). Reuses gcode_gen's object_to_path/rotate_segment so containment geometry == emit geometry. Razor PASS — logic independently PROVED correct (rank monotone, AABB filter zero false-negatives, rep point provably interior); 2 WARNING hardening folded (invariant comment + partial-overlap cycle-prevention test). Rust 104→117 tests, JS 628; tsc/build clean, zero new clippy. ALSO cut this session: v0.8.21 (first-fire + SVG release that the owner was missing) and v0.8.22 (image-trace artifact fix). v0.8.23 carries the cut-order fix and is CUMULATIVE — one build tests first-fire, SVG, trace, AND cut-order. PENDING OWNER HARDWARE TEST."
-next: Owner-vetting + hardware-gated tuning. (Everything below ships in v0.8.23, CUMULATIVE — one download tests all of it.)
-  • OWNER HARDWARE TEST — all live in v0.8.23: first-Start freeze, SVG import (keyrack), image-trace artifacts, AND the new cut-order. Still pending from earlier builds: material test (presets + text labels + cut border + Frame), text tool, slider drag, measure tool, unit toggle (mm/in), aspect ratio lock.
-  • CUT ORDER (inner-first) — ✅ DONE (relay kerf-cut-order, v0.8.23): within-layer inner-before-outer made bulletproof — toggle wired, NN no longer discards inner-first (longest-path-rank banding), single-shape holes ordered before their perimeter, geometric (not bbox) containment. Owner test: cut a part with interior holes + an outer perimeter on one Cut layer — every hole must cut before the outline and the part stays anchored until the final boundary cut; repeat with a rotated part and a one-shape-with-holes import; toggle 'Inner First' OFF → reverts to plain nearest-neighbor.
-  • IMAGE TRACE — ✅ artifact fix DONE (v0.8.22, relay kerf-trace-artifacts): interior-pinhole despeckle + real area filter + WYSIWYG zoomable preview. Owner test: trace a clean black-on-white PNG with 'auto', zoom the enlarged preview to confirm no interior speckle, spot-check an O/e counter still cuts its hole, then burn. SVG PATH-COORDINATE DRIFT remains OPEN — separate bug, awaiting a sample Inkscape SVG from the owner to reproduce.
+current: "HARDENING & EFFICIENCY PROGRAM launched + Phase 0 shipped as v0.8.24 (this session, 2026-07-02). The program: a critic-reviewed 7-phase plan (~11-14 relays, plan kerf-hardening-program.md, critic 10 PASS/6 CONCERN/0 FAIL with all must-fixes folded) built on a 3-agent codebase exploration. Spine: Phase 1 GRBL SIMULATOR (virtual GRBL 1.1 behind the existing Box<dyn SerialPort> seam — makes the entire streaming stack CI-testable, attacking the #1 project bottleneck: owner-hardware-gated verification) → Phase 2 CHARACTER-COUNTING STREAMING (fixes the real burn-quality defect: per-line send-and-wait never keeps GRBL's 128-byte RX full, head starves on dense curves; ships behind a streamingMode toggle with the old path untouched, perLine default until owner A/B) → Phase 3 efficiency (moves[] binary IPC, image-hash cache, JobPreview Path2D rework, code-splitting) → Phase 4 geometry debt (winding hygiene, offsetFill/Clipper2 gate) → Phase 5 UI structure/a11y → Phase 6 adoption (gated). Only TWO owner laser sessions in the whole program (post-Ph2, post-Ph4). Phase 0 (v0.8.24, Ted+Razor PASS_WITH_WARNINGS all findings applied): devtools no longer ships in release builds (was hard-enabled in Cargo.toml), tokio full→rt-multi-thread+macros, 6 unused npm deps removed (5× radix + dxf-parser, −47 packages), scripts/bump-version.mjs + CI version-drift guard (kills the 5-file drift problem), advisory npm/cargo audit CI steps, CI clippy tightened to --all-targets (16 pre-existing test-code errors paid down), lint 52→37 warnings, gcode_gen clone→move + lineCount dedup (Razor-proved identical semantics), ROADMAP body rewritten to current reality (stale May-era checklists → History note; DXF layer-mapping + SPLINE gaps preserved), docs/test-card.md owner test script v1. Zero machine-behavior changes — safe to ship untested on hardware."
+next: Phase 1 of the hardening program (GRBL simulator + test spine) + owner hardware vetting of v0.8.23/v0.8.24.
+  • PHASE 1 (next relays, no laser needed) — 1A simulator core (virtual GRBL 1.1 behind Box<dyn SerialPort>, two-stage RX/planner buffer model, ok-on-planner-accept, the no-ack-await-between-!-and-0x18 invariant assertion); 1B fault injection + integration harness over the REAL serial commands; 1C golden G-code snapshot corpus + gcode_gen coverage + optimizer property tests. Full spec: .claude/plans/kerf-hardening-program.md.
+  • OWNER HARDWARE TEST — one v0.8.24 download tests everything since v0.8.20 (cumulative): first-Start freeze, SVG import (keyrack), image-trace artifacts, cut-order inner-first. Still pending from earlier builds: material test (presets + text labels + cut border + Frame), text tool, slider drag, measure tool, unit toggle (mm/in), aspect ratio lock. USE docs/test-card.md — the new scripted 10-minute pass covers the baseline.
+  • SVG PATH-COORDINATE DRIFT — OPEN, awaiting a sample Inkscape SVG from the owner to reproduce.
   • WS5 ENGRAVE-EVENNESS — ✅ OWNER-CONFIRMED (2026-06-25): M4 engrave came out much cleaner.
-  • MATERIAL TEST — ✅ OVERHAULED: power mode selector (M3/M4), 4 presets (Quick Cut, Quick Engrave, Full Cut, Full Engrave), Frame button, real text labels via text-to-G-code pipeline (opentype.js → sampleBezierPath → G0/G1), cut border for reusable test cards, continuous fill sweep, $32=0 warning. Owner hardware test pending.
-  • WS6 INTERRUPT-RECOVERY — Core idle-stall detection DONE. REMAINING: (a) threshold tuning on hardware, (b) friendlier in-app stall-recovery UI, (c) clean-abort/drain UX for user-initiated interrupts.
-  • CARRY-OVERS — Fill Phase C winding hygiene; then v0.9 Camera & Rotary.
+  • WS6 INTERRUPT-RECOVERY — Core idle-stall detection DONE. Remainder (stall-recovery UI, clean-abort/drain UX, threshold setting) is scheduled as program Phase 2B.
+  • CARRY-OVERS — Fill Phase C winding hygiene + offsetFill/Clipper2 decision → program Phase 4; v0.9 Camera & Rotary parked behind gate D4 (hardware unconfirmed).
 testing: null
 pinned: true
 shipped:
+  - date: 2026-07-02
+    item: "Hardening & Efficiency Program launched + Phase 0 'deck clearing' — v0.8.24 (this session; program plan critic-reviewed 10 PASS/6 CONCERN/0 FAIL with all 6 must-fixes folded; Phase 0 via direct Ted+Razor, PASS_WITH_WARNINGS with all findings applied). THE PROGRAM (plan: .claude/plans/kerf-hardening-program.md; built on a 3-agent exploration of TS health / Rust health / performance): 7 phases, ~11-14 relays. Ph1 GRBL SIMULATOR (test-only keystone — virtual GRBL 1.1 implementing SerialPort behind the existing CommandChannel seam, two-stage RX/planner buffer, fault injection; makes the whole streaming stack CI-testable, attacking the #1 bottleneck: owner-hardware-gated verification) → Ph2 CHARACTER-COUNTING STREAMING (the burn-quality fix: today's per-line send-and-wait never keeps GRBL's 128B RX full so the head starves on dense curves; job moves to a Rust pump w/ 127-byte window accounting, Tauri Channel events, F13-order abort volley [! → settle → realtime 0x18 → conditional M5 — the critic caught the draft re-creating the documented F13 deadlock], pause/resume re-plumbed off the line-based F16 wraps, $32=1 hard-gated at job_start in buffered mode, PumpFlight registered, Status events feed the DRO; ships behind streamingMode toggle, perLine default until owner A/B — which doubles as the FIRST MEASUREMENT of the starvation premise) → Ph3 EFFICIENCY (moves[] binary envelope via ipc::Response w/ named JSON fallback, Rust image-hash cache killing repeated base64 uploads, JobPreview Path2D + stop-rAF-while-paused, drag-path objectsById fix, React.lazy dialogs + manualChunks) → Ph4 GEOMETRY DEBT (winding hygiene, offsetFill/Clipper2 gate D2, kerfOffset-on-fillLine) → Ph5 UI STRUCTURE (ModalShell, 5 focus-trap gaps, component tests, characterization-first toolHandler rule) → Ph6 ADOPTION (gate D3: docs, Windows CI untested-beta). Only TWO owner laser sessions in the whole program (post-Ph2 ~30-45min, post-Ph4 ~15min); every other phase ships on CI evidence. PHASE 0 SHIPPED (v0.8.24, zero machine-behavior changes): devtools REMOVED from release builds (Cargo.toml:22 hard-enabled it in every build — confirmed defect); tokio full→[rt-multi-thread,macros]; 6 unused npm deps removed (5× @radix-ui + dxf-parser, −47 packages, verified zero imports); scripts/bump-version.mjs syncing all 5 version files (package.json/tauri.conf/Cargo.toml/both locks — kills the recurring drift, v0.8.21 shipped with locks at 0.8.18) + CI version-drift assertion; advisory npm/cargo audit CI steps (continue-on-error, install step hardened + pinned per Razor); CI clippy tightened to --all-targets (16 pre-existing test-code clippy errors paid down; one 297-line fn relocation Razor-verified byte-identical); lint 52→37 warnings (15 mechanical fixes, each traced safe; react-hooks family left per config's documented intent); gcode_gen.rs:845 clone→move + gcodeGen.ts countLines dedup (Razor independently traced semantics identical — cut-affecting file, zero behavior change); ROADMAP body rewritten (May-era shipped checklists → History note; Razor caught 2 unshipped DXF items [layer mapping, SPLINE] being silently dropped — restored to Tier 2 gaps; scan-angle struck as shipped); docs/test-card.md v1 (scripted 10-min owner hardware pass, wording verified against actual serial.rs/connection.ts console output). Razor confirmations: no test weakened by the clippy fixes (each assertion traced), Zustand Error-185 clean on all touched files, bump script's Cargo.lock anchor can't match kerf-* dep names. OWNER: nothing hardware-gated in this release; v0.8.24 is also the CUMULATIVE build for the still-pending v0.8.21-23 hardware vetting — use the new test card. Base: v0.8.23."
   - date: 2026-06-28
     item: "Cut-order inner-first fix — v0.8.23 (relay kerf-cut-order; Ted + Razor PASS). Owner: parts get cut FREE of the stock before their interior cuts finish, so the freed piece shifts and is damaged; the 'Inner First' layer toggle did nothing. Root-caused to FIVE compounding bugs (traced against code): (1) `cut_inner_first` was NEVER read — `optimizer::sort_inner_first` ran unconditionally (`commands/gcode.rs:110,125`); (2) THE CORE BUG — per layer the flow was `sort_inner_first` THEN `optimize_cut_order_from` (a from-scratch greedy nearest-neighbor, `optimizer.rs:5-44`), so NN re-sorted by travel distance and DISCARDED the inner-first order (whichever start point was nearest the head went first, hole or perimeter); (3) a single imported shape's sub-contours (holes as sub-paths of ONE CutObject) were never reordered; (4) containment was axis-aligned-bbox-only, computed post-kerf — wrong for rotated/irregular shapes; (5) the correct algorithm already existed as dead code (`multi_criteria_sort`). Owner chose 'LAYER ORDER WINS' (within-layer fix only, no cross-layer reordering — structurally safe since `gcodeGen.ts` already calls `generate_gcode` once per layer). FIX (Rust-only, all gated by `cut_inner_first`, default true): new `order_inner_first_nn` bands objects by LONGEST-PATH RANK in the containment DAG (a plain container-COUNT isn't monotone — a straddling third object can tie an inner with its outer; longest-path rank guarantees rank(inner) > rank(container) on every edge), with NN only WITHIN a rank band (so travel optimization can never reorder a nested pair); real geometric containment via even-odd `point_in_polygon` + a rotated-AABB pre-filter (A's full bbox ⊆ B's bbox — provably zero false-negatives for true containment) and a GUARANTEED-INTERIOR representative point (area centroid, else a scanline-midpoint with a half-open edge rule); `order_paths_inner_first` orders a single object's holes before its perimeter in the `\"line\"` emit arm only (maskFill even-odd/letter-counters + offsetFill untouched); toggle wired at both line sites (off → pure NN; homogeneous branch keeps its `is_line_mode` guard so pure-fill layers stay pure NN). Reuses `gcode_gen`'s now-`pub(crate)` `object_to_path`/`rotate_segment` so containment geometry == the geometry actually cut. REVIEW: Razor PASS — independently PROVED the safety-critical properties (rank is genuine longest-path & monotone; the AABB filter has zero false-negatives; `guaranteed_interior_point` is provably strictly inside any simple polygon; even-odd PiP half-open rule correct; A4b fill-before-line + F7 per-layer order intact; maskFill/offsetFill untouched). 2 WARNING (hardening) folded: a documented invariant on `build_object_outline` (outer = largest-area sub-path) and a `partial_overlap_no_false_containment_cycle` test that locks the AABB filter's cycle-prevention role (asserts equal rank for two intersecting rects — fails if the filter is removed). Tests Rust 104→117 (incl. inner-first-survives-NN, sub-contour hole-before-perimeter, toggle on/off, rotated + concave-outer containment, three-level nesting, straddle-no-tie, layer-order-preserved, degenerate rep-point), JS 628; tsc/build clean, zero NEW clippy (16 pre-existing in untouched files). OWNER HARDWARE TEST (the real gate): cut a part with interior holes + an outer perimeter on ONE Cut layer — every hole must cut before the outline and the part must stay anchored until the final boundary cut; repeat with a rotated part and a one-shape-with-holes import; toggle 'Inner First' OFF and confirm plain nearest-neighbor returns. NOT done (owner-scoped-out): cross-layer 'freeing-cut-last' guarantee. Base: v0.8.22."
     item: "v0.8.21 release + image-trace artifact fix (relay kerf-trace-artifacts; Ted + Razor PASS + Jen PASS). RELEASE: the post-v0.8.20 first-Start-freeze (bda068f) + SVG implicit-lineto (f840618) fixes had been committed to master but never tagged, so CI never built installers — the owner was running v0.8.20 binaries that predated the first-fire fix by one commit ('first fire still not working'). Cut v0.8.21 (tag → build.yml → action-gh-release auto-publishes .dmg/.AppImage/.deb) and fixed version drift: Cargo.lock + package-lock.json had silently fallen to 0.8.18 while package.json/tauri.conf.json/Cargo.toml were 0.8.20 — all five now agree at 0.8.21. TRACE FIX: clean black-on-white PNGs traced with spurious interior 'shading'/small cuts. Root-caused (Plan-agent + critic, ground-truthed against pinned vtracer 0.6.5 / visioncortex 0.8.10) to THREE bugs: (1) interior WHITE pinholes were never despeckled — remove_small_components flood-fills only foreground black, and in vtracer ColorMode::Binary each enclosed white speck becomes a hole subpath inside the black cluster's CompoundPath, which parsePathD splits into its own DesignObject → a real cut; (2) the Step-8 output filter judged contours by to_svg_string().len() > 20 (SVG STRING LENGTH), not geometric area; (3) the dialog preview traced at preview_scale 0.25 while commit ran 1.0, so pixel-count thresholds removed ~16× more (in original px) at preview — the preview was systematically cleaner than the cut, hiding artifacts until the burn. FIXES: new fill_small_holes (border-flood marks exterior, fills interior holes smaller than filter_speckle², floored at 1, gated to non-sketch modes incl. the trace_transparency carve-out, preserves letter counters — verified by a counter-preservation test); shoelace compound_outer_area filter replacing the length heuristic (handles PathI32/PathF64/Spline + empty); adaptive preview scale (s = min(1, 1600/longSide); full-res for normal art, COMMIT ALWAYS UNCAPPED) with scale-normalized filter_speckle/ignore_area/hole thresholds for true WYSIWYG; path_count now sums compound subpaths (contours), so the badge signals artifact spikes; enlarged (360px) + zoomable trace preview reusing the DitherPreviewDialog pattern (zoom −/%/+/Fit, top-left transform-origin + overflow:auto so zoomed corners are reachable, structured contours·resolution info strip). REVIEW: Razor PASS after one WARNING fixed (ignore_area_scaled missing its .max(1) floor → both area filters silently no-op'd on the 'detailed' preset for >1600px images; the cut path at s=1.0 was always correct) + 4 NOTES (N3 sketch/transparency guard tightened; rest accepted); React Error 185 clean (zoom is all local useState). Jen PASS — 7 design concerns ALL applied (zoom-control parity with DitherPreviewDialog, structured info panel, var(--danger)/var(--border)/var(--font-mono) tokens, not-allowed cursors, low-zoom wrap). Tests: Rust 96→104 (fill_small_holes unit, e2e pinhole vs counter, scale parity, shoelace+Spline+empty, contour-count, sketch guard, ignore_area floor), JS 628; tsc --noEmit / build clean, no new clippy. OWNER HARDWARE TEST (the real gate): trace a clean black-on-white PNG with 'auto', zoom the preview to confirm no interior speckle, confirm an O/e counter still cuts its hole, then burn. KNOWN-OPEN (separate, scoped out): SVG path-coordinate drift (awaiting a sample Inkscape file); the import transform/relative-coord code audited clean, so it needs a reproducing file. Base: v0.8.20."
@@ -132,21 +133,24 @@ offset, tabs, kerf offset, perforation, sub-layers, material library,
 dithering (6 algorithms + grayscale), image adjustments, node editing,
 Boolean ops, array tools.
 
-**Tier 1 gaps (workflow-blocking):**
-- Animated cut preview (can't verify order before burning material)
-- Object snapping (no snap to edges/centers of other objects)
-- Auto-read workspace from GRBL $130/$131
-- Recent files + auto-save recovery
-- Layer reorder (controls cut sequence = safety-critical)
+**Tier 1 gaps (workflow-blocking) — all closed, v0.4:**
+- ~~Animated cut preview~~ (v0.4 — can't verify order before burning material)
+- ~~Object snapping~~ (v0.4 — snap to edges/centers of other objects)
+- ~~Auto-read workspace from GRBL $130/$131~~ (v0.4)
+- ~~Recent files + auto-save recovery~~ (v0.4)
+- ~~Layer reorder~~ (v0.4 — controls cut sequence, safety-critical)
 
 **Tier 2 gaps (productivity/quality):**
 - ~~Offset Fill mode~~ (v0.5)
-- Scan angle + rotation between passes
+- ~~Scan angle + rotation between passes~~ (v0.7 — F10, LayerPanel scanAngle/angleIncrement)
 - ~~Cut planner: multi-criteria ordering, flood fill, choose corner~~ (v0.5)
 - ~~Power Scale per shape~~ (v0.4)
 - ~~Grayscale power curve~~ (v0.5)
 - ~~PDF import~~ (v0.5, raster; vector extraction pending)
 - Material library UX (export/share/merge, ship defaults)
+- DXF layer mapping (every DXF entity still imports flat onto `activeLayerIndex`,
+  no per-DXF-layer/color mapping) + SPLINE entity support (LWPOLYLINE bulge
+  arcs shipped in F23; true SPLINE was never handled) — never shipped
 
 **Tier 3 gaps (advanced/pro — post-v0.5):**
 - Camera system (overlay + calibration + print-and-cut)
@@ -189,166 +193,24 @@ macOS/Windows/Linux app, not a hobby project. That's the opportunity.
 
 ---
 
-## Phase 1 — Import & Trace
+## History
 
-*Get designs into Kerf reliably. This is the front door.*
+The roadmap used to track Phase 1 (Import & Trace), Phase 2 (Layer Workflow),
+Phase 3 (Send & Control), and v0.4 (Production-Ready Core) here as detailed
+sub-numbered checklists. All four shipped, long ago — the checkboxes just
+never got ticked as the work landed, so the lists sat there as dozens of
+stale `[ ] ` items contradicting this file's own frontmatter. Nearly
+everything on them is done; the two known exceptions (DXF layer mapping and
+SPLINE entity support, from the old 1c "DXF Import Cleanup" list) never
+shipped and are carried forward as a Tier 2 gap above. With that carve-out
+noted, the checklists are retired in favor of a pointer:
 
-### 1a. Image Trace Workflow
-The preferred workflow: export PNG from design tools (preserves custom
-fonts perfectly), trace to vectors in Kerf.
-
-- [ ] Drag-and-drop PNG/JPG onto canvas (not just file dialog)
-- [ ] Inline trace preview: live threshold/detail sliders over the image
-- [ ] One-click trace to vectors on active layer
-- [ ] Trace quality presets (fast/detailed/photo)
-- [ ] Keep source image as reference layer (toggleable, non-cutting)
-
-### 1b. SVG Import with Layer Mapping
-For vector workflows where tracing isn't needed.
-
-- [ ] Import SVG preserving group structure
-- [ ] Auto-map SVG colors to Kerf layers (match by color)
-- [ ] Import dialog: show color preview, let user assign each color group to a layer
-- [ ] Handle common SVG issues: viewBox normalization, transform flattening, stroke-to-path
-- [ ] Text elements: convert to paths on import (fonts won't be available)
-
-### 1c. DXF Import Cleanup
-Already exists but needs hardening.
-
-- [ ] Layer mapping from DXF colors/layers to Kerf layers
-- [ ] Better arc/spline fidelity
-
----
-
-## Phase 2 — Layer Workflow
-
-*Assigning objects to layers should be instant and obvious.*
-
-### 2a. Layer UX Overhaul
-The layer system exists but needs to feel effortless.
-
-- [ ] Drag objects between layers in the layer panel
-- [ ] Right-click → "Move to Layer" context menu on canvas
-- [ ] Color-coded selection handles match layer color
-- [ ] Layer visibility/lock toggle directly on layer rows
-- [ ] Layer reordering (drag to change cut order)
-- [ ] "Output" toggle per layer (disable without deleting)
-
-### 2b. Layer Settings
-Already comprehensive in the data model. Needs better UX.
-
-- [ ] Inline speed/power/passes controls on each layer row (no dialog)
-- [ ] Material preset dropdown per layer: pick a preset, settings populate
-- [ ] Visual indicator when settings differ from preset ("modified")
-
-### 2c. Material Library
-Exists in data model. Needs to be usable.
-
-- [ ] Save current layer settings as new preset
-- [ ] Organize by material type → thickness
-- [ ] Import/export presets as JSON (share with community)
-- [ ] Ship with sensible defaults for common materials (3mm ply, 3mm acrylic, cardboard)
-
----
-
-## Phase 3 — Send & Control
-
-*Connect, preview, run. Machine panel already works -- make it solid.*
-
-### 3a. Connection Polish
-Serial connection exists. Needs to be bulletproof.
-
-- [ ] Auto-detect common laser USB serial devices
-- [ ] Remember last-used port and auto-reconnect
-- [ ] Connection status always visible in status bar
-- [ ] Graceful recovery from USB disconnect mid-job
-
-### 3b. Job Preview
-- [ ] Estimated time display before sending
-- [ ] Bounding box preview: show laser head path on workspace
-- [ ] "Frame" button: trace the job boundary on the machine without firing
-- [ ] Cut order visualization (animate path sequence)
-
-### 3c. Job Execution
-- [ ] Progress bar with estimated time remaining
-- [ ] Pause/resume (GRBL hold/resume)
-- [ ] Emergency stop always accessible (exists, verify UX)
-- [ ] Job complete notification
-
----
-
-## v0.4 — Production-Ready Core
-
-*Thesis: close every Tier 1 gap so a user with GRBL can do real paid
-work without hitting a wall. Cherry-pick highest-leverage Tier 2 items.*
-
-### 4.1 Animated Cut Preview
-The single most important gap. Users will not trust their material to
-software that can't show what's about to happen.
-- [ ] Playback animation of G-code moves (play/pause/speed control)
-- [ ] Time scrubber: drag to any point in the job
-- [ ] Color-code by type: cut = layer color, travel = gray dashed
-- [ ] Layer visibility toggles in preview
-- [ ] Estimated time display accounting for acceleration
-
-### 4.2 Object Snapping
-Precise layout without typing coordinates.
-- [ ] Snap to grid (exists — verify working)
-- [ ] Snap to edges/centers of other objects
-- [ ] Snap to workspace bounds
-- [ ] Visual snap indicators (guide lines appear on snap)
-- [ ] Hold modifier key to temporarily disable snap
-
-### 4.3 Workspace Auto-Configuration
-- [ ] On connect, read GRBL $130/$131 and set workspace size
-- [ ] Display machine limits as workspace boundary
-- [ ] Warn if design exceeds machine bed
-
-### 4.4 File Persistence
-- [ ] Recent files list (last 10, displayed on launch/File menu)
-- [ ] Auto-save to recovery location every 60s
-- [ ] Crash recovery: detect recovery file on launch, offer restore
-
-### 4.5 Layer Reorder + Cut Sequence
-Safety-critical: controls what gets cut in what order.
-- [ ] Drag layers to reorder (changes G-code output sequence)
-- [ ] Visual cut order numbers on layer rows
-- [ ] "Move to Layer" context menu on canvas objects
-
-### 4.6 Scan Angle Control
-Minimal code, huge engraving flexibility.
-- [ ] `scanAngle` field per layer (0-360 degrees)
-- [ ] `angleIncrement` per layer (auto-rotate between passes)
-- [ ] Wire through Rust engine (rotation_rad already exists)
-
-### 4.7 Power Scale Per Shape
-Gradient depth effects without multiple layers.
-- [ ] `powerScale` property on DesignObject (0-100%, default 100%)
-- [ ] Editable in Properties panel when shape selected
-- [ ] Multiplied against layer power at G-code generation time
-- [ ] Visual indicator on canvas (opacity matches power scale)
-
-### 4.8 Material Library Polish
-Data model is complete — make it usable.
-- [ ] Ship 10-15 defaults (3mm ply, 6mm ply, 3mm/6mm acrylic,
-      cardboard, leather, anodized aluminum, MDF, cork, fabric)
-- [ ] Export/import as .json
-- [ ] Quick-apply from library to active layer
-- [ ] "Save current settings" button on layer panel
-
-### 4.9 First-Launch Onboarding
-Not a manual — just enough to make the core loop obvious.
-- [ ] 3-4 step walk-through: import → assign layer → connect → send
-- [ ] Show only once (localStorage flag)
-- [ ] "Show again" option in Help menu
-- [ ] Contextual tooltips on first use of key panels
-
-### 4.10 Polish & Quality
-- [ ] Smooth zoom to cursor position
-- [ ] Precise position/size input fields in Properties panel
-- [ ] GRBL alarm state recovery (guided steps to unlock)
-- [ ] USB disconnect mid-job: pause, alert, offer reconnect
-- [ ] Status bar: always show connection state + machine position
+**The authoritative shipped history lives in this file's YAML frontmatter**
+(the `shipped:` list at the top) — one dated entry per relay, with root-cause
+detail, the fix, and the review verdict (Razor/Jen PASS, test counts). If you
+want to know when object snapping landed or what the cut-order fix actually
+changed, that's where the real record is. This body only tracks what's
+*upcoming*.
 
 ---
 
@@ -416,7 +278,80 @@ Final production audit PASSED with 0 blockers. Tests 127→369 JS, 25→56 Rust.
 
 ---
 
-## v0.9 — Camera & Rotary (Next)
+## Hardening & Efficiency Program (2026-07)
+
+*Full plan: `.claude/plans/kerf-hardening-program.md`. Seven phases, ~11-14
+relays, current tracked work. Thesis: the project's real bottleneck isn't
+code, it's hardware-gated verification — every release queues on Lee's laser
+time. The keystone is a GRBL simulator that makes the streaming stack
+CI-testable, so only TWO owner laser sessions are needed for the whole
+program.*
+
+- **Phase 0 — Deck clearing.** Goal: mechanical backlog + release hygiene —
+  devtools out of release builds, tokio feature trim, dead npm deps removed,
+  a version-sync script + CI drift guard, two one-liner cleanups, a timeboxed
+  lint burn-down, and this ROADMAP rewrite. Risk: minimal. Laser time: none.
+- **Phase 1 — GRBL simulator + test spine.** Goal: a two-stage-buffer GRBL
+  simulator (RX buffer → line parser → planner queue) with fault injection,
+  plugged into the existing `Box<dyn SerialPort>` seam, plus a golden
+  G-code snapshot corpus so the generator and the streaming stack are both
+  CI-provable for the first time. Risk: low — test-only, no production path
+  touched. Laser time: none.
+- **Phase 2 — Streaming rework + recovery UX.** Goal: replace the
+  one-line-per-round-trip send loop with GRBL character-counting flow
+  control (keeps the 128-byte RX buffer full — the fix for dense-segment
+  engrave stutter), re-plumb pause/resume around the laser-off contract, and
+  hard-gate `$32` laser mode at job start instead of warn-only. Risk:
+  HIGHEST in the program — this changes real machine behavior, and the
+  abort volley must preserve the F13 fix's realtime-`!` → settle →
+  realtime-`0x18` ordering exactly, or it recreates the beam-dwell deadlock
+  that ordering was built to prevent. Laser time: **owner session #1**
+  (~30-45 min) — dense-engrave A/B (old vs new streaming), pause/resume/stop,
+  a deliberate bad-line abort, stall-threshold tuning, transcript capture.
+- **Phase 3 — Efficiency: IPC + preview + interaction + bundle.** Goal: stop
+  shipping `moves[]` as a parallel heap-string JSON array over IPC, cache
+  decoded images by hash instead of re-sending base64 on every regenerate,
+  stop the JobPreview rAF loop from redrawing every move every frame, and
+  code-split the ~13 eagerly-bundled dialogs. Risk: low-medium, gated on
+  emitted G-code staying byte-identical to Phase 1's goldens. Laser time:
+  none.
+- **Phase 4 — Geometry correctness debt.** Goal: fix the long-standing Fill
+  Phase C winding-hygiene carry-over and offsetFill's compound-shape
+  correctness (decides whether Clipper2 becomes a dependency), plus the
+  kerf-offset-on-fillLine-perimeter design. Risk: medium-high — this phase
+  *deliberately* changes cut output, so the safety net is a reviewed
+  golden-diff plus new fixtures pinning the corrected behavior, not
+  byte-identical goldens. Laser time: **owner session #2** (~15 min) — scrap
+  cuts of the fill/offset fixtures.
+- **Phase 5 — UI structure, a11y, component tests.** Goal: fix the 5 dialogs
+  missing focus-trap/escape handling, decide on a shared ModalShell across
+  the ~16 hand-rolled overlays, add component tests for the biggest
+  untested surfaces (MaterialTestDialog, PropertiesPanel, PowerCurveEditor,
+  the PDF import path), and characterize `toolHandler.ts` before ever
+  splitting it. Risk: low. Laser time: none.
+- **Phase 6 — Adoption.** Goal: README + user quickstart/troubleshooting
+  docs, a Windows CI build target, community preset-sharing groundwork.
+  Enters only on Lee's go (gate D3) and is severable from the rest of the
+  program. Risk: low code risk, but the Windows target ships as an
+  untested beta — there's no Windows hardware in this program to verify
+  serial/COM/DTR behavior against. Laser time: none.
+
+**Decision gates:**
+
+| Gate | When | Question | Default |
+|---|---|---|---|
+| D1 | Phase 2A | Ship the sim as a hidden connectable demo port? | Yes (cheap; attacks the bottleneck) |
+| D1c | Phase 2 ship | Default streaming mode at release | `perLine` (unproven pump never ships as a laser's default); flip to `buffered` post-session-#1 |
+| D1b | End Phase 3 | Remove the `perLine` legacy path? | Yes, iff session #1 passed AND the A/B showed the buffered win; keep it if A/B showed no difference |
+| D2 | Phase 4 entry | Clipper2 dependency; kerfOffset-on-fillLine design | Lee + architect call |
+| D3 | Phase 6 entry | Public-adoption push? | Deferred until Lee says go |
+| D4 | Post-program | v0.9 Camera & Rotary | Deferred; hardware unconfirmed |
+
+---
+
+## v0.9 — Camera & Rotary (Parked — decision-gated)
+
+Gate D4: only enters planning after Lee confirms the camera/rotary hardware.
 
 - [ ] Camera alignment (USB webcam, calibration wizard, overlay)
 - [ ] Print-and-cut registration (two-point alignment)
@@ -424,7 +359,10 @@ Final production audit PASSED with 0 blockers. Tests 127→369 JS, 25→56 Rust.
 
 ---
 
-## v1.0 — Profiles, Text & Community
+## v1.0 — Profiles, Text & Community (Parked — decision-gated)
+
+Gate D3: only enters planning once the Hardening & Efficiency Program reaches
+Phase 6 and Lee green-lights a public-adoption push.
 
 - [ ] Multiple machine profiles (switch between setups)
 - [ ] Text on path (arbitrary curve following)
@@ -466,5 +404,5 @@ These are deliberate exclusions, not oversights:
 
 - Repo: github.com/ToastedandTripping/kerf (public, master branch)
 - Stack: Tauri v2 / React 18 / Pixi.js 8 / Rust / Zustand
-- License: (to be determined — recommend MIT for maximum adoption)
+- License: MIT (done — see `LICENSE`)
 - Research: landscape analysis conducted May 2026

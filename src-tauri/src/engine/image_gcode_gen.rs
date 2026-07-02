@@ -782,7 +782,7 @@ mod tests {
     fn f5_scale_x_minus1_flips_pixels_horizontally() {
         // 10 pixels wide, 1 row. Left half (0–4) black, right half (5–9) white.
         let mut pixels = vec![255u8; 10];
-        for i in 0..5 { pixels[i] = 0; }
+        pixels[..5].fill(0);
 
         // Without mirror: run is at pixels 0–4 → X positions 0–5mm
         let req_normal = base_req();
@@ -802,16 +802,12 @@ mod tests {
             .expect("flipped: generate_scan_gcode should succeed");
 
         // Normal run should end at X≤5.0; flipped run should start at X≥5.0
-        let x_end_normal = result_normal.gcode.lines()
-            .filter(|l| l.starts_with("G1 X"))
-            .last()
+        let x_end_normal = result_normal.gcode.lines().rfind(|l| l.starts_with("G1 X"))
             .and_then(|l| l.split_whitespace().find(|t| t.starts_with("X")))
             .and_then(|t| t[1..].parse::<f64>().ok())
             .unwrap_or(0.0);
 
-        let x_start_flipped = result_flipped.gcode.lines()
-            .filter(|l| l.starts_with("G0 X"))
-            .next()
+        let x_start_flipped = result_flipped.gcode.lines().find(|l| l.starts_with("G0 X"))
             .and_then(|l| l.split_whitespace().find(|t| t.starts_with("X")))
             .and_then(|t| t[1..].parse::<f64>().ok())
             .unwrap_or(0.0);

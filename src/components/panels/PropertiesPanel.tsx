@@ -24,7 +24,9 @@ export function PropertiesPanel() {
   const toggleUnit = () => {
     const next = displayUnit === "mm" ? "in" : "mm";
     setDisplayUnit(next);
-    try { localStorage.setItem(UNITS_KEY, next); } catch {}
+    try { localStorage.setItem(UNITS_KEY, next); } catch {
+      // localStorage unavailable (private browsing, disabled storage) — non-critical, ignore
+    }
   };
 
   const toDisplay = (mm: number) => displayUnit === "in" ? mm / MM_PER_INCH : mm;

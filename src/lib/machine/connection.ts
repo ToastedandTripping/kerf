@@ -72,7 +72,9 @@ export const machineConnection = {
       const name = localStorage.getItem(LAST_PORT_KEY);
       const baud = localStorage.getItem(LAST_BAUD_KEY);
       if (name) return { name, baudRate: baud ? parseInt(baud) : 115200 };
-    } catch {}
+    } catch {
+      // localStorage unavailable (private browsing, disabled storage) — non-critical, ignore
+    }
     return null;
   },
 
@@ -107,7 +109,9 @@ export const machineConnection = {
       try {
         localStorage.setItem(LAST_PORT_KEY, portName);
         localStorage.setItem(LAST_BAUD_KEY, String(baudRate));
-      } catch {}
+      } catch {
+        // localStorage unavailable (private browsing, disabled storage) — non-critical, ignore
+      }
 
       // DTR hardware-reset + 0x18 soft-reset now happen in Rust during
       // serial_connect, before it returns. No TS-side reset needed.

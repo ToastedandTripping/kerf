@@ -574,6 +574,12 @@ async function generateImageGcodeByLayer(
 const SENTINEL_PREAMBLE_END = "; KERF:PREAMBLE_END";
 const SENTINEL_FOOTER_BEGIN = "; KERF:FOOTER_BEGIN";
 
+/** Shared line-count helper — avoids duplicating the split("\n").length pattern
+ *  across assembleGcode's two return branches. */
+function countLines(gcode: string): number {
+  return gcode.split("\n").length;
+}
+
 /** Strip the engine-emitted preamble and footer from a G-code fragment.
  *
  *  Uses the machine-readable sentinel comments rather than allow-listing prose
@@ -640,7 +646,7 @@ function assembleGcode(fragments: GcodeResult[]): GcodeResult {
       cutDistance: 0,
       travelDistance: 0,
       estimatedTimeSecs: 0,
-      lineCount: gcode.split("\n").length,
+      lineCount: countLines(gcode),
     };
   }
 
@@ -690,7 +696,7 @@ function assembleGcode(fragments: GcodeResult[]): GcodeResult {
     cutDistance: fragments.reduce((s, f) => s + f.cutDistance, 0),
     travelDistance: fragments.reduce((s, f) => s + f.travelDistance, 0),
     estimatedTimeSecs: fragments.reduce((s, f) => s + f.estimatedTimeSecs, 0),
-    lineCount: gcode.split("\n").length,
+    lineCount: countLines(gcode),
   };
 }
 

@@ -367,7 +367,7 @@ function approximateArc(
   const x1p = cosPhi * dx + sinPhi * dy;
   const y1p = -sinPhi * dx + cosPhi * dy;
 
-  let lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry);
+  const lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry);
   if (lambda > 1) {
     const sqrtL = Math.sqrt(lambda);
     rx *= sqrtL;

@@ -986,7 +986,7 @@ describe("WS2 — generateGcode layer ordering", () => {
     useStore.getState().addObject(makeRect("cut-obj", 20, 0, 10, 10));       // default index 0
     useStore.getState().updateObject("cut-obj", { layerIndex: 2 });           // index 2 (pos 1)
 
-    let invokesWithObjs: string[][] = [];
+    const invokesWithObjs: string[][] = [];
     mockInvoke.mockImplementation(async (cmd: string, args?: { objects?: Array<{ id: string }> }) => {
       if (cmd === "generate_gcode") {
         invokesWithObjs.push((args?.objects ?? []).map((o) => o.id));

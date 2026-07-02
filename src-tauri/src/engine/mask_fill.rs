@@ -917,7 +917,7 @@ mod tests {
         // Row 0: pixels 0-3 filled; Row 1: pixels 4-7 filled;
         // Row 2: pixels 1-5 filled; Row 3: pixels 2-6 filled
         let mut pixels = vec![255u8; w * h];
-        for i in 0..4 { pixels[i] = 0; }          // row 0
+        pixels[..4].fill(0);                      // row 0
         for i in 4..8 { pixels[w + i] = 0; }      // row 1
         for i in 1..6 { pixels[2 * w + i] = 0; }  // row 2
         for i in 2..7 { pixels[3 * w + i] = 0; }  // row 3
@@ -1073,12 +1073,12 @@ G1 X1.172 Y199.414 F6000 S0";
         let bar = make_square_seg(0.0, 4.0, 10.0, 6.0);
         let obj = make_obj("H", vec![left, right, bar], 0.0, 0.0, 10.0, 10.0);
 
-        let (pixels, w, _h, _ox, _oy) = fill_compound_mask(&obj, 1.0).expect("fill_compound_mask should succeed");
+        let (pixels, _w, _h, _ox, _oy) = fill_compound_mask(&obj, 1.0).expect("fill_compound_mask should succeed");
 
         // Row 0 (y=0..1): left stroke pixels (col 0,1) should be filled; right (col 8,9) filled; center not
-        let row0_left = pixels[0 * w + 0]; // col 0, row 0
-        let row0_right = pixels[0 * w + 9]; // col 9, row 0
-        let row0_center = pixels[0 * w + 5]; // col 5, row 0 (gap)
+        let row0_left = pixels[0]; // col 0, row 0
+        let row0_right = pixels[9]; // col 9, row 0
+        let row0_center = pixels[5]; // col 5, row 0 (gap)
 
         assert_eq!(row0_left, 0, "Left stroke (col=0,row=0) must be filled, got {}", row0_left);
         assert_eq!(row0_right, 0, "Right stroke (col=9,row=0) must be filled, got {}", row0_right);
@@ -1100,7 +1100,7 @@ G1 X1.172 Y199.414 F6000 S0";
         let (pixels, w, _h, _ox, _oy) = fill_compound_mask(&obj, 1.0).expect("fill_compound_mask should succeed");
 
         // Left stroke must be filled in its column
-        let left_mid = pixels[5 * w + 0];
+        let left_mid = pixels[5 * w];
         assert_eq!(left_mid, 0, "N left stroke (col=0,row=5) must be filled, got {}", left_mid);
 
         // Right stroke must be filled in its column
@@ -1181,7 +1181,7 @@ G1 X1.172 Y199.414 F6000 S0";
         let (pixels, w, h, _ox, _oy) = fill_compound_mask(&obj, 1.0).expect("fill_compound_mask should succeed");
 
         // With the min-1-row policy, at least one pixel must be filled
-        let any_filled = pixels.iter().any(|&p| p == 0);
+        let any_filled = pixels.contains(&0);
         assert!(
             any_filled,
             "Thin stroke (0.3mm at 1.0mm interval) must produce at least one filled pixel; \
@@ -1242,7 +1242,7 @@ G1 X1.172 Y199.414 F6000 S0";
         // or 1 → at least one pixel filled.
         match result {
             Ok((pixels, _w, _h, _ox, _oy)) => {
-                let any_filled = pixels.iter().any(|&p| p == 0);
+                let any_filled = pixels.contains(&0);
                 // The all_same rescue may or may not succeed depending on whether the
                 // expanded contour hits a row center. If it doesn't, fill_compound_mask
                 // warns and continues — the test verifies it doesn't panic or return Err.
@@ -1307,7 +1307,7 @@ G1 X1.172 Y199.414 F6000 S0";
             fill_compound_mask(&obj, 1.0).expect("fill_compound_mask should succeed");
 
         // Verify we have filled pixels (O outer wall)
-        let has_filled = pixels.iter().any(|&p| p == 0);
+        let has_filled = pixels.contains(&0);
         assert!(has_filled, "O-shape mask should have filled pixels");
 
         // --- origin_top=false (standard GRBL: Y flipped) ---

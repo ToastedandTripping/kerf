@@ -54,7 +54,7 @@ export async function textObjectToPaths(obj: DesignObject): Promise<DesignObject
     // to its outline and the bridge was CUT through the workpiece.
     const contours: Array<Array<{ x: number; y: number; handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } }>> = [];
     let pathPoints: Array<{ x: number; y: number; handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } }> = [];
-    let currentX = 0, currentY = 0;
+    let currentX: number, currentY: number;
 
     for (const cmd of commands) {
       switch (cmd.type) {
@@ -460,7 +460,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
       get().withUndo("convert-to-path", () => {
         const { updateObject } = get();
 
-        let points: Array<{ x: number; y: number; handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } }> = [];
+        let points: Array<{ x: number; y: number; handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } }>;
         const t = obj.transform;
 
         switch (obj.type) {

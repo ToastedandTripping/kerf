@@ -78,5 +78,7 @@ export async function clearRecoveryFile(): Promise<void> {
     if (!recoveryPath) return;
     const fs = await import("@tauri-apps/plugin-fs");
     await fs.remove(recoveryPath);
-  } catch {}
+  } catch {
+    // Best-effort cleanup — recovery file may already be gone, non-critical, ignore
+  }
 }

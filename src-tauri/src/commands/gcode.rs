@@ -212,7 +212,6 @@ pub struct PreviewDitherResult {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::engine::gcode_gen::{CutLayer, CutObject};
     use crate::engine::optimizer;
 
@@ -246,8 +245,6 @@ mod tests {
         let line_order = optimizer::optimize_cut_order_from(&line_group, cur_x, cur_y);
         for &idx in &line_order {
             let obj = &line_group[idx];
-            cur_x = obj.x + obj.width;
-            cur_y = obj.y + obj.height;
             result.push(obj.clone());
         }
         result
