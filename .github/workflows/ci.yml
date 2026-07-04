@@ -48,6 +48,13 @@ jobs:
 
       - run: npm test
 
+      # Guard the golden-corpus integrity: if KERF_UPDATE_GOLDEN is ever set in
+      # the environment, the golden tests regenerate-and-pass instead of
+      # comparing, silently disabling the G-code safety net. CI must never run
+      # with it set.
+      - name: Assert golden-regenerate flag is unset
+        run: 'test -z "${KERF_UPDATE_GOLDEN:-}"'
+
       - run: cargo test
         working-directory: src-tauri
 
