@@ -71,11 +71,22 @@
 //! line-based M5 sent instead of the realtime `0x18` shows up as a recorded
 //! violation the moment it lands on the wire.
 //!
+//! ## Fault injection (Relay 1B)
+//!
+//! `SimPort`'s `set_*` methods (`set_drop_ok_at_line`, `set_error_at_line`,
+//! `set_alarm_after_ticks`, `set_silent`, `set_eof`, `set_write_fail`) script
+//! misbehavior that composes with the model above rather than bypassing it
+//! — a dropped `ok` still lets its line execute; an unsolicited alarm still
+//! runs through the normal tick clock. Each maps 1:1 to a `run_pump`
+//! outcome (`PumpFailure`/`PumpTerminal`) — see the integration tests in
+//! `commands::serial`'s `sim_integration` test module, which drive the REAL
+//! `run_pump`/`drain_startup_banner`/`disconnect_inner`/`send_byte_inner`
+//! against a faulted sim.
+//!
 //! ## Explicitly out of scope
 //!
-//! Acceleration/junction planning, G2/G3 arcs, laser-power simulation, real
-//! `$$` settings semantics (a canned dump is enough), fault injection
-//! (Relay 1B), and any frontend/TS wiring.
+//! Acceleration/junction planning, G2/G3 arcs, laser-power simulation, and
+//! real `$$` settings semantics (a canned dump is enough).
 
 #![cfg_attr(not(test), allow(dead_code))]
 // No production consumer exists yet in this relay — Phase 2 wires a demo
@@ -168,6 +179,34 @@ struct PlannerEntry {
     remaining_ticks: u32,
 }
 
+/// Fault-injection scripting (Relay 1B). Every fault composes with the
+/// existing planner/tick model rather than bypassing it — a dropped `ok`
+/// still lets the line execute; an unsolicited alarm still runs through the
+/// normal tick clock. Set via `SimPort`'s `set_*` methods, which lock the
+/// shared brain, so any clone can arm a fault the others observe.
+#[derive(Debug, Default, Clone, Copy)]
+struct Faults {
+    /// Suppress the `ok` for the Nth line accepted into the planner
+    /// (1-indexed, counting both immediate accepts and later promotions —
+    /// see `GrblBrain::accept_ok`). Models a firmware ack glitch: the line
+    /// still executes, but the host never hears back.
+    drop_ok_at_line: Option<u32>,
+    /// Reply `error:{1}` instead of `ok` for the Nth accepted line (`.0`).
+    error_at_line: Option<(u32, u32)>,
+    /// Raise an unsolicited `ALARM:1` after N more ticks elapse (e.g. a
+    /// simulated hard-limit trip while otherwise idle or mid-job).
+    alarm_after_ticks: Option<u32>,
+    /// The link is dead: `Read::read` always returns `TimedOut`, regardless
+    /// of anything queued in `outbound` — models liveness expiry.
+    silent: bool,
+    /// The port vanished: `Read::read` always returns `Ok(0)` — models the
+    /// pump's EOF branch (serial_pump.rs's `Ok(0) => Disconnected`).
+    eof: bool,
+    /// The port vanished the OTHER direction: `Write::write` always
+    /// returns `Err` — models `PumpFailure::Io` at the write site.
+    write_fail: bool,
+}
+
 /// True if `text` contains a stand-alone M3, M4, or M5 command word — the
 /// spindle/laser control codes real GRBL sync-blocks while in Feed Hold
 /// (the F13 hazard the strict-hold invariant pins). Case-insensitive and
@@ -235,6 +274,18 @@ pub struct GrblBrain {
 
     overflow_count: usize,
     hold_invariant_violations: Vec<String>,
+
+    /// Counts every line accepted into the planner (immediate accept or
+    /// promotion), 1-indexed — what `Faults::drop_ok_at_line`/
+    /// `error_at_line` key off of. Not reset by `boot_or_reset` (a fault
+    /// script spans the whole test, resets included).
+    accepted_count: u32,
+    faults: Faults,
+    /// Every realtime byte (`?`/`!`/`~`/`0x18`/`0x9E`) this brain has ever
+    /// received, in arrival order — lets a test assert "this byte reached
+    /// the wire" the way `MockPort`'s shared `written` buffer does for
+    /// plain writes (serial.rs:469).
+    realtime_log: Vec<u8>,
 }
 
 impl GrblBrain {
@@ -250,6 +301,9 @@ impl GrblBrain {
             outbound: VecDeque::new(),
             overflow_count: 0,
             hold_invariant_violations: Vec::new(),
+            accepted_count: 0,
+            faults: Faults::default(),
+            realtime_log: Vec::new(),
         };
         brain.boot_or_reset();
         brain
@@ -290,15 +344,28 @@ impl GrblBrain {
     fn handle_bytes(&mut self, buf: &[u8]) {
         for &b in buf {
             match b {
-                0x18 => self.soft_reset(),
-                b'?' => self.status_probe(),
-                b'!' => self.feed_hold(),
-                b'~' => self.resume(),
+                0x18 => {
+                    self.realtime_log.push(b);
+                    self.soft_reset();
+                }
+                b'?' => {
+                    self.realtime_log.push(b);
+                    self.status_probe();
+                }
+                b'!' => {
+                    self.realtime_log.push(b);
+                    self.feed_hold();
+                }
+                b'~' => {
+                    self.realtime_log.push(b);
+                    self.resume();
+                }
                 0x9E => {
                     // Reserved: GRBL 1.1's realtime Toggle Spindle-Stop
                     // override, needed by Phase 2A's pause re-plumb. Like
                     // every realtime byte it bypasses the RX line buffer;
                     // it has no simulated effect until 2A gives it one.
+                    self.realtime_log.push(b);
                 }
                 b'\n' => self.complete_line(),
                 other => self.push_rx_byte(other),
@@ -393,13 +460,33 @@ impl GrblBrain {
         if self.planner.len() < self.config.planner_depth {
             self.rx_used = self.rx_used.saturating_sub(len);
             self.planner.push_back(PlannerEntry { remaining_ticks: self.config.line_ticks });
-            self.push_line("ok");
+            self.accept_ok();
             if self.state == MachineState::Idle {
                 self.state = MachineState::Run;
             }
         } else {
             self.pending_lines.push_back(PendingLine { len });
         }
+    }
+
+    /// Called exactly once per line accepted into the planner — immediate
+    /// accept in `dispatch_motion_line`, or promotion in
+    /// `try_promote_pending` — normally to emit its `ok`. Applies the
+    /// drop-ok / error-at-line fault scripts, keyed to this ordinal
+    /// (`accepted_count`, 1-indexed): "the Nth accepted line."
+    fn accept_ok(&mut self) {
+        self.accepted_count += 1;
+        let n = self.accepted_count;
+        if let Some((target, code)) = self.faults.error_at_line {
+            if target == n {
+                self.push_line(&format!("error:{code}"));
+                return;
+            }
+        }
+        if self.faults.drop_ok_at_line == Some(n) {
+            return; // ok deliberately withheld — the line still executes
+        }
+        self.push_line("ok");
     }
 
     fn soft_reset(&mut self) {
@@ -437,6 +524,20 @@ impl GrblBrain {
     /// when there is no response data already queued — a tick models one
     /// elapsed real port-timeout interval.
     fn tick(&mut self) {
+        // Unsolicited alarm (e.g. a hard-limit trip): can fire regardless of
+        // whatever else is going on, so it's checked first.
+        if let Some(remaining) = self.faults.alarm_after_ticks.as_mut() {
+            if *remaining > 0 {
+                *remaining -= 1;
+            }
+            if *remaining == 0 {
+                self.faults.alarm_after_ticks = None;
+                self.state = MachineState::Alarm;
+                self.push_line("ALARM:1");
+                return;
+            }
+        }
+
         if let Some(remaining) = self.homing_remaining.as_mut() {
             if *remaining > 0 {
                 *remaining -= 1;
@@ -480,7 +581,7 @@ impl GrblBrain {
             let Some(pending) = self.pending_lines.pop_front() else { break };
             self.rx_used = self.rx_used.saturating_sub(pending.len);
             self.planner.push_back(PlannerEntry { remaining_ticks: self.config.line_ticks });
-            self.push_line("ok");
+            self.accept_ok();
             if self.state == MachineState::Idle {
                 self.state = MachineState::Run;
             }
@@ -556,11 +657,64 @@ impl SimPort {
     pub fn outbound_len(&self) -> usize {
         self.brain.lock().unwrap().outbound_len()
     }
+
+    // -- Fault injection (Relay 1B) -----------------------------------------
+    // Every setter locks the shared brain, so a fault armed via ANY
+    // `try_clone()`'d handle is observed by all of them — the same handle
+    // sharing the rest of the sim depends on.
+
+    /// Suppress the `ok` for the Nth line accepted into the planner
+    /// (1-indexed). The line still executes; only its ack is withheld.
+    pub fn set_drop_ok_at_line(&self, n: u32) {
+        self.brain.lock().unwrap().faults.drop_ok_at_line = Some(n);
+    }
+
+    /// Reply `error:{code}` instead of `ok` for the Nth accepted line.
+    pub fn set_error_at_line(&self, n: u32, code: u32) {
+        self.brain.lock().unwrap().faults.error_at_line = Some((n, code));
+    }
+
+    /// Raise an unsolicited `ALARM:1` after `ticks` more ticks elapse.
+    pub fn set_alarm_after_ticks(&self, ticks: u32) {
+        self.brain.lock().unwrap().faults.alarm_after_ticks = Some(ticks);
+    }
+
+    /// The link goes dead: reads never again produce data, regardless of
+    /// what's already queued in `outbound`.
+    pub fn set_silent(&self, silent: bool) {
+        self.brain.lock().unwrap().faults.silent = silent;
+    }
+
+    /// The port vanished (read side): every read returns `Ok(0)`.
+    pub fn set_eof(&self, eof: bool) {
+        self.brain.lock().unwrap().faults.eof = eof;
+    }
+
+    /// The port vanished (write side): every write returns `Err`.
+    pub fn set_write_fail(&self, fail: bool) {
+        self.brain.lock().unwrap().faults.write_fail = fail;
+    }
+
+    /// Every realtime byte this brain has received, in arrival order — the
+    /// fault-injection-era analogue of `MockPort`'s shared `written` log,
+    /// scoped to just the realtime bypass path.
+    pub fn realtime_bytes_received(&self) -> Vec<u8> {
+        self.brain.lock().unwrap().realtime_log.clone()
+    }
 }
 
 impl Read for SimPort {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let mut brain = self.brain.lock().unwrap();
+        // Fault injection (Relay 1B): `eof`/`silent` model the link dying,
+        // checked before anything else — genuinely dead, nothing queued in
+        // `outbound` is ever delivered once either engages.
+        if brain.faults.eof {
+            return Ok(0);
+        }
+        if brain.faults.silent {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "sim: silent fault"));
+        }
         if brain.outbound_len() == 0 {
             brain.tick();
         }
@@ -577,7 +731,13 @@ impl Read for SimPort {
 
 impl Write for SimPort {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.brain.lock().unwrap().handle_bytes(buf);
+        let mut brain = self.brain.lock().unwrap();
+        // Fault injection (Relay 1B): the port vanished — writes fail
+        // outright, modeling `PumpFailure::Io` at the write site.
+        if brain.faults.write_fail {
+            return Err(io::Error::other("sim: write_fail fault"));
+        }
+        brain.handle_bytes(buf);
         Ok(buf.len())
     }
 

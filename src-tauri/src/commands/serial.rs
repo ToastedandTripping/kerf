@@ -786,3 +786,386 @@ mod tests {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Integration tests over the GRBL simulator (Relay 1B)
+//
+// `mod tests` above proves lock STRUCTURE with a dumb `MockPort`. This
+// module proves BEHAVIOR: the REAL `run_pump` / `drain_startup_banner` /
+// `disconnect_inner` / `send_byte_inner` driven against a simulated GRBL
+// controller (`crate::sim::grbl`) that can misbehave on cue via its
+// fault-injection API. Each fault maps 1:1 onto a `PumpFailure`/
+// `PumpTerminal` outcome (noted per test). Tests 1-7 are deterministic —
+// scripted faults, small injected tick/liveness windows, no threads. Tests
+// 8-9 are concurrency proofs and legitimately use real threads +
+// `recv_timeout`, exactly like `mod tests` above.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod sim_integration {
+    use super::*;
+    use crate::sim::grbl::{SimConfig, SimPort};
+    use std::sync::mpsc;
+    use std::thread;
+
+    // 1. connect/banner: `drain_startup_banner` — the exact function
+    // `serial_connect` calls — returns the GRBL banner over a sim reader,
+    // and clears `pending` on return.
+    #[test]
+    fn drain_startup_banner_returns_grbl_banner_over_sim() {
+        let sim = SimPort::new(SimConfig::default());
+        let mut channel = CommandChannel {
+            writer: sim.try_clone().unwrap(),
+            reader: BufReader::new(sim.try_clone().unwrap()),
+            pending: Vec::new(),
+        };
+
+        let banner = drain_startup_banner(&mut channel);
+        assert!(banner.contains("Grbl"), "got: {banner}");
+        assert!(channel.pending.is_empty());
+    }
+
+    // 2. send/ack: a line gets its `ok`, terminal == PumpTerminal::Ok — the
+    // production happy path, driven through the real `run_pump`.
+    #[test]
+    fn run_pump_acks_a_normal_line_over_sim() {
+        let sim = SimPort::new(SimConfig::default());
+        let mut writer = sim.try_clone().unwrap();
+        let mut reader = BufReader::new(sim.try_clone().unwrap());
+        let mut pending = Vec::new();
+        let _ = serial_pump::drain_classified(&mut reader, &mut pending); // drain banner
+
+        writer.write_all(b"G1 X10 F500\n").unwrap();
+        let out = serial_pump::run_pump(
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            DEFAULT_LIVENESS_TICKS,
+            serial_pump::DEFAULT_IDLE_STALL_TICKS,
+        )
+        .unwrap();
+        assert_eq!(out.terminal, serial_pump::PumpTerminal::Ok);
+        assert_eq!(out.lines, vec!["ok"]);
+    }
+
+    // 3. dropped-ok idle-stall: the sim keeps answering `?` with
+    // `<Idle|...>` (the planner drains normally — only the ack is
+    // withheld), but the terminal never comes -> the idle-wedge detector
+    // fires -> PumpFailure::Disconnected. A small injected idle_stall_ticks
+    // keeps the test fast.
+    #[test]
+    fn dropped_ok_triggers_idle_stall_disconnect() {
+        let sim = SimPort::new(SimConfig { planner_depth: 15, line_ticks: 1, ..SimConfig::default() });
+        let mut writer = sim.try_clone().unwrap();
+        let mut reader = BufReader::new(sim.try_clone().unwrap());
+        let mut pending = Vec::new();
+        let _ = serial_pump::drain_classified(&mut reader, &mut pending); // drain banner
+
+        sim.set_drop_ok_at_line(1); // the very next accepted line never acks
+
+        writer.write_all(b"G1 X1\n").unwrap();
+        let result = serial_pump::run_pump(&mut reader, &mut writer, &mut pending, DEFAULT_LIVENESS_TICKS, 3);
+        match result {
+            Err(serial_pump::PumpFailure::Disconnected(msg)) => {
+                assert!(
+                    msg.contains("Idle") || msg.contains("terminal lost"),
+                    "expected the idle-wedge message, got: {msg}"
+                );
+            }
+            other => panic!("expected idle-stall Disconnected, got {other:?}"),
+        }
+    }
+
+    // 4. liveness expiry: fault "go silent" — no bytes ever arrive again,
+    // regardless of what the sim would otherwise have queued -> run_pump's
+    // silence counter reaches the (small, injected) liveness window ->
+    // PumpFailure::Disconnected.
+    #[test]
+    fn silent_fault_triggers_liveness_expiry() {
+        let sim = SimPort::new(SimConfig::default());
+        let mut writer = sim.try_clone().unwrap();
+        let mut reader = BufReader::new(sim.try_clone().unwrap());
+        let mut pending = Vec::new();
+        let _ = serial_pump::drain_classified(&mut reader, &mut pending); // drain banner
+
+        sim.set_silent(true);
+        // The line is accepted and its `ok` is queued; `set_silent` kills only the
+        // READ direction, so that `ok` is never delivered back to the pump.
+        writer.write_all(b"G1 X1\n").unwrap();
+
+        let result =
+            serial_pump::run_pump(&mut reader, &mut writer, &mut pending, 3, serial_pump::DEFAULT_IDLE_STALL_TICKS);
+        match result {
+            Err(serial_pump::PumpFailure::Disconnected(msg)) => {
+                assert!(msg.contains("probe ticks") || msg.contains("no response"), "got: {msg}");
+            }
+            other => panic!("expected liveness Disconnected, got {other:?}"),
+        }
+    }
+
+    // 4b. EOF: fault "port closed" — reads return Ok(0) — maps cleanly onto
+    // run_pump's own EOF branch (serial_pump.rs:169-171) since that branch
+    // is a direct, unconditional match on `Ok(0)`.
+    #[test]
+    fn eof_fault_yields_disconnected_port_closed() {
+        let sim = SimPort::new(SimConfig::default());
+        let mut writer = sim.try_clone().unwrap();
+        let mut reader = BufReader::new(sim.try_clone().unwrap());
+        let mut pending = Vec::new();
+        let _ = serial_pump::drain_classified(&mut reader, &mut pending); // drain banner
+
+        sim.set_eof(true);
+        writer.write_all(b"G1 X1\n").unwrap(); // write side is unaffected by the eof fault
+
+        let result = serial_pump::run_pump(
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            DEFAULT_LIVENESS_TICKS,
+            serial_pump::DEFAULT_IDLE_STALL_TICKS,
+        );
+        match result {
+            Err(serial_pump::PumpFailure::Disconnected(msg)) => {
+                assert!(msg.contains("EOF") || msg.contains("closed"), "got: {msg}");
+            }
+            other => panic!("expected EOF Disconnected, got {other:?}"),
+        }
+    }
+
+    // 4c. write failure — FINDING (see report): the task's fault list
+    // expected this to map to `PumpFailure::Io`, but it does not. The only
+    // write run_pump itself performs is the periodic realtime `?` probe on
+    // a timeout tick (`probe.write_probe()`); a failure there is caught by
+    // run_pump's OWN `.map_err(...)` and surfaces as
+    // `PumpFailure::Disconnected("probe write failed: ...")`.
+    // `PumpFailure::Io` is constructed ONLY from a non-TimedOut READ error
+    // (serial_pump.rs's final `Err(e) => ...Io` arm) — there is no code
+    // path in the current pump that turns a WRITE failure into `::Io`. (A
+    // write failure on the INITIAL line write, before run_pump is even
+    // called, doesn't reach `PumpFailure` at all — `serial_send` maps it to
+    // a plain `Err(String)` directly.) This test pins the actual behavior.
+    #[test]
+    fn write_fail_fault_surfaces_as_probe_write_failure_not_io() {
+        let sim = SimPort::new(SimConfig { planner_depth: 15, line_ticks: 1000, ..SimConfig::default() });
+        let mut writer = sim.try_clone().unwrap();
+        let mut reader = BufReader::new(sim.try_clone().unwrap());
+        let mut pending = Vec::new();
+        let _ = serial_pump::drain_classified(&mut reader, &mut pending); // drain banner
+
+        // Accept a line normally first (consume its `ok`), so the run_pump
+        // call below starts from a clean read with nothing pre-queued —
+        // guaranteeing its first tick is a genuine TimedOut that drives a
+        // probe write.
+        writer.write_all(b"G1 X1\n").unwrap();
+        let _ = serial_pump::drain_classified(&mut reader, &mut pending);
+
+        sim.set_write_fail(true);
+        let result = serial_pump::run_pump(
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            DEFAULT_LIVENESS_TICKS,
+            serial_pump::DEFAULT_IDLE_STALL_TICKS,
+        );
+        match result {
+            Err(serial_pump::PumpFailure::Disconnected(msg)) => {
+                assert!(msg.contains("probe write failed"), "got: {msg}");
+            }
+            other => panic!("expected Disconnected(\"probe write failed...\"), got {other:?}"),
+        }
+    }
+
+    // 5. error terminal: fault "error:N on the Nth accepted line" ->
+    // PumpTerminal::Error, the error line present verbatim.
+    #[test]
+    fn error_at_line_fault_yields_error_terminal() {
+        let sim = SimPort::new(SimConfig::default());
+        let mut writer = sim.try_clone().unwrap();
+        let mut reader = BufReader::new(sim.try_clone().unwrap());
+        let mut pending = Vec::new();
+        let _ = serial_pump::drain_classified(&mut reader, &mut pending); // drain banner
+
+        sim.set_error_at_line(1, 9);
+
+        writer.write_all(b"G1 X1\n").unwrap();
+        let out = serial_pump::run_pump(
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            DEFAULT_LIVENESS_TICKS,
+            serial_pump::DEFAULT_IDLE_STALL_TICKS,
+        )
+        .unwrap();
+        assert_eq!(out.terminal, serial_pump::PumpTerminal::Error);
+        assert_eq!(out.lines, vec!["error:9"]);
+    }
+
+    // 6. unsolicited ALARM: fault "alarm after N ticks" (e.g. a hard-limit
+    // trip while otherwise idle) -> PumpTerminal::Alarm.
+    #[test]
+    fn alarm_after_ticks_fault_yields_alarm_terminal() {
+        let sim = SimPort::new(SimConfig::default());
+        let mut writer = sim.try_clone().unwrap();
+        let mut reader = BufReader::new(sim.try_clone().unwrap());
+        let mut pending = Vec::new();
+        let _ = serial_pump::drain_classified(&mut reader, &mut pending); // drain banner
+
+        sim.set_alarm_after_ticks(2);
+
+        // No command in flight: this models an alarm arriving unsolicited.
+        // run_pump here plays the role of whatever reads the sim next
+        // (e.g. the frontend's status poll would surface it the same way).
+        let out = serial_pump::run_pump(
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            DEFAULT_LIVENESS_TICKS,
+            serial_pump::DEFAULT_IDLE_STALL_TICKS,
+        )
+        .unwrap();
+        assert_eq!(out.terminal, serial_pump::PumpTerminal::Alarm);
+        assert!(out.lines.iter().any(|l| l.starts_with("ALARM")), "got: {:?}", out.lines);
+    }
+
+    // 7. banner-mid-line (reset abort): the host is still transmitting a
+    // line (no trailing \n yet) when 0x18 interrupts it. The partial line
+    // is discarded — never acked, never errored — and the sim's banner
+    // becomes the next thing on the wire -> PumpTerminal::Banner ("the
+    // in-flight line was ABORTED, not acked" — serial_pump.rs's own
+    // documented semantics for this terminal).
+    #[test]
+    fn reset_mid_line_yields_banner_terminal_abort() {
+        let sim = SimPort::new(SimConfig::default());
+        let mut writer = sim.try_clone().unwrap();
+        let mut reader = BufReader::new(sim.try_clone().unwrap());
+        let mut pending = Vec::new();
+        let _ = serial_pump::drain_classified(&mut reader, &mut pending); // drain banner
+
+        writer.write_all(b"G1 X5").unwrap(); // no trailing \n — still "mid-line"
+        writer.write_all(&[0x18]).unwrap();
+
+        let out = serial_pump::run_pump(
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            DEFAULT_LIVENESS_TICKS,
+            serial_pump::DEFAULT_IDLE_STALL_TICKS,
+        )
+        .unwrap();
+        assert_eq!(out.terminal, serial_pump::PumpTerminal::Banner);
+        assert!(out.lines.iter().any(|l| l.contains("Grbl")), "got: {:?}", out.lines);
+    }
+
+    // 8. e-stop realtime bypass: mirrors `realtime_write_completes_while_
+    // command_lock_held` above (MockPort) with SimPort instead — plus the
+    // sim's own byte log proves the 0x18 actually reached the SIMULATED
+    // controller, not just that some write syscall returned Ok.
+    #[test]
+    fn sim_realtime_write_completes_while_command_lock_held() {
+        let sim = SimPort::new(SimConfig::default());
+        let realtime_handle: Box<dyn SerialPort> = sim.try_clone().unwrap();
+
+        let inner = Arc::new(SerialInner {
+            command: Mutex::new(None),
+            realtime: Mutex::new(Some(realtime_handle)),
+            connected: AtomicBool::new(true),
+            pump_in_flight: AtomicBool::new(true),
+        });
+
+        // Simulate an in-flight pump: hold the command lock for the whole test.
+        let _command_guard = inner.command.lock().unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let inner2 = inner.clone();
+        thread::spawn(move || {
+            let result = send_byte_inner(&inner2, 0x18);
+            let _ = tx.send(result);
+        });
+
+        let result = rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("realtime write blocked behind the command lock — e-stop would freeze");
+        assert!(result.is_ok());
+        assert_eq!(
+            sim.realtime_bytes_received(),
+            vec![0x18],
+            "0x18 must reach the simulated controller's wire"
+        );
+    }
+
+    // 9. THE WEDGED-PUMP SCENARIO — the e-stop safety proof. A pump reading
+    // this sim would be wedged (fault: drop-ok, so its awaited `ok` never
+    // arrives). Build SerialInner with SimPort (command + realtime sharing
+    // ONE brain, exactly like a real connect's three try_clone()s). Hold the
+    // command lock on the main thread (standing in for "the wedged pump is
+    // still in there," matching the pattern above and at serial.rs:610).
+    // Spawn disconnect_inner on another thread and prove:
+    //   (a) the realtime 0x18 reaches the sim's wire BEFORE disconnect ever
+    //       waits on the command lock (the whole point of the realtime/
+    //       command lock split);
+    //   (b) the sim's banner — queued by that very 0x18 — is exactly what a
+    //       concurrent pump reading the SAME brain would observe as its
+    //       terminal (PumpTerminal::Banner, never a hang);
+    //   (c) releasing the lock lets disconnect complete its teardown.
+    // This proves that if the future Phase-2 pump ever wedges, the user's
+    // STOP still tears the connection down cleanly.
+    #[test]
+    fn wedged_pump_estop_then_disconnect_tears_down_cleanly() {
+        let control = SimPort::new(SimConfig::default());
+        // A firmware ack glitch: the line we're about to send never gets
+        // its `ok` — a real run_pump reading this would wait forever
+        // (bounded only by the idle-wedge detector / liveness timeout, both
+        // much longer than this test's patience). That's "wedged."
+        control.set_drop_ok_at_line(1);
+
+        let mut pump_writer: Box<dyn SerialPort> = control.try_clone().unwrap();
+        let mut pump_reader = BufReader::new(control.try_clone().unwrap());
+        let mut pending = Vec::new();
+        let _ = serial_pump::drain_classified(&mut pump_reader, &mut pending); // drain banner
+
+        pump_writer.write_all(b"G1 X1\n").unwrap(); // the line that will never ack
+
+        let realtime_handle: Box<dyn SerialPort> = control.try_clone().unwrap();
+        let inner = Arc::new(SerialInner {
+            command: Mutex::new(None),
+            realtime: Mutex::new(Some(realtime_handle)),
+            connected: AtomicBool::new(true),
+            pump_in_flight: AtomicBool::new(true),
+        });
+
+        // Hold the command lock — standing in for the wedged pump.
+        let command_guard = inner.command.lock().unwrap();
+
+        let inner2 = inner.clone();
+        let handle = thread::spawn(move || disconnect_inner(&inner2));
+
+        // (a) The 0x18 must arrive at the sim's wire while the command lock
+        // is STILL held.
+        let deadline = std::time::Instant::now() + Duration::from_millis(500);
+        while control.realtime_bytes_received().is_empty() && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            control.realtime_bytes_received(),
+            vec![0x18],
+            "realtime 0x18 must reach the sim before disconnect waits on the command lock"
+        );
+
+        // (b) The reset's banner is exactly what a concurrent pump reading
+        // the SAME brain would see as its terminal — never a hang.
+        let out = serial_pump::run_pump(
+            &mut pump_reader,
+            &mut pump_writer,
+            &mut pending,
+            DEFAULT_LIVENESS_TICKS,
+            serial_pump::DEFAULT_IDLE_STALL_TICKS,
+        )
+        .expect("the pump must observe the reset banner, not hang");
+        assert_eq!(out.terminal, serial_pump::PumpTerminal::Banner);
+
+        // (c) Release the "pump" (in production the banner terminal does
+        // this); disconnect then completes its teardown.
+        drop(command_guard);
+        handle.join().unwrap().unwrap();
+        assert!(!inner.connected.load(Ordering::SeqCst));
+    }
+}
