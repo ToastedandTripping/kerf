@@ -1352,4 +1352,223 @@ mod tests {
         assert_eq!(order[0], 0, "A (nearest to origin) must be first in pure NN order");
         assert_eq!(order[1], 1, "B must follow");
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Part 3 (kerf-hardening-program Relay 1C): adversarial property tests.
+    //
+    // These tests ARE the audit of the ~67 raw index sites in this module --
+    // per the plan, if one of them proves a reachable OOB/panic, that one
+    // site gets a minimal fix (see the relay report). No manual sweep of the
+    // remaining sites otherwise. No proptest/quickcheck dependency: every
+    // fixture below is hand-rolled.
+    // ─────────────────────────────────────────────────────────────────────
+
+    // ── No-panic: empty / single-element inputs ────────────────────────────
+
+    #[test]
+    fn no_panic_empty_object_list() {
+        let empty: Vec<CutObject> = vec![];
+        assert_eq!(order_inner_first_nn(&empty, 0.0, 0.0), Vec::<usize>::new());
+        assert_eq!(optimize_cut_order_from(&empty, 0.0, 0.0), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn no_panic_empty_path_list() {
+        let mut empty: Vec<PathSegment> = vec![];
+        order_paths_inner_first(&mut empty); // must not panic
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn no_panic_single_object() {
+        let obj = make_obj("solo", 10.0, 10.0, 5.0, 5.0, None, None);
+        let order = order_inner_first_nn(std::slice::from_ref(&obj), 0.0, 0.0);
+        assert_eq!(order, vec![0]);
+        let order2 = optimize_cut_order_from(&[obj], 0.0, 0.0);
+        assert_eq!(order2, vec![0]);
+    }
+
+    // ── No-panic: single-point / zero-length / degenerate "contours" ──────
+
+    #[test]
+    fn no_panic_degenerate_paths_zero_one_two_points() {
+        // Empty path (0 points)
+        let empty_path = PathSegment { points: vec![], closed: true };
+        // Single-point "contour"
+        let one_point_path = PathSegment { points: vec![Point { x: 5.0, y: 5.0 }], closed: true };
+        // Zero-length path: two coincident points
+        let zero_len_path = PathSegment {
+            points: vec![Point { x: 3.0, y: 3.0 }, Point { x: 3.0, y: 3.0 }],
+            closed: true,
+        };
+        let normal = make_rect_path(0.0, 0.0, 50.0, 50.0);
+
+        let degenerate_objs = vec![
+            make_obj_with_paths("empty_path_obj", 0.0, 0.0, 0.0, 0.0, vec![empty_path]),
+            make_obj_with_paths("one_point_obj", 5.0, 5.0, 0.0, 0.0, vec![one_point_path]),
+            make_obj_with_paths("zero_len_obj", 3.0, 3.0, 0.0, 0.0, vec![zero_len_path]),
+            make_obj_with_paths("normal_obj", 0.0, 0.0, 50.0, 50.0, vec![normal]),
+        ];
+
+        // Must not panic, and must return every object exactly once.
+        let order = order_inner_first_nn(&degenerate_objs, 0.0, 0.0);
+        assert_is_permutation(&order, degenerate_objs.len());
+
+        // Sub-contour ordering on a single object with degenerate hole paths
+        // must also survive without panicking or dropping a path.
+        let mut mixed_paths = vec![
+            make_rect_path(0.0, 0.0, 50.0, 50.0),
+            PathSegment { points: vec![], closed: true },
+            PathSegment { points: vec![Point { x: 1.0, y: 1.0 }], closed: true },
+        ];
+        order_paths_inner_first(&mut mixed_paths); // must not panic
+        assert_eq!(mixed_paths.len(), 3, "no path should be dropped");
+    }
+
+    // ── No-panic: duplicate / identical objects (mutual-containment stress) ─
+
+    #[test]
+    fn no_panic_duplicate_identical_objects() {
+        // Two perfectly identical, fully overlapping rectangles: each one's
+        // representative point lies inside the other's polygon -- exactly
+        // the mutual-containment shape the DFS cycle-guard in compute_ranks
+        // exists to survive (see partial_overlap_no_false_containment_cycle
+        // for the near-miss case; this is the exact-duplicate extreme). Must
+        // terminate without panicking or hanging, and must still return both
+        // objects exactly once (a dropped/duplicated object here would mean
+        // an un-cut or double-cut part).
+        let a = make_obj("dup_a", 10.0, 10.0, 20.0, 20.0, None, None);
+        let b = make_obj("dup_b", 10.0, 10.0, 20.0, 20.0, None, None);
+        let objs = vec![a, b];
+        let order = order_inner_first_nn(&objs, 0.0, 0.0);
+        assert_is_permutation(&order, 2);
+    }
+
+    #[test]
+    fn no_panic_many_duplicate_objects() {
+        // Five identical overlapping rectangles -- stress the cycle guard
+        // with more than a simple pair.
+        let objs: Vec<CutObject> = (0..5)
+            .map(|i| make_obj(&format!("dup_{i}"), 0.0, 0.0, 30.0, 30.0, None, None))
+            .collect();
+        let order = order_inner_first_nn(&objs, 0.0, 0.0);
+        assert_is_permutation(&order, 5);
+    }
+
+    // ── No-panic: collinear points (zero-area degenerate polygon) ──────────
+
+    #[test]
+    fn no_panic_collinear_points_zero_area_polygon() {
+        // All points on a horizontal line: signed area is exactly zero, and
+        // every point shares the same y -- exactly the case guaranteed_
+        // interior_point's scanline fallback (`ys.len() < 2`) exists to
+        // handle without panicking.
+        let collinear = PathSegment {
+            points: vec![
+                Point { x: 0.0, y: 5.0 },
+                Point { x: 10.0, y: 5.0 },
+                Point { x: 20.0, y: 5.0 },
+            ],
+            closed: true,
+        };
+        let normal = make_rect_path(0.0, 0.0, 100.0, 100.0);
+        let objs = vec![
+            make_obj_with_paths("collinear_obj", 0.0, 5.0, 20.0, 0.0, vec![collinear]),
+            make_obj_with_paths("normal_obj", 0.0, 0.0, 100.0, 100.0, vec![normal]),
+        ];
+        let order = order_inner_first_nn(&objs, 0.0, 0.0);
+        assert_is_permutation(&order, 2);
+    }
+
+    // ── Output-is-a-permutation-of-input (safety-critical invariant) ───────
+
+    /// A dropped object means an un-cut part; a duplicated one means a
+    /// double-cut. Assert the optimizer's output is exactly the input
+    /// reordered -- no more, no fewer.
+    fn assert_is_permutation(order: &[usize], n: usize) {
+        assert_eq!(order.len(), n, "output length must equal input length (n={n})");
+        let mut seen = vec![false; n];
+        for &i in order {
+            assert!(i < n, "index {i} out of range for n={n}");
+            assert!(!seen[i], "index {i} appeared more than once in order={:?}", order);
+            seen[i] = true;
+        }
+        assert!(seen.iter().all(|&s| s), "not every index appeared in order={:?}", order);
+    }
+
+    #[test]
+    fn permutation_property_across_hand_rolled_fixtures() {
+        // (a) Flat list of non-overlapping siblings
+        let flat: Vec<CutObject> = (0..15)
+            .map(|i| make_obj(&format!("flat_{i}"), (i as f64) * 30.0, 0.0, 10.0, 10.0, None, None))
+            .collect();
+        assert_is_permutation(&order_inner_first_nn(&flat, 0.0, 0.0), flat.len());
+
+        // (b) Nested rectangles at varying depths (5 levels; see also the
+        // dedicated rank-monotonicity test below)
+        let nested = vec![
+            make_obj("n0", 0.0, 0.0, 100.0, 100.0, None, None),
+            make_obj("n1", 10.0, 10.0, 80.0, 80.0, None, None),
+            make_obj("n2", 20.0, 20.0, 60.0, 60.0, None, None),
+            make_obj("n3", 30.0, 30.0, 40.0, 40.0, None, None),
+            make_obj("n4", 40.0, 40.0, 20.0, 20.0, None, None),
+        ];
+        assert_is_permutation(&order_inner_first_nn(&nested, 0.0, 0.0), nested.len());
+
+        // (c) Mixed: normal objects + a duplicate pair + a degenerate zero-area object
+        let degenerate = make_obj_with_paths(
+            "degenerate",
+            5.0,
+            5.0,
+            0.0,
+            0.0,
+            vec![PathSegment { points: vec![Point { x: 5.0, y: 5.0 }], closed: true }],
+        );
+        let mixed = vec![
+            make_obj("m0", 0.0, 0.0, 100.0, 100.0, None, None),
+            make_obj("m1", 200.0, 200.0, 10.0, 10.0, None, None),
+            make_obj("m1_dup", 200.0, 200.0, 10.0, 10.0, None, None),
+            degenerate,
+        ];
+        assert_is_permutation(&order_inner_first_nn(&mixed, 5.0, 5.0), mixed.len());
+
+        // (d) optimize_cut_order_from (pure NN path) over the same flat set
+        assert_is_permutation(&optimize_cut_order_from(&flat, 0.0, 0.0), flat.len());
+    }
+
+    // ── Inner-first rank monotonicity: deep nesting (5 levels) ────────────
+
+    /// Extends `three_level_nesting` to 5 levels: for EVERY declared
+    /// containment pair (inner, outer) -- not just adjacent levels -- inner's
+    /// position in the output must come strictly before outer's. This pins
+    /// the rank-monotonicity property the module doc-comment guarantees:
+    /// "if A⊂B then rank(A) ≥ rank(B)+1", checked exhaustively rather than
+    /// just level-by-level.
+    #[test]
+    fn deeply_nested_five_levels_rank_monotonicity() {
+        let levels = vec![
+            make_obj("l0_outer", 0.0, 0.0, 100.0, 100.0, None, None),
+            make_obj("l1", 10.0, 10.0, 80.0, 80.0, None, None),
+            make_obj("l2", 20.0, 20.0, 60.0, 60.0, None, None),
+            make_obj("l3", 30.0, 30.0, 40.0, 40.0, None, None),
+            make_obj("l4_innermost", 40.0, 40.0, 20.0, 20.0, None, None),
+        ];
+        // Presented in worst-case (outermost-first) input order.
+        let order = order_inner_first_nn(&levels, 0.0, 0.0);
+        assert_is_permutation(&order, levels.len());
+
+        // Every (outer, inner) pair with inner > outer is a real containment
+        // relation here (level `inner` is nested inside level `outer` for
+        // all inner > outer) -- assert ALL pairs, not just adjacent levels.
+        let position_of = |idx: usize| order.iter().position(|&x| x == idx).unwrap();
+        for outer in 0..levels.len() {
+            for inner in (outer + 1)..levels.len() {
+                assert!(
+                    position_of(inner) < position_of(outer),
+                    "level {inner} (nested inside level {outer}) must cut before level {outer}; order={:?}",
+                    order
+                );
+            }
+        }
+    }
 }

@@ -1474,4 +1474,277 @@ mod tests {
             result.gcode
         );
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Part 2 (kerf-hardening-program Relay 1C): additional unit coverage on
+    // under-tested pure helpers. These complement the golden corpus
+    // (commands::gcode::golden_tests) -- goldens catch ANY change, these
+    // localize WHICH property broke.
+    // ─────────────────────────────────────────────────────────────────────
+
+    fn make_scan_params(
+        rotation_rad: f64,
+        center_x: f64,
+        center_y: f64,
+        origin_top: bool,
+        workspace_height: f64,
+    ) -> ScanLineParams {
+        ScanLineParams {
+            overscan: 0.0,
+            scanning_offset: 0.0,
+            interval: 1.0,
+            bidirectional: false,
+            speed_mm_min: 1000.0,
+            s_max: 1000.0,
+            power_cmd: "M3".to_string(),
+            workspace_height,
+            origin_top,
+            rotation_rad,
+            center_x,
+            center_y,
+        }
+    }
+
+    // ─── transform_to_grbl: Y-flip / origin handling ──────────────────────
+
+    #[test]
+    fn transform_to_grbl_origin_bottom_flips_y() {
+        let params = make_scan_params(0.0, 0.0, 0.0, false, 100.0);
+        let (x, y) = transform_to_grbl(5.0, 30.0, &params);
+        assert!((x - 5.0).abs() < 1e-9, "x should pass through unchanged, got {x}");
+        assert!(
+            (y - 70.0).abs() < 1e-9,
+            "origin-bottom: y should flip to workspace_height - y = 70, got {y}"
+        );
+    }
+
+    #[test]
+    fn transform_to_grbl_origin_top_negates_y() {
+        let params = make_scan_params(0.0, 0.0, 0.0, true, 100.0);
+        let (x, y) = transform_to_grbl(5.0, 30.0, &params);
+        assert!((x - 5.0).abs() < 1e-9, "x should pass through unchanged, got {x}");
+        assert!(
+            (y - (-30.0)).abs() < 1e-9,
+            "origin-top: y should negate to -y = -30 (workspace_height irrelevant), got {y}"
+        );
+    }
+
+    #[test]
+    fn transform_to_grbl_rotation_about_center() {
+        // 90deg CCW rotation about the origin; origin_top=true isolates the
+        // sign flip from the rotation math (y_final = -rotated_y, no
+        // workspace_height term to reason about at the same time).
+        let params = make_scan_params(std::f64::consts::FRAC_PI_2, 0.0, 0.0, true, 100.0);
+        let (x, y) = transform_to_grbl(10.0, 0.0, &params);
+        // (10,0) rotated 90deg CCW about (0,0) -> (0,10); origin_top negates y -> (0,-10)
+        assert!((x - 0.0).abs() < 1e-9, "expected x~0 after 90deg rotation, got {x}");
+        assert!(
+            (y - (-10.0)).abs() < 1e-9,
+            "expected y~-10 after 90deg rotation + origin-top negate, got {y}"
+        );
+    }
+
+    // ─── collect_scan_segments: fill scan-line math ───────────────────────
+
+    #[test]
+    fn collect_scan_segments_count_and_bidirectional_alternation() {
+        let mut params = make_scan_params(0.0, 0.0, 0.0, false, 100.0);
+        params.interval = 2.0;
+        params.bidirectional = true;
+        params.scanning_offset = 1.0;
+
+        let segments = collect_scan_segments(&params, 0.0, 10.0, 0.0, 6.0);
+        // pos steps 0,2,4,6 (all <= line_max=6.0) -> 4 scan lines
+        assert_eq!(segments.len(), 4, "expected 4 scan lines at interval 2 over [0,6]");
+
+        let forwards: Vec<bool> = segments.iter().map(|s| s.forward).collect();
+        assert_eq!(
+            forwards,
+            vec![true, false, true, false],
+            "bidirectional must alternate direction every line"
+        );
+
+        // Forward segments run scan_min..scan_max unchanged.
+        assert_eq!((segments[0].x_start, segments[0].x_end), (0.0, 10.0));
+        // Reverse segments run scan_max+offset..scan_min+offset (flipped, offset applied).
+        assert_eq!((segments[1].x_start, segments[1].x_end), (11.0, 1.0));
+    }
+
+    // ─── lead-in / lead-out / overcut: exact emitted geometry ─────────────
+
+    #[test]
+    fn lead_in_perpendicular_point_exact_for_closed_path() {
+        // Closed 10x10 square, lead_in=2mm, workspace_height=100 (fy(y)=100-y).
+        // gpts (Y-flipped) = (0,100),(10,100),(10,90),(0,90). First edge
+        // (0,100)->(10,100): dx=10,dy=0,len=10. Perpendicular (closed path):
+        // nx=-dy/len=0, ny=dx/len=1 -> lead-in point = (0+0*2, 100+1*2) = (0,102).
+        let mut layer = make_layer_line();
+        layer.lead_in = 2.0;
+        let obj = make_rect_obj("sq", 0.0, 0.0, 10.0, 10.0, layer);
+        let result = generate_gcode(&[obj], 100.0, 1000.0, false);
+        assert!(
+            result.gcode.contains("G0 X0.000 Y102.000"),
+            "expected lead-in rapid to perpendicular point (0,102); got:\n{}",
+            result.gcode
+        );
+    }
+
+    #[test]
+    fn lead_out_extends_past_end_exact() {
+        // Same square, lead_out=3mm. Closing edge (0,90)->(0,100) [Y-flipped]:
+        // dx=0,dy=10,len=10 -> lead-out point = (0+0/10*3, 100+10/10*3) = (0,103).
+        let mut layer = make_layer_line();
+        layer.lead_out = 3.0;
+        let obj = make_rect_obj("sq", 0.0, 0.0, 10.0, 10.0, layer);
+        let result = generate_gcode(&[obj], 100.0, 1000.0, false);
+        assert!(
+            result.gcode.contains("G1 X0.000 Y103.000"),
+            "expected lead-out cut extending to (0,103); got:\n{}",
+            result.gcode
+        );
+    }
+
+    #[test]
+    fn overcut_extends_past_start_along_path_direction() {
+        // Same square, overcut=1.5mm. First edge (0,100)->(10,100): dx=10,dy=0,
+        // len=10, ext=min(1.5,10)=1.5 -> overcut point = (0+10/10*1.5, 100+0) = (1.5,100).
+        let mut layer = make_layer_line();
+        layer.overcut = 1.5;
+        let obj = make_rect_obj("sq", 0.0, 0.0, 10.0, 10.0, layer);
+        let result = generate_gcode(&[obj], 100.0, 1000.0, false);
+        assert!(
+            result.gcode.contains("G1 X1.500 Y100.000"),
+            "expected overcut extending 1.5mm past start along first-edge direction; got:\n{}",
+            result.gcode
+        );
+    }
+
+    // ─── offsetFill: rings shrink inward (kerf-offset direction) ──────────
+
+    #[test]
+    fn offsetfill_rings_shrink_inward() {
+        let mut layer = make_layer_line();
+        layer.mode = "offsetFill".to_string();
+        layer.interval = 2.0;
+        let obj = make_rect_obj("sq", 0.0, 0.0, 20.0, 20.0, layer);
+        let result = generate_gcode(&[obj], 100.0, 1000.0, false);
+        let gcode = &result.gcode;
+
+        // Parse ring-by-ring: each ring's cut moves are bounded by M5 (laser
+        // off before the rapid to the next ring, per F8). Collect the X-span
+        // (bbox width) of each ring's G1 moves and assert successive rings
+        // shrink -- i.e. the offset direction is genuinely inward.
+        let mut ring_widths: Vec<f64> = Vec::new();
+        let mut cur_xs: Vec<f64> = Vec::new();
+        for line in gcode.lines() {
+            if line.starts_with("M5") {
+                if !cur_xs.is_empty() {
+                    let min_x = cur_xs.iter().cloned().fold(f64::INFINITY, f64::min);
+                    let max_x = cur_xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                    ring_widths.push(max_x - min_x);
+                    cur_xs.clear();
+                }
+            } else if line.starts_with("G1 X") {
+                if let Some(xi) = line.find('X') {
+                    if let Some(x) = line[xi + 1..]
+                        .split_whitespace()
+                        .next()
+                        .and_then(|s| s.parse::<f64>().ok())
+                    {
+                        cur_xs.push(x);
+                    }
+                }
+            }
+        }
+
+        assert!(
+            ring_widths.len() >= 3,
+            "expected at least 3 concentric rings; got {:?}",
+            ring_widths
+        );
+        for pair in ring_widths.windows(2) {
+            assert!(
+                pair[1] < pair[0],
+                "each successive offsetFill ring must shrink inward; widths={:?}",
+                ring_widths
+            );
+        }
+    }
+
+    // ─── cross-hatch: second (vertical) pass wiring ───────────────────────
+
+    #[test]
+    fn cross_hatch_emits_second_pass_with_comment_and_more_moves() {
+        let mut layer = make_layer_line();
+        layer.mode = "fill".to_string();
+        layer.interval = 5.0;
+        layer.cross_hatch = false;
+        let obj_no_hatch = make_rect_obj("sq1", 0.0, 0.0, 20.0, 20.0, layer.clone());
+
+        let mut layer_hatch = layer.clone();
+        layer_hatch.cross_hatch = true;
+        let obj_hatch = make_rect_obj("sq2", 0.0, 0.0, 20.0, 20.0, layer_hatch);
+
+        let no_hatch = generate_gcode(&[obj_no_hatch], 50.0, 1000.0, false);
+        let with_hatch = generate_gcode(&[obj_hatch], 50.0, 1000.0, false);
+
+        assert!(
+            !no_hatch.gcode.contains("; Cross-hatch pass"),
+            "cross_hatch=false must not emit the cross-hatch marker"
+        );
+        assert!(
+            with_hatch.gcode.contains("; Cross-hatch pass"),
+            "cross_hatch=true must emit the cross-hatch marker"
+        );
+
+        let moves_no = no_hatch.gcode.matches("G1 X").count();
+        let moves_hatch = with_hatch.gcode.matches("G1 X").count();
+        assert!(
+            moves_hatch > moves_no,
+            "cross-hatch pass must add additional scan moves (no_hatch={moves_no}, with_hatch={moves_hatch})"
+        );
+    }
+
+    // ─── perforation vs tabs: documented mutual-exclusion priority ───────
+
+    #[test]
+    fn perforation_takes_priority_over_tabs_when_both_set() {
+        // Both perforation AND tab settings configured on the same path.
+        // Production code documents perforation as taking priority over tabs
+        // (mutually exclusive): `tabs_enabled = !perf_enabled && ...`.
+        // tab_spacing is deliberately larger than the whole path: if tabs
+        // incorrectly took over, there would be ZERO toggles (laser stays on
+        // for the entire 10mm run, one M5 at the very end only).
+        let mut layer = make_layer_line();
+        layer.perforation_cut = 3.0;
+        layer.perforation_skip = 1.0;
+        layer.tab_spacing = 100.0;
+        layer.tab_width = 50.0;
+        let obj = CutObject {
+            id: "perf_over_tab".to_string(),
+            obj_type: "line".to_string(),
+            x: 0.0,
+            y: 50.0,
+            width: 10.0,
+            height: 0.0,
+            paths: vec![PathSegment {
+                points: vec![Point { x: 0.0, y: 50.0 }, Point { x: 10.0, y: 50.0 }],
+                closed: false,
+            }],
+            layer,
+            corner_radius: None,
+            rotation: 0.0,
+            priority: None,
+            group_id: None,
+            layer_index: None,
+        };
+        let result = generate_gcode(&[obj], 100.0, 1000.0, false);
+        let m5_count = result.gcode.matches("M5").count();
+        assert!(
+            m5_count >= 3,
+            "expected multiple perforation toggles (cut=3/skip=1 on a 10mm line) proving \
+             perforation -- not the 100mm tab_spacing -- governed the cut; got {m5_count} M5s in:\n{}",
+            result.gcode
+        );
+    }
 }

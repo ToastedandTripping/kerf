@@ -349,3 +349,378 @@ mod tests {
         assert!(result.iter().all(|o| o.layer.mode == "maskFill"));
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Golden G-code snapshot corpus (kerf-hardening-program Phase 1, Relay 1C)
+// ─────────────────────────────────────────────────────────────────────────
+//
+// These tests drive the REAL generation path -- the exact `generate_gcode` /
+// `generate_image_gcode` command functions the frontend invokes over Tauri
+// IPC -- and snapshot the emitted `gcode: String` against a committed fixture
+// file under `tests/golden/`. See `tests/golden/README.md` for the full
+// rationale and the KERF_UPDATE_GOLDEN regenerate workflow.
+//
+// The goldens capture CURRENT behavior, warts and all -- they are not a
+// hand-verified "this is correct G-code" oracle. Phase 3 (IPC payload
+// compaction) must keep every one of these byte-identical; Phase 4
+// (geometry correctness work) is expected to change some of them
+// deliberately, reviewed as a git diff.
+#[cfg(test)]
+mod golden_tests {
+    use super::*;
+    use crate::engine::gcode_gen::{CutLayer, PathSegment, Point};
+    use std::path::PathBuf;
+
+    // ── golden-file harness ────────────────────────────────────────────────
+
+    fn golden_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("golden")
+    }
+
+    /// Compare `actual` (the generator's emitted `gcode` string) against the
+    /// committed golden fixture `<name>.gcode`. Set `KERF_UPDATE_GOLDEN=1` to
+    /// (re)write the fixture instead of asserting -- see
+    /// `tests/golden/README.md`.
+    fn assert_golden(name: &str, actual: &str) {
+        let path = golden_dir().join(format!("{name}.gcode"));
+        if std::env::var("KERF_UPDATE_GOLDEN").is_ok() {
+            std::fs::create_dir_all(path.parent().expect("golden path has a parent dir"))
+                .expect("failed to create tests/golden directory");
+            std::fs::write(&path, format!("{actual}\n")).unwrap_or_else(|e| {
+                panic!("failed to write golden file {}: {e}", path.display())
+            });
+        } else {
+            let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                panic!(
+                    "failed to read golden file {}: {e}. Run `KERF_UPDATE_GOLDEN=1 cargo test` \
+                     to create it (see tests/golden/README.md).",
+                    path.display()
+                )
+            });
+            let expected = raw.strip_suffix('\n').unwrap_or(&raw);
+            assert_eq!(
+                actual, expected,
+                "\nGolden mismatch for '{name}'.\n\
+                 If this is a deliberate generator change (e.g. Phase 4 geometry work), \
+                 regenerate with `KERF_UPDATE_GOLDEN=1 cargo test` and review the diff at \
+                 {}.\nOtherwise this is a regression in generator output.\n",
+                path.display()
+            );
+        }
+    }
+
+    // ── shared fixture builders ────────────────────────────────────────────
+
+    fn base_layer(mode: &str) -> CutLayer {
+        CutLayer {
+            mode: mode.to_string(),
+            power: 100.0,
+            power_min: 0.0,
+            speed: 1200.0,
+            passes: 1,
+            power_mode: "constant".to_string(),
+            interval: 1.0,
+            air_assist: true,
+            cut_inner_first: true,
+            dither: "threshold".to_string(),
+            scan_angle: 0.0,
+            angle_increment: 0.0,
+            overcut: 0.0,
+            lead_in: 0.0,
+            lead_out: 0.0,
+            overscan: 0.0,
+            bidirectional: true,
+            cross_hatch: false,
+            scanning_offset: 0.0,
+            tab_spacing: 0.0,
+            tab_width: 0.0,
+            perforation_cut: 0.0,
+            perforation_skip: 0.0,
+            power_curve: None,
+            fill_order: None,
+            newsprint_cell_size: None,
+            newsprint_angle: None,
+        }
+    }
+
+    fn rect_obj(id: &str, x: f64, y: f64, w: f64, h: f64, layer: CutLayer) -> CutObject {
+        CutObject {
+            id: id.to_string(),
+            obj_type: "rectangle".to_string(),
+            x,
+            y,
+            width: w,
+            height: h,
+            paths: vec![],
+            layer,
+            corner_radius: None,
+            rotation: 0.0,
+            priority: None,
+            group_id: None,
+            layer_index: None,
+        }
+    }
+
+    fn rect_path(x: f64, y: f64, w: f64, h: f64) -> PathSegment {
+        PathSegment {
+            points: vec![
+                Point { x, y },
+                Point { x: x + w, y },
+                Point { x: x + w, y: y + h },
+                Point { x, y: y + h },
+            ],
+            closed: true,
+        }
+    }
+
+    fn make_rgba_png_base64(width: u32, height: u32, pixels: &[(u8, u8, u8, u8)]) -> String {
+        use image::{ImageBuffer, Rgba};
+        let mut img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(width, height);
+        for (i, &(r, g, b, a)) in pixels.iter().enumerate() {
+            let x = (i as u32) % width;
+            let y = (i as u32) / width;
+            img.put_pixel(x, y, Rgba([r, g, b, a]));
+        }
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::codecs::png::PngEncoder::new(&mut buf)
+            .write_image(img.as_raw(), width, height, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        let bytes = buf.into_inner();
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        )
+    }
+
+    // ── (1) simple rectangle cut ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn golden_01_simple_rect_cut() {
+        let layer = CutLayer { power: 80.0, ..base_layer("line") };
+        let obj = rect_obj("rect", 10.0, 10.0, 30.0, 20.0, layer);
+        let result = generate_gcode(vec![obj], 300.0, Some(1000.0), None, None, None)
+            .await
+            .expect("generate_gcode should succeed");
+        assert_golden("01_simple_rect_cut", &result.gcode);
+    }
+
+    // ── (2) compound path with holes, inner-first ordering ─────────────────
+
+    #[tokio::test]
+    async fn golden_02_compound_holes_inner_first() {
+        let mut layer = base_layer("line");
+        layer.cut_inner_first = true;
+        let mut obj = rect_obj("compound", 0.0, 0.0, 100.0, 100.0, layer);
+        obj.obj_type = "path".to_string();
+        obj.paths = vec![
+            rect_path(0.0, 0.0, 100.0, 100.0), // outer perimeter
+            rect_path(30.0, 30.0, 20.0, 20.0), // hole
+        ];
+        let result = generate_gcode(vec![obj], 150.0, Some(1000.0), None, None, None)
+            .await
+            .expect("generate_gcode should succeed");
+        assert_golden("02_compound_holes_inner_first", &result.gcode);
+    }
+
+    // ── (3) a fill layer ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn golden_03_fill_layer() {
+        let mut layer = base_layer("fill");
+        layer.power = 50.0;
+        layer.speed = 3000.0;
+        layer.interval = 5.0;
+        let obj = rect_obj("fill_sq", 0.0, 0.0, 20.0, 20.0, layer);
+        let result = generate_gcode(vec![obj], 50.0, Some(1000.0), None, None, None)
+            .await
+            .expect("generate_gcode should succeed");
+        assert_golden("03_fill_layer", &result.gcode);
+    }
+
+    // ── (4) a fillLine mixed layer (maskFill + perimeter line overlay) ─────
+
+    #[tokio::test]
+    async fn golden_04_fillline_mixed_layer() {
+        let outer = rect_path(0.0, 0.0, 40.0, 40.0);
+        let hole = rect_path(15.0, 15.0, 10.0, 10.0);
+
+        let mut mask_layer = base_layer("maskFill");
+        mask_layer.interval = 5.0;
+        let mut mask_obj = rect_obj("fillline_fill", 0.0, 0.0, 40.0, 40.0, mask_layer);
+        mask_obj.obj_type = "path".to_string();
+        mask_obj.paths = vec![outer.clone(), hole];
+        mask_obj.layer_index = Some(0);
+
+        let mut line_layer = base_layer("line");
+        line_layer.cut_inner_first = false; // single path, N/A
+        let mut line_obj = rect_obj("fillline_perimeter", 0.0, 0.0, 40.0, 40.0, line_layer);
+        line_obj.obj_type = "path".to_string();
+        line_obj.paths = vec![outer];
+        line_obj.layer_index = Some(0);
+
+        // Deliberately present the line object FIRST in input order -- the
+        // A4b partition in commands::gcode::generate_gcode must still emit
+        // ALL fill-ish objects before ANY line objects within the shared layer.
+        let result = generate_gcode(vec![line_obj, mask_obj], 60.0, Some(1000.0), None, None, None)
+            .await
+            .expect("generate_gcode should succeed");
+
+        // Explicit invariant check (belt-and-suspenders alongside the snapshot):
+        // the fill marker comment must precede the line-cut marker comment.
+        let fill_pos = result.gcode.find("; Mask Fill:").expect("mask fill marker present");
+        let line_pos = result.gcode.find("; Cut:").expect("line cut marker present");
+        assert!(fill_pos < line_pos, "fill-ish pass must be emitted before the line pass");
+
+        assert_golden("04_fillline_mixed_layer", &result.gcode);
+    }
+
+    // ── (5) an image engrave ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn golden_05_image_engrave() {
+        let image_data = make_rgba_png_base64(
+            4,
+            1,
+            &[
+                (0, 0, 0, 255),       // black
+                (255, 255, 255, 255), // white
+                (0, 0, 0, 255),       // black
+                (255, 255, 255, 255), // white
+            ],
+        );
+        let request = ImageEngraveRequest {
+            image_data,
+            x: 0.0,
+            y: 0.0,
+            width: 4.0,
+            height: 1.0,
+            rotation: 0.0,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            power: 100.0,
+            power_min: 0.0,
+            speed: 3000.0,
+            passes: 1,
+            power_mode: "constant".to_string(),
+            interval: 1.0,
+            dither: "threshold".to_string(),
+            overscan: 0.0,
+            bidirectional: true,
+            scanning_offset: 0.0,
+            brightness: 0.0,
+            contrast: 0.0,
+            gamma: 1.0,
+            invert: false,
+            workspace_height: 50.0,
+            origin_top: false,
+            s_value_max: 1000.0,
+            power_curve: None,
+            newsprint_cell_size: None,
+            newsprint_angle: None,
+            remove_background: false,
+            bg_tolerance: 20.0,
+        };
+        let result = generate_image_gcode(request)
+            .await
+            .expect("generate_image_gcode should succeed");
+        assert_golden("05_image_engrave", &result.gcode);
+    }
+
+    // ── (6) a rotated object ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn golden_06_rotated_object() {
+        let mut layer = base_layer("line");
+        layer.power = 90.0;
+        layer.speed = 1500.0;
+        let mut obj = rect_obj("rotated", 0.0, 0.0, 20.0, 10.0, layer);
+        obj.rotation = 30.0;
+        let result = generate_gcode(vec![obj], 80.0, Some(1000.0), None, None, None)
+            .await
+            .expect("generate_gcode should succeed");
+        assert_golden("06_rotated_object", &result.gcode);
+    }
+
+    // ── (7) multi-layer priority ordering ───────────────────────────────────
+
+    #[tokio::test]
+    async fn golden_07_multilayer_priority_order() {
+        // layer_index arrival order (5, then 1) must dominate travel distance:
+        // B sits at the start corner (nearest possible object) but its
+        // layer_index (1) is seen SECOND in the input, so it must still be
+        // emitted after both layer-5 objects.
+        let mut obj_a = rect_obj("A_far", 200.0, 200.0, 10.0, 10.0, base_layer("line"));
+        obj_a.layer_index = Some(5);
+        let mut obj_b = rect_obj("B_near_origin", 0.0, 0.0, 10.0, 10.0, base_layer("line"));
+        obj_b.layer_index = Some(1);
+        let mut obj_c = rect_obj("C_far_sibling", 220.0, 200.0, 5.0, 5.0, base_layer("line"));
+        obj_c.layer_index = Some(5);
+
+        let result = generate_gcode(vec![obj_a, obj_b, obj_c], 250.0, Some(1000.0), None, None, None)
+            .await
+            .expect("generate_gcode should succeed");
+
+        // Explicit invariant: both layer-5 objects precede the layer-1 object,
+        // despite B being geometrically nearest the start corner.
+        let pos_a = result.gcode.find("; Cut: A_far").expect("A_far present");
+        let pos_b = result.gcode.find("; Cut: B_near_origin").expect("B_near_origin present");
+        let pos_c = result.gcode.find("; Cut: C_far_sibling").expect("C_far_sibling present");
+        assert!(pos_a < pos_b, "layer_index 5 (arrival order first) must precede layer_index 1");
+        assert!(pos_c < pos_b, "layer_index 5 (arrival order first) must precede layer_index 1");
+
+        assert_golden("07_multilayer_priority_order", &result.gcode);
+    }
+
+    // ── (8) origin-top vs origin-bottom for the same design ─────────────────
+
+    fn origin_test_object() -> CutObject {
+        rect_obj("origin_test", 20.0, 20.0, 15.0, 25.0, base_layer("line"))
+    }
+
+    #[tokio::test]
+    async fn golden_08a_origin_bottom() {
+        let result = generate_gcode(vec![origin_test_object()], 100.0, Some(1000.0), None, None, Some(false))
+            .await
+            .expect("generate_gcode should succeed");
+        assert_golden("08a_origin_bottom", &result.gcode);
+    }
+
+    #[tokio::test]
+    async fn golden_08b_origin_top() {
+        let result = generate_gcode(vec![origin_test_object()], 100.0, Some(1000.0), None, None, Some(true))
+            .await
+            .expect("generate_gcode should succeed");
+        assert_golden("08b_origin_top", &result.gcode);
+    }
+
+    // ── determinism guard ────────────────────────────────────────────────────
+
+    /// The generator must be a pure function of its inputs: no HashMap iteration
+    /// order, no time/random seeding. Running the same compound-path fixture
+    /// twice in-process must produce byte-identical output. This is the
+    /// in-CI complement to the manual "regenerate twice, diff" check performed
+    /// when these goldens were authored (kerf-hardening-program Relay 1C).
+    #[tokio::test]
+    async fn golden_determinism_two_runs_identical() {
+        let mut layer = base_layer("line");
+        layer.cut_inner_first = true;
+        let make_obj = || {
+            let mut obj = rect_obj("compound", 0.0, 0.0, 100.0, 100.0, layer.clone());
+            obj.obj_type = "path".to_string();
+            obj.paths = vec![
+                rect_path(0.0, 0.0, 100.0, 100.0),
+                rect_path(30.0, 30.0, 20.0, 20.0),
+            ];
+            obj
+        };
+
+        let run1 = generate_gcode(vec![make_obj()], 150.0, Some(1000.0), None, None, None)
+            .await
+            .expect("run 1 should succeed");
+        let run2 = generate_gcode(vec![make_obj()], 150.0, Some(1000.0), None, None, None)
+            .await
+            .expect("run 2 should succeed");
+
+        assert_eq!(run1.gcode, run2.gcode, "generator output must be deterministic across runs");
+    }
+}
