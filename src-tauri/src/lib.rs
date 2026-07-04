@@ -1,5 +1,7 @@
 mod commands;
 mod engine;
+#[cfg(any(test, feature = "sim"))]
+mod sim;
 
 use commands::power::KeepAwakeState;
 use commands::serial::SerialState;
