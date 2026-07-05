@@ -84,10 +84,19 @@ src/
 
 src-tauri/src/
   commands/
-    serial.rs                — Serial port open/close/send/status, mutex-guarded state
-    gcode.rs                 — Tauri command: generate_gcode (calls engine)
+    serial.rs                — Serial port open/close/send/status, two-mutex (command +
+                               realtime) state; contains the sim_integration test module
+    serial_pump.rs           — Wait-for-terminal read pump (run_pump): liveness `?` probing,
+                               idle-stall detector, line classification (ok/error/ALARM/banner)
+    gcode.rs                 — Tauri command: generate_gcode (calls engine); golden_tests module
     image_trace.rs           — Tauri command: trace_image (calls engine)
+    power.rs                 — keep-awake acquire/release (OS sleep inhibitor during jobs)
     file_io.rs               — Empty (filesystem handled by tauri-plugin-fs)
+  sim/                       — GRBL 1.1 simulator, #[cfg(any(test, feature = "sim"))] only
+    grbl.rs                  — Virtual controller implementing serialport::SerialPort:
+                               shared Arc<Mutex> brain, two-stage RX→planner buffer with
+                               ok-on-accept, fault injection, strict-hold (M3/M4/M5-in-Hold)
+                               invariant. The CI backbone for the streaming stack.
   engine/
     gcode_gen.rs             — G-code generation: line mode (vector cut with lead-in/out,
                                tabs, perforation, overcut) + fill mode (scan lines with
@@ -101,6 +110,11 @@ src-tauri/src/
                                flood fill segment reordering, start corner selection
     tracer.rs                — vtracer-based image→SVG vectorization with preprocessing
                                (adaptive threshold, morphological ops, blur)
+
+src-tauri/tests/
+  golden/*.gcode             — Frozen G-code snapshots (compared in gcode.rs golden_tests).
+                               Phase 3 proves output byte-identical; Phase 4 reviews geometry
+                               diffs. Regenerate with KERF_UPDATE_GOLDEN=1 (CI guards it unset).
 ```
 
 ## Data Flow
