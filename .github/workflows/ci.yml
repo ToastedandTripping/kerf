@@ -72,10 +72,12 @@ jobs:
       - name: Assert golden-regenerate flag is unset
         run: 'test -z "${KERF_UPDATE_GOLDEN:-}"'
 
-      - run: cargo test
+      - run: cargo test --features sim
         working-directory: src-tauri
 
-      - run: cargo clippy --all-targets -- -D warnings
+      # --features sim so the simulator and golden-corpus code are compiled and
+      # linted too; without it clippy never sees them.
+      - run: cargo clippy --all-targets --features sim -- -D warnings
         working-directory: src-tauri
 
       - name: npm audit (advisory)
