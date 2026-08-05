@@ -510,14 +510,10 @@ function LayerRow({
                 <ToggleChip label="Air Assist" active={layer.airAssist} onClick={() => onManualUpdate({ airAssist: !layer.airAssist })} />
                 <ToggleChip label="Inner First" active={layer.cutInnerFirst} onClick={() => onManualUpdate({ cutInnerFirst: !layer.cutInnerFirst })} />
                 <ToggleChip label="Lock" active={layer.locked} onClick={() => onManualUpdate({ locked: !layer.locked })} />
-                {(layer.mode === "fill" || layer.mode === "offsetFill" || layer.mode === "fillLine") && (
+                {(layer.mode === "fill" || layer.mode === "fillLine") && (
                   <>
-                    {(layer.mode === "fill" || layer.mode === "fillLine") && (
-                      <>
-                        <ToggleChip label="Bidir" active={layer.bidirectional} onClick={() => onManualUpdate({ bidirectional: !layer.bidirectional })} />
-                        <ToggleChip label="Cross" active={layer.crossHatch} onClick={() => onManualUpdate({ crossHatch: !layer.crossHatch })} />
-                      </>
-                    )}
+                    <ToggleChip label="Bidir" active={layer.bidirectional} onClick={() => onManualUpdate({ bidirectional: !layer.bidirectional })} />
+                    <ToggleChip label="Cross" active={layer.crossHatch} onClick={() => onManualUpdate({ crossHatch: !layer.crossHatch })} />
                   </>
                 )}
               </div>

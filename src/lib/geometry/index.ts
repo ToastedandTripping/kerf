@@ -19,6 +19,33 @@
 import type { DesignObject, PathPoint, Transform } from "../../app/types";
 
 /**
+ * A 2D affine transform in the SVG/PDF convention: [a, b, c, d, e, f], i.e.
+ *   x' = a·x + c·y + e
+ *   y' = b·x + d·y + f
+ *
+ * Shared by the SVG and PDF importers, which previously each carried their own
+ * byte-identical copy of the multiply/apply pair.
+ */
+export type Matrix2x3 = [number, number, number, number, number, number];
+
+/** Compose two 2x3 affine matrices (a applied after b, i.e. the product a·b). */
+export function multiplyMatrix2x3(a: ReadonlyArray<number>, b: ReadonlyArray<number>): Matrix2x3 {
+  return [
+    a[0] * b[0] + a[2] * b[1],
+    a[1] * b[0] + a[3] * b[1],
+    a[0] * b[2] + a[2] * b[3],
+    a[1] * b[2] + a[3] * b[3],
+    a[0] * b[4] + a[2] * b[5] + a[4],
+    a[1] * b[4] + a[3] * b[5] + a[5],
+  ];
+}
+
+/** Apply a 2x3 affine matrix to a point. */
+export function applyMatrix2x3(m: ReadonlyArray<number>, x: number, y: number): { x: number; y: number } {
+  return { x: m[0] * x + m[2] * y + m[4], y: m[1] * x + m[3] * y + m[5] };
+}
+
+/**
  * D2: Apply a group's rotation to a PRIMITIVE child's transform, composing center
  * position and rotation angle so that G-code and Viewport render agree.
  *
@@ -130,7 +157,7 @@ export const POINTS_EPSILON = 1e-6;
 export const MIN_SCALE_TARGET = 0.01;
 
 /** A partial object update produced by the invariant-maintaining helpers. */
-export interface GeometryPartial {
+interface GeometryPartial {
   points?: PathPoint[];
   children?: DesignObject[];
   transform: Transform;
@@ -154,6 +181,47 @@ export function pointsBBox(points: ReadonlyArray<PathPoint>): { x: number; y: nu
   }
   if (minX === Infinity) return { x: 0, y: 0, width: 0, height: 0 };
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
+/**
+ * Extents of a w x h box after rotating it by angleDeg, as the axis-aligned
+ * width/height. Shared by computeAABB and the nesting packer so the rotated
+ * footprint used for placement is the same number the selection frame shows.
+ */
+export function rotatedExtents(w: number, h: number, angleDeg: number): { w: number; h: number } {
+  const rad = ((angleDeg % 360 + 360) % 360) * Math.PI / 180;
+  const cos = Math.abs(Math.cos(rad));
+  const sin = Math.abs(Math.sin(rad));
+  return { w: w * cos + h * sin, h: w * sin + h * cos };
+}
+
+/**
+ * Axis-aligned bounding box of an object's transform, accounting for rotation
+ * by projecting the corners. Rotation 0 short-circuits so the untouched case
+ * returns t.x / t.y exactly rather than through a center round-trip.
+ */
+export function computeAABB(obj: DesignObject): { x: number; y: number; w: number; h: number } {
+  const t = obj.transform;
+  const w = t.width;
+  const h = t.height;
+  const rot = (t.rotation % 360 + 360) % 360;
+
+  if (rot === 0) {
+    return { x: t.x, y: t.y, w, h };
+  }
+
+  const ext = rotatedExtents(w, h, rot);
+
+  // Center stays the same
+  const cx = t.x + w / 2;
+  const cy = t.y + h / 2;
+
+  return {
+    x: cx - ext.w / 2,
+    y: cy - ext.h / 2,
+    w: ext.w,
+    h: ext.h,
+  };
 }
 
 /** Pure translation of a points array — fresh point and handle objects, never mutates. */
@@ -280,33 +348,6 @@ export function pointsPartial(obj: DesignObject, points: PathPoint[]): GeometryP
     points,
     transform: { ...obj.transform, x: bb.x, y: bb.y, width: bb.width, height: bb.height },
   };
-}
-
-/**
- * Test/sweep helper: throws if a points-bearing object violates the invariant
- * (transform x/y/w/h ≡ anchors-only points bbox, within ε). Recurses into group
- * children — under the group-local convention, child points and child transform
- * share the group-local frame, so the invariant holds at every level.
- */
-export function assertPointsInvariant(obj: DesignObject, epsilon: number = POINTS_EPSILON): void {
-  if (obj.type === "group" && obj.children) {
-    for (const child of obj.children) assertPointsInvariant(child, epsilon);
-    return;
-  }
-  if (!isPointsBearing(obj)) return;
-  const bb = pointsBBox(obj.points!);
-  const t = obj.transform;
-  const drift = Math.max(
-    Math.abs(t.x - bb.x), Math.abs(t.y - bb.y),
-    Math.abs(t.width - bb.width), Math.abs(t.height - bb.height),
-  );
-  if (drift > epsilon) {
-    throw new Error(
-      `points invariant violated for "${obj.id}" (${obj.type}): transform=` +
-      `{x:${t.x}, y:${t.y}, w:${t.width}, h:${t.height}} vs pointsBBox=` +
-      `{x:${bb.x}, y:${bb.y}, w:${bb.width}, h:${bb.height}} (drift ${drift})`,
-    );
-  }
 }
 
 /**

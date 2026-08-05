@@ -6,7 +6,8 @@
  */
 
 import type { DesignObject, PathPoint } from "../../app/types";
-import { pointsBBox, buildGroupObject } from "../geometry";
+import { pointsBBox, buildGroupObject, applyMatrix2x3, multiplyMatrix2x3 } from "../geometry";
+import { MM_PER_INCH, PT_PER_INCH } from "../constants";
 
 /** Read a PDF file into an ArrayBuffer suitable for pdfjs-dist */
 export async function loadPdfFile(file: File): Promise<ArrayBuffer> {
@@ -49,28 +50,11 @@ export function calculatePixelDimensions(
 // --- Vector path extraction from PDF operator list ---
 
 /** Points-to-mm factor: 1 PDF point = 25.4/72 mm */
-const PT_TO_MM = 25.4 / 72;
+const PT_TO_MM = MM_PER_INCH / PT_PER_INCH;
 
 interface SubPath {
   points: PathPoint[];
   closed: boolean;
-}
-
-/** Apply a 6-element transform matrix [a,b,c,d,e,f] to (x,y) */
-function applyTransform(x: number, y: number, m: number[]): [number, number] {
-  return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
-}
-
-/** Multiply two 6-element transform matrices */
-function multiplyTransform(a: number[], b: number[]): number[] {
-  return [
-    a[0] * b[0] + a[2] * b[1],
-    a[1] * b[0] + a[3] * b[1],
-    a[0] * b[2] + a[2] * b[3],
-    a[1] * b[2] + a[3] * b[3],
-    a[0] * b[4] + a[2] * b[5] + a[4],
-    a[1] * b[4] + a[3] * b[5] + a[5],
-  ];
 }
 
 /**
@@ -116,10 +100,10 @@ export async function extractVectorPaths(
 
   /** Convert a PDF-space point to Kerf-space (mm, Y-up to Y-down) */
   function toKerf(px: number, py: number): PathPoint {
-    const [tx, ty] = applyTransform(px, py, ctm);
+    const t = applyMatrix2x3(ctm, px, py);
     return {
-      x: tx * PT_TO_MM,
-      y: (pageHeightPt - ty) * PT_TO_MM, // flip Y: PDF is bottom-up, Kerf is top-down
+      x: t.x * PT_TO_MM,
+      y: (pageHeightPt - t.y) * PT_TO_MM, // flip Y: PDF is bottom-up, Kerf is top-down
     };
   }
 
@@ -192,7 +176,7 @@ export async function extractVectorPaths(
         break;
 
       case OPS.transform:
-        ctm = multiplyTransform(ctm, arg as number[]);
+        ctm = multiplyMatrix2x3(ctm, arg as number[]);
         break;
 
       case OPS.moveTo: {

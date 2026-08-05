@@ -2,7 +2,7 @@ import { useStore, generateId } from "../../app/store";
 import type { DesignObject, PathPoint, ToolType } from "../../app/types";
 import { machineConnection } from "../machine/connection";
 import { movePartial, scalePartial, pointsPartial, pointsBBox, POINTS_EPSILON, orientedHandlePoints } from "../geometry";
-import { computeAABB } from "../nesting";
+import { computeAABB } from "../geometry";
 import { findNearestSnapPoint, snapThresholdMm, ellipseDiameter } from "../measure";
 import { PX_PER_MM } from "../constants";
 
@@ -75,7 +75,7 @@ const nodeDrag = {
 // --- MEASURE TOOL STATE ---
 // Module-level (NOT a Zustand store field) to avoid Error-185.
 // The only React state added for measure is a scalar measureTick useState in Viewport.
-export interface MeasureState {
+interface MeasureState {
   p1: { x: number; y: number } | null;
   p2: { x: number; y: number } | null;
   hoverPt: { x: number; y: number } | null;

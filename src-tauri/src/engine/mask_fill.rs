@@ -16,7 +16,7 @@
 
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Transform};
 
-use crate::engine::gcode_gen::{CutObject, GcodeMove, GcodeResult, PathSegment};
+use crate::engine::gcode_gen::{CutObject, GcodeMove, GcodeResult, PathSegment, RAPID_SPEED_MM_MIN};
 use crate::engine::image_gcode_gen::{estimate_simple_time, find_binary_runs, find_grayscale_runs};
 
 // ─── Alpha threshold for filled-vs-background classification ──────────────────
@@ -253,7 +253,7 @@ pub fn scan_mask_to_gcode<'a>(
             lines.push(format!("G0 X{:.3} Y{:.3}", lead_in_x, row_gy));
             moves.push(GcodeMove {
                 x: lead_in_x, y: row_gy,
-                move_type: "rapid".to_string(), speed: 3000.0, power: 0.0,
+                move_type: "rapid".to_string(), speed: RAPID_SPEED_MM_MIN, power: 0.0,
             });
 
             // Accel overscan: G1 from lead-in to first run entry boundary, laser off.
@@ -470,7 +470,7 @@ pub fn fill_compound_mask(
     let mut pb = PathBuilder::new();
 
     for seg in &obj.paths {
-        build_subcontour(&mut pb, seg, bbox_x, bbox_y, interval, mask_w, mask_h)?;
+        build_subcontour(&mut pb, seg, bbox_x, bbox_y, interval);
     }
 
     let path = pb.finish().ok_or_else(|| {
@@ -512,7 +512,7 @@ pub fn fill_compound_mask(
         // Re-render with thin-stroke dilation: expand each contour's Y by ±0.5px.
         let mut pb2 = PathBuilder::new();
         for seg in &obj.paths {
-            build_subcontour_dilated(&mut pb2, seg, bbox_x, bbox_y, interval)?;
+            build_subcontour_dilated(&mut pb2, seg, bbox_x, bbox_y, interval);
         }
         if let Some(dilated_path) = pb2.finish() {
             let mut pixmap2 = Pixmap::new(mask_w as u32, mask_h as u32)
@@ -556,11 +556,9 @@ fn build_subcontour(
     bbox_x: f64,
     bbox_y: f64,
     interval: f64,
-    _mask_w: usize,
-    _mask_h: usize,
-) -> Result<(), String> {
+) {
     if seg.points.is_empty() {
-        return Ok(());
+        return;
     }
 
     let to_px = |pt: &crate::engine::gcode_gen::Point| -> (f32, f32) {
@@ -578,8 +576,6 @@ fn build_subcontour(
     if seg.closed {
         pb.close();
     }
-
-    Ok(())
 }
 
 /// Like `build_subcontour` but expands the contour's Y range by ±0.5 pixels
@@ -594,9 +590,9 @@ fn build_subcontour_dilated(
     bbox_x: f64,
     bbox_y: f64,
     interval: f64,
-) -> Result<(), String> {
+) {
     if seg.points.is_empty() {
-        return Ok(());
+        return;
     }
 
     let to_col = |pt: &crate::engine::gcode_gen::Point| -> f32 {
@@ -655,8 +651,6 @@ fn build_subcontour_dilated(
     if seg.closed {
         pb.close();
     }
-
-    Ok(())
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

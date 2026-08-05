@@ -14,7 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 import { render, fireEvent, cleanup } from "@testing-library/react";
 import { useStore } from "../../../app/store";
 import type { DesignObject, PathPoint } from "../../../app/types";
-import { assertPointsInvariant } from "../../../lib/geometry";
+import { assertPointsInvariant } from "../../../lib/geometry/__tests__/pointsInvariant";
 import { PropertiesPanel } from "../PropertiesPanel";
 
 function makePath(id: string): DesignObject {

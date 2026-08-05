@@ -69,7 +69,7 @@ vi.mock("opentype.js", () => {
 import opentype from "opentype.js";
 import { useStore } from "../../app/store";
 import type { DesignObject, PathPoint } from "../../app/types";
-import { assertPointsInvariant } from "../geometry";
+import { assertPointsInvariant } from "../geometry/__tests__/pointsInvariant";
 import { importDxfDirect } from "../fileOps/dxfImport";
 import { extractVectorPaths } from "../fileOps/pdfImport";
 import { _testImportSvgWithLayers } from "../../components/panels/SvgImportDialog";

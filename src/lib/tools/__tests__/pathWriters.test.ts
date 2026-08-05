@@ -24,7 +24,8 @@ import {
   handleViewportPointerMove,
   handleViewportPointerUp,
 } from "../toolHandler";
-import { assertPointsInvariant, orientedHandlePoints } from "../../geometry";
+import { orientedHandlePoints } from "../../geometry";
+import { assertPointsInvariant } from "../../geometry/__tests__/pointsInvariant";
 import { flattenObjectsForTest } from "../../machine/gcodeGen";
 
 function pe(opts: Partial<{ ctrlKey: boolean; shiftKey: boolean; button: number }> = {}): React.PointerEvent {

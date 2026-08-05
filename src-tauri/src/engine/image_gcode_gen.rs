@@ -11,7 +11,7 @@ use image::imageops::FilterType;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::dither::{DitherAlgorithm, dither_image};
-use crate::engine::gcode_gen::GcodeResult;
+use crate::engine::gcode_gen::{GcodeResult, RAPID_SPEED_MM_MIN};
 use crate::engine::mask_fill::{MaskScanParams, scan_mask_to_gcode};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -452,7 +452,7 @@ pub(crate) fn find_grayscale_runs(row: &[u8]) -> Vec<(usize, usize)> {
 
 /// Simple time estimate based on distances and speeds
 pub(crate) fn estimate_simple_time(cut_dist: &f64, travel_dist: &f64, speed_mm_s: f64) -> f64 {
-    let rapid_speed = 50.0; // mm/s assumed rapid speed
+    let rapid_speed = RAPID_SPEED_MM_MIN / 60.0; // mm/s
     let cut_time = cut_dist / speed_mm_s;
     let travel_time = travel_dist / rapid_speed;
     cut_time + travel_time

@@ -16,12 +16,12 @@ import {
   pointsPartial,
   pointsBBox,
   translatePoints,
-  assertPointsInvariant,
   composeGroupChild,
   orientedHandlePoints,
   POINTS_EPSILON,
   MIN_SCALE_TARGET,
 } from "../index";
+import { assertPointsInvariant } from "./pointsInvariant";
 
 function makePath(id: string, points: PathPoint[], rotation = 0): DesignObject {
   const bb = pointsBBox(points);

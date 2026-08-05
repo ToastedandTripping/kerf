@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { nestItems, computeAABB } from "../nesting";
+import { nestItems } from "../nesting";
+import { computeAABB } from "../geometry";
 import type { DesignObject } from "../../app/types";
 
 function makeObject(id: string, x: number, y: number, w: number, h: number, rotation = 0): DesignObject {

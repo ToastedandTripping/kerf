@@ -5,8 +5,8 @@ import type { StoreSet, StoreGet } from "./storeTypes";
 import { generateId } from "./storeTypes";
 import { applyObjects } from "./storeHelpers";
 import { hasPlaceholders, extractPlaceholders, substitutePlaceholders, generateSerialValues } from "../../lib/variableText";
-import { computeAABB, nestItems } from "../../lib/nesting";
-import { offsetRingByDistance, movePartial, pointsBBox, buildGroupObject, composeGroupChild } from "../../lib/geometry";
+import { nestItems } from "../../lib/nesting";
+import { offsetRingByDistance, movePartial, pointsBBox, buildGroupObject, composeGroupChild, computeAABB } from "../../lib/geometry";
 
 // Module-level font cache to avoid reloading on every conversion
 let cachedFont: opentype.Font | null = null;

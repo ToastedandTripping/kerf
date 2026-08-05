@@ -22,7 +22,8 @@ import { useStore } from "../../../app/store";
 import type { DesignObject, KerfProject, Layer, PathPoint, LineOverlay } from "../../../app/types";
 import { DEFAULT_LAYERS, KERF_FORMAT_VERSION } from "../../../app/types";
 import { loadProjectWithMigrations, migrateSpeedToMmMin, migrateSubLayersToFillLine, fileOperations } from "../index";
-import { assertPointsInvariant, pointsBBox, rotatePathPoint } from "../../geometry";
+import { pointsBBox, rotatePathPoint } from "../../geometry";
+import { assertPointsInvariant } from "../../geometry/__tests__/pointsInvariant";
 import { flattenObjectsForTest } from "../../machine/gcodeGen";
 
 function legacyPath(

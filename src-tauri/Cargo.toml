@@ -26,7 +26,6 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 serialport = "4"
 vtracer = "0.6"
@@ -34,5 +33,14 @@ visioncortex = "0.8"
 image = "0.25"
 imageproc = "0.25"
 base64 = "0.22"
+# exact-pin reason unrecorded; verify maskFill mask rasterization
+# (EvenOdd fill across subcontours + the alpha threshold the binary mask
+# reads) against the micro-probe gate in mask_fill.rs before bumping.
 tiny-skia = "=0.12.0"
+# exact-pin reason unrecorded; verify the RAII sleep-inhibitor still holds
+# for a full job (and releases on drop) on each target OS before bumping.
 keepawake = "=0.6.0"
+
+[dev-dependencies]
+# Used only by #[cfg(test)] round-trip assertions in gcode_gen and image_gcode_gen.
+serde_json = "1"

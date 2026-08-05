@@ -227,7 +227,7 @@ mod tests {
         }
 
         let fill_group: Vec<CutObject> = objs.iter().filter(|o| is_fill_ish(&o.layer.mode)).cloned().collect();
-        let mut line_group: Vec<CutObject> = objs.iter().filter(|o| o.layer.mode == "line").cloned().collect();
+        let line_group: Vec<CutObject> = objs.iter().filter(|o| o.layer.mode == "line").cloned().collect();
 
         let mut result: Vec<CutObject> = Vec::new();
         let mut cur_x = start_x;
@@ -241,8 +241,7 @@ mod tests {
             result.push(obj.clone());
         }
 
-        optimizer::sort_inner_first(&mut line_group);
-        let line_order = optimizer::optimize_cut_order_from(&line_group, cur_x, cur_y);
+        let line_order = optimizer::order_inner_first_nn(&line_group, cur_x, cur_y);
         for &idx in &line_order {
             let obj = &line_group[idx];
             result.push(obj.clone());
@@ -691,6 +690,100 @@ mod golden_tests {
             .await
             .expect("generate_gcode should succeed");
         assert_golden("08b_origin_top", &result.gcode);
+    }
+
+    // ── (9) offsetFill: concentric inward rings ─────────────────────────────
+
+    #[tokio::test]
+    async fn golden_09_offsetfill() {
+        let mut layer = base_layer("offsetFill");
+        layer.power = 60.0;
+        layer.interval = 4.0;
+        let mut obj = rect_obj("offset_sq", 0.0, 0.0, 40.0, 40.0, layer);
+        obj.obj_type = "path".to_string();
+        obj.paths = vec![rect_path(0.0, 0.0, 40.0, 40.0)];
+        let result = generate_gcode(vec![obj], 100.0, Some(1000.0), None, None, None)
+            .await
+            .expect("generate_gcode should succeed");
+        assert_golden("09_offsetfill", &result.gcode);
+    }
+
+    // ── (10) perforation: alternating cut / skip along the path ─────────────
+
+    #[tokio::test]
+    async fn golden_10_perforation() {
+        let mut layer = base_layer("line");
+        layer.perforation_cut = 3.0;
+        layer.perforation_skip = 2.0;
+        let mut obj = rect_obj("perf_sq", 0.0, 0.0, 30.0, 20.0, layer);
+        obj.obj_type = "path".to_string();
+        obj.paths = vec![rect_path(0.0, 0.0, 30.0, 20.0)];
+        let result = generate_gcode(vec![obj], 100.0, Some(1000.0), None, None, None)
+            .await
+            .expect("generate_gcode should succeed");
+        assert_golden("10_perforation", &result.gcode);
+    }
+
+    // ── (11) tabs: uncut bridges holding the part in the sheet ──────────────
+
+    #[tokio::test]
+    async fn golden_11_tabs() {
+        let mut layer = base_layer("line");
+        layer.tab_spacing = 8.0;
+        layer.tab_width = 2.0;
+        let mut obj = rect_obj("tab_sq", 0.0, 0.0, 30.0, 20.0, layer);
+        obj.obj_type = "path".to_string();
+        obj.paths = vec![rect_path(0.0, 0.0, 30.0, 20.0)];
+        let result = generate_gcode(vec![obj], 100.0, Some(1000.0), None, None, None)
+            .await
+            .expect("generate_gcode should succeed");
+        assert_golden("11_tabs", &result.gcode);
+    }
+
+    // ── (12) lead-in / lead-out approach and exit moves ─────────────────────
+
+    #[tokio::test]
+    async fn golden_12_lead_in_out() {
+        let mut layer = base_layer("line");
+        layer.lead_in = 3.0;
+        layer.lead_out = 2.0;
+        let mut obj = rect_obj("lead_sq", 20.0, 20.0, 30.0, 20.0, layer);
+        obj.obj_type = "path".to_string();
+        obj.paths = vec![rect_path(20.0, 20.0, 30.0, 20.0)];
+        let result = generate_gcode(vec![obj], 100.0, Some(1000.0), None, None, None)
+            .await
+            .expect("generate_gcode should succeed");
+        assert_golden("12_lead_in_out", &result.gcode);
+    }
+
+    // ── (13) overcut: closed contour overshoots its own start ───────────────
+
+    #[tokio::test]
+    async fn golden_13_overcut() {
+        let mut layer = base_layer("line");
+        layer.overcut = 2.5;
+        let mut obj = rect_obj("overcut_sq", 0.0, 0.0, 30.0, 20.0, layer);
+        obj.obj_type = "path".to_string();
+        obj.paths = vec![rect_path(0.0, 0.0, 30.0, 20.0)];
+        let result = generate_gcode(vec![obj], 100.0, Some(1000.0), None, None, None)
+            .await
+            .expect("generate_gcode should succeed");
+        assert_golden("13_overcut", &result.gcode);
+    }
+
+    // ── (14) cross-hatch: horizontal fill plus a vertical second pass ───────
+
+    #[tokio::test]
+    async fn golden_14_cross_hatch() {
+        let mut layer = base_layer("fill");
+        layer.power = 50.0;
+        layer.interval = 5.0;
+        layer.cross_hatch = true;
+        let obj = rect_obj("hatch_sq", 0.0, 0.0, 20.0, 20.0, layer);
+        let result = generate_gcode(vec![obj], 50.0, Some(1000.0), None, None, None)
+            .await
+            .expect("generate_gcode should succeed");
+        assert_golden("14_cross_hatch", &result.gcode);
     }
 
     // ── determinism guard ────────────────────────────────────────────────────

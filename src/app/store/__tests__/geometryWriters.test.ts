@@ -16,7 +16,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import { useStore } from "../index";
 import type { DesignObject, PathPoint } from "../../types";
-import { assertPointsInvariant, movePartial } from "../../../lib/geometry";
+import { movePartial } from "../../../lib/geometry";
+import { assertPointsInvariant } from "../../../lib/geometry/__tests__/pointsInvariant";
 import { flattenObjectsForTest } from "../../../lib/machine/gcodeGen";
 
 function makePath(id: string, ox = 0, oy = 0): DesignObject {

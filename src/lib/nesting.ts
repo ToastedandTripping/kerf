@@ -1,59 +1,10 @@
-import type { DesignObject, NestRotation, NestResult } from "../app/types";
-
-interface AABB {
-  w: number;
-  h: number;
-}
+import type { NestRotation, NestResult } from "../app/types";
+import { rotatedExtents } from "./geometry";
 
 interface SkylineSegment {
   x: number;
   y: number;
   width: number;
-}
-
-/**
- * Compute the axis-aligned bounding box dimensions for an object,
- * accounting for rotation by projecting corners.
- */
-export function computeAABB(obj: DesignObject): { x: number; y: number; w: number; h: number } {
-  const t = obj.transform;
-  const w = t.width;
-  const h = t.height;
-  const rot = (t.rotation % 360 + 360) % 360;
-
-  if (rot === 0) {
-    return { x: t.x, y: t.y, w, h };
-  }
-
-  const rad = (rot * Math.PI) / 180;
-  const cos = Math.abs(Math.cos(rad));
-  const sin = Math.abs(Math.sin(rad));
-  const rotW = w * cos + h * sin;
-  const rotH = w * sin + h * cos;
-
-  // Center stays the same
-  const cx = t.x + w / 2;
-  const cy = t.y + h / 2;
-
-  return {
-    x: cx - rotW / 2,
-    y: cy - rotH / 2,
-    w: rotW,
-    h: rotH,
-  };
-}
-
-/**
- * Compute AABB dimensions for given width/height at a rotation angle.
- */
-function rotatedDimensions(w: number, h: number, angleDeg: number): AABB {
-  const rad = ((angleDeg % 360 + 360) % 360) * Math.PI / 180;
-  const cos = Math.abs(Math.cos(rad));
-  const sin = Math.abs(Math.sin(rad));
-  return {
-    w: w * cos + h * sin,
-    h: w * sin + h * cos,
-  };
 }
 
 /**
@@ -191,10 +142,10 @@ export function nestItems(
         break;
     }
 
-    let bestPlacement: { x: number; y: number; rot: number; dims: AABB } | null = null;
+    let bestPlacement: { x: number; y: number; rot: number; dims: { w: number; h: number } } | null = null;
 
     for (const rot of rotations) {
-      const dims = rotatedDimensions(item.w, item.h, rot);
+      const dims = rotatedExtents(item.w, item.h, rot);
       const paddedW = dims.w + spacing;
       const paddedH = dims.h + spacing;
 

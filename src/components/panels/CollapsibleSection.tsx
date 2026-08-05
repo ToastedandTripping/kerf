@@ -2,6 +2,11 @@
  *  Extracted from App.tsx so MachinePanel (and others) can import it.
  *  Hover state mirrors LayerRow's onMouseEnter/Leave pattern (no CSS class needed).
  *  Collapse is INSTANT — no transition/animation.
+ *
+ *  A11y: a native <button> already carries role=button and Enter/Space
+ *  activation, so this matches MachinePanel's hand-rolled header by adding
+ *  aria-expanded. The disclosure triangle is decorative and is hidden from the
+ *  accessible name, which comes from the title span alone.
  */
 export function CollapsibleSection({
   title,
@@ -18,6 +23,7 @@ export function CollapsibleSection({
     <div>
       <button
         onClick={onToggle}
+        aria-expanded={open}
         onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
         onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
         style={{
@@ -39,7 +45,7 @@ export function CollapsibleSection({
         }}
       >
         <span>{title}</span>
-        <span style={{ fontSize: "10px", opacity: 0.6 }}>{open ? "▼" : "▶"}</span>
+        <span aria-hidden="true" style={{ fontSize: "10px", opacity: 0.6 }}>{open ? "▼" : "▶"}</span>
       </button>
       {open && children}
     </div>

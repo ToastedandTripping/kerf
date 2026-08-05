@@ -1,10 +1,10 @@
-export interface KnownDevice {
+interface KnownDevice {
   vid: number;
   pid: number;
   label: string;
 }
 
-export const KNOWN_LASER_DEVICES: KnownDevice[] = [
+const KNOWN_LASER_DEVICES: KnownDevice[] = [
   { vid: 0x1a86, pid: 0x7523, label: "CH340 (GRBL)" },
   { vid: 0x1a86, pid: 0x5523, label: "CH341 (GRBL)" },
   { vid: 0x0403, pid: 0x6001, label: "FTDI FT232R" },
@@ -15,7 +15,7 @@ export const KNOWN_LASER_DEVICES: KnownDevice[] = [
   { vid: 0x0483, pid: 0x5740, label: "STM32 VCP" },
 ];
 
-export function isKnownLaserDevice(vid: number | null, pid: number | null): KnownDevice | undefined {
+function isKnownLaserDevice(vid: number | null, pid: number | null): KnownDevice | undefined {
   if (vid === null || pid === null) return undefined;
   return KNOWN_LASER_DEVICES.find(d => d.vid === vid && d.pid === pid);
 }

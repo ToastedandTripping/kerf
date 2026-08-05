@@ -171,7 +171,10 @@ export interface AppState {
   jobProgress: number;
   setJobRunning: (running: boolean) => void;
   setJobProgress: (p: number) => void;
-  // F18: serialBusy flag — set by the material test loop; UI paths check before sending
+  // F18: serialBusy — set true by the material-test streaming loop for the
+  // duration of its send and cleared on exit. NOTHING READS IT: no production
+  // code path gates on this flag today. Reserved for the planned job-stream
+  // gating in the streaming/abort remediation (docs/audit-2026-07-10.md §A).
   serialBusy: boolean;
   setSerialBusy: (busy: boolean) => void;
 

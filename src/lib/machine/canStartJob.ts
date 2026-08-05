@@ -15,12 +15,12 @@
  * explicit gate here and an explicit no-op in frameTargets.
  */
 
-export interface MovesPoint {
+interface MovesPoint {
   x: number;
   y: number;
 }
 
-export interface MovesExtents {
+interface MovesExtents {
   minX: number;
   minY: number;
   maxX: number;

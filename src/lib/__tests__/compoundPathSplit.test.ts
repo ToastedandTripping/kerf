@@ -58,7 +58,7 @@ vi.mock("opentype.js", () => {
 
 import { useStore } from "../../app/store";
 import type { DesignObject } from "../../app/types";
-import { assertPointsInvariant } from "../geometry";
+import { assertPointsInvariant } from "../geometry/__tests__/pointsInvariant";
 import { _testImportSvgWithLayers } from "../../components/panels/SvgImportDialog";
 import { buildTracedPathObjects } from "../../components/panels/ImageTraceDialog";
 import { textObjectToPaths } from "../../app/store/geometryActions";

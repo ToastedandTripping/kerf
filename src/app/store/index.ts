@@ -550,7 +550,9 @@ export const useStore = create<AppState>((set, get) => ({
   jobProgress: 0,
   setJobRunning: (running) => set({ jobRunning: running }),
   setJobProgress: (p) => set({ jobProgress: p }),
-  // F18: serialBusy — tracks material test loop; UI gates check before sending
+  // F18: serialBusy — written by MaterialTestDialog's streaming loop only.
+  // No reader exists in production code; setting it currently gates nothing.
+  // See storeTypes.ts for the reserved use.
   serialBusy: false,
   setSerialBusy: (busy) => set({ serialBusy: busy }),
 

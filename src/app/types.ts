@@ -44,7 +44,7 @@ export type ToolType =
   | "measure"
   | "pan";
 
-export type ObjectType = "rectangle" | "ellipse" | "line" | "path" | "text" | "group" | "image";
+type ObjectType = "rectangle" | "ellipse" | "line" | "path" | "text" | "group" | "image";
 
 export interface Transform {
   x: number;

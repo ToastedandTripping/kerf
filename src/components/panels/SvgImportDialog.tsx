@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useStore, generateId } from "../../app/store";
 import { parsePathD } from "../../lib/fileOps";
-import { pointsBBox, buildGroupObject } from "../../lib/geometry";
+import { pointsBBox, buildGroupObject, applyMatrix2x3, multiplyMatrix2x3, type Matrix2x3 } from "../../lib/geometry";
 import type { DesignObject, PathPoint } from "../../app/types";
 import { useEscapeClose } from "../../lib/hooks/useEscapeClose";
 import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
@@ -18,20 +18,8 @@ interface ColorGroup {
   layerIndex: number;
 }
 
-type Matrix = [number, number, number, number, number, number];
+type Matrix = Matrix2x3;
 const identityMatrix: Matrix = [1, 0, 0, 1, 0, 0];
-
-function multiplyMatrices(a: Matrix, b: Matrix): Matrix {
-  return [
-    a[0] * b[0] + a[2] * b[1], a[1] * b[0] + a[3] * b[1],
-    a[0] * b[2] + a[2] * b[3], a[1] * b[2] + a[3] * b[3],
-    a[0] * b[4] + a[2] * b[5] + a[4], a[1] * b[4] + a[3] * b[5] + a[5],
-  ];
-}
-
-function applyMatrix(m: Matrix, x: number, y: number) {
-  return { x: m[0] * x + m[2] * y + m[4], y: m[1] * x + m[3] * y + m[5] };
-}
 
 function getMatrixScale(m: Matrix) {
   return { sx: Math.sqrt(m[0] * m[0] + m[1] * m[1]), sy: Math.sqrt(m[2] * m[2] + m[3] * m[3]) };
@@ -54,7 +42,7 @@ function parseTransformAttr(attr: string): Matrix {
       case "matrix": m = [nums[0], nums[1], nums[2], nums[3], nums[4], nums[5]]; break;
       default: continue;
     }
-    result = multiplyMatrices(result, m);
+    result = multiplyMatrix2x3(result, m);
   }
   return result;
 }
@@ -482,7 +470,7 @@ function walkElementWithLayers(
 ) {
   const transformAttr = el.getAttribute("transform");
   let matrix = parentMatrix;
-  if (transformAttr) matrix = multiplyMatrices(parentMatrix, parseTransformAttr(transformAttr));
+  if (transformAttr) matrix = multiplyMatrix2x3(parentMatrix, parseTransformAttr(transformAttr));
 
   const tag = el.tagName.toLowerCase();
   if (tag === "defs" || tag === "clippath" || tag === "mask" || tag === "style" || tag === "metadata") return;
@@ -536,7 +524,7 @@ function parseSvgElementForImport(
     case "rect": {
       const x = n(el, "x"), y = n(el, "y"), w = n(el, "width"), h = n(el, "height"), rx = n(el, "rx");
       if (w === 0 && h === 0) return null;
-      const corners = [[x,y],[x+w,y],[x+w,y+h],[x,y+h]].map(([px,py]) => applyMatrix(matrix, px, py));
+      const corners = [[x,y],[x+w,y],[x+w,y+h],[x,y+h]].map(([px,py]) => applyMatrix2x3(matrix, px, py));
       if (isRotated) {
         // Rotated rect → path preserving geometry in world space.
         const pts = corners.map(c => ({ x: c.x * scale, y: c.y * scale }));
@@ -549,14 +537,14 @@ function parseSvgElementForImport(
     case "circle": {
       const cx = n(el, "cx"), cy = n(el, "cy"), r = n(el, "r");
       if (r === 0) return null;
-      const center = applyMatrix(matrix, cx, cy); const ms = getMatrixScale(matrix);
+      const center = applyMatrix2x3(matrix, cx, cy); const ms = getMatrixScale(matrix);
       const rrx = r * ms.sx * scale, rry = r * ms.sy * scale;
       return { ...base, type: "ellipse", transform: { x: center.x*scale-rrx, y: center.y*scale-rry, width: rrx*2, height: rry*2, rotation: 0, scaleX: 1, scaleY: 1 }};
     }
     case "ellipse": {
       const cx = n(el, "cx"), cy = n(el, "cy"), erx = n(el, "rx"), ery = n(el, "ry");
       if (erx === 0 && ery === 0) return null;
-      const center = applyMatrix(matrix, cx, cy); const ms = getMatrixScale(matrix);
+      const center = applyMatrix2x3(matrix, cx, cy); const ms = getMatrixScale(matrix);
       const rrx = erx * ms.sx * scale, rry = ery * ms.sy * scale;
       if (isRotated) {
         // Rotated ellipse → 4-anchor bezier circle approximation in world space.
@@ -584,8 +572,8 @@ function parseSvgElementForImport(
       return { ...base, type: "ellipse", transform: { x: center.x*scale-rrx, y: center.y*scale-rry, width: rrx*2, height: rry*2, rotation: 0, scaleX: 1, scaleY: 1 }};
     }
     case "line": {
-      const p1 = applyMatrix(matrix, n(el, "x1"), n(el, "y1"));
-      const p2 = applyMatrix(matrix, n(el, "x2"), n(el, "y2"));
+      const p1 = applyMatrix2x3(matrix, n(el, "x1"), n(el, "y1"));
+      const p2 = applyMatrix2x3(matrix, n(el, "x2"), n(el, "y2"));
       const sp1 = { x: p1.x*scale, y: p1.y*scale }, sp2 = { x: p2.x*scale, y: p2.y*scale };
       return { ...base, type: "line", transform: { x: Math.min(sp1.x,sp2.x), y: Math.min(sp1.y,sp2.y), width: Math.abs(sp2.x-sp1.x), height: Math.abs(sp2.y-sp1.y), rotation: 0, scaleX: 1, scaleY: 1 }, points: [sp1, sp2] };
     }
@@ -595,7 +583,7 @@ function parseSvgElementForImport(
       if (nums.length < 4) return null;
       const points: { x: number; y: number }[] = [];
       for (let i = 0; i < nums.length - 1; i += 2) {
-        const p = applyMatrix(matrix, nums[i], nums[i+1]);
+        const p = applyMatrix2x3(matrix, nums[i], nums[i+1]);
         points.push({ x: p.x*scale, y: p.y*scale });
       }
       const bb = boundingBox(points);
@@ -612,10 +600,10 @@ function parseSvgElementForImport(
       for (const sub of parsePathD(d)) {
         if (sub.points.length < 2) continue;
         const points: PathPoint[] = sub.points.map(p => {
-          const tp = applyMatrix(matrix, p.x, p.y);
+          const tp = applyMatrix2x3(matrix, p.x, p.y);
           const result: PathPoint = { x: tp.x*scale, y: tp.y*scale };
-          if (p.handleIn) { const hi = applyMatrix(matrix, p.handleIn.x, p.handleIn.y); result.handleIn = { x: hi.x*scale, y: hi.y*scale }; }
-          if (p.handleOut) { const ho = applyMatrix(matrix, p.handleOut.x, p.handleOut.y); result.handleOut = { x: ho.x*scale, y: ho.y*scale }; }
+          if (p.handleIn) { const hi = applyMatrix2x3(matrix, p.handleIn.x, p.handleIn.y); result.handleIn = { x: hi.x*scale, y: hi.y*scale }; }
+          if (p.handleOut) { const ho = applyMatrix2x3(matrix, p.handleOut.x, p.handleOut.y); result.handleOut = { x: ho.x*scale, y: ho.y*scale }; }
           return result;
         });
         // W1b: anchors-only loop bbox; no ||1 clamp (true bbox at birth — the
@@ -636,7 +624,7 @@ function parseSvgElementForImport(
       if (!textContent.trim()) return null;
       let fontSize = parseFloat(getResolvedStyle(el, "font-size", styleMap) || "16");
       const fontFamily = (getResolvedStyle(el, "font-family", styleMap) || "sans-serif").replace(/['"]/g, "");
-      const pos = applyMatrix(matrix, x, y); const ms = getMatrixScale(matrix);
+      const pos = applyMatrix2x3(matrix, x, y); const ms = getMatrixScale(matrix);
       fontSize = fontSize * ms.sy * scale;
       const estWidth = textContent.length * fontSize * 0.55, estHeight = fontSize * 1.3;
       return { ...base, type: "text", name: `Text: "${textContent.slice(0,20)}"`, transform: { x: pos.x*scale, y: pos.y*scale - fontSize, width: estWidth, height: estHeight, rotation: 0, scaleX: 1, scaleY: 1 }, text: textContent, fontSize, fontFamily, fill: resolvedFill || resolvedStroke };

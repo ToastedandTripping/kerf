@@ -265,4 +265,3 @@ function getTickInterval(pxPerMm: number): { interval: number; subdivisions: num
   return { interval, subdivisions };
 }
 
-export { RULER_SIZE };

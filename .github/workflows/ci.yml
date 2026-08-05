@@ -27,16 +27,33 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev
 
+      # scripts/bump-version.mjs syncs five files. This check covers all five,
+      # because the two lockfiles are exactly the ones that have silently
+      # drifted before (v0.8.21 shipped with both stuck at 0.8.18).
       - name: Assert version files agree
         run: |
           PKG_VERSION=$(node -p "require('./package.json').version")
           TAURI_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
           CARGO_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)
-          echo "package.json:      $PKG_VERSION"
-          echo "tauri.conf.json:   $TAURI_VERSION"
-          echo "Cargo.toml:        $CARGO_VERSION"
-          if [ "$PKG_VERSION" != "$TAURI_VERSION" ] || [ "$PKG_VERSION" != "$CARGO_VERSION" ]; then
-            echo "::error::Version drift detected. Run: node scripts/bump-version.mjs <version>"
+          CARGO_LOCK_VERSION=$(awk '/^name = "kerf"$/{getline; sub(/^version = "/,""); sub(/"$/,""); print; exit}' src-tauri/Cargo.lock)
+          NPM_LOCK_VERSION=$(node -p "require('./package-lock.json').version")
+          NPM_LOCK_ROOT_VERSION=$(node -p "require('./package-lock.json').packages[''].version")
+          echo "package.json:            $PKG_VERSION"
+          echo "tauri.conf.json:         $TAURI_VERSION"
+          echo "Cargo.toml:              $CARGO_VERSION"
+          echo "Cargo.lock (kerf):       $CARGO_LOCK_VERSION"
+          echo "package-lock.json:       $NPM_LOCK_VERSION"
+          echo "package-lock.json root:  $NPM_LOCK_ROOT_VERSION"
+          if [ -z "$CARGO_LOCK_VERSION" ]; then
+            echo "::error::Could not read the kerf package version from src-tauri/Cargo.lock"
+            exit 1
+          fi
+          DRIFT=0
+          for V in "$TAURI_VERSION" "$CARGO_VERSION" "$CARGO_LOCK_VERSION" "$NPM_LOCK_VERSION" "$NPM_LOCK_ROOT_VERSION"; do
+            if [ "$V" != "$PKG_VERSION" ]; then DRIFT=1; fi
+          done
+          if [ "$DRIFT" != "0" ]; then
+            echo "::error::Version drift detected. Run: node scripts/bump-version.mjs $PKG_VERSION"
             exit 1
           fi
 

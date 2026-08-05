@@ -1,5 +1,7 @@
 import { useStore, generateId } from "../../app/store";
 import type { DesignObject } from "../../app/types";
+import { pointsBBox } from "../geometry";
+import { MM_PER_INCH } from "../constants";
 
 export function importDxfDirect(content: string) {
   parseDxfManual(content);
@@ -88,7 +90,7 @@ function parseDxfManual(content: string) {
         const units = parseInt(value);
         // DXF $INSUNITS: 1=inches, 2=feet, 4=mm, 5=cm, 6=m
         switch (units) {
-          case 1: unitsScale = 25.4; break;         // inches → mm
+          case 1: unitsScale = MM_PER_INCH; break;  // inches → mm
           case 2: unitsScale = 304.8; break;        // feet → mm
           case 4: unitsScale = 1.0; break;          // mm (no-op)
           case 5: unitsScale = 10.0; break;         // cm → mm
@@ -201,14 +203,10 @@ function parseDxfManual(content: string) {
           expanded.push(...arcPts.slice(0, -1));
         }
 
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const pt of expanded) {
-          minX = Math.min(minX, pt.x); minY = Math.min(minY, pt.y);
-          maxX = Math.max(maxX, pt.x); maxY = Math.max(maxY, pt.y);
-        }
+        const bb = pointsBBox(expanded);
         newObjects.push({
           id: generateId(), type: "path", name: `DXF Polyline ${newObjects.length + 1}`,
-          transform: { x: minX, y: minY, width: maxX - minX, height: maxY - minY, rotation: 0, scaleX: 1, scaleY: 1 },
+          transform: { x: bb.x, y: bb.y, width: bb.width, height: bb.height, rotation: 0, scaleX: 1, scaleY: 1 },
           layerIndex: store.activeLayerIndex, visible: true, locked: false,
           fill: null, stroke: layerColor, strokeWidth: 1, opacity: 1,
           points: expanded, closed,
@@ -238,14 +236,10 @@ function parseDxfManual(content: string) {
           pts.push({ x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) });
         }
         if (pts.length >= 2) {
-          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-          for (const pt of pts) {
-            minX = Math.min(minX, pt.x); minY = Math.min(minY, pt.y);
-            maxX = Math.max(maxX, pt.x); maxY = Math.max(maxY, pt.y);
-          }
+          const bb = pointsBBox(pts);
           newObjects.push({
             id: generateId(), type: "path", name: `DXF Arc ${newObjects.length + 1}`,
-            transform: { x: minX, y: minY, width: maxX - minX, height: maxY - minY, rotation: 0, scaleX: 1, scaleY: 1 },
+            transform: { x: bb.x, y: bb.y, width: bb.width, height: bb.height, rotation: 0, scaleX: 1, scaleY: 1 },
             layerIndex: store.activeLayerIndex, visible: true, locked: false,
             fill: null, stroke: layerColor, strokeWidth: 1, opacity: 1,
             points: pts, closed: false,
@@ -287,12 +281,8 @@ function parseDxfManual(content: string) {
         const flipped = obj.points.map(p => ({ ...p, y: flipY(p.y) }));
         obj.points = flipped;
         // Recompute transform bbox from points
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const p of flipped) {
-          minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
-          maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
-        }
-        obj.transform = { ...obj.transform, x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+        const bb = pointsBBox(flipped);
+        obj.transform = { ...obj.transform, x: bb.x, y: bb.y, width: bb.width, height: bb.height };
       } else {
         // Ellipse / rectangle: flip the Y extent
         const t = obj.transform;

@@ -1,5 +1,6 @@
 import { useStore, generateId } from "../../app/store";
 import type { DesignObject } from "../../app/types";
+import { MM_PER_INCH } from "../constants";
 
 /**
  * Parse PNG pHYs chunk to extract embedded DPI metadata.
@@ -56,8 +57,8 @@ export function importImageData(data: Uint8Array, ext: string) {
   const img = new Image();
   img.onload = () => {
     const dpi = detectedDpi ?? 300;
-    const widthMm = (img.width / dpi) * 25.4;
-    const heightMm = (img.height / dpi) * 25.4;
+    const widthMm = (img.width / dpi) * MM_PER_INCH;
+    const heightMm = (img.height / dpi) * MM_PER_INCH;
 
     const obj: DesignObject = {
       id: generateId(),

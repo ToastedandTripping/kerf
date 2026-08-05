@@ -12,14 +12,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # A release is named by its tag. If the tag says v0.9.0 but package.json
+      # says 0.8.24, the published artifacts are mislabelled and the version
+      # files have drifted. Fail here, before anything is built or uploaded.
+      - name: Assert tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          echo "tag:          $GITHUB_REF_NAME (version $TAG_VERSION)"
+          echo "package.json: $PKG_VERSION"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag/version mismatch: tag $GITHUB_REF_NAME implies $TAG_VERSION but package.json is $PKG_VERSION. Run: node scripts/bump-version.mjs $TAG_VERSION"
+            exit 1
+          fi
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
 
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev
+
       - run: npm ci
 
+      - run: npm run lint
+
       - run: npm test
+
+      - run: npm run build
+
+      # The sim feature gates the GRBL simulator and the golden G-code corpus —
+      # the safety net that catches machine-output regressions before a release.
+      - run: cargo test --features sim
+        working-directory: src-tauri
+
+      - run: cargo clippy --all-targets --features sim -- -D warnings
+        working-directory: src-tauri
 
   build-macos:
     needs: [test]

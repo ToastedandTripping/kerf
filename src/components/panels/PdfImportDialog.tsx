@@ -4,6 +4,7 @@ import type { PDFDocumentProxy } from "pdfjs-dist";
 import type { DesignObject } from "../../app/types";
 import { useStore } from "../../app/store";
 import { extractVectorPaths } from "../../lib/fileOps/pdfImport";
+import { MM_PER_INCH, PT_PER_INCH } from "../../lib/constants";
 
 interface PdfImportDialogProps {
   open: boolean;
@@ -126,7 +127,7 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
         if (!doc) return;
         const page = await doc.getPage(selectedPage);
         const pdfWidth = page.getViewport({ scale: 1 }).width;
-        const scale = (dpi / 72) * (pdfWidth > 0 ? 1 : 1);
+        const scale = (dpi / PT_PER_INCH) * (pdfWidth > 0 ? 1 : 1);
         const viewport = page.getViewport({ scale });
         const canvas = document.createElement("canvas");
         canvas.width = viewport.width;
@@ -167,7 +168,7 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
         if (vectorObjects.length === 0) {
           // No vectors found (scanned PDF) -- fall back to raster
           useStore.getState().setStatusMessage("No vector paths found -- imported as raster image");
-          const scale = dpi / 72;
+          const scale = dpi / PT_PER_INCH;
           const rasterViewport = page.getViewport({ scale });
           const canvas = document.createElement("canvas");
           canvas.width = rasterViewport.width;
@@ -178,8 +179,8 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
             const imageData = canvas.toDataURL("image/png");
             // Pass physical mm dimensions (from PDF points at scale 1.0)
             const baseViewport = page.getViewport({ scale: 1.0 });
-            const mmW = baseViewport.width * 25.4 / 72;
-            const mmH = baseViewport.height * 25.4 / 72;
+            const mmW = baseViewport.width * MM_PER_INCH / PT_PER_INCH;
+            const mmH = baseViewport.height * MM_PER_INCH / PT_PER_INCH;
             onImport(imageData, mmW, mmH);
           }
         } else {
@@ -187,7 +188,7 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
         }
       } else {
         // Raster mode: render at chosen DPI, but pass physical mm dimensions.
-        const scale = dpi / 72;
+        const scale = dpi / PT_PER_INCH;
         const viewport = page.getViewport({ scale });
         const canvas = document.createElement("canvas");
         canvas.width = viewport.width;
@@ -198,8 +199,8 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
           const imageData = canvas.toDataURL("image/png");
           // Physical dimensions come from PDF points at scale 1.0, not from render DPI.
           const baseViewport = page.getViewport({ scale: 1.0 });
-          const mmW = baseViewport.width * 25.4 / 72;
-          const mmH = baseViewport.height * 25.4 / 72;
+          const mmW = baseViewport.width * MM_PER_INCH / PT_PER_INCH;
+          const mmH = baseViewport.height * MM_PER_INCH / PT_PER_INCH;
           onImport(imageData, mmW, mmH);
         }
       }
@@ -224,10 +225,10 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
   // Calculate pixel dimensions for the DPI readout
   // PageInfo stores dimensions in PDF points (1 pt = 1/72 inch) at scale 1.0
   const selectedPageInfo = pages.find((p) => p.pageNum === selectedPage);
-  const pxWidth = selectedPageInfo ? Math.round(selectedPageInfo.widthPt * dpi / 72) : 0;
-  const pxHeight = selectedPageInfo ? Math.round(selectedPageInfo.heightPt * dpi / 72) : 0;
-  const mmWidth = selectedPageInfo ? Math.round(selectedPageInfo.widthPt * 25.4 / 72) : 0;
-  const mmHeight = selectedPageInfo ? Math.round(selectedPageInfo.heightPt * 25.4 / 72) : 0;
+  const pxWidth = selectedPageInfo ? Math.round(selectedPageInfo.widthPt * dpi / PT_PER_INCH) : 0;
+  const pxHeight = selectedPageInfo ? Math.round(selectedPageInfo.heightPt * dpi / PT_PER_INCH) : 0;
+  const mmWidth = selectedPageInfo ? Math.round(selectedPageInfo.widthPt * MM_PER_INCH / PT_PER_INCH) : 0;
+  const mmHeight = selectedPageInfo ? Math.round(selectedPageInfo.heightPt * MM_PER_INCH / PT_PER_INCH) : 0;
 
   const titleId = "pdf-import-title";
 

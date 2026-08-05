@@ -1,6 +1,13 @@
 use serde::{Deserialize, Serialize};
 use super::optimizer;
 
+/// Rapid (G0) traverse speed reported on generated moves, mm/min.
+///
+/// This is METADATA ONLY: it populates `GcodeMove.speed` for the preview and
+/// the time estimate. G0 lines carry no F word, so the machine uses its own
+/// $110-$112 rapid rate — changing this cannot change emitted G-code.
+pub(crate) const RAPID_SPEED_MM_MIN: f64 = 3000.0;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Point {
     pub x: f64,
@@ -64,6 +71,12 @@ pub struct CutObject {
     pub layer: CutLayer,
     pub corner_radius: Option<f64>,
     pub rotation: f64,
+    // dead: no Rust reader; kept for IPC shape stability.
+    // `priority` is still written by a live Properties-panel "Cut Order" control
+    // and persisted into .kerf files, so dropping the wire field would silently
+    // cement that control as inert — a product call, not a cleanup.
+    // `group_id` is load-bearing on the TS side (it keys maskFill coalescing);
+    // only the copy sent over IPC is unread here.
     #[serde(default)]
     pub priority: Option<i32>,
     #[serde(default)]
@@ -199,7 +212,7 @@ fn emit_scan_segments(
         *travel_distance += dist;
         *total_distance += dist;
         lines.push(format!("G0 X{:.3} Y{:.3}", rsx, rsy));
-        moves.push(GcodeMove { x: rsx, y: rsy, move_type: "rapid".to_string(), speed: 3000.0, power: 0.0 });
+        moves.push(GcodeMove { x: rsx, y: rsy, move_type: "rapid".to_string(), speed: RAPID_SPEED_MM_MIN, power: 0.0 });
 
         // Accelerate to boundary at engrave speed with laser off
         if params.overscan > 0.0 {
@@ -387,7 +400,6 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                             let d = ((gpts[i].0 - gpts[i-1].0).powi(2) + (gpts[i].1 - gpts[i-1].1).powi(2)).sqrt();
                             cum_dist.push(cum_dist[i-1] + d);
                         }
-                        let _total_path_len = *cum_dist.last().unwrap_or(&0.0);
 
                         // Lead-in: approach from perpendicular/linear offset
                         let lead_in = layer.lead_in;
@@ -409,7 +421,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                 travel_distance += dist;
                                 total_distance += dist;
                                 lines.push(format!("G0 X{:.3} Y{:.3}", lix, liy));
-                                moves.push(GcodeMove { x: lix, y: liy, move_type: "rapid".to_string(), speed: 3000.0, power: 0.0 });
+                                moves.push(GcodeMove { x: lix, y: liy, move_type: "rapid".to_string(), speed: RAPID_SPEED_MM_MIN, power: 0.0 });
                                 // Laser on, cut to first point
                                 lines.push(format!("{} S{}", power_cmd, effective_s_max));
                                 let d = ((gpts[0].0 - lix).powi(2) + (gpts[0].1 - liy).powi(2)).sqrt();
@@ -428,7 +440,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                             travel_distance += dist;
                             total_distance += dist;
                             lines.push(format!("G0 X{:.3} Y{:.3}", gpts[0].0, gpts[0].1));
-                            moves.push(GcodeMove { x: gpts[0].0, y: gpts[0].1, move_type: "rapid".to_string(), speed: 3000.0, power: 0.0 });
+                            moves.push(GcodeMove { x: gpts[0].0, y: gpts[0].1, move_type: "rapid".to_string(), speed: RAPID_SPEED_MM_MIN, power: 0.0 });
                             cur_x = gpts[0].0;
                             cur_y = gpts[0].1;
                             lines.push(format!("{} S{}", power_cmd, effective_s_max));
@@ -486,7 +498,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                         travel_distance += d;
                                         total_distance += d;
                                         lines.push(format!("G0 X{:.3} Y{:.3}", tx, ty));
-                                        moves.push(GcodeMove { x: tx, y: ty, move_type: "rapid".to_string(), speed: 3000.0, power: 0.0 });
+                                        moves.push(GcodeMove { x: tx, y: ty, move_type: "rapid".to_string(), speed: RAPID_SPEED_MM_MIN, power: 0.0 });
                                         lines.push(format!("{} S{}", power_cmd, effective_s_max));
                                         laser_on = true;
                                         next_toggle_dist += perf_cut;
@@ -500,7 +512,6 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                 let seg_dy = py - cur_y;
                                 let seg_len = ((seg_dx).powi(2) + (seg_dy).powi(2)).sqrt();
                                 if seg_len < 0.001 { continue; }
-                                let mut _cur_seg_dist = seg_start_dist;
                                 loop {
                                     if !laser_on {
                                         let tab_end_dist = next_toggle_dist;
@@ -512,13 +523,12 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                         travel_distance += d;
                                         total_distance += d;
                                         lines.push(format!("G0 X{:.3} Y{:.3}", tx, ty));
-                                        moves.push(GcodeMove { x: tx, y: ty, move_type: "rapid".to_string(), speed: 3000.0, power: 0.0 });
+                                        moves.push(GcodeMove { x: tx, y: ty, move_type: "rapid".to_string(), speed: RAPID_SPEED_MM_MIN, power: 0.0 });
                                         cur_x = tx;
                                         cur_y = ty;
                                         lines.push(format!("{} S{}", power_cmd, effective_s_max));
                                         laser_on = true;
                                         next_toggle_dist = tab_end_dist + tab_spacing;
-                                        _cur_seg_dist = tab_end_dist;
                                     } else {
                                         if next_toggle_dist >= seg_end_dist { break; }
                                         let t = (next_toggle_dist - seg_start_dist) / (seg_end_dist - seg_start_dist);
@@ -534,7 +544,6 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                         lines.push("M5".to_string());
                                         laser_on = false;
                                         next_toggle_dist += tab_width;
-                                        _cur_seg_dist = next_toggle_dist - tab_width;
                                     }
                                 }
                             }
@@ -551,7 +560,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                 travel_distance += d;
                                 total_distance += d;
                                 lines.push(format!("G0 X{:.3} Y{:.3}", px, py));
-                                moves.push(GcodeMove { x: px, y: py, move_type: "rapid".to_string(), speed: 3000.0, power: 0.0 });
+                                moves.push(GcodeMove { x: px, y: py, move_type: "rapid".to_string(), speed: RAPID_SPEED_MM_MIN, power: 0.0 });
                             }
                             cur_x = px;
                             cur_y = py;
@@ -731,7 +740,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                             travel_distance += dist;
                             total_distance += dist;
                             lines.push(format!("G0 X{:.3} Y{:.3}", rsx, rsy));
-                            moves.push(GcodeMove { x: rsx, y: rsy, move_type: "rapid".to_string(), speed: 3000.0, power: 0.0 });
+                            moves.push(GcodeMove { x: rsx, y: rsy, move_type: "rapid".to_string(), speed: RAPID_SPEED_MM_MIN, power: 0.0 });
                             cur_x = rsx;
                             cur_y = rsy;
 
@@ -860,7 +869,13 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                         }
                     }
                 }
-                _ => {}
+                other => {
+                    // Unrecognized layer mode: do not silently emit nothing.
+                    // Mirrors the maskFill skip path — warn on stderr AND leave an
+                    // in-band marker so the omission is visible in the G-code itself.
+                    eprintln!("[gcode_gen] unknown layer mode '{}': object '{}' skipped", other, obj.id);
+                    lines.push(format!("; unknown layer mode '{}' — object skipped", other));
+                }
             }
 
             lines.push(String::new());

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useStore } from "../../app/store";
 import { machineConnection, type ConnectionError } from "../../lib/machine/connection";
 import { generateGcode } from "../../lib/machine/gcodeGen";
-import { MACHINE_STATE_COLORS } from "../../lib/machine/machineStateDisplay";
+import { MACHINE_STATE_COLORS, GRBL_ALARM_DESCRIPTIONS } from "../../lib/machine/machineStateDisplay";
 import { CollapsibleSection } from "./CollapsibleSection";
 import type { StartCorner } from "../../app/types";
 
@@ -219,18 +219,7 @@ export function MachinePanel() {
             // U15: Parse last ALARM line from console to show alarm code
             const alarmLine = [...consoleLines].reverse().find(l => l.text.includes("ALARM:"));
             const alarmCode = alarmLine?.text.match(/ALARM:(\d+)/)?.[1];
-            const alarmDescriptions: Record<string, string> = {
-              "1": "Hard limit triggered",
-              "2": "G-code motion target exceeds machine travel",
-              "3": "Reset while in motion",
-              "4": "Probe fail -- not cleared",
-              "5": "Probe fail -- not contacted",
-              "6": "Homing fail -- cycle not completed",
-              "7": "Homing fail -- pulloff failed",
-              "8": "Homing fail -- could not find limit switch",
-              "9": "Homing fail -- search limit switch not found",
-            };
-            const alarmDesc = alarmCode ? alarmDescriptions[alarmCode] : null;
+            const alarmDesc = alarmCode ? GRBL_ALARM_DESCRIPTIONS[alarmCode] : null;
             return (
             <div style={{
               background: "rgba(220,50,50,0.1)", border: "1px solid rgba(220,50,50,0.3)",

@@ -14,7 +14,7 @@ import { render, cleanup } from "@testing-library/react";
 import { useStore } from "../../app/store";
 import type { DesignObject, PathPoint } from "../../app/types";
 import { useKeyboardShortcuts } from "../shortcuts";
-import { assertPointsInvariant } from "../geometry";
+import { assertPointsInvariant } from "../geometry/__tests__/pointsInvariant";
 import { _testClipboardOp } from "../../components/topbar/MenuBar";
 
 function ShortcutHarness() {

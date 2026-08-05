@@ -2,7 +2,7 @@ import type { PathPoint } from "../../app/types";
 import { CURVE_CHORD_TOLERANCE_MM } from "../geometry";
 
 /** One subpath of a parsed `d` attribute: own points, own closed flag (W1c/F20). */
-export interface ParsedSubpath {
+interface ParsedSubpath {
   points: PathPoint[];
   closed: boolean;
 }
