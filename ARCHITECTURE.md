@@ -21,9 +21,10 @@ src/
     types.ts                 — DesignObject, Layer, SubLayer, MaterialPreset, KerfProject
     store/
       index.ts               — Zustand store creation, CRUD, selection, layers, undo,
-                               z-order, zoom, machine, project, UI (~460 lines)
+                               z-order, zoom, machine, project, UI (~760 lines)
       geometryActions.ts     — Align, flip, group, boolean, array, convert, offset
-                               (~740 lines, uses polygon-clipping + opentype)
+                               (~970 lines, uses polygon-clipping + opentype)
+      storeHelpers.ts        — Shared store helper utilities
       storeTypes.ts          — AppState interface, Command, generateId, type aliases
       __tests__/             — Store and geometry action tests
 
@@ -65,11 +66,12 @@ src/
                                fallback), bezier sampling at serialization,
                                layer-order sorting
       knownDevices.ts        — USB VID/PID table for auto-detect priority sorting
+      textGcode.ts           — Text object → G-code path conversion (font outline extraction)
       __tests__/             — G-code generation tests
     tools/
       toolHandler.ts         — Pointer event state machines for all tools, snap guides
     autoSave.ts              — 60s periodic save to Tauri appDataDir, crash recovery
-    constants.ts             — Shared constants (PX_PER_MM)
+    constants.ts             — Shared constants (PX_PER_MM, MM_PER_INCH, zoom limits, formatTime)
     fileDrop.ts              — Drag-and-drop file handler (SVG/DXF/image/PDF detection)
     geometry/
       index.ts               — Shared geometry utilities (offsetRingByDistance,
@@ -80,6 +82,7 @@ src/
     nesting.ts               — Skyline Bottom-Left-Fill bin-packing algorithm
     recentFiles.ts           — localStorage-backed recent file list
     shortcuts.ts             — Keyboard shortcut registration (includes 1-6 layer assignment)
+    speedScale.ts            — Speed-to-display scaling utilities
     variableText.ts          — Template placeholder parser, serial number generator, CSV import
 
 src-tauri/src/
@@ -106,7 +109,8 @@ src-tauri/src/
     dither.rs                — 8 dithering algorithms (threshold, ordered, Floyd-Steinberg,
                                Jarvis, Stucki, Atkinson, grayscale, newsprint halftone)
     offset.rs                — Polygon inward offset (convex/concave, self-intersection cleanup)
-    optimizer.rs             — Multi-criteria cut ordering (priority, group, inner-first, NN),
+    optimizer.rs             — Cut ordering: layer-index arrival, fill-before-line partition,
+                               inner-first rank (containment DAG), NN within rank bands;
                                flood fill segment reordering, start corner selection
     tracer.rs                — vtracer-based image→SVG vectorization with preprocessing
                                (adaptive threshold, morphological ops, blur)
