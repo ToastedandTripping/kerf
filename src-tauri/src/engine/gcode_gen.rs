@@ -868,7 +868,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                         Err(e) if e.contains("limit exceeded") => {
                             // Resource limit hit — the job is too large. Fail loudly
                             // rather than silently producing an incomplete cut.
-                            return Err(format!("maskFill '{}': {}", obj.id, e));
+                            return Err(e);
                         }
                         Err(e) => {
                             // Degenerate / empty mask (critic must-fix #3): skip + warn.
