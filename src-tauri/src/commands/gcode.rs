@@ -353,6 +353,40 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert!(result.iter().all(|o| o.layer.mode == "maskFill"));
     }
+
+    // ── P6-A: start_point_from_corner table test ──────────────────────────
+    //
+    // 4 named corners x 2 origin modes = 8 cases. Pins the coordinate
+    // mapping that feeds the nearest-neighbor optimizer's start position.
+
+    use super::start_point_from_corner;
+
+    #[test]
+    fn start_point_from_corner_origin_bottom() {
+        let (w, h) = (500.0, 300.0);
+        // origin_top = false: Y=0 at bottom, Y=height at top
+        assert_eq!(start_point_from_corner("bottomLeft", w, h, false), (0.0, 0.0));
+        assert_eq!(start_point_from_corner("bottomRight", w, h, false), (500.0, 0.0));
+        assert_eq!(start_point_from_corner("topLeft", w, h, false), (0.0, 300.0));
+        assert_eq!(start_point_from_corner("topRight", w, h, false), (500.0, 300.0));
+    }
+
+    #[test]
+    fn start_point_from_corner_origin_top() {
+        let (w, h) = (500.0, 300.0);
+        // origin_top = true: Y=0 at top, Y=-height at bottom
+        assert_eq!(start_point_from_corner("bottomLeft", w, h, true), (0.0, -300.0));
+        assert_eq!(start_point_from_corner("bottomRight", w, h, true), (500.0, -300.0));
+        assert_eq!(start_point_from_corner("topLeft", w, h, true), (0.0, 0.0));
+        assert_eq!(start_point_from_corner("topRight", w, h, true), (500.0, 0.0));
+    }
+
+    #[test]
+    fn start_point_from_corner_unknown_defaults_to_bottom_left() {
+        // Unknown corner names fall through to the default arm (bottomLeft behavior)
+        assert_eq!(start_point_from_corner("nonsense", 400.0, 200.0, false), (0.0, 0.0));
+        assert_eq!(start_point_from_corner("nonsense", 400.0, 200.0, true), (0.0, -200.0));
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────

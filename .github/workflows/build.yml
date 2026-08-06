@@ -15,6 +15,9 @@ jobs:
       # A release is named by its tag. If the tag says v0.9.0 but package.json
       # says 0.8.24, the published artifacts are mislabelled and the version
       # files have drifted. Fail here, before anything is built or uploaded.
+      # The tag build is the last gate before a release is published.
+      # Assert both tag-vs-package.json AND all 5 version files agree,
+      # catching drift that slipped past PR CI (e.g. lockfile staleness).
       - name: Assert tag matches package.json version
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -24,6 +27,33 @@ jobs:
           echo "package.json: $PKG_VERSION"
           if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
             echo "::error::Tag/version mismatch: tag $GITHUB_REF_NAME implies $TAG_VERSION but package.json is $PKG_VERSION. Run: node scripts/bump-version.mjs $TAG_VERSION"
+            exit 1
+          fi
+
+      - name: Assert all version files agree
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAURI_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          CARGO_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)
+          CARGO_LOCK_VERSION=$(awk '/^name = "kerf"$/{getline; sub(/^version = "/,""); sub(/"$/,""); print; exit}' src-tauri/Cargo.lock)
+          NPM_LOCK_VERSION=$(node -p "require('./package-lock.json').version")
+          NPM_LOCK_ROOT_VERSION=$(node -p "require('./package-lock.json').packages[''].version")
+          echo "package.json:            $PKG_VERSION"
+          echo "tauri.conf.json:         $TAURI_VERSION"
+          echo "Cargo.toml:              $CARGO_VERSION"
+          echo "Cargo.lock (kerf):       $CARGO_LOCK_VERSION"
+          echo "package-lock.json:       $NPM_LOCK_VERSION"
+          echo "package-lock.json root:  $NPM_LOCK_ROOT_VERSION"
+          if [ -z "$CARGO_LOCK_VERSION" ]; then
+            echo "::error::Could not read the kerf package version from src-tauri/Cargo.lock"
+            exit 1
+          fi
+          DRIFT=0
+          for V in "$TAURI_VERSION" "$CARGO_VERSION" "$CARGO_LOCK_VERSION" "$NPM_LOCK_VERSION" "$NPM_LOCK_ROOT_VERSION"; do
+            if [ "$V" != "$PKG_VERSION" ]; then DRIFT=1; fi
+          done
+          if [ "$DRIFT" != "0" ]; then
+            echo "::error::Version drift detected. Run: node scripts/bump-version.mjs $PKG_VERSION"
             exit 1
           fi
 

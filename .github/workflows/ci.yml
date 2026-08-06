@@ -6,6 +6,10 @@ on:
     branches:
       - master
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -65,6 +69,12 @@ jobs:
 
       - run: npm test
 
+      - name: Production Vite build
+        run: npm run build
+
+      - name: Prettier format check
+        run: npm run format:check
+
       # Guard the golden-corpus integrity: if KERF_UPDATE_GOLDEN is ever set in
       # the environment, the golden tests regenerate-and-pass instead of
       # comparing, silently disabling the G-code safety net. CI must never run
@@ -79,6 +89,11 @@ jobs:
       # linted too; without it clippy never sees them.
       - run: cargo clippy --all-targets --features sim -- -D warnings
         working-directory: src-tauri
+
+      - name: Rust format check
+        run: cargo fmt --check
+        working-directory: src-tauri
+        continue-on-error: true
 
       - name: npm audit (advisory)
         run: npm audit
