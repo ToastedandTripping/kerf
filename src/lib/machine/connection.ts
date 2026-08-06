@@ -238,7 +238,7 @@ export const machineConnection = {
         unsubscribeJobRunning = null;
       }
       jobPollingSuspended = false;
-      await invoke("serial_disconnect");
+      await invoke("serial_disconnect", { jobActive: needsEstop });
       store.setMachineConnected(false);
       store.setMachineState("disconnected");
       store.addConsoleLine("Disconnected", "info");
