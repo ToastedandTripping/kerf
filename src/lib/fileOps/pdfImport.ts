@@ -9,42 +9,12 @@ import type { DesignObject, PathPoint } from "../../app/types";
 import { pointsBBox, buildGroupObject, applyMatrix2x3, multiplyMatrix2x3 } from "../geometry";
 import { MM_PER_INCH, PT_PER_INCH } from "../constants";
 
-/** Read a PDF file into an ArrayBuffer suitable for pdfjs-dist */
-export async function loadPdfFile(file: File): Promise<ArrayBuffer> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (reader.result instanceof ArrayBuffer) {
-        resolve(reader.result);
-      } else {
-        reject(new Error("Failed to read PDF as ArrayBuffer"));
-      }
-    };
-    reader.onerror = () => reject(reader.error);
-    reader.readAsArrayBuffer(file);
-  });
-}
-
 /** Read PDF bytes from a Uint8Array (e.g., from Tauri fs) */
 export function pdfBytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   // Copy into a fresh ArrayBuffer (avoids SharedArrayBuffer issues from wasm)
   const ab = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(ab).set(bytes);
   return ab;
-}
-
-/** Calculate pixel dimensions for a given DPI and page size in points */
-export function calculatePixelDimensions(
-  pageWidthPt: number,
-  pageHeightPt: number,
-  dpi: number,
-): { width: number; height: number; mmWidth: number; mmHeight: number } {
-  // 1 point = 1/72 inch
-  const width = Math.round(pageWidthPt * dpi / 72);
-  const height = Math.round(pageHeightPt * dpi / 72);
-  const mmWidth = Math.round(pageWidthPt * 25.4 / 72);
-  const mmHeight = Math.round(pageHeightPt * 25.4 / 72);
-  return { width, height, mmWidth, mmHeight };
 }
 
 // --- Vector path extraction from PDF operator list ---

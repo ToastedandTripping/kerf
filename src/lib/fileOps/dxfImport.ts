@@ -77,9 +77,6 @@ function parseDxfManual(content: string) {
       const code = parseInt(lines[hi]);
       const value = lines[hi + 1];
       hi += 2;
-      if (code === 0 && value === "SECTION") {
-        // peek at next pair to see if it's HEADER
-      }
       if (code === 2 && value === "HEADER") { inHeader = true; continue; }
       if (inHeader && code === 0 && value === "ENDSEC") break;
       if (inHeader && code === 9 && value === "$INSUNITS") {

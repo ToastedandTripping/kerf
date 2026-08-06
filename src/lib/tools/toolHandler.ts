@@ -19,8 +19,6 @@ interface DragState {
   startY: number;
   isDragging: boolean;
   dragTarget: string | null;
-  dragOffsetX: number;
-  dragOffsetY: number;
   originalTransforms: Map<string, { x: number; y: number; width: number; height: number; rotation: number }>;
   // Marquee selection
   isMarquee: boolean;
@@ -35,8 +33,6 @@ const drag: DragState = {
   startY: 0,
   isDragging: false,
   dragTarget: null,
-  dragOffsetX: 0,
-  dragOffsetY: 0,
   originalTransforms: new Map(),
   isMarquee: false,
   marqueeDirection: "ltr",
@@ -139,12 +135,6 @@ export function getMarqueeState() {
 /** Returns a snapshot of the current measure state for overlay rendering. */
 export function getMeasureState(): MeasureState {
   return measureState;
-}
-
-// R2/R3: expose drag state so Viewport can gate cursor/readout logic without
-// needing access to the private drag object.
-export function isDraggingHandle(): boolean {
-  return drag.isDragging && drag.activeHandle !== null;
 }
 
 // Jen-2/Jen-3: expose rotate-specific drag state.
@@ -556,8 +546,6 @@ function handleSelectDown(worldX: number, worldY: number, e: React.PointerEvent)
         });
       }
     }
-    drag.dragOffsetX = 0;
-    drag.dragOffsetY = 0;
   } else {
     // Click on empty space - start marquee selection
     if (!e.shiftKey) {
