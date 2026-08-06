@@ -46,8 +46,23 @@ pub fn optimize_cut_order_from(objects: &[CutObject], start_x: f64, start_y: f64
 
 /// Reorder scan segments by nearest-neighbor (flood fill order).
 /// Each segment is (y_pos, x_start, x_end). Returns reordered segments.
+///
+/// P2-A Fix #7: when the reverse end (x_end) is closer than x_start, actually
+/// reverse the segment by swapping x_start and x_end. The caller reconstructs
+/// the `forward` flag from the sign of (x_end - x_start), so the swap is
+/// sufficient to produce the correct direction. Also starts from a given head
+/// position instead of hard-coded (0,0).
 pub fn flood_reorder_segments(
     segments: &[(f64, f64, f64)],
+) -> Vec<(f64, f64, f64)> {
+    flood_reorder_segments_from(segments, 0.0, 0.0)
+}
+
+/// Like `flood_reorder_segments` but starting from a given head position.
+pub fn flood_reorder_segments_from(
+    segments: &[(f64, f64, f64)],
+    start_x: f64,
+    start_y: f64,
 ) -> Vec<(f64, f64, f64)> {
     if segments.len() <= 1 {
         return segments.to_vec();
@@ -56,21 +71,23 @@ pub fn flood_reorder_segments(
     let n = segments.len();
     let mut visited = vec![false; n];
     let mut order = Vec::with_capacity(n);
-    let mut cur_x = 0.0_f64;
-    let mut cur_y = 0.0_f64;
+    let mut cur_x = start_x;
+    let mut cur_y = start_y;
 
     for _ in 0..n {
         let mut best_idx = None;
         let mut best_dist = f64::MAX;
+        let mut use_reverse = false;
 
         for (i, seg) in segments.iter().enumerate() {
             if visited[i] { continue; }
 
             // Distance to start of this segment
-            let dist = ((seg.1 - cur_x).powi(2) + (seg.0 - cur_y).powi(2)).sqrt();
-            if dist < best_dist {
-                best_dist = dist;
+            let dist_start = ((seg.1 - cur_x).powi(2) + (seg.0 - cur_y).powi(2)).sqrt();
+            if dist_start < best_dist {
+                best_dist = dist_start;
                 best_idx = Some(i);
+                use_reverse = false;
             }
 
             // Also check distance to end of segment (in case reverse is closer)
@@ -78,15 +95,24 @@ pub fn flood_reorder_segments(
             if dist_end < best_dist {
                 best_dist = dist_end;
                 best_idx = Some(i);
+                use_reverse = true;
             }
         }
 
         if let Some(idx) = best_idx {
             visited[idx] = true;
-            order.push(segments[idx]);
-            // Update position to end of this segment
-            cur_x = segments[idx].2;
-            cur_y = segments[idx].0;
+            let (y, x_s, x_e) = segments[idx];
+            if use_reverse {
+                // Reverse: swap start/end so the segment runs from x_end to x_start
+                order.push((y, x_e, x_s));
+                // Head ends at x_s (the original start, now the end of the reversed segment)
+                cur_x = x_s;
+            } else {
+                order.push((y, x_s, x_e));
+                // Head ends at x_e
+                cur_x = x_e;
+            }
+            cur_y = y;
         }
     }
 
@@ -511,7 +537,9 @@ fn object_start_point(obj: &CutObject) -> (f64, f64) {
     (obj.x, obj.y)
 }
 
-fn object_end_point(obj: &CutObject) -> (f64, f64) {
+/// P2-A Fix #9: pub(crate) so commands/gcode.rs can use the same end-point
+/// computation as the optimizer, instead of the bbox corner approximation.
+pub(crate) fn object_end_point(obj: &CutObject) -> (f64, f64) {
     if let Some(path) = obj.paths.last() {
         if let Some(pt) = path.points.last() {
             return (pt.x, pt.y);
@@ -637,6 +665,35 @@ mod tests {
         let result = flood_reorder_segments(&single);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], (5.0, 0.0, 10.0));
+    }
+
+    // ─── P2-A Finding #7: flood reversal test ────────────────────────────────
+
+    /// When the head is at the END of a segment, the next segment whose end
+    /// is closer than its start should be reversed (x_start/x_end swapped).
+    ///
+    /// Setup: head at (100, 0). Two segments on row y=0:
+    ///   seg A: (0, 0.0, 50.0) — start dist = 100, end dist = 50
+    ///   seg B: (0, 80.0, 100.0) — start dist = 20, end dist = 0
+    /// Nearest: seg B (end dist=0). Since end is closer, it should be reversed
+    /// to (0, 100.0, 80.0). Then seg A: head at x=80 → start dist=80, end=30.
+    /// Seg A's end (50) is closer → reversed to (0, 50.0, 0.0).
+    #[test]
+    fn p2a_flood_reverses_segment_when_end_is_closer() {
+        let segments = vec![
+            (0.0, 0.0, 50.0),   // A
+            (0.0, 80.0, 100.0), // B
+        ];
+        let result = flood_reorder_segments_from(&segments, 100.0, 0.0);
+        assert_eq!(result.len(), 2);
+
+        // B should be reversed: (0, 100.0, 80.0)
+        assert_eq!(result[0], (0.0, 100.0, 80.0),
+            "Seg B should be reversed (end was closer); got {:?}", result[0]);
+
+        // A should be reversed: head at (80, 0), A's end (50) is closer than start (0)
+        assert_eq!(result[1], (0.0, 50.0, 0.0),
+            "Seg A should be reversed (end was closer); got {:?}", result[1]);
     }
 
     // ─── Helpers for new inner-first tests ────────────────────────────────────

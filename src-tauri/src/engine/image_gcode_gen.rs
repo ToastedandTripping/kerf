@@ -315,6 +315,7 @@ pub fn build_power_curve_lut(points: &[(f64, f64)]) -> [u8; 256] {
 /// Applies rotation about the image center, then the workspace Y-flip (unless origin_top).
 /// Mirrors are already applied to the pixel buffer in preview_dither, so no transform here.
 /// Used in tests to verify coordinate transform behavior independently of scan_mask_to_gcode.
+/// Delegates to the shared `coords::to_grbl_coords` helper.
 #[cfg(test)]
 fn image_to_grbl(
     x_img: f64,
@@ -325,16 +326,10 @@ fn image_to_grbl(
     workspace_height: f64,
     origin_top: bool,
 ) -> (f64, f64) {
-    // Rotate (x_img, y_img) about the image center (cx, cy)
-    let dx = x_img - cx;
-    let dy = y_img - cy;
-    let cos_r = rotation_rad.cos();
-    let sin_r = rotation_rad.sin();
-    let rx = cx + dx * cos_r - dy * sin_r;
-    let ry = cy + dx * sin_r + dy * cos_r;
-    // Y-flip for GRBL (bottom-left origin), skip if origin_top
-    let gy = if origin_top { -ry } else { workspace_height - ry };
-    (rx, gy)
+    crate::engine::coords::to_grbl_coords(
+        x_img, y_img, cx, cy,
+        rotation_rad, origin_top, workspace_height,
+    )
 }
 
 /// Generate scan-line G-code from dithered pixel data.
@@ -739,10 +734,11 @@ mod tests {
             .expect("generate_scan_gcode should succeed");
 
         let gcode = result.gcode;
-        // Y should be workspace_height - y_mm = 100 - 10 = 90
+        // P2-A Fix #8: with half-interval centering, y_mm = 10 + 0.5*1.0 = 10.5
+        // Y should be workspace_height - y_mm = 100 - 10.5 = 89.5
         assert!(
-            gcode.contains("Y90.000"),
-            "Expected Y90.000 (100 - 10); got:\n{}", gcode,
+            gcode.contains("Y89.500"),
+            "Expected Y89.500 (100 - 10.5, half-interval centered); got:\n{}", gcode,
         );
     }
 

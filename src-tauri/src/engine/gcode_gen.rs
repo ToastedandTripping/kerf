@@ -133,18 +133,16 @@ struct ScanSegment {
     forward: bool, // direction of travel
 }
 
-/// Transform a design-space point through optional rotation and Y-flip to GRBL coordinates
+/// Transform a design-space point through optional rotation and Y-flip to GRBL coordinates.
+/// Delegates to the shared `coords::to_grbl_coords` helper.
 fn transform_to_grbl(x: f64, y: f64, params: &ScanLineParams) -> (f64, f64) {
-    let (rx, ry) = if params.rotation_rad.abs() > 0.001 {
-        let dx = x - params.center_x;
-        let dy = y - params.center_y;
-        let cos = params.rotation_rad.cos();
-        let sin = params.rotation_rad.sin();
-        (params.center_x + dx * cos - dy * sin, params.center_y + dx * sin + dy * cos)
-    } else {
-        (x, y)
-    };
-    (rx, if params.origin_top { -ry } else { params.workspace_height - ry })
+    super::coords::to_grbl_coords(
+        x, y,
+        params.center_x, params.center_y,
+        params.rotation_rad,
+        params.origin_top,
+        params.workspace_height,
+    )
 }
 
 /// Collect scan segments for fill mode (horizontal or vertical) without emitting G-code.
@@ -347,6 +345,16 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
         // Power mode command
         let power_cmd = if layer.power_mode == "variable" { "M4" } else { "M3" };
 
+        // P2-A Fix #5: compute effective_s_max ONCE, outside the mode match.
+        // In M4 (variable) mode, floor S values at s_min so the laser doesn't
+        // drop below min power during GRBL's speed-compensation at corners/decel.
+        // Previously this floor existed only in the "line" arm.
+        let effective_s_max = if layer.power_mode == "variable" {
+            s_max.max(s_min)
+        } else {
+            s_max
+        };
+
         for pass in 0..layer.passes {
             if layer.passes > 1 {
                 lines.push(format!("; Pass {}/{}", pass + 1, layer.passes));
@@ -356,14 +364,6 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                 "line" => {
                     // Vector cut mode
                     lines.push(format!("; Cut: {} ({}% @ {}mm/min)", obj.id, layer.power, layer.speed));
-
-                    // Fix 6: in M4 (variable) mode, floor S values at s_min so the laser
-                    // doesn't drop below min power during GRBL's speed-compensation at corners.
-                    let effective_s_max = if layer.power_mode == "variable" {
-                        s_max.max(s_min)
-                    } else {
-                        s_max
-                    };
 
                     let mut paths = if obj.paths.is_empty() {
                         vec![object_to_path(obj)]
@@ -408,11 +408,38 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                             let dy = gpts[1].1 - gpts[0].1;
                             let seg_len = (dx * dx + dy * dy).sqrt();
                             if seg_len > 0.001 {
-                                // Perpendicular approach for closed paths, linear for open
+                                // Perpendicular approach for closed paths, linear for open.
+                                // P2-A Fix #4: select lead-in side based on polygon winding.
+                                //
+                                // Left normal (-dy, dx) points to the LEFT of travel direction.
+                                // For CCW polygons (positive signed area in G-code space):
+                                //   left = interior → need RIGHT normal for outside approach.
+                                // For CW polygons (negative signed area):
+                                //   left = exterior → left normal is correct.
+                                //
+                                // Multiply by -sign(signed_area) to always get the outward normal.
                                 let (lix, liy) = if path.closed {
                                     let nx = -dy / seg_len;
                                     let ny = dx / seg_len;
-                                    (gpts[0].0 + nx * lead_in, gpts[0].1 + ny * lead_in)
+
+                                    // Compute signed area of the polygon in G-code space
+                                    // (exclude closing duplicate point).
+                                    let gcode_pts = &gpts[..gpts.len() - 1];
+                                    let signed_area = {
+                                        let n = gcode_pts.len();
+                                        let mut sum = 0.0_f64;
+                                        for i in 0..n {
+                                            let j = (i + 1) % n;
+                                            sum += gcode_pts[i].0 * gcode_pts[j].1;
+                                            sum -= gcode_pts[j].0 * gcode_pts[i].1;
+                                        }
+                                        sum / 2.0
+                                    };
+
+                                    // Flip for CCW (positive area) — left normal is inward.
+                                    let sign = if signed_area > 0.0 { -1.0 } else { 1.0 };
+                                    (gpts[0].0 + sign * nx * lead_in,
+                                     gpts[0].1 + sign * ny * lead_in)
                                 } else {
                                     (gpts[0].0 - dx / seg_len * lead_in, gpts[0].1 - dy / seg_len * lead_in)
                                 };
@@ -620,6 +647,27 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                     lines.push(format!("; Engrave: {} ({}% @ {}mm/min, interval {}mm)",
                         obj.id, layer.power, layer.speed, layer.interval));
 
+                    // P2-A Fix #6: fill mode engraves the full AABB unclipped. Guard against
+                    // non-rectangular paths — the TS routing should send these to maskFill.
+                    // Accept: no paths (primitive rect/ellipse), or a single closed 4-point path
+                    // (rectangle). Reject: multiple paths, open paths, or >4-point shapes.
+                    if !obj.paths.is_empty() {
+                        let is_rect = obj.paths.len() == 1
+                            && obj.paths[0].closed
+                            && obj.paths[0].points.len() == 4;
+                        if !is_rect {
+                            eprintln!(
+                                "[gcode_gen] fill mode skipped '{}': non-rectangular paths \
+                                 (use maskFill for compound/non-rect shapes)", obj.id
+                            );
+                            lines.push(format!(
+                                "; fill skipped: non-rectangular paths for '{}' (use maskFill)",
+                                obj.id
+                            ));
+                            continue;
+                        }
+                    }
+
                     let interval = if layer.interval > 0.0 { layer.interval } else { 0.1 };
                     let overscan = layer.overscan.max(0.0);
                     let scanning_offset = layer.scanning_offset;
@@ -668,7 +716,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                         interval,
                         bidirectional: layer.bidirectional,
                         speed_mm_min,
-                        s_max,
+                        s_max: effective_s_max, // P2-A Fix #5: use floored s_max
                         power_cmd: power_cmd.to_string(),
                         workspace_height,
                         origin_top,
@@ -745,7 +793,8 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                             cur_y = rsy;
 
                             // Laser on before cutting this ring (F8)
-                            lines.push(format!("{} S{}", power_cmd, s_max));
+                            // P2-A Fix #5: use effective_s_max (floored at s_min for M4 mode)
+                            lines.push(format!("{} S{}", power_cmd, effective_s_max));
 
                             // Cut along ring
                             for pt in ring.iter().skip(1) {
@@ -753,8 +802,8 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                 let d = ((px - cur_x).powi(2) + (py - cur_y).powi(2)).sqrt();
                                 cut_distance += d;
                                 total_distance += d;
-                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", px, py, speed_mm_min, s_max));
-                                moves.push(GcodeMove { x: px, y: py, move_type: "cut".to_string(), speed: speed_mm_min, power: s_max });
+                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", px, py, speed_mm_min, effective_s_max));
+                                moves.push(GcodeMove { x: px, y: py, move_type: "cut".to_string(), speed: speed_mm_min, power: effective_s_max });
                                 cur_x = px;
                                 cur_y = py;
                             }
@@ -765,8 +814,8 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                             if d > 0.001 {
                                 cut_distance += d;
                                 total_distance += d;
-                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", cfx, cfy, speed_mm_min, s_max));
-                                moves.push(GcodeMove { x: cfx, y: cfy, move_type: "cut".to_string(), speed: speed_mm_min, power: s_max });
+                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", cfx, cfy, speed_mm_min, effective_s_max));
+                                moves.push(GcodeMove { x: cfx, y: cfy, move_type: "cut".to_string(), speed: speed_mm_min, power: effective_s_max });
                                 cur_x = cfx;
                                 cur_y = cfy;
                             }
@@ -1761,5 +1810,224 @@ mod tests {
              perforation -- not the 100mm tab_spacing -- governed the cut; got {m5_count} M5s in:\n{}",
             result.gcode
         );
+    }
+
+    // ─── P2-A Finding #4: lead-in winding check ──────────────────────────────
+
+    /// CW-wound closed path: lead-in must land OUTSIDE the shape (not inside).
+    ///
+    /// A CW square (in design space, which is Y-up) has negative signed area.
+    /// The default left-normal picks the inward direction for CW paths, scarring
+    /// the part. The fix flips the normal based on winding so the lead-in always
+    /// approaches from scrap/void.
+    ///
+    /// Setup: 100x100 CW square at (0,0) with 10mm lead-in. Design space is Y-up.
+    /// After Y-flip (workspace_height=200): first two G-code points are (0,200) and (100,200).
+    /// Path direction: (0,0)->(100,0)->(100,100)->(0,100) = CW in design space (Y-up).
+    /// After Y-flip: (0,200)->(100,200)->(100,100)->(0,100) = CCW in screen space.
+    ///
+    /// Left normal of first edge (dx=100, dy=0 in G-code space):
+    ///   nx = -0/100 = 0, ny = 100/100 = 1  →  lead-in at (0, 210) — ABOVE the path
+    /// Right normal: (0, -1) → lead-in at (0, 190) — BELOW = INSIDE the shape in G-code space.
+    ///
+    /// For a CW outer (design Y-up), "outside" in G-code space is the direction where
+    /// the lead-in Y is > max(path Y) = 200. So the lead-in Y must be > 200.
+    #[test]
+    fn p2a_lead_in_outside_cw_path() {
+        let mut layer = make_layer_line();
+        layer.lead_in = 10.0;
+        // CW square in design space (Y-up): (0,0) -> (100,0) -> (100,100) -> (0,100)
+        let obj = CutObject {
+            id: "cw_sq".to_string(),
+            obj_type: "path".to_string(),
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+            paths: vec![PathSegment {
+                points: vec![
+                    Point { x: 0.0, y: 0.0 },
+                    Point { x: 100.0, y: 0.0 },
+                    Point { x: 100.0, y: 100.0 },
+                    Point { x: 0.0, y: 100.0 },
+                ],
+                closed: true,
+            }],
+            layer,
+            corner_radius: None,
+            rotation: 0.0,
+            priority: None,
+            group_id: None,
+            layer_index: None,
+        };
+        let result = generate_gcode(&[obj], 200.0, 1000.0, false);
+
+        // Find the G0 lead-in (first G0 after PREAMBLE_END, which has decimal coords)
+        let after_preamble = result.gcode.split("PREAMBLE_END").nth(1)
+            .expect("Expected PREAMBLE_END marker");
+        let g0_lead = after_preamble.lines()
+            .find(|l| l.starts_with("G0 X") && l.contains("Y"))
+            .expect("Expected a G0 lead-in line after preamble");
+
+        let lead_y: f64 = g0_lead.split_whitespace()
+            .find(|t| t.starts_with("Y"))
+            .and_then(|t| t[1..].parse::<f64>().ok())
+            .expect("lead-in should have Y");
+
+        // The path's first point after Y-flip is (0, 200).
+        // Lead-in must be OUTSIDE the shape. For this CW outer, "outside" in G-code
+        // space means Y > 200 (above the bottom edge of the shape).
+        assert!(
+            lead_y > 200.0,
+            "CW outer path: lead-in Y ({lead_y:.3}) must be > 200 (outside the shape). \
+             Got Y={lead_y:.3} which is inside. Bug: left normal picks inward for CW paths.\n\
+             G-code:\n{}", result.gcode
+        );
+    }
+
+    /// CCW-wound closed path (standard outer winding in design space):
+    /// lead-in must land OUTSIDE the shape.
+    ///
+    /// CCW in design space (Y-up): (0,0) -> (0,100) -> (100,100) -> (100,0)
+    /// After Y-flip (wh=200): (0,200) -> (0,100) -> (100,100) -> (100,200)
+    /// Shape interior in G-code space: roughly [0..100, 100..200]
+    ///
+    /// First edge: (0,200)->(0,100), dx=0, dy=-100
+    /// Left normal: nx = 100/100 = 1, ny = 0
+    /// Lead-in: (0+10, 200) = (10, 200) — INSIDE the shape!
+    ///
+    /// The fix should detect CCW winding (standard outer) and flip the normal
+    /// so the lead-in lands outside.
+    #[test]
+    fn p2a_lead_in_outside_ccw_path() {
+        let mut layer = make_layer_line();
+        layer.lead_in = 10.0;
+        let obj = CutObject {
+            id: "ccw_sq".to_string(),
+            obj_type: "path".to_string(),
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+            paths: vec![PathSegment {
+                points: vec![
+                    Point { x: 0.0, y: 0.0 },
+                    Point { x: 0.0, y: 100.0 },
+                    Point { x: 100.0, y: 100.0 },
+                    Point { x: 100.0, y: 0.0 },
+                ],
+                closed: true,
+            }],
+            layer,
+            corner_radius: None,
+            rotation: 0.0,
+            priority: None,
+            group_id: None,
+            layer_index: None,
+        };
+        let result = generate_gcode(&[obj], 200.0, 1000.0, false);
+
+        // Find the G0 lead-in (after preamble)
+        let after_preamble = result.gcode.split("PREAMBLE_END").nth(1)
+            .expect("Expected PREAMBLE_END marker");
+        let g0_lead = after_preamble.lines()
+            .find(|l| l.starts_with("G0 X") && l.contains("Y"))
+            .expect("Expected a G0 lead-in line");
+
+        let lead_x: f64 = g0_lead.split_whitespace()
+            .find(|t| t.starts_with("X"))
+            .and_then(|t| t[1..].parse::<f64>().ok())
+            .expect("lead-in should have X");
+
+        // The shape spans X=[0,100], Y=[100,200] in G-code space.
+        // Lead-in must NOT be inside the shape. With the bug:
+        //   left normal of first edge (0,200)->(0,100) = (+1, 0)
+        //   lead-in at (10, 200) = inside the shape.
+        // After the fix: normal should be flipped to (-1, 0)
+        //   lead-in at (-10, 200) = outside the shape.
+        assert!(
+            lead_x < 0.0,
+            "CCW outer path: lead-in X ({lead_x:.3}) must be < 0 (outside the shape). \
+             Got X={lead_x:.3} which is inside [0..100]. Bug: left normal picks inward \
+             for CCW design-space paths after Y-flip.\n\
+             G-code:\n{}", result.gcode
+        );
+    }
+
+    // ─── P2-A Finding #5: s_min consistency across fill and offsetFill ────────
+
+    /// M4 (variable) mode with power_min > 0: the effective S value must be
+    /// floored at s_min in fill and offsetFill arms, not just in the line arm.
+    ///
+    /// Setup: a fill object with power=10%, power_min=50%, s_value_max=1000.
+    /// s_max = 100, s_min = 500. effective_s_max should be max(100, 500) = 500.
+    /// Without the fix, fill emits S100 (below s_min = 500).
+    #[test]
+    fn p2a_fill_uses_s_min_floor() {
+        let mut layer = make_layer_line();
+        layer.mode = "fill".to_string();
+        layer.power = 10.0;       // s_max = 100
+        layer.power_min = 50.0;   // s_min = 500
+        layer.power_mode = "variable".to_string();
+        layer.interval = 1.0;
+        let obj = make_rect_obj("fill_smin", 0.0, 0.0, 5.0, 5.0, layer);
+
+        let result = generate_gcode(&[obj], 100.0, 1000.0, false);
+
+        // All engrave S values must be >= 500 (s_min)
+        let engrave_s_values: Vec<f64> = result.gcode.lines()
+            .filter(|l| l.starts_with("G1 ") && !l.contains("S0"))
+            .filter_map(|l| {
+                l.split_whitespace()
+                    .find(|t| t.starts_with("S"))
+                    .and_then(|t| t[1..].parse::<f64>().ok())
+            })
+            .collect();
+
+        assert!(!engrave_s_values.is_empty(),
+            "Expected engrave moves; gcode:\n{}", result.gcode);
+
+        for &s in &engrave_s_values {
+            assert!(
+                s >= 500.0,
+                "Fill mode: engrave S={s} < s_min=500. The s_min floor is not applied.\n\
+                 G-code:\n{}", result.gcode
+            );
+        }
+    }
+
+    /// M4 offsetFill with power_min: same floor must apply.
+    #[test]
+    fn p2a_offset_fill_uses_s_min_floor() {
+        let mut layer = make_layer_line();
+        layer.mode = "offsetFill".to_string();
+        layer.power = 10.0;       // s_max = 100
+        layer.power_min = 50.0;   // s_min = 500
+        layer.power_mode = "variable".to_string();
+        layer.interval = 2.0;
+        let obj = make_rect_obj("ofill_smin", 0.0, 0.0, 10.0, 10.0, layer);
+
+        let result = generate_gcode(&[obj], 100.0, 1000.0, false);
+
+        // All G1 S values for cutting (not S0) must be >= 500
+        let cut_s_values: Vec<f64> = result.gcode.lines()
+            .filter(|l| l.starts_with("G1 ") && !l.contains("S0"))
+            .filter_map(|l| {
+                l.split_whitespace()
+                    .find(|t| t.starts_with("S"))
+                    .and_then(|t| t[1..].parse::<f64>().ok())
+            })
+            .collect();
+
+        assert!(!cut_s_values.is_empty(),
+            "Expected cut moves; gcode:\n{}", result.gcode);
+
+        for &s in &cut_s_values {
+            assert!(
+                s >= 500.0,
+                "OffsetFill mode: cut S={s} < s_min=500. The s_min floor is not applied.\n\
+                 G-code:\n{}", result.gcode
+            );
+        }
     }
 }

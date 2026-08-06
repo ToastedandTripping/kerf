@@ -126,19 +126,12 @@ pub fn scan_mask_to_gcode<'a>(
     let cy = params.origin_y + params.height_mm / 2.0;
     let has_rotation = params.rotation_rad.abs() > 1e-6;
 
-    // Inner Y-flip closure (mirrors image_gcode_gen::image_to_grbl)
+    // Inner Y-flip closure: delegates to the shared coords::to_grbl_coords helper.
     let to_grbl = |x_img: f64, y_img: f64| -> (f64, f64) {
-        let (rx, ry) = if has_rotation {
-            let dx = x_img - cx;
-            let dy = y_img - cy;
-            let cos_r = params.rotation_rad.cos();
-            let sin_r = params.rotation_rad.sin();
-            (cx + dx * cos_r - dy * sin_r, cy + dx * sin_r + dy * cos_r)
-        } else {
-            (x_img, y_img)
-        };
-        let gy = if params.origin_top { -ry } else { params.workspace_height - ry };
-        (rx, gy)
+        crate::engine::coords::to_grbl_coords(
+            x_img, y_img, cx, cy,
+            params.rotation_rad, params.origin_top, params.workspace_height,
+        )
     };
 
     // Pre-compute row_has_content for fast skip on sparse masks
@@ -164,7 +157,9 @@ pub fn scan_mask_to_gcode<'a>(
                 continue;
             }
 
-            let y_mm = params.origin_y + row as f64 * interval;
+            // P2-A Fix #8: center each scan line at the pixel center, not edge.
+            // At coarse intervals, pixel-edge placement causes visible banding.
+            let y_mm = params.origin_y + (row as f64 + 0.5) * interval;
 
             let row_start = row * w;
             let row_pixels = &pixels[row_start..row_start + w];
@@ -238,21 +233,31 @@ pub fn scan_mask_to_gcode<'a>(
                 (last_exit_img, gy)
             };
 
+            // P2-A Fix #2: compute lead-in and accel overscan in image space, then
+            // transform to machine coords — symmetric with the decel side. This
+            // prevents the head from cornering at the run boundary under rotation.
+            //
             // Lead-in G0: ONE rapid per row to the overscan approach position.
-            // forward:  approach from left  → G0 to (first_entry_x − overscan)
-            // reversed: approach from right → G0 to (first_entry_x + overscan)
-            let lead_in_x = if forward {
-                first_entry_x - overscan
+            // forward:  approach from left  → G0 to (first_entry_img − overscan) in image X
+            // reversed: approach from right → G0 to (first_entry_img + overscan) in image X
+            let lead_in_img = if forward {
+                first_entry_img - overscan
             } else {
-                first_entry_x + overscan
+                first_entry_img + overscan
+            };
+            let (lead_in_x, lead_in_y) = if has_rotation {
+                to_grbl(lead_in_img, y_mm)
+            } else {
+                let li_x = if forward { first_entry_x - overscan } else { first_entry_x + overscan };
+                (li_x, row_gy)
             };
 
-            let dist = ((lead_in_x - cur_x).powi(2) + (row_gy - cur_y).powi(2)).sqrt();
+            let dist = ((lead_in_x - cur_x).powi(2) + (lead_in_y - cur_y).powi(2)).sqrt();
             travel_distance += dist;
             total_distance += dist;
-            lines.push(format!("G0 X{:.3} Y{:.3}", lead_in_x, row_gy));
+            lines.push(format!("G0 X{:.3} Y{:.3}", lead_in_x, lead_in_y));
             moves.push(GcodeMove {
-                x: lead_in_x, y: row_gy,
+                x: lead_in_x, y: lead_in_y,
                 move_type: "rapid".to_string(), speed: RAPID_SPEED_MM_MIN, power: 0.0,
             });
 
@@ -270,14 +275,19 @@ pub fn scan_mask_to_gcode<'a>(
             // Power command: emit M3/M4 ONCE per row (modal — stays active until M5 at job end).
             lines.push(format!("{} S{}", params.power_cmd, params.s_max));
 
-            // Track the current X head position within the row (in workspace coords).
+            // Track the current head position within the row in machine (GRBL) coords.
+            // P2-A Fix #1: track (x, y) — not X-only — so rotated gap detection is 2D.
             let mut row_cur_x = first_entry_x;
+            let mut row_cur_y = row_gy;
 
             for (run_idx, (run_start, run_end, orig_bounds)) in ordered_runs.iter().enumerate() {
                 let x_start_img = params.origin_x + *run_start as f64 * interval + offset;
                 let x_end_img   = params.origin_x + *run_end as f64 * interval + offset;
 
-                let (x_start, _) = if has_rotation {
+                // P2-A Fix #1: compute full (x, y) in machine coords for both run
+                // endpoints. Gap detection uses 2D distance; gap transit targets the
+                // correct Y from to_grbl (not a stale row_gy).
+                let (x_start, y_start) = if has_rotation {
                     to_grbl(x_start_img, y_mm)
                 } else {
                     (x_start_img, row_gy)
@@ -290,14 +300,16 @@ pub fn scan_mask_to_gcode<'a>(
 
                 // Gap transit: if the head is not already at this run's start, traverse the
                 // gap with G1+S0 at engrave speed (laser off, constant velocity).
+                // P2-A Fix #1: use 2D Euclidean distance so rotated gaps (where runs stack
+                // at the same machine X but differ in Y) are properly detected.
                 // TODO: G0-skip for gaps > v²/$120 (accel-ramp safe threshold)
-                if run_idx > 0 && (x_start - row_cur_x).abs() > 1e-6 {
-                    let gap_dist = (x_start - row_cur_x).abs();
-                    travel_distance += gap_dist;
-                    total_distance += gap_dist;
-                    lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S0", x_start, row_gy, params.speed_mm_min));
+                let gap_dist_2d = ((x_start - row_cur_x).powi(2) + (y_start - row_cur_y).powi(2)).sqrt();
+                if run_idx > 0 && gap_dist_2d > 1e-6 {
+                    travel_distance += gap_dist_2d;
+                    total_distance += gap_dist_2d;
+                    lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S0", x_start, y_start, params.speed_mm_min));
                     moves.push(GcodeMove {
-                        x: x_start, y: row_gy,
+                        x: x_start, y: y_start,
                         move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0,
                     });
                 }
@@ -351,11 +363,13 @@ pub fn scan_mask_to_gcode<'a>(
                             });
                         }
                         row_cur_x = x_end;
+                        row_cur_y = gy_end;
                     }
                 } else {
                     // Binary mode: constant power across the whole run.
                     // S=s_max on G1 to run end; M4/M3 is modal — no per-run power command needed.
-                    let scan_dist = (x_end - x_start).abs();
+                    // P2-A Fix #1: use 2D distance for rotated scan runs.
+                    let scan_dist = ((x_end - x_start).powi(2) + (gy_end - y_start).powi(2)).sqrt();
                     cut_distance += scan_dist;
                     total_distance += scan_dist;
                     lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", x_end, gy_end, params.speed_mm_min, params.s_max));
@@ -364,6 +378,7 @@ pub fn scan_mask_to_gcode<'a>(
                         move_type: "engrave".to_string(), speed: params.speed_mm_min, power: params.s_max,
                     });
                     row_cur_x = x_end;
+                    row_cur_y = gy_end;
                 }
             }
 
@@ -389,9 +404,9 @@ pub fn scan_mask_to_gcode<'a>(
                 cur_y = os_tail_y;
             } else {
                 // No overscan: head ends at the last run's exit position.
-                // row_cur_x was updated to x_end after each run (both binary and grayscale).
+                // P2-A Fix #1: track both x and y from the last run's endpoint.
                 cur_x = row_cur_x;
-                cur_y = row_gy;
+                cur_y = row_cur_y;
             }
 
             if params.bidirectional {
@@ -742,7 +757,9 @@ mod tests {
         }
     }
 
-    /// Phase 0: scanner emits Y = workspace_height - y_mm for axis-aligned mask
+    /// Phase 0: scanner emits Y = workspace_height - y_mm for axis-aligned mask.
+    /// P2-A: with half-interval centering, y_mm = origin_y + 0.5 * interval = 10.5
+    /// → gy = 100 - 10.5 = 89.5
     #[test]
     fn phase0_scanner_y_is_flipped() {
         let mut params = base_scan_params();
@@ -753,8 +770,8 @@ mod tests {
         let pixels = vec![0u8; 10]; // 10 black pixels
         let result = scan_mask_to_gcode(&pixels, 10, 1, &params).expect("should succeed");
         assert!(
-            result.gcode.contains("Y90.000"),
-            "Expected Y90.000 (100 - 10), got:\n{}", result.gcode
+            result.gcode.contains("Y89.500"),
+            "Expected Y89.500 (100 - 10.5, half-interval centered), got:\n{}", result.gcode
         );
     }
 
@@ -918,31 +935,36 @@ mod tests {
 
         let result = scan_mask_to_gcode(&pixels, w, h, &params).expect("should succeed");
 
-        // Frozen snapshot (regenerated 2026-06-24, continuous-sweep rewrite).
+        // Frozen snapshot (regenerated P2-A: Fix #2 + Fix #8 — accel overscan in image
+        // space + half-interval Y centering).
         // Coordinates reflect 45° rotation around mask centre (4.0, 2.0) in a 200mm workspace.
         // Each row: one G0 lead-in → G1 S0 accel overscan → M3 S1000 once → G1 S1000 engrave
         //   → G1 S0 decel overscan.  NO M5 within any row.
+        // P2-A changes:
+        //   Fix #2: G0 lead-in coordinates computed in image space (symmetric with decel).
+        //   Fix #8: Y shifted by 0.5 * interval (pixel center, not edge).
+        // All S-value engrave endpoints are unchanged from the Phase 0 golden.
         let expected = "\
-G0 X1.586 Y202.243\n\
-G1 X2.586 Y202.243 F6000 S0\n\
+G0 X1.525 Y202.596\n\
+G1 X2.232 Y201.889 F6000 S0\n\
 M3 S1000\n\
-G1 X5.414 Y199.414 F6000 S1000\n\
-G1 X6.121 Y198.707 F6000 S0\n\
-G0 X8.536 Y195.879\n\
-G1 X7.536 Y195.879 F6000 S0\n\
+G1 X5.061 Y199.061 F6000 S1000\n\
+G1 X5.768 Y198.354 F6000 S0\n\
+G0 X7.889 Y194.818\n\
+G1 X7.182 Y195.525 F6000 S0\n\
 M3 S1000\n\
-G1 X4.707 Y198.707 F6000 S1000\n\
-G1 X4.000 Y199.414 F6000 S0\n\
-G0 X0.879 Y200.121\n\
-G1 X1.879 Y200.121 F6000 S0\n\
+G1 X4.354 Y198.354 F6000 S1000\n\
+G1 X3.646 Y199.061 F6000 S0\n\
+G0 X0.818 Y200.475\n\
+G1 X1.525 Y199.768 F6000 S0\n\
 M3 S1000\n\
-G1 X5.414 Y196.586 F6000 S1000\n\
-G1 X6.121 Y195.879 F6000 S0\n\
-G0 X6.414 Y195.172\n\
-G1 X5.414 Y195.172 F6000 S0\n\
+G1 X5.061 Y196.232 F6000 S1000\n\
+G1 X5.768 Y195.525 F6000 S0\n\
+G0 X5.768 Y194.111\n\
+G1 X5.061 Y194.818 F6000 S0\n\
 M3 S1000\n\
-G1 X1.879 Y198.707 F6000 S1000\n\
-G1 X1.172 Y199.414 F6000 S0";
+G1 X1.525 Y198.354 F6000 S1000\n\
+G1 X0.818 Y199.061 F6000 S0";
 
         assert_eq!(
             result.gcode.trim(), expected.trim(),
@@ -1634,6 +1656,197 @@ G1 X1.172 Y199.414 F6000 S0";
             "Gap between runs must NOT contain a G0 (continuous sweep).\n\
              Lines between engrave moves: {:?}\nFull G-code:\n{}",
             between, result.gcode
+        );
+    }
+
+    // ─── P2-A Finding #1: rotated gap transit must use correct 2D coordinates ──
+
+    /// At 90-degree rotation, runs that were horizontally separated in image space
+    /// become vertically separated in machine space. The gap transit must target
+    /// the correct (x, y) from to_grbl, not a stale row_gy. Also, the gap check
+    /// must use 2D Euclidean distance, not X-only.
+    ///
+    /// Setup: 10-pixel-wide mask, one row, two runs separated by a gap.
+    /// Pixels 0-2 filled, 3-6 background, 7-9 filled.
+    /// Rotation = 90 degrees (PI/2). Under 90deg rotation around center (5, 0.5),
+    /// the runs map to different machine Y values, and the gap transit must
+    /// reflect that.
+    #[test]
+    fn p2a_rotated_gap_transit_uses_2d_coords() {
+        let mut params = base_scan_params();
+        params.rotation_rad = std::f64::consts::FRAC_PI_2; // 90 degrees
+        params.width_mm = 10.0;
+        params.height_mm = 1.0;
+        params.interval = 1.0;
+        params.workspace_height = 100.0;
+        params.overscan = 0.0;
+        params.bidirectional = false;
+        params.origin_top = false;
+
+        let w = 10usize;
+        let h = 1usize;
+        let mut pixels = vec![255u8; w * h];
+        // Two runs with a gap: pixels 0-2 filled, 7-9 filled
+        pixels[0] = 0; pixels[1] = 0; pixels[2] = 0;
+        pixels[7] = 0; pixels[8] = 0; pixels[9] = 0;
+
+        let result = scan_mask_to_gcode(&pixels, w, h, &params).expect("should succeed");
+
+        // Under 90deg rotation, a gap between runs at different image X positions
+        // maps to different machine Y positions. The gap transit must:
+        // (a) exist (G1 S0 between the two engrave moves)
+        // (b) target the correct machine coordinates for run 2's start
+        //
+        // to_grbl(7.0, 0.0) around center (5.0, 0.5) at 90deg:
+        //   dx=2.0, dy=-0.5, cos90~=0, sin90~=1
+        //   rx = 5.0 + 0 - (-0.5) = 5.5
+        //   ry = 0.5 + 2.0 = 2.5
+        //   gy = 100 - 2.5 = 97.5
+        //
+        // Under the old bug (X-only gap check), the gap transit was skipped
+        // entirely because all X coordinates are 5.5 at 90deg rotation.
+        // The laser burned straight through the gap.
+
+        let all_lines: Vec<&str> = result.gcode.lines().collect();
+        let engrave_indices: Vec<usize> = all_lines.iter().enumerate()
+            .filter(|(_, l)| l.starts_with("G1 ") && l.contains("S1000"))
+            .map(|(i, _)| i)
+            .collect();
+        assert!(engrave_indices.len() >= 2,
+            "Expected at least 2 engrave moves; gcode:\n{}", result.gcode);
+
+        // Between the two engrave moves there must be a G1+S0 gap transit
+        let between = &all_lines[engrave_indices[0] + 1..engrave_indices[1]];
+        let gap_transit = between.iter().find(|l| l.starts_with("G1 ") && l.contains("S0"));
+        assert!(
+            gap_transit.is_some(),
+            "Gap between runs must have a G1+S0 transit (2D gap check).\n\
+             Lines between engrave moves: {:?}\nFull G-code:\n{}",
+            between, result.gcode
+        );
+
+        // The gap transit Y must match to_grbl(7.0, 0.0) = 97.5, not row_gy = 104.5
+        let gap_y: f64 = gap_transit.unwrap().split_whitespace()
+            .find(|t| t.starts_with("Y"))
+            .and_then(|t| t[1..].parse::<f64>().ok())
+            .expect("gap transit should have a Y coordinate");
+        assert!(
+            (gap_y - 97.5).abs() < 0.1,
+            "Gap transit Y should be 97.5 (to_grbl of run 2 start), got {gap_y:.3}.\n\
+             Full gcode:\n{}", result.gcode
+        );
+    }
+
+    // ─── P2-A Finding #2: accel/decel overscan symmetry under rotation ─────────
+
+    /// Under rotation, the accel lead-in (G0) and accel ramp (G1 S0) must approach
+    /// along the rotated scan direction, symmetric with the decel side.
+    ///
+    /// Before the fix, lead-in offset was in machine-X; decel was in image-X-then-rotated.
+    /// Under rotation, this caused the head to corner at the run boundary.
+    ///
+    /// Setup: single row, full width, 45deg rotation, 2mm overscan.
+    /// The G0 lead-in must NOT have the same Y as the accel G1 S0 target —
+    /// that would mean the lead-in is offsetting in machine-X only.
+    #[test]
+    fn p2a_overscan_symmetric_under_rotation() {
+        let mut params = base_scan_params();
+        params.rotation_rad = std::f64::consts::FRAC_PI_4; // 45 degrees
+        params.width_mm = 10.0;
+        params.height_mm = 1.0;
+        params.interval = 1.0;
+        params.overscan = 2.0;
+        params.workspace_height = 200.0;
+        params.bidirectional = false;
+
+        let w = 10usize;
+        let h = 1usize;
+        let pixels = vec![0u8; w * h]; // all filled
+
+        let result = scan_mask_to_gcode(&pixels, w, h, &params).expect("should succeed");
+
+        // Parse the G0 lead-in and the following G1 S0 accel line
+        let lines: Vec<&str> = result.gcode.lines().collect();
+        let g0_line = lines.iter().find(|l| l.starts_with("G0 "))
+            .expect("Expected a G0 lead-in line");
+        let g1_s0_line = lines.iter().find(|l| l.starts_with("G1 ") && l.contains("S0"))
+            .expect("Expected a G1 S0 accel line");
+
+        let parse_xy = |line: &str| -> (f64, f64) {
+            let x = line.split_whitespace()
+                .find(|t| t.starts_with("X"))
+                .and_then(|t| t[1..].parse::<f64>().ok())
+                .unwrap();
+            let y = line.split_whitespace()
+                .find(|t| t.starts_with("Y"))
+                .and_then(|t| t[1..].parse::<f64>().ok())
+                .unwrap();
+            (x, y)
+        };
+
+        let (g0_x, g0_y) = parse_xy(g0_line);
+        let (g1_x, g1_y) = parse_xy(g1_s0_line);
+
+        // Under 45deg rotation, the lead-in G0 must approach from a position offset
+        // along the rotated scan direction. The G0 and G1 S0 should form a vector
+        // at ~45deg, not purely horizontal (which would mean machine-X offset only).
+        //
+        // Vector from G0 to G1 S0: if symmetric, dx and dy should both be non-zero.
+        let dx = g1_x - g0_x;
+        let dy = g1_y - g0_y;
+
+        assert!(
+            dx.abs() > 0.1 && dy.abs() > 0.1,
+            "Accel lead-in vector ({dx:.3}, {dy:.3}) must have non-zero dx AND dy \
+             under 45deg rotation. A zero dy means the lead-in is machine-X only \
+             (not along the rotated scan direction).\n\
+             G0: ({g0_x:.3}, {g0_y:.3}), G1 S0: ({g1_x:.3}, {g1_y:.3})\n\
+             Full gcode:\n{}", result.gcode
+        );
+    }
+
+    // ─── P2-A Finding #8: half-interval Y centering ──────────────────────────
+
+    /// Scan line Y position must be at the CENTER of each pixel row, not the edge.
+    ///
+    /// Before fix: y_mm = origin_y + row * interval  (pixel edge)
+    /// After fix:  y_mm = origin_y + (row + 0.5) * interval  (pixel center)
+    ///
+    /// Setup: 1-pixel-tall mask, interval=2.0, origin_y=10.0, workspace_height=100.
+    /// Before fix: y_mm = 10.0 → gy = 100 - 10 = 90.0
+    /// After fix:  y_mm = 10.0 + 0.5*2.0 = 11.0 → gy = 100 - 11 = 89.0
+    #[test]
+    fn p2a_scan_line_y_is_pixel_center() {
+        let mut params = base_scan_params();
+        params.origin_y = 10.0;
+        params.height_mm = 2.0;
+        params.interval = 2.0;
+        params.workspace_height = 100.0;
+        params.width_mm = 5.0;
+
+        let w = 3usize; // 5mm / ~2mm = ceil(2.5) ≈ 3 pixels, but let's keep it simple
+        let h = 1usize;
+        let pixels = vec![0u8; w * h]; // all filled
+
+        let result = scan_mask_to_gcode(&pixels, w, h, &params).expect("should succeed");
+
+        // Parse the first engrave Y
+        let engrave_y: f64 = result.gcode.lines()
+            .filter(|l| l.starts_with("G1 ") && l.contains("S1000"))
+            .filter_map(|l| {
+                l.split_whitespace()
+                    .find(|t| t.starts_with("Y"))
+                    .and_then(|t| t[1..].parse::<f64>().ok())
+            })
+            .next()
+            .expect("Expected an engrave Y coordinate");
+
+        // Expected: y_mm = 10.0 + 0.5 * 2.0 = 11.0 → gy = 100 - 11 = 89.0
+        assert!(
+            (engrave_y - 89.0).abs() < 0.01,
+            "Scan line Y should be 89.0 (pixel center, not edge). Got {engrave_y:.3}.\n\
+             Before fix: Y=90.0 (pixel edge). After fix: Y=89.0 (pixel center).\n\
+             Full gcode:\n{}", result.gcode
         );
     }
 }

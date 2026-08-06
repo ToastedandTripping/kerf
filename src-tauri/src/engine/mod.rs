@@ -1,3 +1,4 @@
+pub mod coords;
 pub mod dither;
 pub mod gcode_gen;
 pub mod image_gcode_gen;

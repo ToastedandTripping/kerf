@@ -99,8 +99,11 @@ pub async fn generate_gcode(
                 let fill_order = optimizer::optimize_cut_order_from(&fill_group, cur_x, cur_y);
                 for &idx in &fill_order {
                     let obj = &fill_group[idx];
-                    cur_x = obj.x + obj.width;
-                    cur_y = obj.y + obj.height;
+                    // P2-A Fix #9: use optimizer's object_end_point (last path point)
+                    // instead of bbox corner, matching the optimizer's own tracking.
+                    let (ex, ey) = optimizer::object_end_point(obj);
+                    cur_x = ex;
+                    cur_y = ey;
                     final_objects.push(obj.clone());
                 }
 
@@ -120,8 +123,11 @@ pub async fn generate_gcode(
                 };
                 for &idx in &line_order {
                     let obj = &line_group[idx];
-                    cur_x = obj.x + obj.width;
-                    cur_y = obj.y + obj.height;
+                    // P2-A Fix #9: use optimizer's object_end_point (last path point)
+                    // instead of bbox corner, matching the optimizer's own tracking.
+                    let (ex, ey) = optimizer::object_end_point(obj);
+                    cur_x = ex;
+                    cur_y = ey;
                     final_objects.push(obj.clone());
                 }
             } else {
@@ -146,8 +152,11 @@ pub async fn generate_gcode(
                 };
                 for &idx in &order {
                     let obj = &layer_objs[idx];
-                    cur_x = obj.x + obj.width;
-                    cur_y = obj.y + obj.height;
+                    // P2-A Fix #9: use optimizer's object_end_point (last path point)
+                    // instead of bbox corner, matching the optimizer's own tracking.
+                    let (ex, ey) = optimizer::object_end_point(obj);
+                    cur_x = ex;
+                    cur_y = ey;
                     final_objects.push(obj.clone());
                 }
             }
