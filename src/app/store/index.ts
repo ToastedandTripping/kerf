@@ -4,7 +4,7 @@ import { DEFAULT_LAYERS, KERF_FORMAT_VERSION } from "../types";
 import { DEFAULT_MATERIALS } from "../../lib/materials";
 import { createGeometryActions } from "./geometryActions";
 import type { AppState } from "./storeTypes";
-import { generateId } from "./storeTypes";
+import { deepCloneObject } from "./storeTypes";
 import { buildObjectsById, selectionPatch } from "./storeHelpers";
 import { PX_PER_MM } from "../../lib/constants";
 
@@ -623,9 +623,10 @@ export const useStore = create<AppState>((set, get) => ({
       const selected = objects.filter((o) => selectedIds.includes(o.id));
       const newIds: string[] = [];
       for (const obj of selected) {
-        const newId = generateId();
-        addObject({ ...obj, id: newId, name: obj.name + " copy" });
-        newIds.push(newId);
+        const clone = deepCloneObject(obj);
+        clone.name = obj.name + " copy";
+        addObject(clone);
+        newIds.push(clone.id);
       }
       set(selectionPatch(newIds));
     });

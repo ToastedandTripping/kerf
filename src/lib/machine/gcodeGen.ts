@@ -143,6 +143,48 @@ function buildLineOverlayCutLayer(layer: Layer): CutObject["layer"] {
   };
 }
 
+/** Synthesize a fill contour for shapes that have no explicit points[].
+ *  Ellipses and rounded rectangles need sampled outlines for the maskFill
+ *  rasterizer; without contour points the Rust arm receives empty paths and
+ *  returns Err (the object silently vanishes from the cut). */
+function synthesizeFillContour(obj: DesignObject): CutObject["paths"][0] | null {
+  const { x, y, width, height } = obj.transform;
+  if (obj.type === "ellipse") {
+    const steps = 64;
+    const cx = x + width / 2, cy = y + height / 2;
+    const rx = width / 2, ry = height / 2;
+    const pts: Array<{ x: number; y: number }> = [];
+    for (let s = 0; s < steps; s++) {
+      const angle = (2 * Math.PI * s) / steps;
+      pts.push({ x: cx + Math.cos(angle) * rx, y: cy + Math.sin(angle) * ry });
+    }
+    return { points: pts, closed: true };
+  }
+  if (obj.type === "rectangle" && (obj.cornerRadius || 0) > 0) {
+    const cr = obj.cornerRadius!;
+    const r = Math.min(cr, width / 2, height / 2);
+    const steps = 16;
+    const pts: Array<{ x: number; y: number }> = [];
+    const corners = [
+      { cx: x + r, cy: y + r, startAngle: Math.PI, endAngle: Math.PI * 1.5 },
+      { cx: x + width - r, cy: y + r, startAngle: Math.PI * 1.5, endAngle: Math.PI * 2 },
+      { cx: x + width - r, cy: y + height - r, startAngle: 0, endAngle: Math.PI * 0.5 },
+      { cx: x + r, cy: y + height - r, startAngle: Math.PI * 0.5, endAngle: Math.PI },
+    ];
+    for (const c of corners) {
+      for (let s = 0; s <= steps; s++) {
+        const angle = c.startAngle + (c.endAngle - c.startAngle) * s / steps;
+        pts.push({ x: c.cx + Math.cos(angle) * r, y: c.cy + Math.sin(angle) * r });
+      }
+    }
+    return { points: pts, closed: true };
+  }
+  return null;
+}
+
+/** Exported for unit testing — do not use in production code outside this module. */
+export { synthesizeFillContour as synthesizeFillContourForTest };
+
 /** Recursively flatten groups into leaf objects with parent transform applied.
  *
  *  Group composition (translation + rotation, for primitives AND path/line
@@ -228,9 +270,12 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
 
     const isNonRectShape = obj.type === "ellipse" || obj.type === "path" || obj.type === "line";
 
-    // Fill-mode (or fillLine) non-rect shapes with a groupId → coalesce into one maskFill CutObject.
+    // Fill-mode (or fillLine or offsetFill) non-rect shapes with a groupId →
+    // coalesce into one maskFill CutObject. offsetFill compounds must also
+    // route through maskFill so holes are respected (even-odd rule); only
+    // simple single-contour objects use the Rust offsetFill spiral arm.
     // Rectangles keep the AABB fill path (their bbox IS the shape, no coalescing needed).
-    if ((layer.mode === "fill" || layer.mode === "fillLine") && isNonRectShape && obj.groupId) {
+    if ((layer.mode === "fill" || layer.mode === "fillLine" || layer.mode === "offsetFill") && isNonRectShape && obj.groupId) {
       // Use the resolved layer.index for the group key so orphan groups (unknown
       // layerIndex → resolved to layers[0] above) are keyed on the same layer
       // whose settings they actually use — not on the raw (possibly undefined)
@@ -238,30 +283,57 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
       // has a different index.
       const key = `${layer.index}:${obj.groupId}`;
 
-      // Build this contour's sampled path
+      // Build this contour's sampled path.
+      // Bake child rotation into the points so each child's orientation is
+      // preserved — the coalesced CutObject emits rotation: 0.
       const contourPaths: CutObject["paths"] = [];
       if (obj.points && obj.points.length >= 2) {
+        let sampled = sampleBezierPath(obj.points, obj.closed || false);
+        const childRot = obj.transform.rotation || 0;
+        if (childRot !== 0) {
+          const ccx = obj.transform.x + obj.transform.width / 2;
+          const ccy = obj.transform.y + obj.transform.height / 2;
+          const rad = childRot * Math.PI / 180;
+          const cos = Math.cos(rad);
+          const sin = Math.sin(rad);
+          sampled = sampled.map((p) => {
+            const dx = p.x - ccx;
+            const dy = p.y - ccy;
+            return { x: ccx + dx * cos - dy * sin, y: ccy + dx * sin + dy * cos };
+          });
+        }
         contourPaths.push({
-          points: sampleBezierPath(obj.points, obj.closed || false),
+          points: sampled,
           closed: obj.closed || false,
         });
       }
 
       const { x, y, width, height } = obj.transform;
-      const x2 = x + width;
-      const y2 = y + height;
+      // After baking rotation, recompute extent from actual points.
+      let bx = x, by = y, bx2 = x + width, by2 = y + height;
+      if (contourPaths.length > 0 && (obj.transform.rotation || 0) !== 0) {
+        const pts = contourPaths[0].points;
+        bx = Math.min(...pts.map((p) => p.x));
+        by = Math.min(...pts.map((p) => p.y));
+        bx2 = Math.max(...pts.map((p) => p.x));
+        by2 = Math.max(...pts.map((p) => p.y));
+      } else {
+        bx = x; by = y; bx2 = x + width; by2 = y + height;
+      }
+      const x2 = bx2;
+      const y2 = by2;
 
       if (groupBuf.has(key)) {
         const entry = groupBuf.get(key)!;
         entry.paths.push(...contourPaths);
-        entry.minX = Math.min(entry.minX, x);
-        entry.minY = Math.min(entry.minY, y);
+        entry.minX = Math.min(entry.minX, bx);
+        entry.minY = Math.min(entry.minY, by);
         entry.maxX = Math.max(entry.maxX, x2);
         entry.maxY = Math.max(entry.maxY, y2);
       } else {
         groupBuf.set(key, {
           paths: [...contourPaths],
-          minX: x, minY: y, maxX: x2, maxY: y2,
+          minX: bx, minY: by, maxX: x2, maxY: y2,
           firstObj: obj,
           layer,
         });
@@ -283,11 +355,23 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
       });
     }
 
+    // Synthesize fill contour for shapes without explicit points (ellipses,
+    // rounded rectangles) heading to fill/fillLine/maskFill. Without this,
+    // the Rust maskFill arm receives zero contours and returns Err (silent no-op).
+    if (paths.length === 0 && (layer.mode === "fill" || layer.mode === "fillLine" || layer.mode === "offsetFill")) {
+      const synth = synthesizeFillContour(obj);
+      if (synth) paths.push(synth);
+    }
+
     // Phase 2: ungrouped fill/fillLine non-rect closed shapes route to maskFill.
     // Rectangles keep the AABB fast path (their bbox IS the shape).
     // offsetFill remains an explicit opt-in dropdown mode.
     let effectiveMode: InternalCutMode = layer.mode;
     if ((layer.mode === "fill" || layer.mode === "fillLine") && isNonRectShape) {
+      effectiveMode = "maskFill";
+    }
+    // Rounded rectangles also need maskFill (their cornerRadius means AABB != shape).
+    if ((layer.mode === "fill" || layer.mode === "fillLine") && obj.type === "rectangle" && (obj.cornerRadius || 0) > 0 && paths.length > 0) {
       effectiveMode = "maskFill";
     }
 
@@ -421,7 +505,10 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
       height: maxY - minY,
       paths: coalescedPaths,
       cornerRadius: null,
-      rotation: firstObj.transform.rotation || 0,
+      // rotation: 0 — each child's rotation is already baked into its contour
+      // points above. Using firstObj.rotation would double-rotate the first
+      // child and mis-rotate every other child.
+      rotation: 0,
       priority: firstObj.priority ?? 0,
       groupId: firstObj.groupId,
       layerIndex: firstObj.layerIndex,
@@ -487,7 +574,11 @@ async function generateImageGcodeByLayer(
   accelX: number = 0,
 ): Promise<{ byLayer: Map<number, GcodeResult[]>; lockedCount: number }> {
   const layerOrder = new Map(layers.map((l, pos) => [l.index, pos]));
-  const imageObjects = objects.filter(
+  // Flatten groups so images nested inside groups are included with their
+  // composed transforms (position, rotation). Without this, only top-level
+  // images reached the image pipeline — grouped images silently vanished.
+  const flat = flattenObjects(objects);
+  const imageObjects = flat.filter(
     (obj) => obj.type === "image" && obj.visible && obj.imageData,
   );
 

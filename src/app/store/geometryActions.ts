@@ -2,7 +2,7 @@ import polygonClipping from "polygon-clipping";
 import opentype from "opentype.js";
 import type { DesignObject, VariableTextConfig, NestConfig, NestResult } from "../types";
 import type { StoreSet, StoreGet } from "./storeTypes";
-import { generateId } from "./storeTypes";
+import { generateId, deepCloneObject } from "./storeTypes";
 import { applyObjects } from "./storeHelpers";
 import { hasPlaceholders, extractPlaceholders, substitutePlaceholders, generateSerialValues } from "../../lib/variableText";
 import { nestItems } from "../../lib/nesting";
@@ -577,12 +577,12 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
           for (let r = 0; r < rows; r++) {
             for (let c = 0; c < cols; c++) {
               if (r === 0 && c === 0) continue;
-              const newId = generateId();
+              // Deep-clone to re-ID group children (prevents shared-ID aliasing).
+              const clone = deepCloneObject(obj);
               // W1b: movePartial offsets path points with the cell AND breaks
               // the points-array aliasing between array copies.
               addObject({
-                ...obj,
-                id: newId,
+                ...clone,
                 name: obj.name + ` [${r},${c}]`,
                 ...movePartial(
                   obj,
@@ -590,7 +590,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
                   obj.transform.y + r * (obj.transform.height + spacingY),
                 ),
               });
-              newIds.push(newId);
+              newIds.push(clone.id);
             }
           }
         }
@@ -619,13 +619,13 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
             const angle = (startAngle + angleStep * i) * (Math.PI / 180);
             const newCx = cx + radius * Math.cos(angle);
             const newCy = cy + radius * Math.sin(angle);
-            const newId = generateId();
+            // Deep-clone to re-ID group children (prevents shared-ID aliasing).
+            const clone = deepCloneObject(obj);
             // W1b: movePartial for the position write (points move, aliasing
             // broken); the rotation field merges on top of the synced transform.
             const moved = movePartial(obj, newCx - obj.transform.width / 2, newCy - obj.transform.height / 2);
             addObject({
-              ...obj,
-              id: newId,
+              ...clone,
               name: obj.name + ` [${i}]`,
               ...moved,
               transform: {
@@ -633,7 +633,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
                 rotation: ((obj.transform.rotation + angleStep * i) % 360 + 360) % 360,
               },
             });
-            newIds.push(newId);
+            newIds.push(clone.id);
           }
         }
         setSelectedIds(newIds);
@@ -667,7 +667,9 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
             type: "path",
             points: offsetRing.map((p) => ({ x: p[0], y: p[1] })),
             closed: true,
-            transform: { ...obj.transform, x: minX, y: minY, width: maxX - minX, height: maxY - minY },
+            // rotation: 0 — objectToPolygon already baked rotation into world-frame
+            // points. Keeping the source rotation would double-apply it downstream.
+            transform: { ...obj.transform, x: minX, y: minY, width: maxX - minX, height: maxY - minY, rotation: 0 },
           });
           newIds.push(newId);
         }
@@ -929,7 +931,10 @@ function objectToPolygon(obj: DesignObject): polygonClipping.Polygon | null {
       if (ring.length > 0 && (ring[0][0] !== ring[ring.length - 1][0] || ring[0][1] !== ring[ring.length - 1][1])) {
         ring.push([ring[0][0], ring[0][1]]);
       }
-      return [ring];
+      // F28-path: apply rotation about transform center (matches rect/ellipse pattern).
+      const pcx = t.x + t.width / 2;
+      const pcy = t.y + t.height / 2;
+      return [applyRotation(ring, pcx, pcy, t.rotation || 0)];
     }
     default:
       return null;

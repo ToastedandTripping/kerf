@@ -277,3 +277,17 @@ let idCounter = 0;
 export function generateId(): string {
   return `obj_${Date.now()}_${++idCounter}`;
 }
+
+/** Deep-clone a DesignObject, assigning fresh IDs to the root and all children
+ *  recursively. Prevents shared-ID aliasing when duplicating groups. */
+export function deepCloneObject(obj: DesignObject): DesignObject {
+  const clone: DesignObject = {
+    ...obj,
+    id: generateId(),
+    points: obj.points ? obj.points.map((p) => ({ ...p })) : obj.points,
+  };
+  if (obj.children) {
+    clone.children = obj.children.map((child) => deepCloneObject(child));
+  }
+  return clone;
+}
