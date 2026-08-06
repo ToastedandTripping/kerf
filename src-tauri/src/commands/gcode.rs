@@ -45,8 +45,6 @@ pub async fn generate_gcode(
         let corner = start_corner.as_deref().unwrap_or("bottomLeft");
         let (start_x, start_y) = start_point_from_corner(corner, ws_width, workspace_height, origin_top);
 
-        let sorted = objects;
-
         // F7: Group by layer_index to preserve user-set layer order.
         // Within each layer group:
         //   - line mode: apply inner-first, then NN travel optimization
@@ -55,7 +53,7 @@ pub async fn generate_gcode(
 
         // Collect unique layer indices in arrival order
         let mut layer_order: Vec<i32> = Vec::new();
-        for obj in &sorted {
+        for obj in &objects {
             let li = obj.layer_index.unwrap_or(0);
             if !layer_order.contains(&li) {
                 layer_order.push(li);
@@ -67,7 +65,7 @@ pub async fn generate_gcode(
         let mut cur_y = start_y;
 
         for &li in &layer_order {
-            let layer_objs: Vec<CutObject> = sorted.iter()
+            let layer_objs: Vec<CutObject> = objects.iter()
                 .filter(|o| o.layer_index.unwrap_or(0) == li)
                 .cloned()
                 .collect();

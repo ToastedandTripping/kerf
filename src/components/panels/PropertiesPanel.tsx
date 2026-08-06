@@ -443,7 +443,6 @@ export function PropertiesPanel() {
                   }
                   onFocus={beginEdit}
                   onBlur={commitEdit}
-                  style={inputStyle}
                 />
               </PropertyRow>
               <PropertyRow label="Remove Bg">
@@ -464,7 +463,6 @@ export function PropertiesPanel() {
                   }
                   onFocus={beginEdit}
                   onBlur={commitEdit}
-                  style={inputStyle}
                 />
               </PropertyRow>
               {(obj.imageAdjustments?.removeBackground ?? false) && (
