@@ -15,7 +15,10 @@ function isValidPreset(obj: unknown): obj is MaterialPreset {
     typeof p.mode === "string" &&
     typeof p.power === "number" && Number.isFinite(p.power) &&
     typeof p.speed === "number" && Number.isFinite(p.speed) &&
-    typeof p.passes === "number" && Number.isFinite(p.passes)
+    typeof p.passes === "number" && Number.isFinite(p.passes) &&
+    typeof p.powerMin === "number" && Number.isFinite(p.powerMin) &&
+    typeof p.airAssist === "boolean" &&
+    typeof p.interval === "number" && Number.isFinite(p.interval)
   );
 }
 
