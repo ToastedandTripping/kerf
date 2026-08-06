@@ -6,7 +6,7 @@
  * (the old design→machine `workspaceHeight - y` flip is deleted, not ported).
  */
 import { describe, it, expect } from "vitest";
-import { canStartJob, movesExtents, frameTargets, type JobGateState } from "../canStartJob";
+import { canStartJob, movesExtents, frameTargets, gcodeExtents, type JobGateState } from "../canStartJob";
 
 const MOVES = [
   { x: 10, y: 20 },
@@ -42,6 +42,26 @@ describe("canStartJob", () => {
     const gate = canStartJob({ ...okState(), jobRunning: true });
     expect(gate.ok).toBe(false);
     expect(gate.reason).toBe("Job already running");
+  });
+
+  // P1-C: START/FRAME gate unification — START now requires idle too
+  it("blocks when machineState is hold (gate unification)", () => {
+    const gate = canStartJob({ ...okState(), machineState: "hold" });
+    expect(gate.ok).toBe(false);
+    expect(gate.reason).toContain("hold");
+    expect(gate.reason).toContain("wait for idle");
+  });
+
+  it("blocks when machineState is run (gate unification)", () => {
+    const gate = canStartJob({ ...okState(), machineState: "run" });
+    expect(gate.ok).toBe(false);
+    expect(gate.reason).toContain("run");
+  });
+
+  it("blocks when machineState is door (gate unification)", () => {
+    const gate = canStartJob({ ...okState(), machineState: "door" });
+    expect(gate.ok).toBe(false);
+    expect(gate.reason).toContain("door");
   });
 
   it("blocks without generated G-code", () => {
@@ -119,5 +139,59 @@ describe("frameTargets (machine-frame, no Y transform)", () => {
 
   it("returns null for empty moves (Frame must no-op, not G0 XInfinity)", () => {
     expect(frameTargets([])).toBeNull();
+  });
+});
+
+// P1-C: gcodeExtents — A5 material-test bounds helper
+describe("gcodeExtents (G-code text to bounding box)", () => {
+  it("extracts min/max from G0/G1 lines", () => {
+    const gcode = [
+      "; comment",
+      "G21",
+      "G90",
+      "G0 X10 Y10",
+      "G1 X50 Y20 F500 S100",
+      "G1 X30 Y80 F500 S100",
+      "M5",
+    ].join("\n");
+    expect(gcodeExtents(gcode)).toEqual({ minX: 10, minY: 10, maxX: 50, maxY: 80 });
+  });
+
+  it("handles X0 Y0 as valid coordinates (not skipped)", () => {
+    const gcode = "G0 X0 Y0\nG1 X100 Y50 F500";
+    expect(gcodeExtents(gcode)).toEqual({ minX: 0, minY: 0, maxX: 100, maxY: 50 });
+  });
+
+  it("returns null for G-code with no coordinates (comment-only)", () => {
+    expect(gcodeExtents("; comment only\n; another comment")).toBeNull();
+  });
+
+  it("returns null for empty string", () => {
+    expect(gcodeExtents("")).toBeNull();
+  });
+
+  it("ignores comment lines starting with semicolon", () => {
+    // The comment starts with ';' which the early-bail catches.
+    // The regex would also reject it (doesn't start with G/X/Y/etc.).
+    // This is defense-in-depth; the test documents the intent.
+    const gcode = "; G0 X999 Y999\nG0 X10 Y10";
+    const ext = gcodeExtents(gcode)!;
+    expect(ext.maxX).toBe(10);
+    expect(ext.maxY).toBe(10);
+  });
+
+  it("ignores non-motion G-code commands", () => {
+    // M-codes, G21, G90 etc. should not contribute to extents
+    const gcode = "G21\nG90\nM5\nG0 X10 Y10\nM2";
+    const ext = gcodeExtents(gcode)!;
+    expect(ext.minX).toBe(10);
+    expect(ext.minY).toBe(10);
+    expect(ext.maxX).toBe(10);
+    expect(ext.maxY).toBe(10);
+  });
+
+  it("handles negative coordinates", () => {
+    const gcode = "G0 X-5 Y-10\nG1 X20 Y30 F500";
+    expect(gcodeExtents(gcode)).toEqual({ minX: -5, minY: -10, maxX: 20, maxY: 30 });
   });
 });

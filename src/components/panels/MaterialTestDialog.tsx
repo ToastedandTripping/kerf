@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { useStore } from "../../app/store";
 import { streamJob } from "../../lib/machine/jobStream";
+import { gcodeExtents, isWithinBounds } from "../../lib/machine/canStartJob";
 import { useEscapeClose } from "../../lib/hooks/useEscapeClose";
 import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
 import { effectiveMaxSpeed } from "../../lib/speedScale";
@@ -253,6 +254,11 @@ export function MaterialTestDialog({ open, onClose }: Props) {
   const grblMaxFeedRateX = useStore((s) => s.grblMaxFeedRateX);
   const grblMaxFeedRateY = useStore((s) => s.grblMaxFeedRateY);
   const grblLaserMode = useStore((s) => s.grblLaserMode);
+  // A5: subscribe to workspace dimensions reactively (not render-time getState)
+  const workspaceW = useStore((s) => s.workspaceWidth);
+  const workspaceH = useStore((s) => s.workspaceHeight);
+  const machineConnected = useStore((s) => s.machineConnected);
+  const machineState = useStore((s) => s.machineState);
   const effectiveSpeedMax = effectiveMaxSpeed(grblMaxFeedRateX, grblMaxFeedRateY);
 
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -267,9 +273,7 @@ export function MaterialTestDialog({ open, onClose }: Props) {
   const bm = cutBorder ? 3 : 0;
   const totalWidth = gridWidth + lm + 2 * bm;
   const totalHeight = gridHeight + lm + 2 * bm;
-  const store = useStore.getState();
-  const workspaceW = store.workspaceWidth;
-  const workspaceH = store.workspaceHeight;
+  // A5: exceedsWorkspace from reactive selectors (no render-time getState)
   const exceedsWorkspace = (totalWidth + 10) > workspaceW || (totalHeight + 10) > workspaceH;
 
   function applyPreset(name: string) {
@@ -298,6 +302,7 @@ export function MaterialTestDialog({ open, onClose }: Props) {
     }, grblSValueMax);
 
     if (target === "clipboard") {
+      const store = useStore.getState();
       navigator.clipboard.writeText(gcode).then(() => {
         store.addConsoleLine(`Material test G-code copied (${gcode.split("\n").length} lines)`, "info");
       }).catch(() => { /* clipboard may be denied */ });
@@ -311,6 +316,15 @@ export function MaterialTestDialog({ open, onClose }: Props) {
       if (state.jobRunning) {
         state.addConsoleLine("Cannot start material test while a job is running", "error");
         return;
+      }
+      // A5: hard gate — bounds check generated G-code before sending
+      const ext = gcodeExtents(gcode);
+      if (ext && !isWithinBounds(ext, state.workspaceWidth, state.workspaceHeight)) {
+        state.addConsoleLine(
+          "Material test blocked: grid extends outside workspace bounds. Reduce steps or cell size.",
+          "error",
+        );
+        return; // dialog stays open
       }
       const lines = gcode.split("\n").filter((l) => l.trim() && !l.startsWith(";"));
       state.addConsoleLine(`Sending material test (${lines.length} commands)...`, "info");
@@ -332,6 +346,15 @@ export function MaterialTestDialog({ open, onClose }: Props) {
       return;
     }
     const gcode = generateFrameGcode(totalWidth, totalHeight);
+    // A5: hard gate — bounds check frame G-code before sending
+    const ext = gcodeExtents(gcode);
+    if (ext && !isWithinBounds(ext, state.workspaceWidth, state.workspaceHeight)) {
+      state.addConsoleLine(
+        "Frame blocked: grid extends outside workspace bounds. Reduce steps or cell size.",
+        "error",
+      );
+      return; // dialog stays open
+    }
     const lines = gcode.split("\n").filter((l) => l.trim() && !l.startsWith(";"));
     state.addConsoleLine(`Sending frame (${lines.length} commands)...`, "info");
     state.setJobRunning(true);
@@ -557,46 +580,70 @@ export function MaterialTestDialog({ open, onClose }: Props) {
           {exceedsWorkspace && " -- exceeds workspace!"}
         </div>
 
-        {/* Actions */}
+        {/* Actions — A5: Send/Frame disabled when exceeds bounds or not idle */}
         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-          <button
-            onClick={() => handleGenerate("send")}
-            disabled={jobRunning}
-            title={jobRunning ? "Cannot start while a job is running" : undefined}
-            style={{
-              flex: "1 1 auto",
-              padding: "6px 12px",
-              borderRadius: "var(--radius-sm)",
-              border: "none",
-              fontSize: "11px",
-              fontWeight: 600,
-              cursor: jobRunning ? "not-allowed" : "pointer",
-              background: "rgba(74,226,138,0.2)",
-              color: "var(--success)",
-              opacity: jobRunning ? 0.4 : 1,
-            }}
-          >
-            Send to Machine
-          </button>
-          <button
-            onClick={handleFrame}
-            disabled={jobRunning}
-            title={jobRunning ? "Cannot frame while a job is running" : "Trace the grid outline without firing the laser"}
-            style={{
-              flex: "1 1 auto",
-              padding: "6px 12px",
-              borderRadius: "var(--radius-sm)",
-              border: "1px solid var(--border)",
-              fontSize: "11px",
-              fontWeight: 600,
-              cursor: jobRunning ? "not-allowed" : "pointer",
-              background: "transparent",
-              color: "var(--text-secondary)",
-              opacity: jobRunning ? 0.4 : 1,
-            }}
-          >
-            Frame
-          </button>
+          {(() => {
+            const sendDisabled = jobRunning || exceedsWorkspace || !machineConnected || (machineState !== "idle" && machineState !== "disconnected");
+            const sendTitle = exceedsWorkspace
+              ? "Grid exceeds workspace bounds"
+              : jobRunning
+                ? "Cannot start while a job is running"
+                : !machineConnected
+                  ? "Machine not connected"
+                  : undefined;
+            return (
+              <button
+                onClick={() => handleGenerate("send")}
+                disabled={sendDisabled}
+                title={sendTitle}
+                style={{
+                  flex: "1 1 auto",
+                  padding: "6px 12px",
+                  borderRadius: "var(--radius-sm)",
+                  border: "none",
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  cursor: sendDisabled ? "not-allowed" : "pointer",
+                  background: "rgba(74,226,138,0.2)",
+                  color: "var(--success)",
+                  opacity: sendDisabled ? 0.4 : 1,
+                }}
+              >
+                Send to Machine
+              </button>
+            );
+          })()}
+          {(() => {
+            const frameDisabled = jobRunning || exceedsWorkspace || !machineConnected || machineState !== "idle";
+            const frameTitle = exceedsWorkspace
+              ? "Grid exceeds workspace bounds"
+              : jobRunning
+                ? "Cannot frame while a job is running"
+                : !machineConnected
+                  ? "Machine not connected"
+                  : "Trace the grid outline without firing the laser";
+            return (
+              <button
+                onClick={handleFrame}
+                disabled={frameDisabled}
+                title={frameTitle}
+                style={{
+                  flex: "1 1 auto",
+                  padding: "6px 12px",
+                  borderRadius: "var(--radius-sm)",
+                  border: "1px solid var(--border)",
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  cursor: frameDisabled ? "not-allowed" : "pointer",
+                  background: "transparent",
+                  color: "var(--text-secondary)",
+                  opacity: frameDisabled ? 0.4 : 1,
+                }}
+              >
+                Frame
+              </button>
+            );
+          })()}
           <button
             onClick={() => handleGenerate("clipboard")}
             style={{

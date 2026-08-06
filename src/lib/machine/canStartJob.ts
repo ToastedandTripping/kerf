@@ -75,6 +75,37 @@ export function isWithinBounds(
          ext.maxX <= workspaceWidth && ext.maxY <= workspaceHeight;
 }
 
+/**
+ * Parse G-code text and extract the bounding extents of all G0/G1 move
+ * coordinates. Used by MaterialTestDialog to bounds-check generated G-code
+ * before sending. Returns null when no coordinates are found.
+ */
+export function gcodeExtents(gcode: string): MovesExtents | null {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let found = false;
+  for (const line of gcode.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith(";")) continue;
+    // Only parse G0/G1 lines (the ones that actually move the head)
+    if (!/^(?:G[01]\b|[XYZMFS])/i.test(trimmed)) continue;
+    const xMatch = trimmed.match(/X([-\d.]+)/i);
+    const yMatch = trimmed.match(/Y([-\d.]+)/i);
+    if (xMatch) {
+      const x = parseFloat(xMatch[1]);
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      found = true;
+    }
+    if (yMatch) {
+      const y = parseFloat(yMatch[1]);
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      found = true;
+    }
+  }
+  return found ? { minX, minY, maxX, maxY } : null;
+}
+
 export interface JobGateState {
   machineConnected: boolean;
   machineState?: string;
@@ -93,10 +124,18 @@ export interface JobGate {
   reason?: string;
 }
 
-/** Pure START gate. Every blocking condition carries a user-facing reason. */
+/** Pure START gate. Every blocking condition carries a user-facing reason.
+ *
+ *  Gate unification (P1-C): both START and FRAME require idle. The old START
+ *  gate only checked for alarm, silently permitting hold/run/door — which let
+ *  a user queue a new job while a pause was in progress. */
 export function canStartJob(state: JobGateState): JobGate {
   if (!state.machineConnected) return { ok: false, reason: "Machine not connected" };
   if (state.machineState === "alarm") return { ok: false, reason: "Machine locked (ALARM) — Home ($H) or Unlock ($X) first" };
+  // Gate unification: require idle — hold/run/door all block.
+  if (state.machineState && state.machineState !== "idle") {
+    return { ok: false, reason: `Machine is ${state.machineState} — wait for idle before starting` };
+  }
   if (state.jobRunning) return { ok: false, reason: "Job already running" };
   if (!state.gcodeResult) return { ok: false, reason: "Generate G-code first" };
   if (state.gcodeStale) return { ok: false, reason: "Design changed -- regenerate G-code" };

@@ -388,6 +388,25 @@ describe("canStartJob — ALARM gate (BUG 3)", () => {
     const gate = canStartJob({ ...baseState(), machineState: "alarm" });
     expect(gate.reason).toMatch(/\$H|\$X/);
   });
+
+  // P1-C: gate unification — START now requires idle, same as FRAME
+  it("blocks when machineState=hold (gate unification P1-C)", () => {
+    const gate = canStartJob({ ...baseState(), machineState: "hold" });
+    expect(gate.ok).toBe(false);
+    expect(gate.reason).toContain("hold");
+  });
+
+  it("blocks when machineState=run (gate unification P1-C)", () => {
+    const gate = canStartJob({ ...baseState(), machineState: "run" });
+    expect(gate.ok).toBe(false);
+    expect(gate.reason).toContain("run");
+  });
+
+  it("blocks when machineState=door (gate unification P1-C)", () => {
+    const gate = canStartJob({ ...baseState(), machineState: "door" });
+    expect(gate.ok).toBe(false);
+    expect(gate.reason).toContain("door");
+  });
 });
 
 // ---- NOTE-1: canStartJob fail-closed on undefined workspaceVerified ----

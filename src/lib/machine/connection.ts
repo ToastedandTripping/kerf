@@ -56,6 +56,11 @@ let jobPollingSuspended = false;
 let unsubscribeJobRunning: (() => void) | null = null;
 let consecutivePollFailures = 0;
 
+/** A7: in-flight connect promise for re-entrancy coalescing. If a connect()
+ *  is already running (StrictMode double-mount, rapid clicks), subsequent
+ *  callers get the same promise instead of racing a second connection. */
+let connectingPromise: Promise<string> | null = null;
+
 export const machineConnection = {
   async listPorts(): Promise<PortInfo[]> {
     try {
@@ -93,6 +98,11 @@ export const machineConnection = {
   },
 
   async connect(portName: string, baudRate: number = 115200): Promise<string> {
+    // A7: re-entrancy guard — StrictMode double-mount or rapid button clicks
+    // coalesce onto the existing in-flight connect instead of racing a second.
+    if (connectingPromise) return connectingPromise;
+
+    const doConnect = async (): Promise<string> => {
     const store = useStore.getState();
     try {
       const response = await invoke<string>("serial_connect", {
@@ -115,6 +125,17 @@ export const machineConnection = {
 
       // DTR hardware-reset + 0x18 soft-reset now happen in Rust during
       // serial_connect, before it returns. No TS-side reset needed.
+
+      // A7: clear any leaked intervals/subscriptions from a prior connect
+      // (e.g. reconnect after a 3-strike disconnect) BEFORE reassigning.
+      if (statusPollInterval) {
+        clearInterval(statusPollInterval);
+        statusPollInterval = null;
+      }
+      if (unsubscribeJobRunning) {
+        unsubscribeJobRunning();
+        unsubscribeJobRunning = null;
+      }
 
       // Start status polling
       statusPollInterval = setInterval(() => this.pollStatus(), 250);
@@ -179,10 +200,34 @@ export const machineConnection = {
       store.addConsoleLine(`Connection failed: ${msg}`, "error");
       throw categorizeConnectionError(msg);
     }
+    }; // end doConnect
+
+    // A7: set the coalescing promise; clear on settle (success or failure).
+    connectingPromise = doConnect().finally(() => { connectingPromise = null; });
+    return connectingPromise;
   },
 
   async disconnect(): Promise<void> {
     const store = useStore.getState();
+
+    // A2: disconnect beam-on safety — if a job is active or the machine is in
+    // a motion state, fire emergencyStop BEFORE teardown so the laser is
+    // de-energized. setJobRunning(false) first so the streaming loop exits
+    // on its next iteration and skips its own safety volley (we handle it).
+    const needsEstop =
+      store.jobRunning ||
+      store.machineState === "run" ||
+      store.machineState === "hold";
+    if (needsEstop) {
+      store.setJobRunning(false);
+      try {
+        await this.emergencyStop();
+      } catch {
+        // E-stop failed (port already gone) — proceed with teardown.
+        // emergencyStop already logged the failure to the console.
+      }
+    }
+
     try {
       if (statusPollInterval) {
         clearInterval(statusPollInterval);

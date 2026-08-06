@@ -444,4 +444,115 @@ describe("connection.ts (TN3)", () => {
       );
     });
   });
+
+  // ---- A2: disconnect beam-on safety ----
+  describe("disconnect — A2 beam-on safety", () => {
+    it("fires emergencyStop before teardown when a job is running", async () => {
+      vi.useFakeTimers();
+      const calls: string[] = [];
+      mockInvoke.mockImplementation(async (cmd: string, args?: { byte?: number; command?: string }) => {
+        if (cmd === "serial_send_byte") {
+          calls.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
+          return;
+        }
+        if (cmd === "serial_send") {
+          calls.push(`send(${args?.command ?? "?"})`);
+          return { responses: ["ok"], drained: [] };
+        }
+        if (cmd === "serial_get_status") {
+          calls.push("status");
+          return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
+        }
+        if (cmd === "serial_disconnect") {
+          calls.push("disconnect");
+          return undefined;
+        }
+        return undefined;
+      });
+
+      useStore.setState({ jobRunning: true, machineState: "run" });
+      const disconnectPromise = machineConnection.disconnect();
+      await vi.runAllTimersAsync();
+      await disconnectPromise;
+
+      // E-stop sequence must fire BEFORE serial_disconnect
+      expect(calls.indexOf("byte(21)")).toBeLessThan(calls.indexOf("disconnect"));
+      expect(calls.indexOf("byte(18)")).toBeLessThan(calls.indexOf("disconnect"));
+      // jobRunning must be false after disconnect
+      expect(useStore.getState().jobRunning).toBe(false);
+      expect(useStore.getState().machineConnected).toBe(false);
+    });
+
+    it("skips emergencyStop on clean idle disconnect", async () => {
+      const calls: string[] = [];
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        calls.push(cmd);
+        if (cmd === "serial_disconnect") return undefined;
+        return undefined;
+      });
+
+      useStore.setState({ jobRunning: false, machineState: "idle" });
+      await machineConnection.disconnect();
+
+      // No e-stop bytes sent — only the teardown
+      expect(calls).not.toContain("serial_send_byte");
+      expect(calls).toContain("serial_disconnect");
+      expect(useStore.getState().machineConnected).toBe(false);
+    });
+
+    it("fires emergencyStop when machine is in hold state (even if jobRunning is false)", async () => {
+      vi.useFakeTimers();
+      const calls: string[] = [];
+      mockInvoke.mockImplementation(async (cmd: string, args?: { byte?: number }) => {
+        if (cmd === "serial_send_byte") {
+          calls.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
+          return;
+        }
+        if (cmd === "serial_get_status") return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
+        if (cmd === "serial_send") return { responses: ["ok"], drained: [] };
+        if (cmd === "serial_disconnect") { calls.push("disconnect"); return undefined; }
+        return undefined;
+      });
+
+      useStore.setState({ jobRunning: false, machineState: "hold" });
+      const disconnectPromise = machineConnection.disconnect();
+      await vi.runAllTimersAsync();
+      await disconnectPromise;
+
+      // E-stop fires even when jobRunning is false (machine is in hold)
+      expect(calls.some((c) => c.startsWith("byte("))).toBe(true);
+    });
+  });
+
+  // ---- A7: connect re-entrancy coalescing ----
+  describe("connect — A7 re-entrancy coalescing", () => {
+    it("coalesces concurrent connect() calls — serial_connect fires once", async () => {
+      vi.useFakeTimers();
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        if (cmd === "serial_connect") return "Grbl 1.1h ['$' for help]";
+        if (cmd === "serial_send_byte") return undefined;
+        if (cmd === "serial_send") return { responses: ["$30=1000", "$32=1"], drained: [] };
+        if (cmd === "serial_get_status")
+          return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
+        if (cmd === "serial_disconnect") return undefined;
+        return undefined;
+      });
+
+      // Fire two connects concurrently
+      const p1 = machineConnection.connect("/dev/ttyUSB0", 115200);
+      const p2 = machineConnection.connect("/dev/ttyUSB0", 115200);
+
+      await vi.advanceTimersByTimeAsync(2000);
+      const [r1, r2] = await Promise.all([p1, p2]);
+
+      // Both resolve to the same value (coalesced)
+      expect(r1).toBe(r2);
+
+      // serial_connect was only called once (not twice)
+      const connectCalls = mockInvoke.mock.calls.filter(([cmd]: string[]) => cmd === "serial_connect");
+      expect(connectCalls).toHaveLength(1);
+
+      await machineConnection.disconnect();
+    });
+  });
 });

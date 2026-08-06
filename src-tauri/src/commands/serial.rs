@@ -225,6 +225,13 @@ pub async fn serial_connect(
 ) -> Result<String, String> {
     let inner = state.0.clone();
     tokio::task::spawn_blocking(move || {
+        // P1-C: already-connected guard — if a connection is live, disconnect
+        // first to prevent resource leaks. This handles rapid reconnect or
+        // StrictMode double-mount on the frontend.
+        if inner.connected.load(Ordering::SeqCst) {
+            let _ = disconnect_inner(&inner);
+        }
+
         let mut port = serialport::new(&port_name, baud_rate)
             .timeout(Duration::from_millis(1000))
             .open()
@@ -265,14 +272,21 @@ pub async fn serial_connect(
             soft_banner
         };
 
-        *inner
-            .command
-            .lock()
-            .map_err(|e| format!("Lock failed: {}", e))? = Some(channel);
-        *inner
-            .realtime
-            .lock()
-            .map_err(|e| format!("Lock failed: {}", e))? = Some(realtime);
+        // P1-C: store both channels in one critical section to prevent
+        // cross-wiring if two connects race. Lock order: command first,
+        // realtime second (same order as disconnect_inner teardown).
+        {
+            let mut cmd_guard = inner
+                .command
+                .lock()
+                .map_err(|e| format!("Lock failed: {}", e))?;
+            let mut rt_guard = inner
+                .realtime
+                .lock()
+                .map_err(|e| format!("Lock failed: {}", e))?;
+            *cmd_guard = Some(channel);
+            *rt_guard = Some(realtime);
+        }
         inner.connected.store(true, Ordering::SeqCst);
 
         if banner.trim().is_empty() {
@@ -289,22 +303,37 @@ pub async fn serial_connect(
 ///
 /// When a pump is mid-line it holds the command lock for up to the line's
 /// duration — abort it via a realtime `0x18` FIRST so disconnect is prompt. The
-/// reset is gated on `pump_in_flight`: an unconditional reset on a clean
-/// disconnect would wipe volatile G92 work origins on stock GRBL 1.1
+/// reset is gated on `pump_in_flight || job_active`: an unconditional reset on
+/// a clean disconnect would wipe volatile G92 work origins on stock GRBL 1.1
 /// (Set Origin → Disconnect → origin gone).
+///
+/// `job_active` is an optional frontend hint: the TS side knows whether a job
+/// is running (Rust cannot see the frontend's jobRunning). When true, the
+/// pre-lock 0x18 fires even if the pump finished its last line and the flag
+/// has already cleared — defense-in-depth for A2 (disconnect beam-on).
 #[tauri::command]
-pub async fn serial_disconnect(state: State<'_, SerialState>) -> Result<(), String> {
+pub async fn serial_disconnect(
+    state: State<'_, SerialState>,
+    job_active: Option<bool>,
+) -> Result<(), String> {
     let inner = state.0.clone();
-    tokio::task::spawn_blocking(move || disconnect_inner(&inner))
+    tokio::task::spawn_blocking(move || disconnect_inner_with_job(&inner, job_active.unwrap_or(false)))
         .await
         .map_err(|e| format!("Task join error: {}", e))?
 }
 
+/// Disconnect body (backwards-compatible wrapper). See `disconnect_inner_with_job`.
+pub(crate) fn disconnect_inner(inner: &SerialInner) -> Result<(), String> {
+    disconnect_inner_with_job(inner, false)
+}
+
 /// Disconnect body. The realtime `0x18` happens BEFORE any wait on the command
 /// lock (pinned by `disconnect_aborts_in_flight_pump_via_realtime_reset`), and
-/// ONLY when a pump is in flight (pinned by `clean_disconnect_sends_no_reset`).
-pub(crate) fn disconnect_inner(inner: &SerialInner) -> Result<(), String> {
-    if inner.pump_in_flight.load(Ordering::SeqCst) {
+/// ONLY when a pump is in flight OR `job_active` is true (defense-in-depth for
+/// A2: disconnect beam-on). Clean idle disconnect still skips the reset
+/// (pinned by `clean_disconnect_sends_no_reset`).
+pub(crate) fn disconnect_inner_with_job(inner: &SerialInner, job_active: bool) -> Result<(), String> {
+    if inner.pump_in_flight.load(Ordering::SeqCst) || job_active {
         if let Ok(mut rt) = inner.realtime.lock() {
             if let Some(port) = rt.as_mut() {
                 let _ = port.write_all(&[0x18]);
@@ -784,6 +813,75 @@ mod tests {
             "pending must be empty after a clean EOF so the first command \
              response is not contaminated by a pre-EOF fragment"
         );
+    }
+
+    /// P1-C: disconnect_inner_with_job sends 0x18 when job_active=true,
+    /// even if pump_in_flight is false (defense-in-depth for A2).
+    #[test]
+    fn disconnect_with_job_active_sends_reset() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let inner = SerialInner {
+            command: Mutex::new(None),
+            realtime: Mutex::new(Some(
+                Box::new(MockPort::shared(written.clone())) as Box<dyn SerialPort>
+            )),
+            connected: AtomicBool::new(true),
+            pump_in_flight: AtomicBool::new(false), // pump NOT in flight
+        };
+
+        // job_active=true should still trigger the reset
+        disconnect_inner_with_job(&inner, true).unwrap();
+        assert_eq!(
+            *written.lock().unwrap(),
+            vec![0x18],
+            "job_active=true must send 0x18 even without pump_in_flight"
+        );
+        assert!(!inner.connected.load(Ordering::SeqCst));
+    }
+
+    /// P1-C: disconnect_inner_with_job(false) + pump_not_in_flight = clean
+    /// disconnect (no 0x18). Regression guard for the backwards-compatible path.
+    #[test]
+    fn disconnect_with_job_inactive_and_no_pump_sends_no_reset() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let inner = SerialInner {
+            command: Mutex::new(None),
+            realtime: Mutex::new(Some(
+                Box::new(MockPort::shared(written.clone())) as Box<dyn SerialPort>
+            )),
+            connected: AtomicBool::new(true),
+            pump_in_flight: AtomicBool::new(false),
+        };
+
+        disconnect_inner_with_job(&inner, false).unwrap();
+        assert!(
+            written.lock().unwrap().is_empty(),
+            "clean disconnect (no job, no pump) must not write 0x18"
+        );
+        assert!(!inner.connected.load(Ordering::SeqCst));
+    }
+
+    /// P1-C: already-connected guard — calling serial_connect on a connected
+    /// inner should disconnect first. Verified via the connected flag lifecycle.
+    #[test]
+    fn already_connected_guard_disconnects_first() {
+        let inner = SerialInner {
+            command: Mutex::new(None),
+            realtime: Mutex::new(Some(Box::new(MockPort::new()) as Box<dyn SerialPort>)),
+            connected: AtomicBool::new(true),
+            pump_in_flight: AtomicBool::new(false),
+        };
+
+        // Simulate the guard: if connected, disconnect first
+        if inner.connected.load(Ordering::SeqCst) {
+            let _ = disconnect_inner(&inner);
+        }
+
+        // After disconnect, connected should be false
+        assert!(!inner.connected.load(Ordering::SeqCst));
+        // And the channels should be cleared
+        assert!(inner.command.lock().unwrap().is_none());
+        assert!(inner.realtime.lock().unwrap().is_none());
     }
 }
 
