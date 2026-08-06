@@ -391,20 +391,34 @@ export const machineConnection = {
   },
 
   async softReset(): Promise<void> {
-    await this.sendByte(0x18); // Ctrl+X
+    try {
+      await this.sendByte(0x18); // Ctrl+X
+    } catch {
+      useStore.getState().addConsoleLine("Soft reset send failed", "error");
+      return;
+    }
     const store = useStore.getState();
     store.addConsoleLine("Soft reset sent", "info");
-    // Poll actual state instead of assuming idle
     await this.pollStatus();
   },
 
   async feedHold(): Promise<void> {
-    await this.sendByte(0x21); // '!'
+    try {
+      await this.sendByte(0x21); // '!'
+    } catch {
+      useStore.getState().addConsoleLine("Feed hold send failed", "error");
+      return;
+    }
     useStore.getState().setMachineState("hold");
   },
 
   async cycleResume(): Promise<void> {
-    await this.sendByte(0x7e); // '~'
+    try {
+      await this.sendByte(0x7e); // '~'
+    } catch {
+      useStore.getState().addConsoleLine("Cycle resume send failed", "error");
+      return;
+    }
     useStore.getState().setMachineState("run");
   },
 
