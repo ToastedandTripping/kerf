@@ -28,6 +28,7 @@ import type { AppState } from "../../../app/store";
 import { DEFAULT_LAYERS } from "../../../app/types";
 import { JobActionBar } from "../JobActionBar";
 import { MachinePanel } from "../MachinePanel";
+import { streamJob } from "../../../lib/machine/jobStream";
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>;
 
@@ -350,5 +351,138 @@ describe("MachinePanel Fire button (F17 Fix 2.3)", () => {
     );
     // No multi-line blob whose pump would stop at the FIRST ok.
     expect(sentCommands().some((c) => c.includes("\n"))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P1-A safety contract: streamJob abort protocol for FRAME and material-test
+// paths. These exercise the REAL streamJob function (no mocks of it) with the
+// serial layer mocked. Each test is mutation-verified: removing the abort
+// check makes the test fail.
+// ---------------------------------------------------------------------------
+
+describe("streamJob FRAME abort protocol (P1-A)", () => {
+  const frameGcode = "G0 X10 Y20\nG0 X50 Y80";
+
+  beforeEach(() => {
+    cleanup();
+    mockInvoke.mockReset();
+    localStorage.clear();
+    seedReadyToStart();
+    // Pre-set jobRunning as the caller (handleFrame) would
+    useStore.setState({ jobRunning: true, jobProgress: 0 });
+  });
+
+  it("aborts FRAME on empty response (protocol failure)", async () => {
+    mockSerial((cmd) =>
+      cmd.startsWith("G0")
+        ? { responses: [], drained: [] }
+        : { responses: ["ok"], drained: [] },
+    );
+
+    const result = await streamJob(frameGcode, { label: "Frame" });
+    expect(result.endState).toBe("aborted");
+    expect(consoleTexts()).toContain("Frame aborted -- machine was reset mid-line");
+    expect(useStore.getState().jobRunning).toBe(false);
+    // Safety volley fired (not user-stopped): M5 + soft reset
+    expect(sentCommands()).toContain("M5");
+    expect(sentBytes()).toContain(0x18);
+  });
+
+  it("aborts FRAME on reset banner (line was aborted, not acked)", async () => {
+    mockSerial((cmd) =>
+      cmd.startsWith("G0")
+        ? { responses: ["Grbl 1.1h ['$' for help]"], drained: [] }
+        : { responses: ["ok"], drained: [] },
+    );
+
+    const result = await streamJob(frameGcode, { label: "Frame" });
+    expect(result.endState).toBe("aborted");
+    expect(consoleTexts()).toContain("Frame aborted -- machine was reset mid-line");
+    expect(useStore.getState().jobRunning).toBe(false);
+    // Safety volley fired
+    expect(sentCommands()).toContain("M5");
+    expect(sentBytes()).toContain(0x18);
+  });
+
+  it("aborts FRAME on ALARM without M5+reset volley", async () => {
+    mockSerial((cmd) =>
+      cmd.startsWith("G0")
+        ? { responses: ["ALARM:1"], drained: [] }
+        : { responses: ["ok"], drained: [] },
+    );
+
+    const result = await streamJob(frameGcode, { label: "Frame" });
+    expect(result.endState).toBe("alarm");
+    expect(consoleTexts()).toContain(
+      "Frame stopped -- machine alarm (laser already off; unlock to continue)",
+    );
+    expect(useStore.getState().jobRunning).toBe(false);
+    // GRBL is locked: M5 would earn error:9, 0x18 would re-reset. Neither fires.
+    expect(sentCommands()).not.toContain("M5");
+    expect(sentBytes()).not.toContain(0x18);
+  });
+});
+
+describe("streamJob material-test abort protocol (P1-A)", () => {
+  const testGcode = "G1 X10 Y10 F1000 S500\nG1 X20 Y10 F1000 S500";
+
+  beforeEach(() => {
+    cleanup();
+    mockInvoke.mockReset();
+    localStorage.clear();
+    seedReadyToStart();
+    // Pre-set jobRunning as the caller (handleGenerate) would
+    useStore.setState({ jobRunning: true, jobProgress: 0 });
+  });
+
+  it("aborts material test on empty response (protocol failure)", async () => {
+    mockSerial((cmd) =>
+      cmd.startsWith("G1")
+        ? { responses: [], drained: [] }
+        : { responses: ["ok"], drained: [] },
+    );
+
+    const result = await streamJob(testGcode, { label: "Material test" });
+    expect(result.endState).toBe("aborted");
+    expect(consoleTexts()).toContain("Material test aborted -- machine was reset mid-line");
+    expect(useStore.getState().jobRunning).toBe(false);
+    // Safety volley fired
+    expect(sentCommands()).toContain("M5");
+    expect(sentBytes()).toContain(0x18);
+  });
+
+  it("aborts material test on reset banner (line was aborted, not acked)", async () => {
+    mockSerial((cmd) =>
+      cmd.startsWith("G1")
+        ? { responses: ["Grbl 1.1h ['$' for help]"], drained: [] }
+        : { responses: ["ok"], drained: [] },
+    );
+
+    const result = await streamJob(testGcode, { label: "Material test" });
+    expect(result.endState).toBe("aborted");
+    expect(consoleTexts()).toContain("Material test aborted -- machine was reset mid-line");
+    expect(useStore.getState().jobRunning).toBe(false);
+    // Safety volley fired
+    expect(sentCommands()).toContain("M5");
+    expect(sentBytes()).toContain(0x18);
+  });
+
+  it("aborts material test on ALARM without M5+reset volley", async () => {
+    mockSerial((cmd) =>
+      cmd.startsWith("G1")
+        ? { responses: ["ALARM:1"], drained: [] }
+        : { responses: ["ok"], drained: [] },
+    );
+
+    const result = await streamJob(testGcode, { label: "Material test" });
+    expect(result.endState).toBe("alarm");
+    expect(consoleTexts()).toContain(
+      "Material test stopped -- machine alarm (laser already off; unlock to continue)",
+    );
+    expect(useStore.getState().jobRunning).toBe(false);
+    // GRBL is locked: no volley
+    expect(sentCommands()).not.toContain("M5");
+    expect(sentBytes()).not.toContain(0x18);
   });
 });

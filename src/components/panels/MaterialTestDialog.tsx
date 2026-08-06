@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import { useStore } from "../../app/store";
-import { machineConnection } from "../../lib/machine/connection";
+import { streamJob } from "../../lib/machine/jobStream";
 import { useEscapeClose } from "../../lib/hooks/useEscapeClose";
 import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
 import { effectiveMaxSpeed } from "../../lib/speedScale";
@@ -290,43 +290,6 @@ export function MaterialTestDialog({ open, onClose }: Props) {
     setCutBorder(p.cutBorder);
   }
 
-  async function sendLines(gcode: string, label: string) {
-    const connected = useStore.getState().machineConnected;
-    if (!connected) {
-      store.addConsoleLine("Machine not connected", "error");
-      return;
-    }
-    if (useStore.getState().jobRunning) {
-      store.addConsoleLine(`Cannot start ${label} while a job is running`, "error");
-      return;
-    }
-    const lines = gcode.split("\n").filter((l) => l.trim() && !l.startsWith(";"));
-    store.addConsoleLine(`Sending ${label} (${lines.length} commands)...`, "info");
-    store.setJobRunning(true);
-    store.setSerialBusy(true);
-    store.setJobProgress(0);
-
-    let aborted = false;
-    for (let i = 0; i < lines.length; i++) {
-      if (!useStore.getState().jobRunning) break;
-      const responses = await machineConnection.send(lines[i]);
-      const errorLine = responses.find((r) => r.startsWith("error:") || r.startsWith("ALARM"));
-      if (errorLine) {
-        store.addConsoleLine(`${label} aborted: ${errorLine}`, "error");
-        await machineConnection.send("M5");
-        aborted = true;
-        break;
-      }
-      store.setJobProgress((i + 1) / lines.length);
-    }
-    store.setSerialBusy(false);
-    store.setJobRunning(false);
-    store.setJobProgress(0);
-    if (!aborted) {
-      store.addConsoleLine(`${label} complete`, "info");
-    }
-  }
-
   async function handleGenerate(target: "clipboard" | "send") {
     const gcode = await generateMaterialTestGcode({
       powerMin, powerMax, powerSteps,
@@ -340,14 +303,40 @@ export function MaterialTestDialog({ open, onClose }: Props) {
       }).catch(() => { /* clipboard may be denied */ });
       onClose();
     } else {
-      sendLines(gcode, "material test");
+      const state = useStore.getState();
+      if (!state.machineConnected) {
+        state.addConsoleLine("Machine not connected", "error");
+        return;
+      }
+      if (state.jobRunning) {
+        state.addConsoleLine("Cannot start material test while a job is running", "error");
+        return;
+      }
+      const lines = gcode.split("\n").filter((l) => l.trim() && !l.startsWith(";"));
+      state.addConsoleLine(`Sending material test (${lines.length} commands)...`, "info");
+      state.setJobRunning(true);
+      state.setJobProgress(0);
+      streamJob(gcode, { label: "Material test" }); // fire-and-forget: dialog closes
       onClose();
     }
   }
 
   function handleFrame() {
+    const state = useStore.getState();
+    if (!state.machineConnected) {
+      state.addConsoleLine("Machine not connected", "error");
+      return;
+    }
+    if (state.jobRunning) {
+      state.addConsoleLine("Cannot start frame while a job is running", "error");
+      return;
+    }
     const gcode = generateFrameGcode(totalWidth, totalHeight);
-    sendLines(gcode, "frame");
+    const lines = gcode.split("\n").filter((l) => l.trim() && !l.startsWith(";"));
+    state.addConsoleLine(`Sending frame (${lines.length} commands)...`, "info");
+    state.setJobRunning(true);
+    state.setJobProgress(0);
+    streamJob(gcode, { label: "Frame" }); // fire-and-forget: dialog closes
     onClose();
   }
 

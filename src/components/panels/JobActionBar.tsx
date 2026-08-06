@@ -16,6 +16,7 @@ import { useState, useEffect, useRef } from "react";
 import { useStore } from "../../app/store";
 import { machineConnection } from "../../lib/machine/connection";
 import { canStartJob, movesExtents, frameTargets, isWithinBounds } from "../../lib/machine/canStartJob";
+import { streamJob } from "../../lib/machine/jobStream";
 import { formatTime } from "../../lib/constants";
 
 export function JobActionBar() {
@@ -68,109 +69,13 @@ export function JobActionBar() {
     setJobProgress(0);
     addConsoleLine("Sending job...", "info");
 
-    const lines = job.gcode
-      .split("\n")
-      .filter((l) => l.trim() && !l.startsWith(";"));
+    const result = await streamJob(job.gcode, {
+      label: "Job",
+      waitForIdle: true,
+    });
 
-    // F13/F17 line-response protocol: empty response or reset banner = the line
-    // was ABORTED, not acked; ALARM = controller locked, laser already
-    // de-energized by firmware.
-    let endState: "complete" | "cancelled" | "aborted" | "alarm" | "error" = "complete";
-    let portDisconnected = false;
-
-    for (let i = 0; i < lines.length; i++) {
-      // Wait while paused. The wait ALSO exits when jobRunning goes false
-      // (STOP-while-PAUSED): emergencyStop's re-poll may write a fresh
-      // non-hold state, or the state may stay "hold" if the re-poll got
-      // nothing — either way the loop must un-park. The wait sits ABOVE the
-      // cancel check so every exit flows through it before any send; a stray
-      // post-reset line can never fire.
-      while (
-        useStore.getState().machineState === "hold" &&
-        useStore.getState().jobRunning
-      ) {
-        await new Promise((r) => setTimeout(r, 100));
-      }
-      if (!useStore.getState().jobRunning) {
-        addConsoleLine("Job cancelled", "error");
-        endState = "cancelled";
-        break;
-      }
-      const responses = await machineConnection.send(lines[i]);
-      setJobProgress((i + 1) / lines.length);
-
-      if (responses.length === 0 || responses.some((r) => r.startsWith("Grbl "))) {
-        addConsoleLine("Job aborted -- machine was reset mid-line", "error");
-        endState = "aborted";
-        break;
-      }
-      if (responses.some((r) => r.startsWith("ALARM"))) {
-        // NO M5+reset volley here: GRBL is locked and the laser is already off;
-        // the volley would only earn a confusing error:9.
-        endState = "alarm";
-        break;
-      }
-      if (responses.some((r) => r.startsWith("error:"))) {
-        addConsoleLine("Job stopped due to error", "error");
-        endState = "error";
-        // Detect disconnect
-        if (responses.some((r) => r === "error:disconnected")) {
-          useStore.getState().setMachineConnected(false);
-          useStore.getState().setMachineState("disconnected");
-          portDisconnected = true;
-        }
-        break;
-      }
-    }
-
-    const elapsed = job.estimatedTimeSecs * (useStore.getState().jobProgress || 1);
-    if (endState === "complete") {
-      // F19: after last ack, wait for machine to actually reach Idle before
-      // re-enabling START — head is still decelerating at last-ack time.
-      const IDLE_TIMEOUT_MS = 30000;
-      const IDLE_POLL_MS = 200;
-      const idleDeadline = Date.now() + IDLE_TIMEOUT_MS;
-      let reachedIdle = false;
-      while (Date.now() < idleDeadline) {
-        await new Promise((r) => setTimeout(r, IDLE_POLL_MS));
-        try {
-          const report = await machineConnection.getStatusReport();
-          if (report && report.match(/^<Idle/i)) {
-            reachedIdle = true;
-            break;
-          }
-        } catch { /* port may be gone; fall through to timeout */ }
-      }
-      if (!reachedIdle) {
-        addConsoleLine("Job complete (Idle timeout — head may still be moving)", "warning");
-      } else {
-        addConsoleLine("Job complete", "info");
-      }
-      setStatusMessage(`Job complete -- ${formatTime(elapsed)}`);
-    } else if (endState === "alarm") {
-      addConsoleLine(
-        "Job stopped -- machine alarm (laser already off; unlock to continue)",
-        "error",
-      );
-    } else {
-      // Safety volley: ensure laser is off. SKIPPED when jobRunning is already
-      // false — the user pressed STOP and emergencyStop ran its own sequence; a
-      // second M5+0x18 would push another reset banner into the buffer.
-      if (useStore.getState().jobRunning) {
-        try { await machineConnection.send("M5"); } catch { /* port may be gone */ }
-        try { await machineConnection.softReset(); } catch { /* port may be gone */ }
-      }
-      addConsoleLine("Job aborted", "error");
-    }
-
-    setJobRunning(false);
-    setJobProgress(0);
-
-    // Tear down the serial port on disconnect so a subsequent reconnect
-    // (which now sends 0x18) doesn't fail with "port busy". Runs AFTER the
-    // safety volley above so M5 has already been attempted before teardown.
-    if (portDisconnected) {
-      try { await machineConnection.disconnect(); } catch { /* port already gone */ }
+    if (result.endState === "complete") {
+      setStatusMessage(`Job complete -- ${formatTime(job.estimatedTimeSecs)}`);
     }
   }
 
@@ -191,6 +96,47 @@ export function JobActionBar() {
   async function handleStop() {
     setJobRunning(false);
     await machineConnection.emergencyStop();
+  }
+
+  async function handleFrame() {
+    // Machine-frame moves extents — the old design->machine Y-flip
+    // is deliberately DELETED, not ported: moves[] is already
+    // machine-frame, flipping again would trace a mirrored rect.
+    const storeState = useStore.getState();
+    // WARNING-2: explicit guard — frameDisabled already blocks the button,
+    // but guard here too so the handler is safe if called by other paths.
+    if (!storeState.workspaceVerified) {
+      addConsoleLine("FRAME blocked: confirm bed size before framing", "error");
+      return;
+    }
+    const moves = storeState.gcodeResult?.moves ?? [];
+    const targets = frameTargets(moves);
+    if (!targets) {
+      addConsoleLine("Nothing to cut -- no moves in the generated G-code", "error");
+      return;
+    }
+    // Bounds check: same gate that START uses — never send out-of-range G0s
+    const ext = movesExtents(moves)!; // targets non-null implies ext non-null
+    if (!isWithinBounds(ext, storeState.workspaceWidth, storeState.workspaceHeight, storeState.originTop)) {
+      addConsoleLine(
+        "FRAME blocked: G-code extends outside workspace bounds. Move or resize the design to fit.",
+        "error",
+      );
+      return;
+    }
+
+    // Build M5-bracketed G0 program — F16 safety: M5 clears any stale M3
+    // before framing so bare G0 moves can't trace-cut; belt-and-suspenders
+    // M5 after the final frame move.
+    const frameLines: string[] = ["M5"];
+    for (const t of targets) {
+      frameLines.push(`G0 X${t.x.toFixed(3)} Y${t.y.toFixed(3)}`);
+    }
+    frameLines.push("M5");
+
+    setJobRunning(true);
+    setJobProgress(0);
+    await streamJob(frameLines.join("\n"), { label: "Frame" });
   }
 
   // --- Gate computation (scalars passed individually — same as MachinePanel IIFE) ---
@@ -262,41 +208,7 @@ export function JobActionBar() {
           START
         </button>
         <button
-          onClick={async () => {
-            // Machine-frame moves extents — the old design→machine Y-flip
-            // is deliberately DELETED, not ported: moves[] is already
-            // machine-frame, flipping again would trace a mirrored rect.
-            const storeState = useStore.getState();
-            // WARNING-2: explicit guard — frameDisabled already blocks the button,
-            // but guard here too so the handler is safe if called by other paths.
-            if (!storeState.workspaceVerified) {
-              addConsoleLine("FRAME blocked: confirm bed size before framing", "error");
-              return;
-            }
-            const moves = storeState.gcodeResult?.moves ?? [];
-            const targets = frameTargets(moves);
-            if (!targets) {
-              addConsoleLine("Nothing to cut -- no moves in the generated G-code", "error");
-              return;
-            }
-            // Bounds check: same gate that START uses — never send out-of-range G0s
-            const ext = movesExtents(moves)!; // targets non-null implies ext non-null
-            if (!isWithinBounds(ext, storeState.workspaceWidth, storeState.workspaceHeight, storeState.originTop)) {
-              addConsoleLine(
-                "FRAME blocked: G-code extends outside workspace bounds. Move or resize the design to fit.",
-                "error",
-              );
-              return;
-            }
-            // F16: M5 guard before framing clears any stale M3 from a
-            // previous operation so bare G0 moves can't trace-cut.
-            await machineConnection.send("M5");
-            for (const t of targets) {
-              await machineConnection.send(`G0 X${t.x.toFixed(3)} Y${t.y.toFixed(3)}`);
-            }
-            // F16: belt-and-suspenders M5 after final frame move.
-            await machineConnection.send("M5");
-          }}
+          onClick={handleFrame}
           disabled={frameDisabled}
           title={frameHint}
           style={{
