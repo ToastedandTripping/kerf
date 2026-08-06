@@ -3,6 +3,7 @@ import { useStore } from "../../app/store";
 import { fileOperations } from "../../lib/fileOps";
 import { getRecentFiles, clearRecentFiles } from "../../lib/recentFiles";
 import { movePartial } from "../../lib/geometry";
+import { MIN_ZOOM, MAX_ZOOM } from "../../lib/constants";
 import { resetOnboarding } from "../panels/OnboardingOverlay";
 import { openMaterialTest, openImageTrace, openQrCode, openVariableText, openNesting, openGrblSettings, openSettings, openProjectNotes } from "../../app/App";
 
@@ -154,11 +155,11 @@ export function MenuBar() {
         { label: "Frame Selection", shortcut: "Ctrl+Shift+A", action: () => useStore.getState().zoomToFitSelection() },
         { label: "Zoom In", shortcut: "Ctrl++", action: () => {
           const s = useStore.getState();
-          s.setCamera({ zoom: Math.min(50, s.camera.zoom * 1.25) });
+          s.setCamera({ zoom: Math.min(MAX_ZOOM, s.camera.zoom * 1.25) });
         }},
         { label: "Zoom Out", shortcut: "Ctrl+-", action: () => {
           const s = useStore.getState();
-          s.setCamera({ zoom: Math.max(0.05, s.camera.zoom / 1.25) });
+          s.setCamera({ zoom: Math.max(MIN_ZOOM, s.camera.zoom / 1.25) });
         }},
       ]} />
       <MenuButton label="Arrange" {...makeMenuProps(3)} items={[

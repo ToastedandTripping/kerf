@@ -8,7 +8,7 @@ import { hasPlaceholders } from "../../lib/variableText";
 import { handleViewportPointerDown, handleViewportPointerMove, handleViewportPointerUp, getMarqueeState, getSelectionBBox, handleViewportDoubleClick, hitTestHandle, isDraggingRotateHandle, getActiveDragHandle, isPointerDragging, getMeasureState } from "../../lib/tools/toolHandler";
 import { measureDistance, measureAngleDeg, formatMeasureLabel } from "../../lib/measure";
 
-import { PX_PER_MM } from "../../lib/constants";
+import { PX_PER_MM, MIN_ZOOM, MAX_ZOOM } from "../../lib/constants";
 import { composeGroupChild, orientedHandlePoints } from "../../lib/geometry";
 
 // Cache for GPU textures keyed by object ID (avoids retaining megabyte-sized base64 strings as Map keys)
@@ -635,7 +635,7 @@ export function Viewport() {
       const mouseY = e.clientY - rect.top;
 
       const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
-      const newZoom = Math.max(0.05, Math.min(50, camera.zoom * zoomFactor));
+      const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, camera.zoom * zoomFactor));
 
       // Zoom toward cursor
       const worldX = (mouseX - camera.x) / camera.zoom;

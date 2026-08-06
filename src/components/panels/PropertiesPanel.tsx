@@ -3,8 +3,7 @@ import { useStore } from "../../app/store";
 import type { ImageAdjustments } from "../../app/types";
 import { openDitherPreview } from "../../app/App";
 import { movePartial, scalePartial } from "../../lib/geometry";
-
-const MM_PER_INCH = 25.4;
+import { MM_PER_INCH } from "../../lib/constants";
 const UNITS_KEY = "kerf-display-units";
 
 export function PropertiesPanel() {

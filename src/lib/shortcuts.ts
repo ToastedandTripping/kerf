@@ -3,6 +3,7 @@ import { useStore, generateId } from "../app/store";
 import { fileOperations } from "./fileOps";
 import { handleViewportKeyDown, handleToolChange } from "./tools/toolHandler";
 import { movePartial } from "./geometry";
+import { MIN_ZOOM, MAX_ZOOM } from "./constants";
 import type { ToolType } from "../app/types";
 
 const toolShortcuts: Record<string, ToolType> = {
@@ -321,13 +322,13 @@ export function useKeyboardShortcuts() {
       if (ctrl && (key === "=" || key === "+")) {
         e.preventDefault();
         const s = useStore.getState();
-        s.setCamera({ zoom: Math.min(50, s.camera.zoom * 1.25) });
+        s.setCamera({ zoom: Math.min(MAX_ZOOM, s.camera.zoom * 1.25) });
         return;
       }
       if (ctrl && key === "-") {
         e.preventDefault();
         const s = useStore.getState();
-        s.setCamera({ zoom: Math.max(0.05, s.camera.zoom / 1.25) });
+        s.setCamera({ zoom: Math.max(MIN_ZOOM, s.camera.zoom / 1.25) });
         return;
       }
       if (ctrl && key === "0") {

@@ -5,6 +5,7 @@ import { generateGcode } from "../../lib/machine/gcodeGen";
 import { MACHINE_STATE_COLORS, GRBL_ALARM_DESCRIPTIONS } from "../../lib/machine/machineStateDisplay";
 import { CollapsibleSection } from "./CollapsibleSection";
 import type { StartCorner } from "../../app/types";
+import { formatTime } from "../../lib/constants";
 
 /** Returns the fraction of non-transparent / non-white pixels in an image data URL.
  *  Samples a scaled-down copy (max 64x64) to keep this fast. */
@@ -934,15 +935,6 @@ export function MachinePanel() {
       )}
     </div>
   );
-}
-
-function formatTime(secs: number): string {
-  if (secs < 60) return `${Math.ceil(secs)}s`;
-  const m = Math.floor(secs / 60);
-  const s = Math.ceil(secs % 60);
-  if (m < 60) return `${m}m ${s}s`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
 }
 
 function JogButton({

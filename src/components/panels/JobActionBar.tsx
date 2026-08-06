@@ -16,6 +16,7 @@ import { useState, useEffect, useRef } from "react";
 import { useStore } from "../../app/store";
 import { machineConnection } from "../../lib/machine/connection";
 import { canStartJob, movesExtents, frameTargets, isWithinBounds } from "../../lib/machine/canStartJob";
+import { formatTime } from "../../lib/constants";
 
 export function JobActionBar() {
   // --- Scalar / stable-ref selectors only (Error-185 safe) ---
@@ -350,15 +351,6 @@ export function JobActionBar() {
       </div>
     </div>
   );
-}
-
-function formatTime(secs: number): string {
-  if (secs < 60) return `${Math.ceil(secs)}s`;
-  const m = Math.floor(secs / 60);
-  const s = Math.ceil(secs % 60);
-  if (m < 60) return `${m}m ${s}s`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
 }
 
 /** Format seconds as M:SS for compact job timer display */
