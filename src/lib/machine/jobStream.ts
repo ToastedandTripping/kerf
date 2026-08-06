@@ -16,6 +16,52 @@
 import { useStore } from "../../app/store";
 import { machineConnection } from "./connection";
 
+/**
+ * pauseJob — A1 fix: feed hold + spindle-stop-override (realtime, ack-less).
+ *
+ * The old handlePauseResume sent a line-based M5 on pause. During Hold state,
+ * GRBL queues line commands but doesn't execute them — the M5 never fires, the
+ * beam stays on (F13 ack-in-Hold hazard). This replacement uses only realtime
+ * bytes:
+ *   1. `!` (0x21) — feed hold, brings motion to a controlled stop
+ *   2. ~100ms settle — let deceleration complete
+ *   3. `0x9E` — spindle-stop-override (realtime, ack-less, Hold-only)
+ *
+ * If the 0x9E byte write throws, a loud console warning surfaces so the
+ * operator knows the beam may still be on. Never degrades silently.
+ */
+export async function pauseJob(): Promise<void> {
+  await machineConnection.feedHold();
+  // Deceleration settle — let the machine reach full Hold before
+  // sending the spindle-stop override.
+  await new Promise((r) => setTimeout(r, 100));
+  try {
+    await machineConnection.sendByte(0x9E);
+  } catch (e) {
+    // Fallback MUST be detectable, not silent (A1 spec):
+    console.warn(
+      "Spindle stop override (0x9E) failed — beam may still be on during pause",
+      e,
+    );
+    useStore.getState().addConsoleLine(
+      "WARNING: Spindle stop override (0x9E) failed — beam may still be on during pause",
+      "error",
+    );
+  }
+}
+
+/**
+ * resumeJob — A1 fix: cycle resume only, no M3 re-enable.
+ *
+ * The old handlePauseResume sent a line-based M3 before resume (to re-enable
+ * the laser for $32=0 machines). This is the same F13 hazard — a line command
+ * sent into Hold. The spindle-stop-override (0x9E) is a toggle: GRBL restores
+ * spindle state on resume automatically. The only realtime byte needed is `~`.
+ */
+export async function resumeJob(): Promise<void> {
+  await machineConnection.cycleResume();
+}
+
 export interface StreamJobOptions {
   /** Display label for console messages (e.g. "Job", "Frame", "Material test").
    *  Used directly in messages -- capitalize accordingly. */

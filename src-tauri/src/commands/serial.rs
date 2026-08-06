@@ -1168,4 +1168,213 @@ mod sim_integration {
         handle.join().unwrap().unwrap();
         assert!(!inner.connected.load(Ordering::SeqCst));
     }
+
+    // -- Volley-transcript contract (P1-B) ----------------------------------
+    // Each safety volley's exact byte/line sequence replayed against a
+    // GrblBrain, asserting zero strict-hold invariant violations and
+    // correct spindle_energized() state.
+
+    // 10. Pause volley: [!, 0x9E] — feedHold + spindle-stop-override.
+    // After the volley, spindle_energized() must be false (beam off during
+    // pause). Zero hold-invariant violations (no line commands in Hold).
+    #[test]
+    fn pause_volley_clears_spindle_and_zero_hold_violations() {
+        use crate::sim::grbl::MachineState;
+
+        let sim = SimPort::new(SimConfig::default());
+        let mut writer = sim.try_clone().unwrap();
+        let mut reader = BufReader::new(sim.try_clone().unwrap());
+        let mut pending = Vec::new();
+        let _ = serial_pump::drain_classified(&mut reader, &mut pending); // drain banner
+
+        // Start spindle and a motion command so we're in Run state
+        writer.write_all(b"M3 S1000\n").unwrap();
+        let _ = serial_pump::run_pump(
+            &mut reader, &mut writer, &mut pending,
+            DEFAULT_LIVENESS_TICKS, serial_pump::DEFAULT_IDLE_STALL_TICKS,
+        ).unwrap();
+        assert!(sim.spindle_energized(), "spindle must be on after M3");
+
+        writer.write_all(b"G1 X50 F500\n").unwrap();
+        let _ = serial_pump::run_pump(
+            &mut reader, &mut writer, &mut pending,
+            DEFAULT_LIVENESS_TICKS, serial_pump::DEFAULT_IDLE_STALL_TICKS,
+        ).unwrap();
+
+        // Pause volley: [!, 0x9E]
+        writer.write_all(b"!").unwrap();
+        assert_eq!(sim.machine_state(), MachineState::Hold);
+        writer.write_all(&[0x9E]).unwrap();
+
+        // Assertions
+        assert!(
+            sim.hold_invariant_violations().is_empty(),
+            "pause volley must cause zero hold-invariant violations"
+        );
+        assert!(
+            !sim.spindle_energized(),
+            "spindle must be off after pause volley [!, 0x9E]"
+        );
+        assert_eq!(
+            sim.realtime_bytes_received(),
+            vec![b'!', 0x9E],
+            "exact pause volley bytes on the wire"
+        );
+    }
+
+    // 11. Resume volley: [~] — cycle resume only. After resume,
+    // spindle_energized() stays false (GRBL's override toggle is separate
+    // from line-based M3; the sim doesn't model the toggle-restore, so
+    // spindle stays off — which is the correct conservative assertion).
+    #[test]
+    fn resume_volley_is_tilde_only() {
+        use crate::sim::grbl::MachineState;
+
+        let sim = SimPort::new(SimConfig::default());
+        let mut writer = sim.try_clone().unwrap();
+        let mut reader = BufReader::new(sim.try_clone().unwrap());
+        let mut pending = Vec::new();
+        let _ = serial_pump::drain_classified(&mut reader, &mut pending); // drain banner
+
+        // Start spindle, motion, then pause
+        writer.write_all(b"M3 S1000\n").unwrap();
+        let _ = serial_pump::run_pump(
+            &mut reader, &mut writer, &mut pending,
+            DEFAULT_LIVENESS_TICKS, serial_pump::DEFAULT_IDLE_STALL_TICKS,
+        ).unwrap();
+        writer.write_all(b"G1 X50 F500\n").unwrap();
+        let _ = serial_pump::run_pump(
+            &mut reader, &mut writer, &mut pending,
+            DEFAULT_LIVENESS_TICKS, serial_pump::DEFAULT_IDLE_STALL_TICKS,
+        ).unwrap();
+
+        // Pause volley
+        writer.write_all(b"!").unwrap();
+        writer.write_all(&[0x9E]).unwrap();
+        assert!(!sim.spindle_energized());
+
+        // Resume volley: [~]
+        writer.write_all(b"~").unwrap();
+
+        // The machine exits Hold
+        let state = sim.machine_state();
+        assert!(
+            state == MachineState::Run || state == MachineState::Idle,
+            "machine must leave Hold after resume, got: {:?}", state
+        );
+        assert!(
+            sim.hold_invariant_violations().is_empty(),
+            "resume volley must cause zero hold-invariant violations"
+        );
+    }
+
+    // 12. E-stop volley: [!, 0x18, ?] — feedHold + reset + status query.
+    // The 0x18 clears the spindle at firmware level (boot_or_reset). Zero
+    // hold-invariant violations.
+    #[test]
+    fn estop_volley_resets_and_clears_spindle() {
+        let sim = SimPort::new(SimConfig::default());
+        let mut writer = sim.try_clone().unwrap();
+        let mut reader = BufReader::new(sim.try_clone().unwrap());
+        let mut pending = Vec::new();
+        let _ = serial_pump::drain_classified(&mut reader, &mut pending); // drain banner
+
+        // Start spindle + motion
+        writer.write_all(b"M3 S1000\n").unwrap();
+        let _ = serial_pump::run_pump(
+            &mut reader, &mut writer, &mut pending,
+            DEFAULT_LIVENESS_TICKS, serial_pump::DEFAULT_IDLE_STALL_TICKS,
+        ).unwrap();
+        assert!(sim.spindle_energized());
+
+        // E-stop volley: [!, 0x18, ?]
+        writer.write_all(b"!").unwrap();
+        writer.write_all(&[0x18]).unwrap();
+        // Drain the reset banner
+        let _ = serial_pump::drain_classified(&mut reader, &mut pending);
+        writer.write_all(b"?").unwrap();
+
+        assert!(
+            sim.hold_invariant_violations().is_empty(),
+            "e-stop volley must cause zero hold-invariant violations"
+        );
+        assert!(
+            !sim.spindle_energized(),
+            "spindle must be off after e-stop (reset clears it)"
+        );
+    }
+
+    // 13. MAX_PUMP_LINES ceiling: a chatty non-terminal stream hits the
+    // ceiling and returns PumpFailure::Disconnected instead of looping
+    // forever.
+    #[test]
+    fn pump_ceiling_triggers_on_chatty_junk() {
+        // Build a reader that emits MAX_PUMP_LINES + 10 [MSG:] lines
+        // with no terminal. The pump must stop at the ceiling.
+        let ceiling = serial_pump::MAX_PUMP_LINES;
+        let junk_line = b"[MSG:junk]\n";
+        let total_lines = ceiling + 10;
+        let mut data = Vec::with_capacity(junk_line.len() * total_lines);
+        for _ in 0..total_lines {
+            data.extend_from_slice(junk_line);
+        }
+
+        use std::io::{Error, ErrorKind};
+
+        struct JunkReader {
+            data: Vec<u8>,
+            pos: usize,
+        }
+        impl std::io::Read for JunkReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.pos >= self.data.len() {
+                    return Err(Error::new(ErrorKind::TimedOut, "no more data"));
+                }
+                let n = buf.len().min(self.data.len() - self.pos);
+                buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+                self.pos += n;
+                Ok(n)
+            }
+        }
+        impl BufRead for JunkReader {
+            fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+                if self.pos >= self.data.len() {
+                    return Err(Error::new(ErrorKind::TimedOut, "no more data"));
+                }
+                Ok(&self.data[self.pos..])
+            }
+            fn consume(&mut self, amt: usize) {
+                self.pos += amt;
+            }
+        }
+
+        struct NoopProbe;
+        impl serial_pump::ProbeWriter for NoopProbe {
+            fn write_probe(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut reader = JunkReader { data, pos: 0 };
+        let mut probe = NoopProbe;
+        let mut pending = Vec::new();
+
+        let result = serial_pump::run_pump(
+            &mut reader,
+            &mut probe,
+            &mut pending,
+            DEFAULT_LIVENESS_TICKS,
+            serial_pump::DEFAULT_IDLE_STALL_TICKS,
+        );
+
+        match result {
+            Err(serial_pump::PumpFailure::Disconnected(msg)) => {
+                assert!(
+                    msg.contains("pump ceiling") || msg.contains("non-terminal"),
+                    "expected pump ceiling message, got: {msg}"
+                );
+            }
+            other => panic!("expected pump ceiling Disconnected, got {other:?}"),
+        }
+    }
 }

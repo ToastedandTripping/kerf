@@ -36,6 +36,12 @@ pub const DEFAULT_LIVENESS_TICKS: u32 = 60;
 /// probe is rewritten once (covers a `?` eaten during the post-reset boot window).
 pub const STATUS_MAX_TICKS: u32 = 2;
 
+/// Total-line ceiling: if the pump collects more than this many non-terminal lines
+/// without finding an ok/error/ALARM/banner, something is badly wrong (a chatty
+/// hardware fault spewing junk that's none of the terminal classes). Return
+/// `PumpFailure::Disconnected` so the streaming stack doesn't wedge forever.
+pub const MAX_PUMP_LINES: usize = 1000;
+
 /// Consecutive Idle status replies (with no terminal in between) before concluding
 /// the terminal was lost on the wire and returning a recoverable stall.
 ///
@@ -209,7 +215,15 @@ pub fn run_pump<R: BufRead, P: ProbeWriter>(
                         return Ok(PumpOutput { lines, terminal: PumpTerminal::Banner })
                     }
                     // Status reports, [MSG:] and unrecognized lines are not terminals.
-                    LineClass::Status | LineClass::Msg | LineClass::Other => continue,
+                    LineClass::Status | LineClass::Msg | LineClass::Other => {
+                        if lines.len() >= MAX_PUMP_LINES {
+                            return Err(PumpFailure::Disconnected(format!(
+                                "pump ceiling reached: {} non-terminal lines without ok/error/ALARM/banner",
+                                MAX_PUMP_LINES
+                            )));
+                        }
+                        continue;
+                    }
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
@@ -742,6 +756,32 @@ mod tests {
             }
             Ok(out) => panic!("expected Disconnected stall, got Ok with terminal {:?}", out.terminal),
             Err(PumpFailure::Io(e)) => panic!("expected Disconnected stall, got Io error: {e}"),
+        }
+    }
+
+    // Pump ceiling test: more than MAX_PUMP_LINES non-terminal lines triggers
+    // PumpFailure::Disconnected — a chatty hardware fault can't wedge the pump.
+    #[test]
+    fn pump_ceiling_triggers_on_non_terminal_flood() {
+        // Pin the constant value so changing MAX_PUMP_LINES requires updating
+        // this test — the ceiling is a safety parameter, not a tunable.
+        assert_eq!(MAX_PUMP_LINES, 1000, "MAX_PUMP_LINES value changed — update this test");
+
+        // Build 1005 [MSG:junk] lines (hardcoded, not derived from the constant).
+        // This breaks if MAX_PUMP_LINES is raised above 1005.
+        let mut steps: Vec<Step> = Vec::new();
+        for _ in 0..1005 {
+            steps.push(Step::Data(b"[MSG:junk]\n"));
+        }
+        let (result, _, _) = pump(steps, DEFAULT_LIVENESS_TICKS);
+        match result {
+            Err(PumpFailure::Disconnected(msg)) => {
+                assert!(
+                    msg.contains("pump ceiling") || msg.contains("non-terminal"),
+                    "expected pump ceiling message, got: {msg}"
+                );
+            }
+            other => panic!("expected pump ceiling Disconnected, got {other:?}"),
         }
     }
 

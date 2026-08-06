@@ -244,6 +244,38 @@ fn contains_spindle_sync_mcode(text: &str) -> bool {
     false
 }
 
+/// True if `text` contains a stand-alone M5 command word — the spindle-off
+/// code. Same parsing rules as `contains_spindle_sync_mcode` (case-insensitive,
+/// leading-zero-tolerant, comment-aware) but matches only M5.
+fn contains_spindle_off_mcode(text: &str) -> bool {
+    let mut chars = text.chars().peekable();
+    let mut in_comment = false;
+    while let Some(c) = chars.next() {
+        match c {
+            '(' => in_comment = true,
+            ')' => in_comment = false,
+            _ if in_comment => {}
+            'M' | 'm' => {
+                let mut digits = String::new();
+                while let Some(&d) = chars.peek() {
+                    if d.is_ascii_digit() {
+                        digits.push(d);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                let code = digits.trim_start_matches('0');
+                if code == "5" {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// The shared GRBL brain. Every `try_clone()`'d `SimPort` drives/observes
 /// this SAME state via `Arc<Mutex<_>>` — mirroring how `CommandChannel`'s
 /// three clones (command writer, persistent reader, realtime writer) are
@@ -268,6 +300,12 @@ pub struct GrblBrain {
     homing_remaining: Option<u32>,
 
     state: MachineState,
+
+    /// Spindle modal flag — set by M3/M4 lines, cleared by M5 lines and
+    /// by the 0x9E spindle-stop-override realtime byte (Hold-only).
+    /// Models whether the laser/spindle is energized; Phase 2A's pause
+    /// volley asserts `spindle_energized() == false` after `[!, 0x9E]`.
+    spindle_on: bool,
 
     /// Bytes queued for the host to read: banner/ok/error/alarm/status/msg.
     outbound: VecDeque<u8>,
@@ -298,6 +336,7 @@ impl GrblBrain {
             planner: VecDeque::new(),
             homing_remaining: None,
             state: MachineState::Idle,
+            spindle_on: false,
             outbound: VecDeque::new(),
             overflow_count: 0,
             hold_invariant_violations: Vec::new(),
@@ -321,6 +360,7 @@ impl GrblBrain {
         self.planner.clear();
         self.homing_remaining = None;
         self.state = self.config.initial_state;
+        self.spindle_on = false;
         self.push_line(BANNER);
     }
 
@@ -361,11 +401,17 @@ impl GrblBrain {
                     self.resume();
                 }
                 0x9E => {
-                    // Reserved: GRBL 1.1's realtime Toggle Spindle-Stop
-                    // override, needed by Phase 2A's pause re-plumb. Like
-                    // every realtime byte it bypasses the RX line buffer;
-                    // it has no simulated effect until 2A gives it one.
+                    // GRBL 1.1's realtime Toggle Spindle-Stop override
+                    // (Phase 2A pause volley). Like every realtime byte it
+                    // bypasses the RX line buffer. Only effective during
+                    // Hold — latches at hold-complete, clears `spindle_on`.
+                    // Outside Hold the byte is silently ignored (matches
+                    // real GRBL behavior: override toggles are no-ops
+                    // unless the corresponding override state is active).
                     self.realtime_log.push(b);
+                    if self.state == MachineState::Hold {
+                        self.spindle_on = false;
+                    }
                 }
                 b'\n' => self.complete_line(),
                 other => self.push_rx_byte(other),
@@ -404,6 +450,19 @@ impl GrblBrain {
             && contains_spindle_sync_mcode(&text)
         {
             self.hold_invariant_violations.push(text.clone());
+        }
+
+        // Track spindle modal state from M3/M4/M5 line commands.
+        // Uses the same `contains_spindle_sync_mcode` parser to detect
+        // spindle codes, then checks specifically which one: M3/M4 set
+        // spindle_on, M5 clears it.
+        if contains_spindle_sync_mcode(&text) {
+            if contains_spindle_off_mcode(&text) {
+                self.spindle_on = false;
+            } else {
+                // M3 or M4 (spindle on)
+                self.spindle_on = true;
+            }
         }
 
         if text.is_empty() {
@@ -613,6 +672,13 @@ impl GrblBrain {
     pub fn state(&self) -> MachineState {
         self.state
     }
+
+    /// Whether the spindle/laser is currently energized. Set by M3/M4 lines,
+    /// cleared by M5 lines, by the 0x9E spindle-stop-override realtime byte
+    /// (Hold-only), and by soft reset.
+    pub fn spindle_energized(&self) -> bool {
+        self.spindle_on
+    }
 }
 
 /// `SerialPort` implementation whose `Read`/`Write` drive a shared
@@ -656,6 +722,11 @@ impl SimPort {
 
     pub fn outbound_len(&self) -> usize {
         self.brain.lock().unwrap().outbound_len()
+    }
+
+    /// Whether the spindle/laser is currently energized (delegated to GrblBrain).
+    pub fn spindle_energized(&self) -> bool {
+        self.brain.lock().unwrap().spindle_energized()
     }
 
     // -- Fault injection (Relay 1B) -----------------------------------------
@@ -1060,6 +1131,92 @@ mod tests {
             port.hold_invariant_violations().is_empty(),
             "realtime bytes must never trip the invariant"
         );
+    }
+
+    // -- Spindle tracking and 0x9E spindle-stop-override (Phase 2A) --
+
+    #[test]
+    fn spindle_on_set_by_m3_cleared_by_m5() {
+        let mut port = SimPort::new(SimConfig::default());
+        let _ = read_line_blocking(&mut port, 5); // banner
+        assert!(!port.spindle_energized(), "spindle off at startup");
+
+        send_line(&mut port, "M3 S1000");
+        let _ = read_line_blocking(&mut port, 5); // ok
+        assert!(port.spindle_energized(), "M3 sets spindle on");
+
+        send_line(&mut port, "M5");
+        let _ = read_line_blocking(&mut port, 5); // ok
+        assert!(!port.spindle_energized(), "M5 clears spindle");
+    }
+
+    #[test]
+    fn spindle_on_set_by_m4_cleared_by_soft_reset() {
+        let mut port = SimPort::new(SimConfig::default());
+        let _ = read_line_blocking(&mut port, 5); // banner
+
+        send_line(&mut port, "M4 S500");
+        let _ = read_line_blocking(&mut port, 5); // ok
+        assert!(port.spindle_energized(), "M4 sets spindle on");
+
+        port.write_all(&[0x18]).unwrap();
+        let _ = read_line_blocking(&mut port, 5); // banner
+        assert!(!port.spindle_energized(), "soft reset clears spindle");
+    }
+
+    #[test]
+    fn spindle_stop_override_0x9e_clears_spindle_during_hold() {
+        let mut port = SimPort::new(SimConfig::default());
+        let _ = read_line_blocking(&mut port, 5); // banner
+
+        send_line(&mut port, "M3 S1000");
+        let _ = read_line_blocking(&mut port, 5); // ok
+        assert!(port.spindle_energized());
+
+        port.write_all(b"!").unwrap(); // feed hold
+        assert_eq!(port.machine_state(), MachineState::Hold);
+        assert!(port.spindle_energized(), "hold alone doesn't clear spindle");
+
+        port.write_all(&[0x9E]).unwrap(); // spindle-stop-override
+        assert!(!port.spindle_energized(), "0x9E in Hold clears spindle");
+    }
+
+    #[test]
+    fn spindle_stop_override_0x9e_ignored_outside_hold() {
+        let mut port = SimPort::new(SimConfig::default());
+        let _ = read_line_blocking(&mut port, 5); // banner
+
+        send_line(&mut port, "M3 S1000");
+        let _ = read_line_blocking(&mut port, 5); // ok
+        assert!(port.spindle_energized());
+
+        // 0x9E while Idle: no effect
+        port.write_all(&[0x9E]).unwrap();
+        assert!(port.spindle_energized(), "0x9E outside Hold is a no-op");
+    }
+
+    #[test]
+    fn pause_volley_hold_then_0x9e_clears_spindle_resume_keeps_it_off() {
+        // The exact Phase 2A pause volley: [!, 0x9E] should leave
+        // spindle_energized() == false. Resume with [~] should NOT
+        // re-energize the spindle.
+        let mut port = SimPort::new(SimConfig::default());
+        let _ = read_line_blocking(&mut port, 5); // banner
+
+        send_line(&mut port, "M3 S1000");
+        let _ = read_line_blocking(&mut port, 5); // ok
+        assert!(port.spindle_energized());
+
+        // Pause volley
+        port.write_all(b"!").unwrap();
+        port.write_all(&[0x9E]).unwrap();
+        assert!(!port.spindle_energized(), "pause volley clears spindle");
+        assert_eq!(port.machine_state(), MachineState::Hold);
+
+        // Resume
+        port.write_all(b"~").unwrap();
+        // spindle_on stays false -- resume doesn't re-enable the spindle
+        assert!(!port.spindle_energized(), "resume does not re-energize spindle");
     }
 
     #[test]

@@ -28,7 +28,8 @@ import type { AppState } from "../../../app/store";
 import { DEFAULT_LAYERS } from "../../../app/types";
 import { JobActionBar } from "../JobActionBar";
 import { MachinePanel } from "../MachinePanel";
-import { streamJob } from "../../../lib/machine/jobStream";
+import { streamJob, pauseJob, resumeJob } from "../../../lib/machine/jobStream";
+import { machineConnection } from "../../../lib/machine/connection";
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>;
 
@@ -484,5 +485,247 @@ describe("streamJob material-test abort protocol (P1-A)", () => {
     // GRBL is locked: no volley
     expect(sentCommands()).not.toContain("M5");
     expect(sentBytes()).not.toContain(0x18);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P1-B A1: Pause/Resume volley contract — the exact byte sequences the
+// frontend must emit. These pin the F13 deadlock fix: only realtime bytes,
+// never line-based M5/M3 in Hold state.
+// ---------------------------------------------------------------------------
+
+describe("pauseJob / resumeJob volley contract (P1-B A1)", () => {
+  beforeEach(() => {
+    cleanup();
+    mockInvoke.mockReset();
+    localStorage.clear();
+    seedReadyToStart();
+  });
+
+  it("pauseJob emits [! (0x21), 0x9E] — feedHold + spindle-stop-override, no line M5", async () => {
+    vi.useFakeTimers();
+    mockSerial(() => ({ responses: ["ok"], drained: [] }));
+
+    const pausePromise = pauseJob();
+    await vi.runAllTimersAsync();
+    await pausePromise;
+
+    // Exact volley: feedHold byte (0x21) then spindle-stop-override (0x9E)
+    expect(sentBytes()).toEqual([0x21, 0x9E]);
+    // No line-based M5 — the F13 hazard this fix eliminates
+    expect(sentCommands()).not.toContain("M5");
+    // No line-based M3 either
+    expect(sentCommands()).not.toContain("M3");
+  });
+
+  it("resumeJob emits [~ (0x7E)] only — no line M3 re-enable", async () => {
+    mockSerial(() => ({ responses: ["ok"], drained: [] }));
+
+    await resumeJob();
+
+    // Exact volley: cycle resume byte only
+    expect(sentBytes()).toEqual([0x7E]);
+    // No line-based M3 — the F13 hazard
+    expect(sentCommands()).not.toContain("M3");
+    // No other line commands
+    expect(sentCommands()).toHaveLength(0);
+  });
+
+  it("pauseJob surfaces a console warning when 0x9E write fails", async () => {
+    vi.useFakeTimers();
+    let callCount = 0;
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "serial_send_byte") {
+        callCount++;
+        if (callCount === 2) {
+          // Second sendByte call (0x9E) fails
+          throw new Error("port vanished");
+        }
+        return undefined;
+      }
+      return undefined;
+    });
+
+    const pausePromise = pauseJob();
+    await vi.runAllTimersAsync();
+    await pausePromise;
+
+    // The feedHold byte (0x21) succeeded
+    expect(callCount).toBe(2);
+    // Console warning must surface — never degrade silently
+    const warnings = consoleTexts().filter((t) => t.includes("Spindle stop override"));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("beam may still be on");
+
+    vi.useRealTimers();
+  });
+
+  it("handlePauseResume uses pauseJob (no line M5) when pausing", async () => {
+    mockSerial(() => ({ responses: ["ok"], drained: [] }));
+    useStore.setState({ jobRunning: true, machineState: "run" });
+    const { getByText } = render(<JobActionBar />);
+
+    fireEvent.click(getByText("PAUSE"));
+
+    // pauseJob has a real 100ms settle delay — wait for it
+    await waitFor(() => {
+      expect(sentBytes()).toContain(0x9E); // spindle-stop-override arrived
+    });
+
+    // Must use the realtime pause volley, not the old line-based M5
+    expect(sentBytes()).toContain(0x21); // feedHold
+    expect(sentBytes()).toContain(0x9E); // spindle-stop-override
+    expect(sentCommands()).not.toContain("M5");
+    expect(sentCommands()).not.toContain("M3");
+  });
+
+  it("handlePauseResume uses resumeJob (no line M3) when resuming", async () => {
+    mockSerial(() => ({ responses: ["ok"], drained: [] }));
+    useStore.setState({ jobRunning: true, machineState: "hold" });
+    const { getByText } = render(<JobActionBar />);
+
+    fireEvent.click(getByText("RESUME"));
+    await waitFor(() => expect(sentBytes()).toContain(0x7E));
+
+    // Must use the realtime resume, not the old line-based M3
+    expect(sentBytes()).toEqual([0x7E]); // cycleResume only
+    expect(sentCommands()).not.toContain("M3");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P1-B A6: E-stop edge cases — retry on partial send, narrowed M5 gate.
+// ---------------------------------------------------------------------------
+
+describe("emergencyStop edge cases (P1-B A6)", () => {
+  beforeEach(() => {
+    cleanup();
+    mockInvoke.mockReset();
+    localStorage.clear();
+    seedReadyToStart();
+  });
+
+  it("retries 0x18 once when feedHold sent but reset failed, then completes", async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    let resetAttempts = 0;
+    mockInvoke.mockImplementation(async (cmd: string, args?: { byte?: number; command?: string }) => {
+      if (cmd === "serial_send_byte") {
+        const byte = args?.byte ?? 0;
+        calls.push(`byte(${byte.toString(16)})`);
+        if (byte === 0x18) {
+          resetAttempts++;
+          if (resetAttempts === 1) {
+            throw new Error("first reset failed");
+          }
+          // Second attempt succeeds
+        }
+        return undefined;
+      }
+      if (cmd === "serial_get_status") {
+        calls.push("status");
+        return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
+      }
+      if (cmd === "serial_send") {
+        calls.push(`send(${args?.command ?? "?"})`);
+        return { responses: ["ok"], drained: [] };
+      }
+      return undefined;
+    });
+
+    const stopPromise = machineConnection.emergencyStop();
+    await vi.runAllTimersAsync();
+    await stopPromise;
+
+    // feedHold -> first reset fails -> retry reset succeeds -> status -> M5
+    expect(calls).toEqual(["byte(21)", "byte(18)", "byte(18)", "status", "send(M5)"]);
+    expect(consoleTexts()).toContain("Emergency stop complete");
+
+    vi.useRealTimers();
+  });
+
+  it("sets alarm when feedHold sent but reset fails even on retry", async () => {
+    vi.useFakeTimers();
+    mockInvoke.mockImplementation(async (cmd: string, args?: { byte?: number }) => {
+      if (cmd === "serial_send_byte") {
+        const byte = args?.byte ?? 0;
+        if (byte === 0x18) {
+          throw new Error("reset failed");
+        }
+        return undefined;
+      }
+      return undefined;
+    });
+
+    const stopPromise = machineConnection.emergencyStop();
+    await vi.runAllTimersAsync();
+    await stopPromise;
+
+    expect(useStore.getState().machineState).toBe("alarm");
+    expect(consoleTexts()).toContain(
+      "E-stop incomplete — feed hold sent but soft reset failed after retry. Beam may still be on — treat as unsafe.",
+    );
+
+    vi.useRealTimers();
+  });
+
+  it("skips M5 when re-poll reports Hold state (narrowed from !== alarm)", async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    mockInvoke.mockImplementation(async (cmd: string, args?: { byte?: number; command?: string }) => {
+      if (cmd === "serial_send_byte") {
+        calls.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
+        return undefined;
+      }
+      if (cmd === "serial_get_status") {
+        calls.push("status");
+        // Machine stuck in Hold after reset (edge case)
+        return { status: "<Hold|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
+      }
+      if (cmd === "serial_send") {
+        calls.push(`send(${args?.command ?? "?"})`);
+        return { responses: ["ok"], drained: [] };
+      }
+      return undefined;
+    });
+
+    const stopPromise = machineConnection.emergencyStop();
+    await vi.runAllTimersAsync();
+    await stopPromise;
+
+    // Old behavior: would have sent M5 because Hold !== "alarm"
+    // New behavior (A6): skips M5 because Hold is not "idle" or "run"
+    expect(calls).toEqual(["byte(21)", "byte(18)", "status"]);
+    expect(calls).not.toContain("send(M5)");
+
+    vi.useRealTimers();
+  });
+
+  it("skips M5 when re-poll reports Door state (narrowed gate)", async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    mockInvoke.mockImplementation(async (cmd: string, args?: { byte?: number; command?: string }) => {
+      if (cmd === "serial_send_byte") {
+        calls.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
+        return undefined;
+      }
+      if (cmd === "serial_get_status") {
+        calls.push("status");
+        return { status: "<Door|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
+      }
+      if (cmd === "serial_send") {
+        calls.push(`send(${args?.command ?? "?"})`);
+        return { responses: ["ok"], drained: [] };
+      }
+      return undefined;
+    });
+
+    const stopPromise = machineConnection.emergencyStop();
+    await vi.runAllTimersAsync();
+    await stopPromise;
+
+    expect(calls).not.toContain("send(M5)");
+
+    vi.useRealTimers();
   });
 });

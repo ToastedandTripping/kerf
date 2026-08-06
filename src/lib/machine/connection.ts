@@ -249,6 +249,9 @@ export const machineConnection = {
       await invoke("serial_send_byte", { byte });
     } catch (e) {
       console.error("Send byte error:", e);
+      // A1 fix: re-throw so callers (e.g. pauseJob's 0x9E) can detect
+      // failures and surface an honest warning instead of degrading silently.
+      throw e;
     }
   },
 
@@ -452,6 +455,24 @@ export const machineConnection = {
       return;
     }
 
+    // A6 fix: if feed hold succeeded but reset failed, retry 0x18 once.
+    // A partial e-stop (hold without reset) leaves the machine frozen in Hold
+    // with the laser potentially still on — the reset is the critical byte.
+    if (feedHoldSent && !resetSent) {
+      try {
+        await invoke("serial_send_byte", { byte: 0x18 });
+        resetSent = true;
+      } catch {
+        // Retry also failed — the port is dying. Set alarm and report honestly.
+        store.setMachineState("alarm");
+        store.addConsoleLine(
+          "E-stop incomplete — feed hold sent but soft reset failed after retry. Beam may still be on — treat as unsafe.",
+          "error",
+        );
+        return;
+      }
+    }
+
     // 4. Let GRBL's reboot window pass (it drops RX bytes while resetting),
     //    then re-poll. Bounded in Rust -- can never hang mid-emergency.
     await new Promise((r) => setTimeout(r, 200));
@@ -472,8 +493,11 @@ export const machineConnection = {
     }
 
     // 5. Conditional M5, keyed ONLY off the returned report.
+    // A6 fix: narrowed from `!== "alarm"` to `=== "idle" || === "run"` so
+    // a line M5 is NEVER sent into Hold or Door state (same F13 hazard —
+    // line commands queue but don't execute in Hold/Door).
     const reportedState = report.match(/^<(\w+)/)?.[1]?.toLowerCase();
-    if (reportedState && reportedState !== "alarm") {
+    if (reportedState === "idle" || reportedState === "run") {
       try { await this.send("M5"); } catch { /* port may be gone */ }
       store.addConsoleLine("Emergency stop complete", "warning");
     } else if (reportedState === "alarm") {

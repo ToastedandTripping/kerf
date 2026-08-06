@@ -16,7 +16,7 @@ import { useState, useEffect, useRef } from "react";
 import { useStore } from "../../app/store";
 import { machineConnection } from "../../lib/machine/connection";
 import { canStartJob, movesExtents, frameTargets, isWithinBounds } from "../../lib/machine/canStartJob";
-import { streamJob } from "../../lib/machine/jobStream";
+import { streamJob, pauseJob, resumeJob } from "../../lib/machine/jobStream";
 import { formatTime } from "../../lib/constants";
 
 export function JobActionBar() {
@@ -81,15 +81,16 @@ export function JobActionBar() {
 
   async function handlePauseResume() {
     if (machineState === "hold") {
-      // F16: re-enable laser power before resuming so $32=0 machines don't
-      // start cutting with the laser off.
-      try { await machineConnection.send("M3"); } catch { /* port may be gone */ }
-      await machineConnection.cycleResume();
+      // A1 fix: cycle resume only (realtime byte `~`). No M3 re-enable —
+      // that's a line command into Hold (F13 hazard). GRBL restores spindle
+      // state automatically when the spindle-stop-override toggle is released
+      // by the resume.
+      await resumeJob();
     } else {
-      await machineConnection.feedHold();
-      // F16: immediately send M5 after feed hold to prevent beam dwell under
-      // $32=0 (constant power mode keeps laser on at zero speed).
-      try { await machineConnection.send("M5"); } catch { /* port may be gone */ }
+      // A1 fix: feed hold + spindle-stop-override (realtime bytes only).
+      // No M5 line — that's the F13 deadlock (line command queued in Hold,
+      // never executed, beam stays on).
+      await pauseJob();
     }
   }
 
