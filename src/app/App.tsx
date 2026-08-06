@@ -30,7 +30,7 @@ import { VariableTextDialog } from "../components/panels/VariableTextDialog";
 import { NestingDialog } from "../components/panels/NestingDialog";
 import { useKeyboardShortcuts } from "../lib/shortcuts";
 import { handleFileDrop } from "../lib/fileDrop";
-import { loadProjectWithMigrations } from "../lib/fileOps";
+import { loadProjectWithMigrations, parseAndValidateProject } from "../lib/fileOps";
 import { startAutoSave, checkRecoveryFile, clearRecoveryFile } from "../lib/autoSave";
 import { OnboardingOverlay, shouldShowOnboarding } from "../components/panels/OnboardingOverlay";
 import { useStore } from "./store";
@@ -317,7 +317,12 @@ export default function App() {
                     // wrapper as every other loader — old recovery files are
                     // legacy-convention and were previously the one loader
                     // that bypassed migrations entirely.
-                    loadProjectWithMigrations(result.project);
+                    // P3-A: validate structure before loading (corrupt recovery
+                    // files should surface an error, not crash the app).
+                    const validated = parseAndValidateProject(
+                      JSON.stringify(result.project), "recovery.kerf"
+                    );
+                    if (validated) loadProjectWithMigrations(validated);
                   }
                   setRecoveryOffer(null);
                 }}

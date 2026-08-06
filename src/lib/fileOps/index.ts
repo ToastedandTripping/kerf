@@ -12,6 +12,31 @@ import { exportSvgContent } from "./svgExport";
 export { parsePathD } from "./svgImport";
 export { importDxfDirect } from "./dxfImport";
 
+/**
+ * Shared JSON parse + structural validation for .kerf project files.
+ * Returns the parsed project or null (with error surfaced to the user).
+ * Used by openProject, openRecentFile, and recovery restore.
+ */
+export function parseAndValidateProject(content: string, filePath: string): KerfProject | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(content);
+  } catch {
+    const store = useStore.getState();
+    store.setStatusMessage("Project file is corrupted and could not be loaded");
+    store.addConsoleLine(`Failed to load "${filePath}": file is corrupted or not a valid Kerf project`, "error");
+    return null;
+  }
+  const project = raw as KerfProject;
+  if (!Array.isArray(project.objects) || !Array.isArray(project.layers)) {
+    const store = useStore.getState();
+    store.setStatusMessage("Project file is missing required data");
+    store.addConsoleLine(`Failed to load "${filePath}": missing objects or layers array`, "error");
+    return null;
+  }
+  return project;
+}
+
 type TauriDialogPath = string | { path: string };
 function resolvePath(path: TauriDialogPath): string {
   return typeof path === "string" ? path : path.path;
@@ -20,10 +45,11 @@ function resolvePath(path: TauriDialogPath): string {
 let dialogModule: typeof import("@tauri-apps/plugin-dialog") | null = null;
 let fsModule: typeof import("@tauri-apps/plugin-fs") | null = null;
 
-// Tracks original file content after a migrating load so saveToPath can write
-// a .bak sibling before overwriting. Cleared after first use.
-let _pendingBakContent: string | null = null;
-let _pendingBakPath: string | null = null;
+// Per-path tracking of original file content after a migrating load so
+// saveToPath can write a .bak sibling before overwriting. Entries are
+// consumed on first save per path.
+const _pendingBakContents = new Map<string, string>();
+const _pendingBakPaths = new Set<string>();
 
 async function ensureTauri() {
   if (dialogModule && fsModule) return true;
@@ -163,20 +189,12 @@ export const fileOperations = {
         importImageData(data, ext);
       } else {
         const content = await fsModule.readTextFile(pathStr);
-        // F26: surface corrupt file errors clearly
-        let project: KerfProject;
-        try {
-          project = JSON.parse(content) as KerfProject;
-        } catch {
-          const store = useStore.getState();
-          store.setStatusMessage("Project file is corrupted and could not be loaded");
-          store.addConsoleLine(`Failed to load "${pathStr}": file is corrupted or not a valid Kerf project`, "error");
-          return;
-        }
+        const project = parseAndValidateProject(content, pathStr);
+        if (!project) return;
         // Track original content for .bak if any migration will run
         if (project.formatVersion === undefined || project.formatVersion < KERF_FORMAT_VERSION) {
-          _pendingBakContent = content;
-          _pendingBakPath = pathStr;
+          _pendingBakContents.set(pathStr, content);
+          _pendingBakPaths.add(pathStr);
         }
         loadProjectWithMigrations(project);
         useStore.getState().setProjectPath(pathStr);
@@ -230,21 +248,12 @@ export const fileOperations = {
     if (!hasTauri || !fsModule) return;
     try {
       const content = await fsModule.readTextFile(filePath);
-      // F26: wrap JSON.parse in try/catch — surface corrupt file errors instead of
-      // letting them throw uncaught or silently fall through to an empty state.
-      let project: KerfProject;
-      try {
-        project = JSON.parse(content) as KerfProject;
-      } catch {
-        const store = useStore.getState();
-        store.setStatusMessage("Project file is corrupted and could not be loaded");
-        store.addConsoleLine(`Failed to load "${filePath}": file is corrupted or not a valid Kerf project`, "error");
-        return;
-      }
+      const project = parseAndValidateProject(content, filePath);
+      if (!project) return;
       // Track original content for .bak if any migration will run
       if (project.formatVersion === undefined || project.formatVersion < KERF_FORMAT_VERSION) {
-        _pendingBakContent = content;
-        _pendingBakPath = filePath;
+        _pendingBakContents.set(filePath, content);
+        _pendingBakPaths.add(filePath);
       }
       loadProjectWithMigrations(project);
       useStore.getState().setProjectPath(filePath);
@@ -363,26 +372,49 @@ async function saveToPath(path: string): Promise<boolean> {
   const hasTauri = await ensureTauri();
   if (!hasTauri || !fsModule) return false;
   // Write .bak before overwriting if this path has a pending backup from migration
-  if (_pendingBakPath === path && _pendingBakContent !== null) {
-    const content = _pendingBakContent;
-    _pendingBakContent = null;
-    _pendingBakPath = null;
+  if (_pendingBakPaths.has(path) && _pendingBakContents.has(path)) {
+    const content = _pendingBakContents.get(path)!;
+    _pendingBakContents.delete(path);
+    _pendingBakPaths.delete(path);
     await writeBakIfMissing(path, content).catch(() => {
       // .bak is best-effort; already logs via console.warn in writeBakIfMissing.
       // Swallow here so a bak hiccup can never break saveToPath's boolean contract.
     });
   }
   const project = useStore.getState().toProject();
+  const json = JSON.stringify(project, null, 2);
+  // Atomic save: write to .tmp then rename over original. A crash mid-write
+  // destroys only the .tmp — the original file survives intact.
+  const tmpPath = `${path}.tmp`;
   try {
-    await fsModule.writeTextFile(path, JSON.stringify(project, null, 2));
-    useStore.getState().setDirty(false);
-    return true;
+    await fsModule.writeTextFile(tmpPath, json);
   } catch (e) {
     const store = useStore.getState();
     store.setStatusMessage("Save failed — check permissions or disk space");
     store.addConsoleLine(`Save failed for "${path}": ${e}`, "error");
-    // Do NOT setDirty(false) — the project is still unsaved
     return false;
+  }
+  try {
+    await fsModule.rename(tmpPath, path);
+    useStore.getState().setDirty(false);
+    return true;
+  } catch {
+    // rename failed (e.g. scope denial for projects outside $HOME).
+    // Fall back to direct overwrite — still better than no save.
+    try {
+      await fsModule.writeTextFile(path, json);
+      useStore.getState().setDirty(false);
+      // Clean up orphaned .tmp best-effort
+      await fsModule.remove(tmpPath).catch(() => {});
+      return true;
+    } catch (e2) {
+      const store = useStore.getState();
+      store.setStatusMessage("Save failed — check permissions or disk space");
+      store.addConsoleLine(`Save failed for "${path}": ${e2}`, "error");
+      // Clean up orphaned .tmp best-effort
+      await fsModule.remove(tmpPath).catch(() => {});
+      return false;
+    }
   }
 }
 

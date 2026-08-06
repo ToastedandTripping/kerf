@@ -89,6 +89,94 @@ describe("svgExport", () => {
   });
 });
 
+// P3-A (Finding 9): path and line rotation now exported
+describe("P3-A Finding 9: path/line rotation export", () => {
+  beforeEach(() => {
+    useStore.setState({
+      objects: [],
+      objectsById: new Map(),
+      selectedIds: [],
+      selectedSet: new Set(),
+      undoStack: [],
+      redoStack: [],
+      layers: DEFAULT_LAYERS,
+      workspaceWidth: 300,
+      workspaceHeight: 200,
+    });
+  });
+
+  it("exports rotated path with rotate transform", () => {
+    const obj: DesignObject = {
+      id: "p1",
+      type: "path",
+      name: "Path 1",
+      transform: { x: 10, y: 20, width: 30, height: 40, rotation: 90, scaleX: 1, scaleY: 1 },
+      layerIndex: 0,
+      visible: true,
+      locked: false,
+      fill: null,
+      stroke: "#4a90e2",
+      strokeWidth: 1,
+      opacity: 1,
+      points: [
+        { x: 10, y: 20 },
+        { x: 40, y: 20 },
+        { x: 40, y: 60 },
+      ],
+      closed: false,
+    };
+    useStore.getState().addObject(obj);
+    const svg = exportSvgContent();
+    // center = (10+15, 20+20) = (25, 40), rotation = 90
+    expect(svg).toMatch(/transform="rotate\(90[,\s]+25[,\s]+40\)"/);
+  });
+
+  it("exports rotated line with rotate transform", () => {
+    const obj: DesignObject = {
+      id: "l1",
+      type: "line",
+      name: "Line 1",
+      transform: { x: 0, y: 0, width: 100, height: 0, rotation: 45, scaleX: 1, scaleY: 1 },
+      layerIndex: 0,
+      visible: true,
+      locked: false,
+      fill: null,
+      stroke: "#e24a4a",
+      strokeWidth: 2,
+      opacity: 1,
+      points: [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+      ],
+    };
+    useStore.getState().addObject(obj);
+    const svg = exportSvgContent();
+    // center = (50, 0), rotation = 45
+    expect(svg).toMatch(/transform="rotate\(45[,\s]+50[,\s]+0\)"/);
+  });
+
+  it("does not add rotation to unrotated path", () => {
+    const obj: DesignObject = {
+      id: "p2",
+      type: "path",
+      name: "Path 2",
+      transform: { x: 0, y: 0, width: 10, height: 10, rotation: 0, scaleX: 1, scaleY: 1 },
+      layerIndex: 0,
+      visible: true,
+      locked: false,
+      fill: null,
+      stroke: "#000",
+      strokeWidth: 1,
+      opacity: 1,
+      points: [{ x: 0, y: 0 }, { x: 10, y: 10 }],
+      closed: false,
+    };
+    useStore.getState().addObject(obj);
+    const svg = exportSvgContent();
+    expect(svg).not.toMatch(/transform="rotate\(/);
+  });
+});
+
 // W1c (Fix 4): svgExport learns groups — post-F20 every compound-path import
 // is a group; without the flatten, export silently lost those objects.
 describe("svgExport groups (W1c Fix 4)", () => {

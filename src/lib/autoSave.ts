@@ -7,11 +7,12 @@ const RECOVERY_FILENAME = "recovery.kerf";
 
 async function getRecoveryPath(): Promise<string | null> {
   try {
-    const path = await import("@tauri-apps/api/path");
+    const pathMod = await import("@tauri-apps/api/path");
     if (!appDataDir) {
-      appDataDir = await path.appDataDir();
+      appDataDir = await pathMod.appDataDir();
     }
-    return `${appDataDir}${RECOVERY_FILENAME}`;
+    // Use path.join to avoid reliance on trailing separator from appDataDir
+    return await pathMod.join(appDataDir, RECOVERY_FILENAME);
   } catch {
     return null;
   }
@@ -38,7 +39,17 @@ export async function startAutoSave(intervalMs: number = 60000): Promise<void> {
       }
       const project = store.toProject();
       const json = JSON.stringify(project, null, 2);
-      await fs.writeTextFile(recoveryPath, json);
+      // Atomic write: write to .tmp then rename, so a crash mid-write
+      // does not destroy the existing recovery file.
+      const tmpPath = `${recoveryPath}.tmp`;
+      await fs.writeTextFile(tmpPath, json);
+      try {
+        await fs.rename(tmpPath, recoveryPath);
+      } catch {
+        // rename may fail in appdata scope — fall back to direct write
+        await fs.writeTextFile(recoveryPath, json);
+        await fs.remove(tmpPath).catch(() => {});
+      }
     } catch (e) {
       // Do not toast every 60s — log once so it's diagnosable without pestering the user
       console.error("[Kerf] Auto-save recovery write failed:", e);

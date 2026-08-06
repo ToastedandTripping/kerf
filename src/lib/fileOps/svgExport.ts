@@ -30,12 +30,9 @@ export function exportSvgContent(): string {
     const fill = obj.fill || "none";
     const opacity = obj.opacity < 1 ? ` opacity="${obj.opacity}"` : "";
 
-    // Emit rotate transform for rotated primitives (rect, ellipse, text, image).
+    // Emit rotate transform for rotated objects.
     // Center = AABB center (x+w/2, y+h/2), consistent with D2 rotation-center convention.
-    // path/line emit raw points — standalone rotated path/line still exports unrotated
-    // (pre-existing limitation; tracked as a separate issue). Flattened group
-    // children of type path/line inherit the same limitation for their OWN
-    // r_c (the group's rotation r_g IS baked into the composed points).
+    // P3-A: now applied to path/line as well (was previously missing).
     const rotation = t.rotation || 0;
     const rotTransform = Math.abs(rotation) > 0.001
       ? ` transform="rotate(${rotation}, ${t.x + t.width / 2}, ${t.y + t.height / 2})"`
@@ -55,7 +52,7 @@ export function exportSvgContent(): string {
       }
       case "line": {
         if (obj.points && obj.points.length >= 2) {
-          elements += `  <line x1="${obj.points[0].x}" y1="${obj.points[0].y}" x2="${obj.points[1].x}" y2="${obj.points[1].y}" stroke="${stroke}" stroke-width="${sw}"${opacity}/>\n`;
+          elements += `  <line x1="${obj.points[0].x}" y1="${obj.points[0].y}" x2="${obj.points[1].x}" y2="${obj.points[1].y}" stroke="${stroke}" stroke-width="${sw}"${opacity}${rotTransform}/>\n`;
         }
         break;
       }
@@ -83,7 +80,7 @@ export function exportSvgContent(): string {
             }
             d += " Z";
           }
-          elements += `  <path d="${d}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${opacity}/>\n`;
+          elements += `  <path d="${d}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"${opacity}${rotTransform}/>\n`;
         }
         break;
       }

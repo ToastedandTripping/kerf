@@ -260,12 +260,117 @@ export async function extractVectorPaths(
         break;
 
       case OPS.setStrokeRGBColor:
-        strokeColor = `#${toHex(arg[0])}${toHex(arg[1])}${toHex(arg[2])}`;
+        // pdfjs v5 emits a single hex string "#rrggbb"; v4 emitted 3 floats.
+        if (typeof arg[0] === "string" && arg[0].startsWith("#")) {
+          strokeColor = arg[0];
+        } else {
+          strokeColor = `#${toHex(arg[0])}${toHex(arg[1])}${toHex(arg[2])}`;
+        }
         break;
 
       case OPS.setStrokeGray:
         strokeColor = `#${toHex(arg[0])}${toHex(arg[0])}${toHex(arg[0])}`;
         break;
+
+      // pdfjs v5 packs all path ops into a single OPS.constructPath call.
+      // Args: [finishingOp, [Float32Array pathData], minMax].
+      // pathData is a flat buffer of DrawOPS opcodes interleaved with coords:
+      //   moveTo(0)=2 coords, lineTo(1)=2, curveTo(2)=6, quadraticCurveTo(3)=4, closePath(4)=0.
+      case OPS.constructPath: {
+        const pathDataArr = arg[1];
+        if (!pathDataArr || !pathDataArr[0]) break;
+        const buf: Float32Array | number[] = pathDataArr[0];
+        let j = 0;
+        while (j < buf.length) {
+          const drawOp = buf[j++];
+          switch (drawOp) {
+            case 0: { // moveTo
+              flushSubPath();
+              const pt = toKerf(buf[j], buf[j + 1]);
+              currentSubPath = [pt];
+              j += 2;
+              break;
+            }
+            case 1: { // lineTo
+              const pt = toKerf(buf[j], buf[j + 1]);
+              currentSubPath.push(pt);
+              j += 2;
+              break;
+            }
+            case 2: { // curveTo (cubic bezier): cp1x,cp1y,cp2x,cp2y,x,y
+              const cp1 = toKerf(buf[j], buf[j + 1]);
+              const cp2 = toKerf(buf[j + 2], buf[j + 3]);
+              const end = toKerf(buf[j + 4], buf[j + 5]);
+              if (currentSubPath.length > 0) {
+                currentSubPath[currentSubPath.length - 1].handleOut = { x: cp1.x, y: cp1.y };
+              }
+              end.handleIn = { x: cp2.x, y: cp2.y };
+              currentSubPath.push(end);
+              j += 6;
+              break;
+            }
+            case 3: { // quadraticCurveTo: qx,qy,x,y — promote to cubic
+              const qx = buf[j], qy = buf[j + 1];
+              const ex = buf[j + 2], ey = buf[j + 3];
+              if (currentSubPath.length > 0) {
+                // Reverse-transform last Kerf point back to PDF space is complex;
+                // instead compute cubic CPs in Kerf space directly.
+                const prev = currentSubPath[currentSubPath.length - 1];
+                const qKerf = toKerf(qx, qy);
+                const endKerf = toKerf(ex, ey);
+                const cp1x = prev.x + (2 / 3) * (qKerf.x - prev.x);
+                const cp1y = prev.y + (2 / 3) * (qKerf.y - prev.y);
+                const cp2x = endKerf.x + (2 / 3) * (qKerf.x - endKerf.x);
+                const cp2y = endKerf.y + (2 / 3) * (qKerf.y - endKerf.y);
+                prev.handleOut = { x: cp1x, y: cp1y };
+                endKerf.handleIn = { x: cp2x, y: cp2y };
+                currentSubPath.push(endKerf);
+              } else {
+                currentSubPath.push(toKerf(ex, ey));
+              }
+              j += 4;
+              break;
+            }
+            case 4: // closePath
+              if (currentSubPath.length > 0) {
+                currentPath.push({ points: currentSubPath, closed: true });
+                currentSubPath = [];
+              }
+              break;
+            default:
+              // Unknown draw op — bail out of this constructPath to avoid
+              // misaligned reads
+              j = buf.length;
+              break;
+          }
+        }
+        // The finishing op (arg[0]) determines how to emit.
+        // Process it like the corresponding standalone op.
+        const finishOp = arg[0];
+        if (finishOp === OPS.stroke || finishOp === OPS.closeStroke) {
+          if (finishOp === OPS.closeStroke && currentSubPath.length > 0) {
+            currentPath.push({ points: currentSubPath, closed: true });
+            currentSubPath = [];
+          } else {
+            flushSubPath();
+          }
+          emitPaths(currentPath);
+          currentPath = [];
+        } else if (
+          finishOp === OPS.fill || finishOp === OPS.eoFill ||
+          finishOp === OPS.fillStroke || finishOp === OPS.eoFillStroke ||
+          finishOp === OPS.closeFillStroke || finishOp === OPS.closeEOFillStroke
+        ) {
+          flushSubPath();
+          for (const sub of currentPath) sub.closed = true;
+          emitPaths(currentPath);
+          currentPath = [];
+        } else if (finishOp === OPS.endPath) {
+          currentSubPath = [];
+          currentPath = [];
+        }
+        break;
+      }
 
       // Skip text, image, clipping, and other ops we don't handle
       default:

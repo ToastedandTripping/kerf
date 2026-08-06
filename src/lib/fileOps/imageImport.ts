@@ -18,7 +18,9 @@ export function parsePngPhysDpi(data: Uint8Array): number | null {
   let offset = 8;
   while (offset + 12 <= data.length) {
     const chunkLen =
-      (data[offset] << 24) | (data[offset + 1] << 16) | (data[offset + 2] << 8) | data[offset + 3];
+      ((data[offset] << 24) | (data[offset + 1] << 16) | (data[offset + 2] << 8) | data[offset + 3]) >>> 0;
+    // Guard against corrupt chunk lengths that would freeze the parser
+    if (chunkLen > data.length - offset - 12) break;
     const type = String.fromCharCode(data[offset + 4], data[offset + 5], data[offset + 6], data[offset + 7]);
     if (type === "pHYs" && chunkLen === 9 && offset + 12 + 9 <= data.length) {
       const d = offset + 8;
@@ -55,6 +57,10 @@ export function importImageData(data: Uint8Array, ext: string) {
   const base64 = `data:${mime};base64,${btoa(binary)}`;
 
   const img = new Image();
+  img.onerror = () => {
+    store.setStatusMessage("Image import failed — file may be corrupted");
+    store.addConsoleLine(`Image import failed: could not decode ${ext.toUpperCase()} data`, "error");
+  };
   img.onload = () => {
     const dpi = detectedDpi ?? 300;
     const widthMm = (img.width / dpi) * MM_PER_INCH;

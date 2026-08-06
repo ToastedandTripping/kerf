@@ -43,6 +43,7 @@ const mockReadFile = vi.fn();
 const mockStat = vi.fn();
 const mockRemove = vi.fn();
 const mockMkdir = vi.fn();
+const mockRename = vi.fn();
 
 vi.mock("@tauri-apps/plugin-fs", () => ({
   writeTextFile: mockWriteTextFile,
@@ -51,6 +52,7 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
   stat: mockStat,
   remove: mockRemove,
   mkdir: mockMkdir,
+  rename: mockRename,
 }));
 
 // autoSave imports @tauri-apps/api/path for appDataDir — stub it
@@ -111,6 +113,9 @@ function resetStore() {
 describe("saveToPath — success/failure behaviour via saveProject", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Atomic save uses rename + remove for cleanup; default to resolving promises
+    mockRename.mockResolvedValue(undefined);
+    mockRemove.mockResolvedValue(undefined);
     resetStore();
   });
 
@@ -146,6 +151,8 @@ describe("saveToPath — success/failure behaviour via saveProject", () => {
 describe("saveProject: recovery + recent-file are not cleared/added on failure", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRename.mockResolvedValue(undefined);
+    mockRemove.mockResolvedValue(undefined);
     resetStore();
   });
 
@@ -202,6 +209,8 @@ describe("saveProject: recovery + recent-file are not cleared/added on failure",
 describe("checkUnsavedChanges: aborts when save fails", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRename.mockResolvedValue(undefined);
+    mockRemove.mockResolvedValue(undefined);
     resetStore();
   });
 

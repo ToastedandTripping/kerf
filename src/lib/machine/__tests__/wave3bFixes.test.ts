@@ -116,6 +116,7 @@ describe("F18 — store: serialBusy field", () => {
 // ---------------------------------------------------------------------------
 vi.mock("@tauri-apps/api/path", () => ({
   appDataDir: vi.fn().mockResolvedValue("/tmp/kerf-test/"),
+  join: vi.fn().mockImplementation((...parts: string[]) => Promise.resolve(parts.join("/").replace(/\/+/g, "/"))),
 }));
 
 vi.mock("@tauri-apps/plugin-fs", () => {
@@ -133,6 +134,7 @@ vi.mock("@tauri-apps/plugin-fs", () => {
     })),
     remove: vi.fn().mockResolvedValue(undefined),
     writeTextFile: vi.fn().mockResolvedValue(undefined),
+    rename: vi.fn().mockResolvedValue(undefined),
   };
 });
 

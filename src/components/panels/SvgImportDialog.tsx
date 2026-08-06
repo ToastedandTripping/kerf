@@ -363,16 +363,31 @@ function importSvgWithLayers(svgText: string, colorToLayer: Map<string, number> 
     ? [1, 0, 0, 1, -vbOffset.x, -vbOffset.y]
     : identityMatrix;
 
-  walkElementWithLayers(svg, initialMatrix, globalScale, styleMap, store.activeLayerIndex, colorToLayer, newObjects);
+  const skippedElements = new Map<string, number>();
+  walkElementWithLayers(svg, initialMatrix, globalScale, styleMap, store.activeLayerIndex, colorToLayer, newObjects, skippedElements);
 
   if (newObjects.length > 0) {
     store.withUndo("svg-import", () => {
       for (const obj of newObjects) store.addObject(obj);
       store.setSelectedIds(newObjects.map(o => o.id));
     });
-    store.addConsoleLine(`SVG imported: ${newObjects.length} objects`, "info");
+    let msg = `SVG imported: ${newObjects.length} objects`;
+    if (skippedElements.size > 0) {
+      const summary = Array.from(skippedElements.entries())
+        .map(([tag, count]) => `${tag} (${count})`)
+        .join(", ");
+      msg += ` — skipped: ${summary}`;
+    }
+    store.addConsoleLine(msg, "info");
   } else {
-    store.addConsoleLine("SVG import: no supported elements found", "error");
+    let msg = "SVG import: no supported elements found";
+    if (skippedElements.size > 0) {
+      const summary = Array.from(skippedElements.entries())
+        .map(([tag, count]) => `${tag} (${count})`)
+        .join(", ");
+      msg += ` — unsupported: ${summary}`;
+    }
+    store.addConsoleLine(msg, "error");
   }
 }
 
@@ -466,7 +481,8 @@ function walkElementWithLayers(
   el: Element, parentMatrix: Matrix, globalScale: number,
   styleMap: Map<string, Record<string, string>>,
   defaultLayer: number, colorToLayer: Map<string, number> | null,
-  results: DesignObject[]
+  results: DesignObject[],
+  skipped: Map<string, number>,
 ) {
   const transformAttr = el.getAttribute("transform");
   let matrix = parentMatrix;
@@ -479,10 +495,13 @@ function walkElementWithLayers(
     const layerIndex = resolveLayerIndex(el, styleMap, defaultLayer, colorToLayer);
     const obj = parseSvgElementForImport(el, matrix, globalScale, styleMap, layerIndex);
     if (obj) { results.push(obj); return; }
+    // Track unsupported/degenerate elements that produced no object
+    skipped.set(tag, (skipped.get(tag) || 0) + 1);
+    return;
   }
 
   for (const child of el.children) {
-    walkElementWithLayers(child, matrix, globalScale, styleMap, defaultLayer, colorToLayer, results);
+    walkElementWithLayers(child, matrix, globalScale, styleMap, defaultLayer, colorToLayer, results, skipped);
   }
 }
 
