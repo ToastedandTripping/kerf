@@ -16,6 +16,16 @@ let dirtyObjectIds: Set<string> = new Set();
 export const getDirtyObjectIds = () => dirtyObjectIds;
 export const clearDirtyObjectIds = () => { dirtyObjectIds = new Set(); };
 
+// D3: recursively mark all descendants of a group dirty so the Viewport re-renders them
+function markDescendantsDirty(obj: DesignObject) {
+  if (obj.type === "group" && obj.children) {
+    for (const child of obj.children) {
+      dirtyObjectIds.add(child.id);
+      markDescendantsDirty(child);
+    }
+  }
+}
+
 // --- P4: Module-level cursor position (removed from Zustand to avoid 60 set() calls/sec) ---
 let _cursorPosition = { x: 0, y: 0 };
 let _cursorListeners: Array<() => void> = [];
@@ -149,16 +159,9 @@ export const useStore = create<AppState>((set, get) => ({
     }),
   updateObject: (id, partial) => {
     dirtyObjectIds.add(id);
-    // D3: if the target is a group, mark all its children dirty too so the Viewport re-renders them
+    // D3: if the target is a group, mark all descendants dirty so the Viewport re-renders them
     const existing = get().objectsById.get(id);
-    if (existing && existing.type === "group" && existing.children) {
-      for (const child of existing.children) {
-        dirtyObjectIds.add(child.id);
-        if (child.type === "group" && child.children) {
-          for (const gc of child.children) dirtyObjectIds.add(gc.id);
-        }
-      }
-    }
+    if (existing) markDescendantsDirty(existing);
     set((state) => {
       const newObjects = applyPartialsDeep(state.objects, new Map([[id, partial]]));
       return {
@@ -172,16 +175,9 @@ export const useStore = create<AppState>((set, get) => ({
   updateObjects: (updates) => {
     for (const u of updates) {
       dirtyObjectIds.add(u.id);
-      // D3: mark group children dirty
+      // D3: mark all descendants dirty
       const existing = get().objectsById.get(u.id);
-      if (existing && existing.type === "group" && existing.children) {
-        for (const child of existing.children) {
-          dirtyObjectIds.add(child.id);
-          if (child.type === "group" && child.children) {
-            for (const gc of child.children) dirtyObjectIds.add(gc.id);
-          }
-        }
-      }
+      if (existing) markDescendantsDirty(existing);
     }
     set((state) => {
       const updateMap = new Map(updates.map((u) => [u.id, u.partial]));

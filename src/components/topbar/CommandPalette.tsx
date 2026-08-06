@@ -31,7 +31,10 @@ function getCommands(): Command[] {
     { id: "edit-selectall", label: "Select All", shortcut: "Ctrl+A", category: "Edit", action: () => s().setSelectedIds(s().objects.filter(o => o.visible && !o.locked).map(o => o.id)) },
     { id: "edit-invert", label: "Invert Selection", shortcut: "Ctrl+Shift+I", category: "Edit", action: () => s().invertSelection() },
     { id: "edit-duplicate", label: "Duplicate", shortcut: "Ctrl+D", category: "Edit", action: () => s().duplicateInPlace() },
-    { id: "edit-delete", label: "Delete Selected", shortcut: "Del", category: "Edit", action: () => s().removeObjects(s().selectedIds) },
+    { id: "edit-delete", label: "Delete Selected", shortcut: "Del", category: "Edit", action: () => {
+      const store = s();
+      store.withUndo("delete", () => { store.removeObjects(store.selectedIds); });
+    }},
     { id: "edit-convert-path", label: "Convert to Path", shortcut: "Ctrl+Shift+C", category: "Edit", action: () => {
       const store = s();
       for (const id of store.selectedIds) {
@@ -72,7 +75,10 @@ function getCommands(): Command[] {
     { id: "arr-rot90ccw", label: "Rotate 90 CCW", category: "Arrange", action: () => s().rotate90("ccw") },
     { id: "arr-front", label: "Bring to Front", shortcut: "Ctrl+PgUp", category: "Arrange", action: () => { for (const id of s().selectedIds) s().moveObjectToFront(id); } },
     { id: "arr-back", label: "Send to Back", shortcut: "Ctrl+PgDn", category: "Arrange", action: () => { for (const id of [...s().selectedIds].reverse()) s().moveObjectToBack(id); } },
-    { id: "arr-lock", label: "Lock Selected", category: "Arrange", action: () => { for (const id of s().selectedIds) s().updateObject(id, { locked: true }); s().clearSelection(); } },
+    { id: "arr-lock", label: "Lock Selected", category: "Arrange", action: () => {
+      const store = s();
+      store.withUndo("lock", () => { for (const id of store.selectedIds) store.updateObject(id, { locked: true }); store.clearSelection(); });
+    }},
 
     // Boolean / Tools
     { id: "bool-union", label: "Boolean Union", category: "Tools", action: () => s().booleanUnion() },

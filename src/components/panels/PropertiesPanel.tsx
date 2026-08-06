@@ -377,6 +377,7 @@ export function PropertiesPanel() {
                 onChange={(v) =>
                   updateObject(obj.id, {
                     imageAdjustments: {
+                      ...obj.imageAdjustments,
                       brightness: v,
                       contrast: obj.imageAdjustments?.contrast ?? 0,
                       gamma: obj.imageAdjustments?.gamma ?? 1,
@@ -395,6 +396,7 @@ export function PropertiesPanel() {
                 onChange={(v) =>
                   updateObject(obj.id, {
                     imageAdjustments: {
+                      ...obj.imageAdjustments,
                       brightness: obj.imageAdjustments?.brightness ?? 0,
                       contrast: v,
                       gamma: obj.imageAdjustments?.gamma ?? 1,
@@ -413,6 +415,7 @@ export function PropertiesPanel() {
                 onChange={(v) =>
                   updateObject(obj.id, {
                     imageAdjustments: {
+                      ...obj.imageAdjustments,
                       brightness: obj.imageAdjustments?.brightness ?? 0,
                       contrast: obj.imageAdjustments?.contrast ?? 0,
                       gamma: v,

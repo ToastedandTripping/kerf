@@ -109,10 +109,19 @@ export function GrblSettingsDialog({ open, onClose }: Props) {
     setEditError(null);
     await machineConnection.send(`$${key}=${value}`);
     // C4: sync store for settings Kerf uses internally so G-code stays consistent
+    const store = useStore.getState();
     if (key === 30) {
-      useStore.getState().setGrblSValueMax(Number(value));
+      store.setGrblSValueMax(Number(value));
     } else if (key === 32) {
-      useStore.getState().setGrblLaserMode(Number(value) === 1);
+      store.setGrblLaserMode(Number(value) === 1);
+    } else if (key === 120 || key === 121) {
+      const x = key === 120 ? Number(value) : store.grblAccelX;
+      const y = key === 121 ? Number(value) : store.grblAccelY;
+      store.setGrblAccel(x, y);
+    } else if (key === 110 || key === 111) {
+      const x = key === 110 ? Number(value) : store.grblMaxFeedRateX;
+      const y = key === 111 ? Number(value) : store.grblMaxFeedRateY;
+      store.setGrblMaxFeedRate(x, y);
     }
     setEditingKey(null);
     // Reload settings to verify

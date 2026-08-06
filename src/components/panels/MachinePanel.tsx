@@ -767,7 +767,7 @@ export function MachinePanel() {
               style={{
                 padding: "4px 8px",
                 borderRadius: "var(--radius-sm)",
-                border: `1px solid ${activeTool === "positionLaser" ? "var(--accent)" : "var(--accent)33"}`,
+                border: `1px solid ${activeTool === "positionLaser" ? "var(--accent)" : "color-mix(in srgb, var(--accent) 20%, transparent)"}`,
                 background: activeTool === "positionLaser" ? "rgba(74,144,226,0.25)" : "rgba(74,144,226,0.08)",
                 color: !machineConnected || machineState !== "idle" ? "var(--text-muted)" : "var(--accent)",
                 fontSize: "10px",
@@ -829,7 +829,7 @@ export function MachinePanel() {
                 flex: 1,
                 padding: "5px",
                 borderRadius: "var(--radius-sm)",
-                border: gcodeStale ? "1px solid var(--accent-warm)" : "1px solid var(--accent)33",
+                border: gcodeStale ? "1px solid var(--accent-warm)" : "1px solid color-mix(in srgb, var(--accent) 20%, transparent)",
                 fontSize: "10px",
                 fontWeight: 600,
                 cursor: "pointer",
@@ -1044,8 +1044,8 @@ function ActionButton({ label, color, onClick, disabled, title }: { label: strin
       style={{
         padding: "4px 8px",
         borderRadius: "var(--radius-sm)",
-        border: `1px solid ${color}33`,
-        background: `${color}15`,
+        border: `1px solid color-mix(in srgb, ${color} 20%, transparent)`,
+        background: `color-mix(in srgb, ${color} 8%, transparent)`,
         color,
         fontSize: "10px",
         fontWeight: 600,

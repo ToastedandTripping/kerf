@@ -140,6 +140,10 @@ export function Viewport() {
       initPromise.then(() => {
         app.destroy(true);
         appRef.current = null;
+        // Clear module-level caches — textures belong to the destroyed GPU context
+        for (const tex of textureCache.values()) tex.destroy(true);
+        textureCache.clear();
+        contentHashCache.clear();
       }).catch((err) => console.error("Pixi.js destroy failed:", err));
     };
   }, []);

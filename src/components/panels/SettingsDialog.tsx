@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useStore } from "../../app/store";
 import { useEscapeClose } from "../../lib/hooks/useEscapeClose";
 import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
@@ -18,6 +18,15 @@ export function SettingsDialog({ open, onClose }: Props) {
   const [wWidth, setWWidth] = useState(workspaceWidth.toString());
   const [wHeight, setWHeight] = useState(workspaceHeight.toString());
   const [gSize, setGSize] = useState(gridSize.toString());
+
+  // Re-sync local state from store whenever the dialog opens
+  useEffect(() => {
+    if (open) {
+      setWWidth(workspaceWidth.toString());
+      setWHeight(workspaceHeight.toString());
+      setGSize(gridSize.toString());
+    }
+  }, [open, workspaceWidth, workspaceHeight, gridSize]);
 
   const dialogRef = useRef<HTMLDivElement>(null);
   useEscapeClose(open, onClose);

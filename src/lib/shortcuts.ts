@@ -72,8 +72,8 @@ export function useKeyboardShortcuts() {
         return;
       }
 
-      // Copy/Cut/Paste
-      if (ctrl && key === "c") {
+      // Copy/Cut/Paste (shift guard: Ctrl+Shift+C is "convert to path" below)
+      if (ctrl && !shift && key === "c") {
         e.preventDefault();
         const s = useStore.getState();
         s.setClipboard(s.objects.filter((o) => s.selectedIds.includes(o.id)));
@@ -151,8 +151,8 @@ export function useKeyboardShortcuts() {
         return;
       }
 
-      // Select All
-      if (ctrl && key === "a") {
+      // Select All (shift guard: Ctrl+Shift+A is "frame selection" below)
+      if (ctrl && !shift && key === "a") {
         e.preventDefault();
         const s = useStore.getState();
         s.setSelectedIds(s.objects.filter((o) => o.visible && !o.locked).map((o) => o.id));

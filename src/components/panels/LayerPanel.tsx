@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useMemo } from "react";
 import { useShallow } from "zustand/shallow";
 import { useStore } from "../../app/store";
 import type { Layer, CutMode, LineOverlay, MaterialPreset } from "../../app/types";
@@ -133,7 +133,7 @@ function LayerRow({
     s.selectedIds.some((id) => s.objectsById.get(id)?.layerIndex === layer.index)
   );
 
-  const defaultCurve: CurvePoint[] = [{ x: 0, y: 100 }, { x: 255, y: 0 }];
+  const defaultCurve = useMemo<CurvePoint[]>(() => [{ x: 0, y: 100 }, { x: 255, y: 0 }], []);
 
   return (
     <div

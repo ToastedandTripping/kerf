@@ -281,8 +281,12 @@ export function scalePartial(
 ): GeometryPartial {
   if (obj.type === "group" && obj.children && obj.children.length > 0) {
     const t = obj.transform;
-    const sx = t.width > POINTS_EPSILON ? target.width / t.width : 1;
-    const sy = t.height > POINTS_EPSILON ? target.height / t.height : 1;
+    // Clamp group dimensions the same way points-bearing objects are clamped:
+    // prevents zero-size groups that collapse children irreversibly.
+    const tw = Math.max(target.width, MIN_SCALE_TARGET);
+    const th = Math.max(target.height, MIN_SCALE_TARGET);
+    const sx = t.width > POINTS_EPSILON ? tw / t.width : 1;
+    const sy = t.height > POINTS_EPSILON ? th / t.height : 1;
     const children = obj.children.map((child) => {
       const ct = child.transform;
       const childTarget = {
@@ -296,7 +300,7 @@ export function scalePartial(
     });
     return {
       children,
-      transform: { ...t, x: target.x, y: target.y, width: target.width, height: target.height },
+      transform: { ...t, x: target.x, y: target.y, width: tw, height: th },
     };
   }
   if (!isPointsBearing(obj)) {

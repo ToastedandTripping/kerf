@@ -258,6 +258,8 @@ export function MenuBar() {
         { label: "Keyboard Shortcuts", shortcut: "?", action: () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "?" })) },
         { type: "separator" },
         { label: "Welcome Guide", action: () => {
+          const store = useStore.getState();
+          if (store.isDirty && !confirm("You have unsaved changes. Reload to show the welcome guide?")) return;
           resetOnboarding();
           window.location.reload();
         }},

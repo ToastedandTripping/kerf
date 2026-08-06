@@ -9,7 +9,7 @@ const KNOWN_LASER_DEVICES: KnownDevice[] = [
   { vid: 0x1a86, pid: 0x5523, label: "CH341 (GRBL)" },
   { vid: 0x0403, pid: 0x6001, label: "FTDI FT232R" },
   { vid: 0x0403, pid: 0x6014, label: "FTDI FT232H" },
-  { vid: 0x10c6, pid: 0xea60, label: "CP2102 (SiLabs)" },
+  { vid: 0x10c4, pid: 0xea60, label: "CP2102 (SiLabs)" },
   { vid: 0x2341, pid: 0x0043, label: "Arduino Uno" },
   { vid: 0x2341, pid: 0x0042, label: "Arduino Mega" },
   { vid: 0x0483, pid: 0x5740, label: "STM32 VCP" },

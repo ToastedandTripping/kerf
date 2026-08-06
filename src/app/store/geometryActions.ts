@@ -366,12 +366,10 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
                 }));
                 const bb = pointsBBox(flippedPoints);
                 updateObject(obj.id, { points: flippedPoints, transform: { ...obj.transform, x: bb.x, y: bb.y, width: bb.width, height: bb.height } });
-              } else if (obj.type === "rectangle" || obj.type === "ellipse") {
+              } else {
+                // Reposition AND mirror (rect, ellipse, image, text, group)
                 const newX = allRight - (obj.transform.x - allLeft) - obj.transform.width;
                 updateObject(obj.id, { transform: { ...obj.transform, x: newX, scaleX: obj.transform.scaleX * -1 } });
-              } else {
-                const newX = allRight - (obj.transform.x - allLeft) - obj.transform.width;
-                updateObject(obj.id, movePartial(obj, newX, obj.transform.y));
               }
             } else {
               if ((obj.type === "path" || obj.type === "line") && obj.points) {
@@ -385,12 +383,10 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
                 }));
                 const bb = pointsBBox(flippedPoints);
                 updateObject(obj.id, { points: flippedPoints, transform: { ...obj.transform, x: bb.x, y: bb.y, width: bb.width, height: bb.height } });
-              } else if (obj.type === "rectangle" || obj.type === "ellipse") {
+              } else {
+                // Reposition AND mirror (rect, ellipse, image, text, group)
                 const newY = allBottom - (obj.transform.y - allTop) - obj.transform.height;
                 updateObject(obj.id, { transform: { ...obj.transform, y: newY, scaleY: obj.transform.scaleY * -1 } });
-              } else {
-                const newY = allBottom - (obj.transform.y - allTop) - obj.transform.height;
-                updateObject(obj.id, movePartial(obj, obj.transform.x, newY));
               }
             }
           }
