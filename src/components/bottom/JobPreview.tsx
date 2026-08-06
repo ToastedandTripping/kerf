@@ -8,7 +8,6 @@ const COLORS = {
   cut: "#E24A4A",       // Red - vector cuts
   engrave: "#c4a57b",   // Gold - engrave/fill
   laserHead: "#4AE28A", // Green - laser head dot
-  trail: "rgba(255,255,255,0.06)", // faint grid
 };
 
 interface Move {

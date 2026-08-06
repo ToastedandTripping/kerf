@@ -7,8 +7,8 @@ export function StatusBar() {
   // P4: Cursor position via useSyncExternalStore (removed from Zustand)
   const cursorPosition = useSyncExternalStore(subscribeCursorPosition, getCursorPosition);
   const camera = useStore((s) => s.camera);
-  const objects = useStore((s) => s.objects);
-  const selectedIds = useStore((s) => s.selectedIds);
+  const objectCount = useStore((s) => s.objects.length);
+  const selectedCount = useStore((s) => s.selectedIds.length);
   const gridVisible = useStore((s) => s.gridVisible);
   const snapToGrid = useStore((s) => s.snapToGrid);
   const machineState = useStore((s) => s.machineState);
@@ -46,8 +46,8 @@ export function StatusBar() {
         <span style={{ color: "var(--border)" }}>|</span>
 
         <span>
-          {objects.length} obj{objects.length !== 1 ? "s" : ""}
-          {selectedIds.length > 0 && ` / ${selectedIds.length} sel`}
+          {objectCount} obj{objectCount !== 1 ? "s" : ""}
+          {selectedCount > 0 && ` / ${selectedCount} sel`}
         </span>
         <Indicator label="Grid" active={gridVisible} />
         <Indicator label="Snap" active={snapToGrid} />
