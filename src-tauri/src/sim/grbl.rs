@@ -213,9 +213,12 @@ struct Faults {
 /// tolerant of leading zeros (`M05`, `M3 S0`, `M3S1000` all count), but
 /// requires the digits immediately after `M`/`m` to reduce to exactly 3, 4,
 /// or 5 — `M30` (program end) and `M8` (coolant) never match, nor does any
-/// non-`M` word (a coordinate like `X5`). Content inside `(...)` comments is
-/// skipped, so a remark that merely mentions "M5" never trips it.
+/// non-`M` word (a coordinate like `X5`). Content inside `(...)` comments and
+/// after `;` (semicolon end-of-line comments, used by Kerf's own G-code
+/// annotations like `; Cut: M5 bracket`) is skipped.
 fn contains_spindle_sync_mcode(text: &str) -> bool {
+    // Truncate at `;` before scanning — semicolon comments are end-of-line.
+    let text = text.split(';').next().unwrap_or("");
     let mut chars = text.chars().peekable();
     let mut in_comment = false;
     while let Some(c) = chars.next() {
@@ -246,8 +249,11 @@ fn contains_spindle_sync_mcode(text: &str) -> bool {
 
 /// True if `text` contains a stand-alone M5 command word — the spindle-off
 /// code. Same parsing rules as `contains_spindle_sync_mcode` (case-insensitive,
-/// leading-zero-tolerant, comment-aware) but matches only M5.
+/// leading-zero-tolerant, comment-aware including `;` truncation) but matches
+/// only M5.
 fn contains_spindle_off_mcode(text: &str) -> bool {
+    // Truncate at `;` before scanning — matches contains_spindle_sync_mcode.
+    let text = text.split(';').next().unwrap_or("");
     let mut chars = text.chars().peekable();
     let mut in_comment = false;
     while let Some(c) = chars.next() {
@@ -1217,6 +1223,56 @@ mod tests {
         port.write_all(b"~").unwrap();
         // spindle_on stays false -- resume doesn't re-enable the spindle
         assert!(!port.spindle_energized(), "resume does not re-energize spindle");
+    }
+
+    // P5 Finding 7: semicolon comments must be stripped before M-code scanning.
+    // Kerf's own G-code comments like `; Cut: M5 bracket` would false-trigger
+    // the hold-invariant if `;` comments aren't stripped.
+    #[test]
+    fn semicolon_comment_with_m5_does_not_trip_hold_invariant() {
+        let mut port = SimPort::new(SimConfig::default());
+        let _ = read_line_blocking(&mut port, 5); // banner
+
+        port.write_all(b"!").unwrap(); // feed hold
+        assert_eq!(port.machine_state(), MachineState::Hold);
+
+        // A line with M5 only in a semicolon comment — must NOT trip the invariant.
+        send_line(&mut port, "G1 X10 ; Cut: M5 bracket");
+        assert!(
+            port.hold_invariant_violations().is_empty(),
+            "M5 in a semicolon comment must not trip the hold invariant; got: {:?}",
+            port.hold_invariant_violations()
+        );
+    }
+
+    #[test]
+    fn semicolon_comment_with_m3_does_not_trip_hold_invariant() {
+        let mut port = SimPort::new(SimConfig::default());
+        let _ = read_line_blocking(&mut port, 5); // banner
+
+        port.write_all(b"!").unwrap(); // feed hold
+
+        // M3 in a comment: must not trip.
+        send_line(&mut port, "G0 X0 ; M3 S1000 not real");
+        assert!(
+            port.hold_invariant_violations().is_empty(),
+            "M3 in a semicolon comment must not trip the hold invariant"
+        );
+    }
+
+    // P5 Finding 7: real M5 before semicolon comment must still trip.
+    #[test]
+    fn real_m5_before_semicolon_comment_trips_invariant() {
+        let mut port = SimPort::new(SimConfig::default());
+        let _ = read_line_blocking(&mut port, 5); // banner
+
+        port.write_all(b"!").unwrap(); // feed hold
+
+        send_line(&mut port, "M5 ; laser off");
+        assert_eq!(
+            port.hold_invariant_violations().len(), 1,
+            "Real M5 before semicolon comment must trip the invariant"
+        );
     }
 
     #[test]

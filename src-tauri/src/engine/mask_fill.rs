@@ -18,6 +18,7 @@ use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Transform};
 
 use crate::engine::gcode_gen::{CutObject, GcodeMove, GcodeResult, PathSegment, RAPID_SPEED_MM_MIN};
 use crate::engine::image_gcode_gen::{estimate_simple_time, find_binary_runs, find_grayscale_runs};
+use crate::engine::limits;
 
 // ─── Alpha threshold for filled-vs-background classification ──────────────────
 // Pixels with alpha >= 128 are treated as "filled" (engrave).
@@ -109,6 +110,17 @@ pub fn scan_mask_to_gcode<'a>(
     h: usize,
     params: &MaskScanParams<'a>,
 ) -> Result<GcodeResult, String> {
+    // Validate grayscale_pixels length if provided.
+    if let Some(gray) = params.grayscale_pixels {
+        let expected = w * h;
+        if gray.len() != expected {
+            return Err(format!(
+                "grayscale_pixels length {} does not match mask dimensions {}x{} = {}",
+                gray.len(), w, h, expected
+            ));
+        }
+    }
+
     let mut lines: Vec<String> = Vec::new();
     let mut moves: Vec<GcodeMove> = Vec::new();
     let mut cut_distance = 0.0_f64;
@@ -450,7 +462,9 @@ pub fn fill_compound_mask(
         return Err("maskFill: object has no paths".to_string());
     }
 
-    let interval = if interval > 0.0 { interval } else { 0.1 };
+    let interval = limits::validated_interval(
+        if interval > 0.0 { interval } else { 0.1 }
+    );
 
     // Compute union bbox of all contours in obj.paths.
     // The object's x/y/width/height is already the axis-aligned union bbox of all
@@ -478,6 +492,11 @@ pub fn fill_compound_mask(
     // Mask dimensions: one pixel per interval
     let mask_w = (bbox_w / interval).ceil().max(1.0) as usize;
     let mask_h = (bbox_h / interval).ceil().max(1.0) as usize;
+
+    // Guard: reject oversized masks that would exhaust memory.
+    if let Err(e) = limits::check_raster_pixels(mask_w, mask_h) {
+        return Err(format!("maskFill '{}': {}", obj.id, e));
+    }
 
     // Build tiny-skia path from all path segments.
     // Each PathSegment becomes one subcontour (move_to/line_to*/close).
@@ -623,21 +642,25 @@ fn build_subcontour_dilated(
     let row_max = rows.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
     let row_center = (row_min + row_max) / 2.0;
 
-    // Expand each row coordinate away from the center by 0.5px
+    // Expand each row coordinate away from the center by 0.5px.
+    // Points exactly at `row_center` (within epsilon) cannot be expanded
+    // "away" from the center because there is no directional signal. In the
+    // `all_same` branch below, these are handled with the alternating
+    // +0.5/-0.5 expansion. In the non-`all_same` branch (multi-row contour),
+    // center-coincident points stay at their original row -- acceptable
+    // because they lie between points that ARE expanded, so the contour
+    // still covers more area than the undilated version.
     let dilated_rows: Vec<f32> = rows.iter().map(|&r| {
         let d = r - row_center;
         if d.abs() < 1e-6 {
-            // Point at exact center: expand in the direction that keeps contour CCW.
-            // For a degenerate single-row contour (thin horizontal stroke), push
-            // top half up and bottom half down. Since all points are at center,
-            // distribute top and bottom halves by index parity.
-            r // will be handled by the +0.5 / -0.5 expansion below
+            r // center-coincident: no expansion direction available
         } else {
             row_center + d.signum() * (d.abs() + 0.5)
         }
     }).collect();
 
-    // If all points collapsed to the same row (degenerate), just expand uniformly
+    // If all points collapsed to the same row (degenerate), use the
+    // alternating +0.5/-0.5 expansion to create a 1-pixel-tall strip.
     let all_same = (row_max - row_min).abs() < 1e-6;
     let half = seg.points.len() / 2;
 

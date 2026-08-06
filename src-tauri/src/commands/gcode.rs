@@ -162,8 +162,7 @@ pub async fn generate_gcode(
             }
         }
 
-        let result = gcode_gen::generate_gcode(&final_objects, workspace_height, s_value_max, origin_top);
-        Ok(result)
+        gcode_gen::generate_gcode(&final_objects, workspace_height, s_value_max, origin_top)
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?

@@ -136,8 +136,8 @@ pub fn preview_dither(req: &ImageEngraveRequest) -> Result<(Vec<u8>, u32, u32), 
     } else {
         req.dither.clone()
     };
-    let algorithm = DitherAlgorithm::from_str(&dither_str);
-    let dithered = dither_image(&pixels, target_w, target_h, algorithm, 128);
+    let algorithm = DitherAlgorithm::from_str(&dither_str)?;
+    let dithered = dither_image(&pixels, target_w, target_h, algorithm, 128)?;
 
     Ok((dithered, target_w, target_h))
 }
@@ -148,7 +148,7 @@ pub fn generate(req: &ImageEngraveRequest) -> Result<GcodeResult, String> {
     let (dithered, target_w, target_h) = preview_dither(req)?;
 
     // 6. Generate scan-line G-code
-    let algorithm = DitherAlgorithm::from_str(&req.dither);
+    let algorithm = DitherAlgorithm::from_str(&req.dither)?;
     let is_grayscale = algorithm == DitherAlgorithm::Grayscale;
     generate_scan_gcode(req, &dithered, target_w, target_h, is_grayscale)
 }
