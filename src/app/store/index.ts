@@ -257,11 +257,14 @@ export const useStore = create<AppState>((set, get) => ({
   // F15: layer params (power/speed/mode/passes…) feed G-code, so every layer
   // write stales it. Name/color edits over-trigger; accepted — safe direction,
   // not worth a field carve-out.
+  // P3-B: isDirty was missing — a session that only adjusts layer settings
+  // (the most common workflow) would not trigger save prompts.
   updateLayer: (index, partial) =>
     set((state) => ({
       layers: state.layers.map((l) =>
         l.index === index ? { ...l, ...partial } : l
       ),
+      isDirty: true,
       gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
     })),
   reorderLayers: (fromIndex, toIndex) =>
@@ -295,6 +298,7 @@ export const useStore = create<AppState>((set, get) => ({
   // Lazily initialises lineOverlay with defaults if absent (lifecycle: entering
   // fillLine mode initialises it only if absent; a mode change AWAY from fillLine
   // does NOT delete it, preserving round-trip settings).
+  // P3-B: isDirty was missing — lineOverlay edits are layer-level changes.
   updateLineOverlay: (layerIndex, changes) =>
     set((state) => ({
       layers: state.layers.map((l) => {
@@ -308,6 +312,7 @@ export const useStore = create<AppState>((set, get) => ({
         };
         return { ...l, lineOverlay: { ...existing, ...changes } };
       }),
+      isDirty: true,
       gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
     })),
 
@@ -456,10 +461,13 @@ export const useStore = create<AppState>((set, get) => ({
 
   // Materials
   materials: DEFAULT_MATERIALS,
-  addMaterial: (m) => set((state) => ({ materials: [...state.materials, m] })),
-  removeMaterial: (id) => set((state) => ({ materials: state.materials.filter((m) => m.id !== id) })),
+  // P3-B: isDirty was missing on all material mutations — materials are
+  // persisted in the project file, so changes must trigger save prompts.
+  addMaterial: (m) => set((state) => ({ materials: [...state.materials, m], isDirty: true })),
+  removeMaterial: (id) => set((state) => ({ materials: state.materials.filter((m) => m.id !== id), isDirty: true })),
   updateMaterial: (id, partial) => set((state) => ({
     materials: state.materials.map((m) => m.id === id ? { ...m, ...partial } : m),
+    isDirty: true,
   })),
 
   // Machine connection

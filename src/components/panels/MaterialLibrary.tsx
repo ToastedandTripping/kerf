@@ -2,6 +2,35 @@ import { useState } from "react";
 import { useStore } from "../../app/store";
 import type { MaterialPreset } from "../../app/types";
 
+// P3-B: Validate that an object has the minimum shape of a MaterialPreset.
+// Returns true only if all required fields are present and have correct types.
+function isValidPreset(obj: unknown): obj is MaterialPreset {
+  if (typeof obj !== "object" || obj === null) return false;
+  const p = obj as Record<string, unknown>;
+  return (
+    typeof p.id === "string" && p.id.length > 0 &&
+    typeof p.name === "string" && p.name.length > 0 &&
+    typeof p.material === "string" &&
+    typeof p.thickness === "string" &&
+    typeof p.mode === "string" &&
+    typeof p.power === "number" && Number.isFinite(p.power) &&
+    typeof p.speed === "number" && Number.isFinite(p.speed) &&
+    typeof p.passes === "number" && Number.isFinite(p.passes)
+  );
+}
+
+// Inline preset form field style
+const fieldStyle: React.CSSProperties = {
+  background: "var(--bg-input)",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--radius-sm)",
+  color: "var(--text-primary)",
+  padding: "4px 8px",
+  fontSize: "11px",
+  width: "100%",
+  boxSizing: "border-box",
+};
+
 export function MaterialLibrary() {
   const materials = useStore((s) => s.materials);
   const layers = useStore((s) => s.layers);
@@ -9,6 +38,12 @@ export function MaterialLibrary() {
   const updateLayer = useStore((s) => s.updateLayer);
   const [filter, setFilter] = useState("");
   const [expanded, setExpanded] = useState(false);
+
+  // P3-B: Inline form state replaces window.prompt (no-op in Tauri webviews).
+  const [showSaveForm, setShowSaveForm] = useState(false);
+  const [presetName, setPresetName] = useState("");
+  const [presetMaterial, setPresetMaterial] = useState("");
+  const [presetThickness, setPresetThickness] = useState("");
 
   const grouped = materials.reduce<Record<string, MaterialPreset[]>>((acc, m) => {
     const key = `${m.material} ${m.thickness}`;
@@ -33,21 +68,16 @@ export function MaterialLibrary() {
     });
   }
 
-  function saveCurrentAsPreset() {
+  // P3-B: Replaced window.prompt flow with inline form submission.
+  function handleSavePreset() {
     const layer = layers[activeLayerIndex];
-    if (!layer) return;
-    const name = prompt("Preset name (e.g. 'Birch Plywood 3mm Cut'):");
-    if (!name) return;
-    const material = prompt("Material type (e.g. 'Plywood'):");
-    if (!material) return;
-    const thickness = prompt("Thickness (e.g. '3mm'):");
-    if (!thickness) return;
+    if (!layer || !presetName.trim()) return;
 
     const preset: MaterialPreset = {
       id: `custom_${Date.now()}`,
-      name,
-      material,
-      thickness,
+      name: presetName.trim(),
+      material: presetMaterial.trim() || "Custom",
+      thickness: presetThickness.trim() || "",
       mode: layer.mode,
       power: layer.power,
       powerMin: layer.powerMin,
@@ -57,6 +87,17 @@ export function MaterialLibrary() {
       interval: layer.interval,
     };
     useStore.getState().addMaterial(preset);
+    setShowSaveForm(false);
+    setPresetName("");
+    setPresetMaterial("");
+    setPresetThickness("");
+  }
+
+  function cancelSavePreset() {
+    setShowSaveForm(false);
+    setPresetName("");
+    setPresetMaterial("");
+    setPresetThickness("");
   }
 
   async function exportMaterials() {
@@ -84,13 +125,33 @@ export function MaterialLibrary() {
       });
       if (!path) return;
       const content = await fs.readTextFile(typeof path === "string" ? path : String(path));
-      const imported = JSON.parse(content) as MaterialPreset[];
-      if (!Array.isArray(imported)) return;
+      const parsed = JSON.parse(content);
+      if (!Array.isArray(parsed)) {
+        useStore.getState().addConsoleLine("Import failed: file is not a material preset array", "error");
+        return;
+      }
+      // P3-B: Validate each entry before importing.
       const existing = new Set(materials.map((m) => m.id));
-      for (const preset of imported) {
-        if (!existing.has(preset.id)) {
-          useStore.getState().addMaterial(preset);
+      let imported = 0;
+      let skipped = 0;
+      for (const entry of parsed) {
+        if (!isValidPreset(entry)) {
+          skipped++;
+          continue;
         }
+        if (!existing.has(entry.id)) {
+          useStore.getState().addMaterial(entry);
+          existing.add(entry.id);
+          imported++;
+        }
+      }
+      if (skipped > 0) {
+        useStore.getState().addConsoleLine(
+          `Imported ${imported} preset${imported !== 1 ? "s" : ""}, skipped ${skipped} invalid entr${skipped !== 1 ? "ies" : "y"}`,
+          skipped > 0 && imported === 0 ? "error" : "warning",
+        );
+      } else if (imported > 0) {
+        useStore.getState().addConsoleLine(`Imported ${imported} preset${imported !== 1 ? "s" : ""}`, "info");
       }
     } catch (e) {
       useStore.getState().addConsoleLine(`Import materials failed: ${e}`, "error");
@@ -120,7 +181,7 @@ export function MaterialLibrary() {
         }}
       >
         <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>
-          {expanded ? "\u25BC" : "\u25B6"}
+          {expanded ? "▼" : "▶"}
         </span>
         Material Library
       </div>
@@ -144,7 +205,7 @@ export function MaterialLibrary() {
               }}
             />
             <button
-              onClick={saveCurrentAsPreset}
+              onClick={() => setShowSaveForm(true)}
               title="Save current layer settings as preset"
               style={{
                 background: "var(--bg-input)",
@@ -189,6 +250,74 @@ export function MaterialLibrary() {
               Import
             </button>
           </div>
+
+          {/* P3-B: Inline save preset form (replaces window.prompt) */}
+          {showSaveForm && (
+            <div style={{
+              padding: "8px",
+              marginBottom: "6px",
+              background: "var(--bg-elevated)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-sm)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "4px",
+            }}>
+              <input
+                placeholder="Preset name (e.g. Birch Plywood 3mm Cut)"
+                value={presetName}
+                onChange={(e) => setPresetName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleSavePreset(); if (e.key === "Escape") cancelSavePreset(); }}
+                autoFocus
+                style={fieldStyle}
+              />
+              <input
+                placeholder="Material (e.g. Plywood)"
+                value={presetMaterial}
+                onChange={(e) => setPresetMaterial(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleSavePreset(); if (e.key === "Escape") cancelSavePreset(); }}
+                style={fieldStyle}
+              />
+              <input
+                placeholder="Thickness (e.g. 3mm)"
+                value={presetThickness}
+                onChange={(e) => setPresetThickness(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleSavePreset(); if (e.key === "Escape") cancelSavePreset(); }}
+                style={fieldStyle}
+              />
+              <div style={{ display: "flex", gap: "4px", justifyContent: "flex-end" }}>
+                <button
+                  onClick={cancelSavePreset}
+                  style={{
+                    background: "none",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius-sm)",
+                    color: "var(--text-secondary)",
+                    padding: "3px 10px",
+                    fontSize: "10px",
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSavePreset}
+                  disabled={!presetName.trim()}
+                  style={{
+                    background: presetName.trim() ? "var(--accent)" : "var(--bg-input)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius-sm)",
+                    color: presetName.trim() ? "#fff" : "var(--text-muted)",
+                    padding: "3px 10px",
+                    fontSize: "10px",
+                    cursor: presetName.trim() ? "pointer" : "default",
+                  }}
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Material groups */}
           <div style={{ maxHeight: "200px", overflow: "auto" }}>

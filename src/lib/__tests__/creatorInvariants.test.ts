@@ -371,14 +371,17 @@ describe("pen tool (pointer pipeline)", () => {
 });
 
 describe("text to path", () => {
-  it("convertTextToPath FALLBACK (font load failure) creates an invariant-coherent box path", async () => {
+  // P3-B: On font load failure the text object must stay unchanged (type "text").
+  // The old behavior silently substituted a bounding-box rectangle — a laser
+  // safety hazard (cuts a rectangle where text was expected).
+  it("convertTextToPath FALLBACK (font load failure) leaves text object unchanged", async () => {
     (opentype.load as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("no font in jsdom"));
     const text = { ...makeText("t1", "A"), transform: { x: 20, y: 30, width: 40, height: 18, rotation: 0, scaleX: 1, scaleY: 1 } };
     useStore.getState().addObject(text);
     await useStore.getState().convertTextToPath("t1");
     const obj = useStore.getState().objects.find((o) => o.id === "t1")!;
-    expect(obj.type).toBe("path");
-    assertPointsInvariant(obj);
+    expect(obj.type).toBe("text");
+    expect(obj.text).toBe("A");
   });
 
   it("textObjectToPaths glyph output satisfies the invariant (synthetic font)", async () => {

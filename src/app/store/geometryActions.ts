@@ -536,19 +536,13 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
           setSelectedIds(newIds);
         });
       } catch (e) {
+        // P3-B: Do NOT silently substitute a bounding-box rectangle — the laser
+        // would cut a rectangle where text was expected. Leave the text object
+        // unchanged and surface the error to the user.
         console.error("Text to path conversion failed:", e);
-        get().withUndo("convert-to-path", () => {
-          get().updateObject(id, {
-            type: "path",
-            points: [
-              { x: obj.transform.x, y: obj.transform.y },
-              { x: obj.transform.x + obj.transform.width, y: obj.transform.y },
-              { x: obj.transform.x + obj.transform.width, y: obj.transform.y + obj.transform.height },
-              { x: obj.transform.x, y: obj.transform.y + obj.transform.height },
-            ],
-            closed: true,
-          });
-        });
+        const msg = e instanceof Error ? e.message : String(e);
+        get().addConsoleLine(`Text to path failed: ${msg}`, "error");
+        get().setStatusMessage(`Font conversion failed — text object unchanged`);
       }
     },
 
