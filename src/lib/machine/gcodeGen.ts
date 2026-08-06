@@ -306,6 +306,11 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
           points: sampled,
           closed: obj.closed || false,
         });
+      } else {
+        const synth = synthesizeFillContour(obj);
+        if (synth) {
+          contourPaths.push(synth);
+        }
       }
 
       const { x, y, width, height } = obj.transform;
