@@ -405,6 +405,26 @@ These are deliberate exclusions, not oversights:
 └─────────────────────────────────────┘
 ```
 
+## Parking Lot — every deferral, one index
+
+This is the single entry point for named-but-unscheduled work.
+
+Rule: a deferral is recorded here or it does not exist. The detailed sections below are kept
+verbatim and are not to be edited into summaries — this index points at them.
+
+- **v0.9 — Camera & Rotary** — parked behind gate D4 (hardware unconfirmed). See
+  `## v0.9 — Camera & Rotary (Parked — decision-gated)` above.
+- **v1.0 — Profiles, Text & Community** — parked behind gate D3. See
+  `## v1.0 — Profiles, Text & Community (Parked — decision-gated)` above.
+- **Deliberate exclusions** — see `## What We're NOT Building` above.
+- **Phase 2 (character-counting streaming rework)** — designed, not started; blocked on owner
+  hardware verification. See `## Hardening & Efficiency Program (2026-07)` above.
+- **Gate D2 — Clipper2 dependency + kerf-offset-on-fillLine (Phase 4 entry)** — undecided;
+  "Lee + architect call". See the gate table in `## Hardening & Efficiency Program (2026-07)`.
+- **SVG path-coordinate drift repro** — open since 2026-06-21, unreproduced; awaiting a sample
+  Inkscape SVG. Import/transform code audited clean (`.claude/DECISIONS.md` → Evidence
+  corrections).
+
 ## Reference
 
 - Repo: github.com/ToastedandTripping/kerf (public, master branch)
