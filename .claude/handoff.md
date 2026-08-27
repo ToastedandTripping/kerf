@@ -20,19 +20,23 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 ## Owed right now
 
-- **v0.8.25 owner hardware test not yet run.** Test card (`docs/test-card.md`)
-  covers pause/resume 0x9E, disconnect safety, rotated compound fill, ellipse
-  on Engrave, save round-trip, shortcuts. This is the verification gate for
-  everything shipped in the comprehensive remediation.
+- **OWNER HARDWARE TEST on v0.8.26 — Lee's hands, next step.** Test card
+  (`docs/test-card.md`) covers pause/resume 0x9E, disconnect safety, rotated
+  compound fill, ellipse on Engrave, save round-trip, shortcuts. v0.8.26
+  Build workflow in progress; once published, Lee runs the card on the built
+  binary against his laser. This is the verification gate for everything
+  shipped in the comprehensive remediation AND the limits wiring.
 
-- **~~Confirm the owner's laser is back in service.~~** Confirmed by Lee 2026-08-27.
-  DECISIONS.md constraint reversed. Hardware test and Phase 2 unblocked.
-
-- **Phase 2A plan reviewed and ready for implementation.** Plan
+- **Phase 2A plan reviewed, blocked on hardware test.** Plan
   (`~/.claude/plans/prancy-fluttering-wave.md`) critic-reviewed (Opus,
-  2026-08-26; Fable rate-limited, sanctioned fallback): 10 core PASS, X1/X5
-  gating PASS, X6/X8 advisory PASS, two advisory items folded. Implementation
-  via relay, blocked on the hardware test above + laser confirmation.
+  2026-08-26, all 14 dimensions PASS). Laser confirmed 2026-08-27.
+  Implementation via relay starts after the hardware test passes.
+
+- **Limits relay shipped without Razor review.** The kerf-limits-wiring
+  relay (4a33dec) completed Ted (DONE, 216 tests, mutation-verified) but
+  shipped in v0.8.26 before Razor Stage 2 ran. The fixes mirror existing
+  code and are memory-safety guards (not laser-behavior changes), but the
+  review gap is on record. Razor can post-review on the next relay.
 
 ## Open questions awaiting Lee
 
