@@ -32,11 +32,10 @@ in this project has already been ruled on, usually for a reason that is not obvi
   2026-08-26, all 14 dimensions PASS). Laser confirmed 2026-08-27.
   Implementation via relay starts after the hardware test passes.
 
-- **Limits relay shipped without Razor review.** The kerf-limits-wiring
-  relay (4a33dec) completed Ted (DONE, 216 tests, mutation-verified) but
-  shipped in v0.8.26 before Razor Stage 2 ran. The fixes mirror existing
-  code and are memory-safety guards (not laser-behavior changes), but the
-  review gap is on record. Razor can post-review on the next relay.
+- **Limits relay: Razor post-ship PASS.** The kerf-limits-wiring relay
+  (4a33dec) shipped in v0.8.26 before Razor ran. Post-ship cold-eyes
+  review (Opus): PASS — 0 CRITICAL, 0 WARNING, 0 NOTE. All guards
+  correctly wired, no bypass paths, tests non-tautological. Gate closed.
 
 ## Open questions awaiting Lee
 
