@@ -315,7 +315,7 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
 
       const { x, y, width, height } = obj.transform;
       // After baking rotation, recompute extent from actual points.
-      let bx = x, by = y, bx2 = x + width, by2 = y + height;
+      let bx: number, by: number, bx2: number, by2: number;
       if (contourPaths.length > 0 && (obj.transform.rotation || 0) !== 0) {
         const pts = contourPaths[0].points;
         bx = Math.min(...pts.map((p) => p.x));

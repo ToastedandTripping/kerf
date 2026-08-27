@@ -237,9 +237,9 @@ describe("P3-A Finding 6: .bak per-path tracking", () => {
     resetStore();
   });
 
-  it("capabilities/default.json includes fs:allow-rename", () => {
-    const fs = require("node:fs");
-    const path = require("node:path");
+  it("capabilities/default.json includes fs:allow-rename", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
     const capPath = path.resolve(
       __dirname,
       "../../../../src-tauri/capabilities/default.json",
