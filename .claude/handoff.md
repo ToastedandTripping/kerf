@@ -25,8 +25,8 @@ in this project has already been ruled on, usually for a reason that is not obvi
   on Engrave, save round-trip, shortcuts. This is the verification gate for
   everything shipped in the comprehensive remediation.
 
-- **Confirm the owner's laser is back in service.** The standing hardware constraint in
-  `DECISIONS.md` blocks both the item above and Phase 2's owner laser session #1.
+- **~~Confirm the owner's laser is back in service.~~** Confirmed by Lee 2026-08-27.
+  DECISIONS.md constraint reversed. Hardware test and Phase 2 unblocked.
 
 - **Phase 2A plan reviewed and ready for implementation.** Plan
   (`~/.claude/plans/prancy-fluttering-wave.md`) critic-reviewed (Opus,
@@ -38,7 +38,7 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 | Question                                                                                            | Why it matters                                                                                                       | Raised     |
 | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------- |
-| Is the laser repaired and back in service?                                                          | Blocks the v0.8.25 hardware test and the Phase 2 owner laser session — nothing hardware-gated can proceed without it | 2026-07-10 |
+| ~~Is the laser repaired and back in service?~~ **Confirmed 2026-08-27**                             | Constraint lifted. Hardware test and Phase 2 unblocked.                                                              | 2026-07-10 |
 | Can you provide a sample Inkscape SVG that reproduces the path-coordinate drift?                    | Bug can't be fixed without a repro; the import code has been audited clean otherwise                                 | 2026-06-21 |
 | Clipper2 dependency decision for Phase 4 (offsetFill compound correctness, kerf-offset-on-fillLine) | Gate D2 — changes real cut geometry output, needs your sign-off before Phase 4 starts                                | 2026-07-05 |
 | v0.9 Camera & Rotary — do you have/plan to get the hardware?                                        | Gate D4 — the feature stays parked with no planning until confirmed                                                  | 2026-07-05 |
