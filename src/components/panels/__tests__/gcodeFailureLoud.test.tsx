@@ -110,11 +110,20 @@ describe("Rust-engine failure is loud and blocking (fallback deleted)", () => {
   it("FIRST-generation failure: console + status line, gcodeResult stays null, START/FRAME blocked", async () => {
     mockBrokenEngine();
     useStore.getState().addObject(makeRect("r1"));
-    const { getByText } = render(<><MachinePanel /><JobActionBar /></>);
+    const { getByText } = render(
+      <>
+        <MachinePanel />
+        <JobActionBar />
+      </>
+    );
 
     fireEvent.click(getByText("Generate G-code"));
     await waitFor(() =>
-      expect(consoleTexts().some((t) => t.includes("G-code generation failed") && t.includes("engine exploded"))).toBe(true),
+      expect(
+        consoleTexts().some(
+          (t) => t.includes("G-code generation failed") && t.includes("engine exploded")
+        )
+      ).toBe(true)
     );
     expect(useStore.getState().statusMessage).toBe("G-code generation failed — see console");
     expect(useStore.getState().gcodeResult).toBeNull();
@@ -133,11 +142,16 @@ describe("Rust-engine failure is loud and blocking (fallback deleted)", () => {
     useStore.setState({ gcodeResult: prev });
     useStore.getState().addObject(makeRect("r1")); // objects write flips gcodeStale
     expect(useStore.getState().gcodeStale).toBe(true);
-    const { getByText } = render(<><MachinePanel /><JobActionBar /></>);
+    const { getByText } = render(
+      <>
+        <MachinePanel />
+        <JobActionBar />
+      </>
+    );
 
     fireEvent.click(getByText("Regenerate G-code"));
     await waitFor(() =>
-      expect(consoleTexts().some((t) => t.includes("G-code generation failed"))).toBe(true),
+      expect(consoleTexts().some((t) => t.includes("G-code generation failed"))).toBe(true)
     );
     // Untouched, not nulled: the previous result object is still there…
     expect(useStore.getState().gcodeResult).toBe(prev);
@@ -152,11 +166,16 @@ describe("Rust-engine failure is loud and blocking (fallback deleted)", () => {
   it("preview button does NOT open the preview when generation fails", async () => {
     mockBrokenEngine();
     useStore.getState().addObject(makeRect("r1"));
-    const { getByText } = render(<><MachinePanel /><JobActionBar /></>);
+    const { getByText } = render(
+      <>
+        <MachinePanel />
+        <JobActionBar />
+      </>
+    );
 
     fireEvent.click(getByText("Preview"));
     await waitFor(() =>
-      expect(consoleTexts().some((t) => t.includes("G-code generation failed"))).toBe(true),
+      expect(consoleTexts().some((t) => t.includes("G-code generation failed"))).toBe(true)
     );
     expect(useStore.getState().previewVisible).toBe(false);
   });

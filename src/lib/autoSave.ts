@@ -66,7 +66,10 @@ export function stopAutoSave(): void {
   }
 }
 
-export async function checkRecoveryFile(): Promise<{ project: ReturnType<typeof useStore.getState>["toProject"] extends () => infer R ? R : never; timestamp: number } | null> {
+export async function checkRecoveryFile(): Promise<{
+  project: ReturnType<typeof useStore.getState>["toProject"] extends () => infer R ? R : never;
+  timestamp: number;
+} | null> {
   try {
     const recoveryPath = await getRecoveryPath();
     if (!recoveryPath) return null;

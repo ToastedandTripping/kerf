@@ -30,9 +30,11 @@ function importDroppedImage(file: File) {
     const base64 = reader.result as string;
     const img = new Image();
     img.onload = () => {
-      import("../app/App").then(({ openImageImport }) => {
-        openImageImport(base64, file.name, img.width, img.height);
-      }).catch(console.error);
+      import("../app/App")
+        .then(({ openImageImport }) => {
+          openImageImport(base64, file.name, img.width, img.height);
+        })
+        .catch(console.error);
     };
     img.src = base64;
   };
@@ -43,9 +45,11 @@ function importDroppedSvg(file: File) {
   const reader = new FileReader();
   reader.onload = () => {
     const svgContent = reader.result as string;
-    import("../app/App").then(({ openSvgImport }) => {
-      openSvgImport(svgContent);
-    }).catch(console.error);
+    import("../app/App")
+      .then(({ openSvgImport }) => {
+        openSvgImport(svgContent);
+      })
+      .catch(console.error);
   };
   reader.readAsText(file);
 }
@@ -54,9 +58,11 @@ function importDroppedPdf(file: File) {
   const reader = new FileReader();
   reader.onload = () => {
     const arrayBuffer = reader.result as ArrayBuffer;
-    import("../app/App").then(({ openPdfImport }) => {
-      openPdfImport(arrayBuffer, file.name);
-    }).catch(console.error);
+    import("../app/App")
+      .then(({ openPdfImport }) => {
+        openPdfImport(arrayBuffer, file.name);
+      })
+      .catch(console.error);
   };
   reader.readAsArrayBuffer(file);
 }
@@ -65,15 +71,19 @@ function importDroppedDxf(file: File) {
   const reader = new FileReader();
   reader.onload = () => {
     const content = reader.result as string;
-    import("./fileOps").then(({ importDxfDirect }) => {
-      const beforeCount = useStore.getState().objects.length;
-      importDxfDirect(content);
-      const afterCount = useStore.getState().objects.length;
-      const added = afterCount - beforeCount;
-      if (added > 0) {
-        useStore.getState().setStatusMessage(`Imported ${file.name} -- ${added} object${added !== 1 ? "s" : ""}`);
-      }
-    }).catch(console.error);
+    import("./fileOps")
+      .then(({ importDxfDirect }) => {
+        const beforeCount = useStore.getState().objects.length;
+        importDxfDirect(content);
+        const afterCount = useStore.getState().objects.length;
+        const added = afterCount - beforeCount;
+        if (added > 0) {
+          useStore
+            .getState()
+            .setStatusMessage(`Imported ${file.name} -- ${added} object${added !== 1 ? "s" : ""}`);
+        }
+      })
+      .catch(console.error);
   };
   reader.readAsText(file);
 }

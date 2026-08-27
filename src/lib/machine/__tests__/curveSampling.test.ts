@@ -29,7 +29,10 @@ import { DEFAULT_LAYERS } from "../../../app/types";
 const K = 0.5522847498; // circle-from-cubics constant (same as convertToPath)
 
 function basePath(id: string, points: PathPoint[], closed: boolean, layerIndex = 0): DesignObject {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
   for (const p of points) {
     if (p.x < minX) minX = p.x;
     if (p.y < minY) minY = p.y;
@@ -40,7 +43,15 @@ function basePath(id: string, points: PathPoint[], closed: boolean, layerIndex =
     id,
     type: "path",
     name: `Path ${id}`,
-    transform: { x: minX, y: minY, width: maxX - minX, height: maxY - minY, rotation: 0, scaleX: 1, scaleY: 1 },
+    transform: {
+      x: minX,
+      y: minY,
+      width: maxX - minX,
+      height: maxY - minY,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+    },
     layerIndex,
     visible: true,
     locked: false,
@@ -56,10 +67,30 @@ function basePath(id: string, points: PathPoint[], closed: boolean, layerIndex =
 /** The 4-anchor bezier circle convertToPath produces for an ellipse. */
 function bezierCirclePoints(cx: number, cy: number, r: number): PathPoint[] {
   return [
-    { x: cx, y: cy - r, handleIn: { x: cx + r * K, y: cy - r }, handleOut: { x: cx - r * K, y: cy - r } },
-    { x: cx - r, y: cy, handleIn: { x: cx - r, y: cy - r * K }, handleOut: { x: cx - r, y: cy + r * K } },
-    { x: cx, y: cy + r, handleIn: { x: cx - r * K, y: cy + r }, handleOut: { x: cx + r * K, y: cy + r } },
-    { x: cx + r, y: cy, handleIn: { x: cx + r, y: cy + r * K }, handleOut: { x: cx + r, y: cy - r * K } },
+    {
+      x: cx,
+      y: cy - r,
+      handleIn: { x: cx + r * K, y: cy - r },
+      handleOut: { x: cx - r * K, y: cy - r },
+    },
+    {
+      x: cx - r,
+      y: cy,
+      handleIn: { x: cx - r, y: cy - r * K },
+      handleOut: { x: cx - r, y: cy + r * K },
+    },
+    {
+      x: cx,
+      y: cy + r,
+      handleIn: { x: cx - r * K, y: cy + r },
+      handleOut: { x: cx + r * K, y: cy + r },
+    },
+    {
+      x: cx + r,
+      y: cy,
+      handleIn: { x: cx + r, y: cy + r * K },
+      handleOut: { x: cx + r, y: cy - r * K },
+    },
   ];
 }
 
@@ -68,13 +99,17 @@ function assertNoConsecutiveDuplicates(points: Array<{ x: number; y: number }>):
     const same =
       Math.abs(points[i].x - points[i - 1].x) <= POINTS_EPSILON &&
       Math.abs(points[i].y - points[i - 1].y) <= POINTS_EPSILON;
-    expect(same, `consecutive duplicate at index ${i}: (${points[i].x}, ${points[i].y})`).toBe(false);
+    expect(same, `consecutive duplicate at index ${i}: (${points[i].x}, ${points[i].y})`).toBe(
+      false
+    );
   }
 }
 
 describe("F2: bezier sampling at toCutObjects serialization", () => {
   it("4-anchor bezier circle: dense polyline within chord tolerance of the true circle (diamond repro dead)", () => {
-    const cx = 30, cy = 30, r = 20;
+    const cx = 30,
+      cy = 30,
+      r = 20;
     const obj = basePath("c1", bezierCirclePoints(cx, cy, r), true);
     const { objects } = toCutObjectsForTest([obj], DEFAULT_LAYERS);
     expect(objects).toHaveLength(1);
@@ -93,7 +128,8 @@ describe("F2: bezier sampling at toCutObjects serialization", () => {
     for (let i = 0; i < pts.length; i++) {
       const a = pts[i];
       const b = pts[(i + 1) % pts.length]; // closing chord included (Rust appends gpts[0])
-      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      const mx = (a.x + b.x) / 2,
+        my = (a.y + b.y) / 2;
       expect(Math.abs(Math.hypot(mx - cx, my - cy) - r)).toBeLessThanOrEqual(bound);
     }
     assertNoConsecutiveDuplicates(pts);
@@ -114,25 +150,35 @@ describe("F2: bezier sampling at toCutObjects serialization", () => {
     // Red-before: 3 anchor points, closing curve cut as a chord.
     expect(out.length).toBeGreaterThan(3);
     // Samples BEYOND the last anchor exist (the closing curve's interior) …
-    const lastAnchorIdx = out.findIndex((p) => Math.abs(p.x - 20) < 1e-9 && Math.abs(p.y - 30) < 1e-9);
+    const lastAnchorIdx = out.findIndex(
+      (p) => Math.abs(p.x - 20) < 1e-9 && Math.abs(p.y - 30) < 1e-9
+    );
     expect(lastAnchorIdx).toBeGreaterThan(-1);
     expect(out.length - 1).toBeGreaterThan(lastAnchorIdx);
     // …but the terminal point (= first anchor) is NEVER emitted: Rust appends
     // gpts[0]; a duplicate would make a zero-length G1 seam.
     const last = out[out.length - 1];
-    expect(Math.abs(last.x - out[0].x) > POINTS_EPSILON || Math.abs(last.y - out[0].y) > POINTS_EPSILON).toBe(true);
+    expect(
+      Math.abs(last.x - out[0].x) > POINTS_EPSILON || Math.abs(last.y - out[0].y) > POINTS_EPSILON
+    ).toBe(true);
     expect(objects[0].paths[0].closed).toBe(true);
     assertNoConsecutiveDuplicates(out);
   });
 
   it("straight-segment path serializes byte-identical to the anchors (characterization)", () => {
     const square: PathPoint[] = [
-      { x: 10, y: 10 }, { x: 30, y: 10 }, { x: 30, y: 30 }, { x: 10, y: 30 },
+      { x: 10, y: 10 },
+      { x: 30, y: 10 },
+      { x: 30, y: 30 },
+      { x: 10, y: 30 },
     ];
     const obj = basePath("s1", square, true);
     const { objects } = toCutObjectsForTest([obj], DEFAULT_LAYERS);
     expect(objects[0].paths[0].points).toEqual([
-      { x: 10, y: 10 }, { x: 30, y: 10 }, { x: 30, y: 30 }, { x: 10, y: 30 },
+      { x: 10, y: 10 },
+      { x: 30, y: 10 },
+      { x: 30, y: 30 },
+      { x: 10, y: 30 },
     ]);
     expect(objects[0].paths[0].closed).toBe(true);
   });
@@ -156,26 +202,51 @@ describe("F2: bezier sampling at toCutObjects serialization", () => {
 
   it("ε-dedup uses POINTS_EPSILON, not the chord tolerance: anchors 0.001mm apart BOTH survive", () => {
     const out = sampleBezierPath(
-      [{ x: 0, y: 0 }, { x: 0.001, y: 0 }, { x: 10, y: 0 }],
-      false,
+      [
+        { x: 0, y: 0 },
+        { x: 0.001, y: 0 },
+        { x: 10, y: 0 },
+      ],
+      false
     );
-    expect(out).toEqual([{ x: 0, y: 0 }, { x: 0.001, y: 0 }, { x: 10, y: 0 }]);
+    expect(out).toEqual([
+      { x: 0, y: 0 },
+      { x: 0.001, y: 0 },
+      { x: 10, y: 0 },
+    ]);
   });
 
   it("exact duplicate anchors are dropped on emit (real imports carry them)", () => {
     const out = sampleBezierPath(
-      [{ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 0 }],
-      false,
+      [
+        { x: 0, y: 0 },
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 10, y: 0 },
+      ],
+      false
     );
-    expect(out).toEqual([{ x: 0, y: 0 }, { x: 10, y: 0 }]);
+    expect(out).toEqual([
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+    ]);
   });
 
   it("closed path with an explicit return-to-start point drops the seam duplicate", () => {
     const out = sampleBezierPath(
-      [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 0 }],
-      true,
+      [
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 10, y: 10 },
+        { x: 0, y: 0 },
+      ],
+      true
     );
-    expect(out).toEqual([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }]);
+    expect(out).toEqual([
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+    ]);
   });
 
   it("kerf offset applies AFTER sampling — the offset ring reflects the dense polyline", () => {
@@ -206,8 +277,8 @@ describe("F2: bezier sampling at toCutObjects serialization", () => {
           { x: 0, y: 0, handleOut: { x: Infinity, y: 0 } },
           { x: 10, y: 0, handleIn: { x: 5, y: NaN } },
         ],
-        false,
-      ),
+        false
+      )
     ).toThrow(/non-finite/);
   });
 });
@@ -215,9 +286,17 @@ describe("F2: bezier sampling at toCutObjects serialization", () => {
 describe("W1c rider: fill-mode 2×-energy warning for grouped objects", () => {
   function groupedSquares(layerIndex: number): DesignObject {
     const child = (id: string, off: number): DesignObject =>
-      basePath(id, [
-        { x: off, y: off }, { x: off + 10, y: off }, { x: off + 10, y: off + 10 }, { x: off, y: off + 10 },
-      ], true, layerIndex);
+      basePath(
+        id,
+        [
+          { x: off, y: off },
+          { x: off + 10, y: off },
+          { x: off + 10, y: off + 10 },
+          { x: off, y: off + 10 },
+        ],
+        true,
+        layerIndex
+      );
     const c1 = child("c1", 0);
     const c2 = child("c2", 2);
     return {
@@ -254,8 +333,26 @@ describe("W1c rider: fill-mode 2×-energy warning for grouped objects", () => {
   });
 
   it("does NOT warn for ungrouped fill objects", () => {
-    const a = basePath("a", [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }], true, 1);
-    const b = basePath("b", [{ x: 2, y: 2 }, { x: 8, y: 2 }, { x: 8, y: 8 }], true, 1);
+    const a = basePath(
+      "a",
+      [
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 10, y: 10 },
+      ],
+      true,
+      1
+    );
+    const b = basePath(
+      "b",
+      [
+        { x: 2, y: 2 },
+        { x: 8, y: 2 },
+        { x: 8, y: 8 },
+      ],
+      true,
+      1
+    );
     const { warnings } = toCutObjectsForTest([a, b], DEFAULT_LAYERS);
     expect(warnings.some((w) => w.includes("double energy"))).toBe(false);
   });

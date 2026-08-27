@@ -76,7 +76,9 @@ export function ActiveLayerStrip() {
 
       {/* Row 2: Power label + slider + value */}
       <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-        <span style={{ fontSize: "10px", color: "var(--text-muted)", flexShrink: 0, width: "38px" }}>
+        <span
+          style={{ fontSize: "10px", color: "var(--text-muted)", flexShrink: 0, width: "38px" }}
+        >
           Power
         </span>
         <input
@@ -110,7 +112,9 @@ export function ActiveLayerStrip() {
 
       {/* Row 3: Speed label + bare number field + unit (full SpeedInput too wide for strip) */}
       <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-        <span style={{ fontSize: "10px", color: "var(--text-muted)", flexShrink: 0, width: "38px" }}>
+        <span
+          style={{ fontSize: "10px", color: "var(--text-muted)", flexShrink: 0, width: "38px" }}
+        >
           Speed
         </span>
         <input

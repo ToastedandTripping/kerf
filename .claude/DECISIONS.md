@@ -3,7 +3,7 @@
 **Write rule: APPEND AND AMEND. Never rewrite, never delete.**
 
 A decision leaves this file only by being explicitly reversed, and a reversal is written
-*into* the entry it reverses — struck through, dated, with the reason. Nothing here is
+_into_ the entry it reverses — struck through, dated, with the reason. Nothing here is
 removed because it looks stale, because a rewrite felt cleaner, or because the reader
 doesn't recognise it. If an entry seems wrong, that is a reason to investigate it, not to
 delete it.
@@ -26,7 +26,8 @@ only as a pointer; the detail stays in the private register.
 ## Product rulings
 
 ### streamingMode default: flip `perLine`→`buffered` only if buffered measurably wins
-*2026-07-05*
+
+_2026-07-05_
 
 Gate D1c — recommended default is "flip if buffered wins, keep perLine if no measurable
 difference"; you may override.
@@ -36,13 +37,15 @@ difference"; you may override.
 ## Engineering pins
 
 ### The Phase 2 abort order is safety-critical and must never contain an ack-awaited write
-*2026-07-05*
+
+_2026-07-05_
 
 safety-critical abort order (`!` → ~100ms settle → realtime `0x18` → conditional M5 —
 never an ack-awaited write in between, that recreates the F13 deadlock).
 
 ### `$32=1` is hard-gated at job_start and `streamingMode` defaults to `perLine`
-*2026-07-05*
+
+_2026-07-05_
 
 `$32=1` hard-gated at job_start, JobEvents (Progress/Console/Status/Finished) coalesced
 50-100ms, `streamingMode` localStorage rollback flag defaulting `perLine`.
@@ -55,7 +58,8 @@ never an ack-awaited write in between, that recreates the F13 deadlock).
 ## Operating constraints
 
 ### Nothing hardware-gated proceeds until the owner's laser is confirmed back in service
-*2026-07-10*
+
+_2026-07-10_
 
 The machine was damaged and its repair has never been confirmed (detail: see the private
 hand-off register, not published here). This blocks BOTH the v0.8.25 owner hardware test
@@ -64,14 +68,16 @@ machine is confirmed back in service. The constraint lifts by confirmation, not 
 assumption.
 
 ### Gate D2 (Phase 4 entry) is explicitly a "Lee + architect call"
-*2026-07-05*
+
+_2026-07-05_
 
 Clipper2-as-a-dependency call for offsetFill compound-shape correctness + the
 kerf-offset-on-fillLine-perimeter design. Explicitly "Lee + architect call" — not yet
 made. An implementer does not settle it in passing.
 
 ### Phase 2A gets a design/plan pass before Ted implements
-*2026-07-05*
+
+_2026-07-05_
 
 Recommended: a design/plan pass for 2A before Ted implements — not a straight jump to
 implementation. It is the program's highest-risk phase and the first one that touches real
@@ -82,7 +88,8 @@ machine behaviour.
 ## Evidence corrections
 
 ### The SVG path-coordinate drift is not an import/transform defect — that code was audited clean
-*2026-06-21*
+
+_2026-06-21_
 
 Import/transform code audited clean; needs a sample Inkscape SVG from Lee to reproduce.
 Carried across all three prior hand-offs with no progress. Do not re-derive an

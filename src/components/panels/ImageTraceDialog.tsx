@@ -34,7 +34,7 @@ export function buildTracedPathObjects(
   heightPx: number,
   layerIndex: number,
   layerColor: string,
-  imageName?: string,
+  imageName?: string
 ): DesignObject[] {
   const parser = new DOMParser();
   const doc = parser.parseFromString(svg, "image/svg+xml");
@@ -45,11 +45,15 @@ export function buildTracedPathObjects(
     const d = pathEl.getAttribute("d");
     if (!d) continue;
 
-    let offsetX = 0, offsetY = 0;
+    let offsetX = 0,
+      offsetY = 0;
     const transformAttr = pathEl.getAttribute("transform");
     if (transformAttr) {
       const m = transformAttr.match(/translate\(\s*([^,\s]+)\s*[,\s]\s*([^)]+)\)/);
-      if (m) { offsetX = parseFloat(m[1]) || 0; offsetY = parseFloat(m[2]) || 0; }
+      if (m) {
+        offsetX = parseFloat(m[1]) || 0;
+        offsetY = parseFloat(m[2]) || 0;
+      }
     }
 
     // W1c (F20): vtracer emits compound `d` per cluster (M..Z M..Z for shapes
@@ -61,7 +65,8 @@ export function buildTracedPathObjects(
     for (const sub of parsePathD(d)) {
       if (sub.points.length < 2) continue;
       let scaledPoints: PathPoint[] = sub.points.map((p) => {
-        const px = p.x + offsetX, py = p.y + offsetY;
+        const px = p.x + offsetX,
+          py = p.y + offsetY;
         const scaled: PathPoint = {
           x: imgT.x + (px / widthPx) * imgT.width,
           y: imgT.y + (py / heightPx) * imgT.height,
@@ -89,29 +94,50 @@ export function buildTracedPathObjects(
         const pts = scaledPoints.map((p): [number, number] => [p.x, p.y]);
         if (signedArea(pts) < 0) {
           // CW → reverse to CCW (also swap handles to preserve curve direction)
-          scaledPoints = scaledPoints.slice().reverse().map((p) => ({
-            ...p,
-            handleIn: p.handleOut,
-            handleOut: p.handleIn,
-          }));
+          scaledPoints = scaledPoints
+            .slice()
+            .reverse()
+            .map((p) => ({
+              ...p,
+              handleIn: p.handleOut,
+              handleOut: p.handleIn,
+            }));
         }
       }
 
       const bb = pointsBBox(scaledPoints);
 
       contourObjects.push({
-        id: generateId(), type: "path", name: "Traced path",
-        transform: { x: bb.x, y: bb.y, width: bb.width, height: bb.height, rotation: 0, scaleX: 1, scaleY: 1 },
-        layerIndex, visible: true, locked: false,
-        fill: null, stroke: layerColor, strokeWidth: 1, opacity: 1,
-        points: scaledPoints, closed: sub.closed,
+        id: generateId(),
+        type: "path",
+        name: "Traced path",
+        transform: {
+          x: bb.x,
+          y: bb.y,
+          width: bb.width,
+          height: bb.height,
+          rotation: 0,
+          scaleX: 1,
+          scaleY: 1,
+        },
+        layerIndex,
+        visible: true,
+        locked: false,
+        fill: null,
+        stroke: layerColor,
+        strokeWidth: 1,
+        opacity: 1,
+        points: scaledPoints,
+        closed: sub.closed,
       });
     }
 
     if (contourObjects.length === 1) {
       allPathObjects.push(contourObjects[0]);
     } else if (contourObjects.length > 1) {
-      allPathObjects.push(buildGroupObject(contourObjects, generateId(), "Traced path", layerIndex));
+      allPathObjects.push(
+        buildGroupObject(contourObjects, generateId(), "Traced path", layerIndex)
+      );
     }
   }
 
@@ -142,7 +168,7 @@ export function computeFitZoomIndex(
   containerW: number,
   containerH: number,
   imgW: number,
-  imgH: number,
+  imgH: number
 ): number {
   if (imgW === 0 || imgH === 0) return 2; // default to 100%
   const fitPct = Math.min(containerW / imgW, containerH / imgH) * 100;
@@ -165,33 +191,76 @@ interface TraceResult {
   heightPx: number;
 }
 
-const PRESETS: Record<Exclude<Preset, "custom">, {
-  mode: TraceMode; threshold: number; thresholdLow: number; cornerThreshold: number;
-  filterSpeckle: number; blurRadius: number; smoothness: number; ignoreArea: number;
-  useAdaptiveThreshold: boolean; adaptiveBlockSize: number; morphRadius: number;
-}> = {
+const PRESETS: Record<
+  Exclude<Preset, "custom">,
+  {
+    mode: TraceMode;
+    threshold: number;
+    thresholdLow: number;
+    cornerThreshold: number;
+    filterSpeckle: number;
+    blurRadius: number;
+    smoothness: number;
+    ignoreArea: number;
+    useAdaptiveThreshold: boolean;
+    adaptiveBlockSize: number;
+    morphRadius: number;
+  }
+> = {
   auto: {
     // useAdaptiveThreshold off: clean binary art bypasses via is_near_binary anyway;
     // this protects the anti-aliased case from adaptive halos. morphRadius 0: open()
     // was eroding fine strokes. blurRadius 0.5: lighter noise reduction. ignoreArea 15.
-    mode: "standard", threshold: 128, thresholdLow: 0, cornerThreshold: 60,
-    filterSpeckle: 4, blurRadius: 0.5, smoothness: 0.8, ignoreArea: 15,
-    useAdaptiveThreshold: false, adaptiveBlockSize: 15, morphRadius: 0,
+    mode: "standard",
+    threshold: 128,
+    thresholdLow: 0,
+    cornerThreshold: 60,
+    filterSpeckle: 4,
+    blurRadius: 0.5,
+    smoothness: 0.8,
+    ignoreArea: 15,
+    useAdaptiveThreshold: false,
+    adaptiveBlockSize: 15,
+    morphRadius: 0,
   },
   logo: {
-    mode: "standard", threshold: 128, thresholdLow: 0, cornerThreshold: 40,
-    filterSpeckle: 8, blurRadius: 0.5, smoothness: 1.0, ignoreArea: 30,
-    useAdaptiveThreshold: false, adaptiveBlockSize: 15, morphRadius: 0,
+    mode: "standard",
+    threshold: 128,
+    thresholdLow: 0,
+    cornerThreshold: 40,
+    filterSpeckle: 8,
+    blurRadius: 0.5,
+    smoothness: 1.0,
+    ignoreArea: 30,
+    useAdaptiveThreshold: false,
+    adaptiveBlockSize: 15,
+    morphRadius: 0,
   },
   photo: {
-    mode: "sketch", threshold: 100, thresholdLow: 0, cornerThreshold: 80,
-    filterSpeckle: 6, blurRadius: 2.0, smoothness: 1.2, ignoreArea: 40,
-    useAdaptiveThreshold: false, adaptiveBlockSize: 21, morphRadius: 1,
+    mode: "sketch",
+    threshold: 100,
+    thresholdLow: 0,
+    cornerThreshold: 80,
+    filterSpeckle: 6,
+    blurRadius: 2.0,
+    smoothness: 1.2,
+    ignoreArea: 40,
+    useAdaptiveThreshold: false,
+    adaptiveBlockSize: 21,
+    morphRadius: 1,
   },
   detailed: {
-    mode: "standard", threshold: 128, thresholdLow: 0, cornerThreshold: 30,
-    filterSpeckle: 2, blurRadius: 0.5, smoothness: 0.4, ignoreArea: 5,
-    useAdaptiveThreshold: false, adaptiveBlockSize: 11, morphRadius: 0,
+    mode: "standard",
+    threshold: 128,
+    thresholdLow: 0,
+    cornerThreshold: 30,
+    filterSpeckle: 2,
+    blurRadius: 0.5,
+    smoothness: 0.4,
+    ignoreArea: 5,
+    useAdaptiveThreshold: false,
+    adaptiveBlockSize: 11,
+    morphRadius: 0,
   },
 };
 
@@ -216,7 +285,12 @@ export function ImageTraceDialog({ open, onClose }: Props) {
   const [traceTransparency, setTraceTransparency] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  const [preview, setPreview] = useState<{ svg: string; pathCount: number; widthPx: number; heightPx: number } | null>(null);
+  const [preview, setPreview] = useState<{
+    svg: string;
+    pathCount: number;
+    widthPx: number;
+    heightPx: number;
+  } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [committing, setCommitting] = useState(false);
@@ -237,9 +311,10 @@ export function ImageTraceDialog({ open, onClose }: Props) {
   const activeLayerIndex = useStore((s) => s.activeLayerIndex);
   const selectedIds = useStore((s) => s.selectedIds);
   const objects = useStore((s) => s.objects);
-  const selectedImage = (selectedIds.length === 1
-    && objects.find((o) => o.id === selectedIds[0] && o.type === "image" && o.imageData))
-    || null;
+  const selectedImage =
+    (selectedIds.length === 1 &&
+      objects.find((o) => o.id === selectedIds[0] && o.type === "image" && o.imageData)) ||
+    null;
 
   // When the dialog opens, reset the layer target to the active layer
   useEffect(() => {
@@ -251,19 +326,35 @@ export function ImageTraceDialog({ open, onClose }: Props) {
   function applyPreset(p: Exclude<Preset, "custom">) {
     const v = PRESETS[p];
     setPreset(p);
-    setMode(v.mode); setThreshold(v.threshold); setThresholdLow(v.thresholdLow);
-    setCornerThreshold(v.cornerThreshold); setFilterSpeckle(v.filterSpeckle);
-    setBlurRadius(v.blurRadius); setSmoothness(v.smoothness);
-    setIgnoreArea(v.ignoreArea); setUseAdaptiveThreshold(v.useAdaptiveThreshold);
-    setAdaptiveBlockSize(v.adaptiveBlockSize); setMorphRadius(v.morphRadius);
+    setMode(v.mode);
+    setThreshold(v.threshold);
+    setThresholdLow(v.thresholdLow);
+    setCornerThreshold(v.cornerThreshold);
+    setFilterSpeckle(v.filterSpeckle);
+    setBlurRadius(v.blurRadius);
+    setSmoothness(v.smoothness);
+    setIgnoreArea(v.ignoreArea);
+    setUseAdaptiveThreshold(v.useAdaptiveThreshold);
+    setAdaptiveBlockSize(v.adaptiveBlockSize);
+    setMorphRadius(v.morphRadius);
   }
 
   function buildParams(scale: number) {
     return {
       imageData: selectedImage!.imageData!,
-      mode, threshold, thresholdLow, cornerThreshold, filterSpeckle, invert,
-      previewScale: scale, blurRadius, smoothness, ignoreArea,
-      useAdaptiveThreshold, adaptiveBlockSize, morphRadius,
+      mode,
+      threshold,
+      thresholdLow,
+      cornerThreshold,
+      filterSpeckle,
+      invert,
+      previewScale: scale,
+      blurRadius,
+      smoothness,
+      ignoreArea,
+      useAdaptiveThreshold,
+      adaptiveBlockSize,
+      morphRadius,
       traceTransparency,
     };
   }
@@ -286,14 +377,31 @@ export function ImageTraceDialog({ open, onClose }: Props) {
 
     const timer = setTimeout(async () => {
       try {
-        const result = await invoke<TraceResult>("trace_image_command", { params: buildParams(adaptiveScale) });
+        const result = await invoke<TraceResult>("trace_image_command", {
+          params: buildParams(adaptiveScale),
+        });
         if (generation === generationRef.current) {
-          setPreview({ svg: result.svg, pathCount: result.pathCount, widthPx: result.widthPx, heightPx: result.heightPx });
-          setZoomIndex(computeFitZoomIndex(PREVIEW_CONTAINER_W, PREVIEW_CONTAINER_H, result.widthPx, result.heightPx));
+          setPreview({
+            svg: result.svg,
+            pathCount: result.pathCount,
+            widthPx: result.widthPx,
+            heightPx: result.heightPx,
+          });
+          setZoomIndex(
+            computeFitZoomIndex(
+              PREVIEW_CONTAINER_W,
+              PREVIEW_CONTAINER_H,
+              result.widthPx,
+              result.heightPx
+            )
+          );
           setLoading(false);
         }
       } catch (e) {
-        if (generation === generationRef.current) { setError(String(e)); setLoading(false); }
+        if (generation === generationRef.current) {
+          setError(String(e));
+          setLoading(false);
+        }
       }
     }, 400);
 
@@ -301,29 +409,80 @@ export function ImageTraceDialog({ open, onClose }: Props) {
     // `preview` is intentionally excluded: adaptiveScale reads prior dims via stale closure
     // so preview updates don't re-trigger the trace effect (avoids infinite loop).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, mode, threshold, thresholdLow, cornerThreshold, filterSpeckle, invert,
-      blurRadius, smoothness, ignoreArea, useAdaptiveThreshold, adaptiveBlockSize,
-      morphRadius, traceTransparency, selectedImage?.id]);
+  }, [
+    open,
+    mode,
+    threshold,
+    thresholdLow,
+    cornerThreshold,
+    filterSpeckle,
+    invert,
+    blurRadius,
+    smoothness,
+    ignoreArea,
+    useAdaptiveThreshold,
+    adaptiveBlockSize,
+    morphRadius,
+    traceTransparency,
+    selectedImage?.id,
+  ]);
 
   if (!open) return null;
 
   if (!selectedImage) {
     return (
       <>
-        <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999 }} />
+        <div
+          onClick={onClose}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999 }}
+        />
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="image-trace-dialog-title"
           style={{
-          position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
-          width: "420px", background: "var(--bg-panel)", border: "1px solid var(--border)",
-          borderRadius: "var(--radius-lg)", boxShadow: "var(--shadow-modal)", zIndex: 10000, padding: "20px",
-        }}>
-          <div id="image-trace-dialog-title" style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "12px" }}>Trace Image</div>
-          <div style={{ color: "var(--text-secondary)", fontSize: "13px", marginBottom: "16px" }}>Select a single image object to trace.</div>
+            position: "fixed",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            width: "420px",
+            background: "var(--bg-panel)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-lg)",
+            boxShadow: "var(--shadow-modal)",
+            zIndex: 10000,
+            padding: "20px",
+          }}
+        >
+          <div
+            id="image-trace-dialog-title"
+            style={{
+              fontSize: "14px",
+              fontWeight: 600,
+              color: "var(--text-primary)",
+              marginBottom: "12px",
+            }}
+          >
+            Trace Image
+          </div>
+          <div style={{ color: "var(--text-secondary)", fontSize: "13px", marginBottom: "16px" }}>
+            Select a single image object to trace.
+          </div>
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
-            <button onClick={onClose} style={{ background: "none", border: "1px solid var(--border)", color: "var(--text-secondary)", padding: "6px 16px", borderRadius: "var(--radius-sm)", cursor: "pointer", fontSize: "13px" }}>Close</button>
+            <button
+              onClick={onClose}
+              style={{
+                background: "none",
+                border: "1px solid var(--border)",
+                color: "var(--text-secondary)",
+                padding: "6px 16px",
+                borderRadius: "var(--radius-sm)",
+                cursor: "pointer",
+                fontSize: "13px",
+              }}
+            >
+              Close
+            </button>
           </div>
         </div>
       </>
@@ -346,15 +505,21 @@ export function ImageTraceDialog({ open, onClose }: Props) {
         result.heightPx,
         effectiveLayerIndex,
         layerColor,
-        imageName,
+        imageName
       );
 
       store.withUndo("trace", () => {
         const newIds: string[] = [];
-        for (const obj of prepared) { store.addObject(obj); newIds.push(obj.id); }
+        for (const obj of prepared) {
+          store.addObject(obj);
+          newIds.push(obj.id);
+        }
         if (newIds.length > 0) {
           store.setSelectedIds(newIds);
-          store.addConsoleLine(`Traced image: ${newIds.length === 1 ? "1 group" : `${newIds.length} paths`} added to ${store.layers[effectiveLayerIndex]?.name ?? "layer"}`, "info");
+          store.addConsoleLine(
+            `Traced image: ${newIds.length === 1 ? "1 group" : `${newIds.length} paths`} added to ${store.layers[effectiveLayerIndex]?.name ?? "layer"}`,
+            "info"
+          );
         }
       });
       onClose();
@@ -369,50 +534,111 @@ export function ImageTraceDialog({ open, onClose }: Props) {
     background: active ? "var(--accent-warm)" : "var(--bg-input)",
     border: "1px solid " + (active ? "var(--accent-warm)" : "var(--border)"),
     color: active ? "#fff" : "var(--text-secondary)",
-    padding: "4px 10px", borderRadius: "var(--radius-sm)", cursor: "pointer", fontSize: "11px",
+    padding: "4px 10px",
+    borderRadius: "var(--radius-sm)",
+    cursor: "pointer",
+    fontSize: "11px",
   });
 
   const zoomBtnStyle = (disabled: boolean): React.CSSProperties => ({
-    background: "var(--bg-input)", border: "1px solid var(--border)",
+    background: "var(--bg-input)",
+    border: "1px solid var(--border)",
     color: disabled ? "var(--text-muted)" : "var(--text-secondary)",
-    width: "32px", height: "24px", borderRadius: "var(--radius-sm)",
-    cursor: disabled ? "not-allowed" : "pointer", fontSize: "13px",
-    display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+    width: "32px",
+    height: "24px",
+    borderRadius: "var(--radius-sm)",
+    cursor: disabled ? "not-allowed" : "pointer",
+    fontSize: "13px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
     opacity: disabled ? 0.4 : 1,
   });
 
-  const sliderRow = (label: string, value: number, min: number, max: number, step: number, onChange: (v: number) => void, unit?: string) => (
+  const sliderRow = (
+    label: string,
+    value: number,
+    min: number,
+    max: number,
+    step: number,
+    onChange: (v: number) => void,
+    unit?: string
+  ) => (
     <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-      <span style={{ fontSize: "11px", color: "var(--text-secondary)", minWidth: "70px" }}>{label}</span>
-      <input type="range" min={min} max={max} step={step} value={value}
-        onChange={(e) => { onChange(Number(e.target.value)); if (preset !== "custom") setPreset("custom"); }}
-        style={{ flex: 1, accentColor: "var(--accent-warm)" }} />
-      <span style={{ fontSize: "11px", color: "var(--text-muted)", minWidth: "36px", textAlign: "right" }}>
-        {step < 1 ? value.toFixed(1) : value}{unit || ""}
+      <span style={{ fontSize: "11px", color: "var(--text-secondary)", minWidth: "70px" }}>
+        {label}
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => {
+          onChange(Number(e.target.value));
+          if (preset !== "custom") setPreset("custom");
+        }}
+        style={{ flex: 1, accentColor: "var(--accent-warm)" }}
+      />
+      <span
+        style={{
+          fontSize: "11px",
+          color: "var(--text-muted)",
+          minWidth: "36px",
+          textAlign: "right",
+        }}
+      >
+        {step < 1 ? value.toFixed(1) : value}
+        {unit || ""}
       </span>
     </div>
   );
 
   const previewSvgUrl = preview?.svg
-    ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(preview.svg)}` : null;
+    ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(preview.svg)}`
+    : null;
 
   const currentZoom = ZOOM_STEPS[zoomIndex];
 
   return (
     <>
-      <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999 }} />
+      <div
+        onClick={onClose}
+        style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999 }}
+      />
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="image-trace-main-dialog-title"
         style={{
-        position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
-        width: "580px", maxHeight: "85vh", overflow: "auto",
-        background: "var(--bg-panel)", border: "1px solid var(--border)",
-        borderRadius: "var(--radius-lg)", boxShadow: "var(--shadow-modal)", zIndex: 10000, padding: "20px",
-      }}>
-        <div id="image-trace-main-dialog-title" style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "16px" }}>Trace Image</div>
+          position: "fixed",
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%, -50%)",
+          width: "580px",
+          maxHeight: "85vh",
+          overflow: "auto",
+          background: "var(--bg-panel)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-lg)",
+          boxShadow: "var(--shadow-modal)",
+          zIndex: 10000,
+          padding: "20px",
+        }}
+      >
+        <div
+          id="image-trace-main-dialog-title"
+          style={{
+            fontSize: "14px",
+            fontWeight: 600,
+            color: "var(--text-primary)",
+            marginBottom: "16px",
+          }}
+        >
+          Trace Image
+        </div>
 
         {/* Presets */}
         <div style={{ display: "flex", gap: "4px", marginBottom: "12px", flexWrap: "wrap" }}>
@@ -421,13 +647,31 @@ export function ImageTraceDialog({ open, onClose }: Props) {
               {p.charAt(0).toUpperCase() + p.slice(1)}
             </button>
           ))}
-          <button style={chipStyle(preset === "custom")} onClick={() => setPreset("custom")}>Custom</button>
+          <button style={chipStyle(preset === "custom")} onClick={() => setPreset("custom")}>
+            Custom
+          </button>
         </div>
 
         {/* Mode */}
         <div style={{ display: "flex", gap: "4px", marginBottom: "12px" }}>
-          <button style={chipStyle(mode === "standard")} onClick={() => { setMode("standard"); if (preset !== "custom") setPreset("custom"); }}>Standard</button>
-          <button style={chipStyle(mode === "sketch")} onClick={() => { setMode("sketch"); if (preset !== "custom") setPreset("custom"); }}>Sketch</button>
+          <button
+            style={chipStyle(mode === "standard")}
+            onClick={() => {
+              setMode("standard");
+              if (preset !== "custom") setPreset("custom");
+            }}
+          >
+            Standard
+          </button>
+          <button
+            style={chipStyle(mode === "sketch")}
+            onClick={() => {
+              setMode("sketch");
+              if (preset !== "custom") setPreset("custom");
+            }}
+          >
+            Sketch
+          </button>
         </div>
 
         {/* Core controls */}
@@ -440,61 +684,133 @@ export function ImageTraceDialog({ open, onClose }: Props) {
 
         {/* Invert + adaptive threshold */}
         <div style={{ display: "flex", gap: "12px", marginBottom: "12px" }}>
-          <label style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer", fontSize: "11px", color: "var(--text-secondary)" }}>
-            <input type="checkbox" checked={invert} onChange={(e) => setInvert(e.target.checked)} /> Invert
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "4px",
+              cursor: "pointer",
+              fontSize: "11px",
+              color: "var(--text-secondary)",
+            }}
+          >
+            <input type="checkbox" checked={invert} onChange={(e) => setInvert(e.target.checked)} />{" "}
+            Invert
           </label>
           {mode === "standard" && (
-            <label style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer", fontSize: "11px", color: "var(--text-secondary)" }}>
-              <input type="checkbox" checked={useAdaptiveThreshold}
-                onChange={(e) => { setUseAdaptiveThreshold(e.target.checked); if (preset !== "custom") setPreset("custom"); }} />
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "4px",
+                cursor: "pointer",
+                fontSize: "11px",
+                color: "var(--text-secondary)",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={useAdaptiveThreshold}
+                onChange={(e) => {
+                  setUseAdaptiveThreshold(e.target.checked);
+                  if (preset !== "custom") setPreset("custom");
+                }}
+              />
               Adaptive threshold
             </label>
           )}
-          <label style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer", fontSize: "11px", color: "var(--text-secondary)" }}>
-            <input type="checkbox" checked={traceTransparency} onChange={(e) => setTraceTransparency(e.target.checked)} />
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "4px",
+              cursor: "pointer",
+              fontSize: "11px",
+              color: "var(--text-secondary)",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={traceTransparency}
+              onChange={(e) => setTraceTransparency(e.target.checked)}
+            />
             Trace transparency
           </label>
         </div>
 
         {/* Fix 4: Layer selector */}
         <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
-          <span style={{ fontSize: "11px", color: "var(--text-secondary)", minWidth: "70px" }}>Trace to</span>
+          <span style={{ fontSize: "11px", color: "var(--text-secondary)", minWidth: "70px" }}>
+            Trace to
+          </span>
           <select
             value={effectiveLayerIndex}
             onChange={(e) => setTargetLayerIndex(Number(e.target.value))}
             style={{
-              flex: 1, background: "var(--bg-input)", border: "1px solid var(--border)",
-              color: "var(--text-primary)", padding: "4px 8px", borderRadius: "var(--radius-sm)",
-              fontSize: "11px", cursor: "pointer",
+              flex: 1,
+              background: "var(--bg-input)",
+              border: "1px solid var(--border)",
+              color: "var(--text-primary)",
+              padding: "4px 8px",
+              borderRadius: "var(--radius-sm)",
+              fontSize: "11px",
+              cursor: "pointer",
             }}
           >
             {layers.map((layer, idx) => (
               <option key={idx} value={idx}>
-                {layer.name}{idx === activeLayerIndex ? " (active)" : ""}
+                {layer.name}
+                {idx === activeLayerIndex ? " (active)" : ""}
               </option>
             ))}
           </select>
-          <span style={{
-            width: "10px", height: "10px", borderRadius: "50%", flexShrink: 0,
-            background: layers[effectiveLayerIndex]?.color || "#4a90e2",
-            border: "1px solid var(--border)",
-          }} />
+          <span
+            style={{
+              width: "10px",
+              height: "10px",
+              borderRadius: "50%",
+              flexShrink: 0,
+              background: layers[effectiveLayerIndex]?.color || "#4a90e2",
+              border: "1px solid var(--border)",
+            }}
+          />
         </div>
 
         {/* Advanced */}
-        <button onClick={() => setShowAdvanced(!showAdvanced)} style={{
-          background: "none", border: "none", color: "var(--text-muted)",
-          fontSize: "10px", cursor: "pointer", padding: "2px 0", textTransform: "uppercase", marginBottom: "8px",
-        }}>
+        <button
+          onClick={() => setShowAdvanced(!showAdvanced)}
+          style={{
+            background: "none",
+            border: "none",
+            color: "var(--text-muted)",
+            fontSize: "10px",
+            cursor: "pointer",
+            padding: "2px 0",
+            textTransform: "uppercase",
+            marginBottom: "8px",
+          }}
+        >
           {showAdvanced ? "▼" : "▶"} Advanced
         </button>
         {showAdvanced && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "12px", paddingLeft: "8px", borderLeft: "2px solid var(--border)" }}>
-            {mode === "standard" && !useAdaptiveThreshold && sliderRow("Low Cutoff", thresholdLow, 0, 254, 1, setThresholdLow)}
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "8px",
+              marginBottom: "12px",
+              paddingLeft: "8px",
+              borderLeft: "2px solid var(--border)",
+            }}
+          >
+            {mode === "standard" &&
+              !useAdaptiveThreshold &&
+              sliderRow("Low Cutoff", thresholdLow, 0, 254, 1, setThresholdLow)}
             {sliderRow("Corner", cornerThreshold, 0, 180, 1, setCornerThreshold, "°")}
             {sliderRow("Speckle", filterSpeckle, 0, 50, 1, setFilterSpeckle)}
             {sliderRow("Morph", morphRadius, 0, 5, 1, setMorphRadius, "px")}
-            {useAdaptiveThreshold && sliderRow("Block Size", adaptiveBlockSize, 3, 51, 2, setAdaptiveBlockSize)}
+            {useAdaptiveThreshold &&
+              sliderRow("Block Size", adaptiveBlockSize, 3, 51, 2, setAdaptiveBlockSize)}
           </div>
         )}
 
@@ -505,8 +821,18 @@ export function ImageTraceDialog({ open, onClose }: Props) {
             onClick={() => setZoomIndex((i) => Math.max(0, i - 1))}
             disabled={zoomIndex === 0}
             aria-label="Zoom out"
-          >−</button>
-          <span style={{ fontSize: "11px", color: "var(--text-muted)", minWidth: "36px", textAlign: "center", fontFamily: "var(--font-mono)" }}>
+          >
+            −
+          </button>
+          <span
+            style={{
+              fontSize: "11px",
+              color: "var(--text-muted)",
+              minWidth: "36px",
+              textAlign: "center",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
             {currentZoom}%
           </span>
           <button
@@ -514,53 +840,92 @@ export function ImageTraceDialog({ open, onClose }: Props) {
             onClick={() => setZoomIndex((i) => Math.min(ZOOM_STEPS.length - 1, i + 1))}
             disabled={zoomIndex === ZOOM_STEPS.length - 1}
             aria-label="Zoom in"
-          >+</button>
+          >
+            +
+          </button>
           <button
-            onClick={() => preview && setZoomIndex(computeFitZoomIndex(PREVIEW_CONTAINER_W, PREVIEW_CONTAINER_H, preview.widthPx, preview.heightPx))}
+            onClick={() =>
+              preview &&
+              setZoomIndex(
+                computeFitZoomIndex(
+                  PREVIEW_CONTAINER_W,
+                  PREVIEW_CONTAINER_H,
+                  preview.widthPx,
+                  preview.heightPx
+                )
+              )
+            }
             disabled={!preview}
             style={{
-              background: "var(--bg-input)", border: "1px solid var(--border)",
+              background: "var(--bg-input)",
+              border: "1px solid var(--border)",
               color: preview ? "var(--text-secondary)" : "var(--text-muted)",
-              padding: "4px 10px", borderRadius: "var(--radius-sm)",
-              cursor: preview ? "pointer" : "default", fontSize: "11px",
+              padding: "4px 10px",
+              borderRadius: "var(--radius-sm)",
+              cursor: preview ? "pointer" : "default",
+              fontSize: "11px",
               opacity: preview ? 1 : 0.4,
             }}
-          >Fit</button>
+          >
+            Fit
+          </button>
         </div>
 
         {/* Info strip */}
         {preview && (
-          <div style={{
-            display: "flex",
-            gap: 16,
-            background: "var(--bg-input)",
-            borderRadius: "var(--radius-sm)",
-            padding: "6px 10px",
-            marginBottom: "6px",
-          }}>
+          <div
+            style={{
+              display: "flex",
+              gap: 16,
+              background: "var(--bg-input)",
+              borderRadius: "var(--radius-sm)",
+              padding: "6px 10px",
+              marginBottom: "6px",
+            }}
+          >
             <div>
-              <span style={{
-                color: "var(--text-muted)",
-                fontSize: 9,
-                textTransform: "uppercase",
-                letterSpacing: 0.3,
-                display: "block",
-                marginBottom: 1,
-              }}>Contours</span>
-              <span style={{ color: "var(--text-primary)", fontSize: 11, fontFamily: "var(--font-mono)" }}>
+              <span
+                style={{
+                  color: "var(--text-muted)",
+                  fontSize: 9,
+                  textTransform: "uppercase",
+                  letterSpacing: 0.3,
+                  display: "block",
+                  marginBottom: 1,
+                }}
+              >
+                Contours
+              </span>
+              <span
+                style={{
+                  color: "var(--text-primary)",
+                  fontSize: 11,
+                  fontFamily: "var(--font-mono)",
+                }}
+              >
                 {preview.pathCount}
               </span>
             </div>
             <div>
-              <span style={{
-                color: "var(--text-muted)",
-                fontSize: 9,
-                textTransform: "uppercase",
-                letterSpacing: 0.3,
-                display: "block",
-                marginBottom: 1,
-              }}>Resolution</span>
-              <span style={{ color: "var(--text-primary)", fontSize: 11, fontFamily: "var(--font-mono)" }}>
+              <span
+                style={{
+                  color: "var(--text-muted)",
+                  fontSize: 9,
+                  textTransform: "uppercase",
+                  letterSpacing: 0.3,
+                  display: "block",
+                  marginBottom: 1,
+                }}
+              >
+                Resolution
+              </span>
+              <span
+                style={{
+                  color: "var(--text-primary)",
+                  fontSize: 11,
+                  fontFamily: "var(--font-mono)",
+                }}
+              >
                 {preview.widthPx}×{preview.heightPx}px
               </span>
             </div>
@@ -568,56 +933,113 @@ export function ImageTraceDialog({ open, onClose }: Props) {
         )}
 
         {/* Preview — scrollable at high zoom, full-res for typical images */}
-        <div style={{
-          background: "#1a1a2e", borderRadius: "var(--radius-sm)", height: "360px",
-          marginBottom: "12px", position: "relative", overflow: "auto",
-          border: "1px solid var(--border)",
-        }}>
+        <div
+          style={{
+            background: "#1a1a2e",
+            borderRadius: "var(--radius-sm)",
+            height: "360px",
+            marginBottom: "12px",
+            position: "relative",
+            overflow: "auto",
+            border: "1px solid var(--border)",
+          }}
+        >
           {loading && (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+              }}
+            >
               <span style={{ color: "var(--text-muted)", fontSize: "12px" }}>Processing...</span>
             </div>
           )}
           {!loading && error && (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+              }}
+            >
               <span style={{ color: "var(--danger)", fontSize: "12px" }}>{error}</span>
             </div>
           )}
-          {!loading && previewSvgUrl && preview && (() => {
-            const scaledW = Math.round(preview.widthPx * currentZoom / 100);
-            const scaledH = Math.round(preview.heightPx * currentZoom / 100);
-            return (
-              <div style={{ minWidth: "100%", minHeight: "100%", display: "flex", alignItems: "flex-start", justifyContent: "flex-start" }}>
-                <img
-                  src={previewSvgUrl}
-                  style={{ width: scaledW, height: scaledH, display: "block" }}
-                  alt="Trace preview"
-                />
-              </div>
-            );
-          })()}
+          {!loading &&
+            previewSvgUrl &&
+            preview &&
+            (() => {
+              const scaledW = Math.round((preview.widthPx * currentZoom) / 100);
+              const scaledH = Math.round((preview.heightPx * currentZoom) / 100);
+              return (
+                <div
+                  style={{
+                    minWidth: "100%",
+                    minHeight: "100%",
+                    display: "flex",
+                    alignItems: "flex-start",
+                    justifyContent: "flex-start",
+                  }}
+                >
+                  <img
+                    src={previewSvgUrl}
+                    style={{ width: scaledW, height: scaledH, display: "block" }}
+                    alt="Trace preview"
+                  />
+                </div>
+              );
+            })()}
         </div>
 
         {/* Hint */}
-        <div style={{
-          fontSize: "10px", color: "var(--text-muted)", marginBottom: "12px",
-          padding: "6px 8px", background: "rgba(74,144,226,0.06)", borderRadius: "var(--radius-sm)",
-        }}>
-          For complex images, trace in Inkscape (Path &gt; Trace Bitmap) and import the SVG for best results.
+        <div
+          style={{
+            fontSize: "10px",
+            color: "var(--text-muted)",
+            marginBottom: "12px",
+            padding: "6px 8px",
+            background: "rgba(74,144,226,0.06)",
+            borderRadius: "var(--radius-sm)",
+          }}
+        >
+          For complex images, trace in Inkscape (Path &gt; Trace Bitmap) and import the SVG for best
+          results.
         </div>
 
         {/* Buttons */}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
-          <button onClick={onClose} style={{
-            background: "none", border: "1px solid var(--border)", color: "var(--text-secondary)",
-            padding: "6px 16px", borderRadius: "var(--radius-sm)", cursor: "pointer", fontSize: "13px",
-          }}>Cancel</button>
-          <button onClick={handleCommit} disabled={committing || !preview} style={{
-            background: preview && !committing ? "var(--accent-warm)" : "var(--bg-input)",
-            border: "none", color: preview && !committing ? "#fff" : "var(--text-muted)",
-            padding: "6px 16px", borderRadius: "var(--radius-sm)",
-            cursor: preview && !committing ? "pointer" : "default", fontSize: "13px",
-          }}>{committing ? "Tracing..." : "Trace to Canvas"}</button>
+          <button
+            onClick={onClose}
+            style={{
+              background: "none",
+              border: "1px solid var(--border)",
+              color: "var(--text-secondary)",
+              padding: "6px 16px",
+              borderRadius: "var(--radius-sm)",
+              cursor: "pointer",
+              fontSize: "13px",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleCommit}
+            disabled={committing || !preview}
+            style={{
+              background: preview && !committing ? "var(--accent-warm)" : "var(--bg-input)",
+              border: "none",
+              color: preview && !committing ? "#fff" : "var(--text-muted)",
+              padding: "6px 16px",
+              borderRadius: "var(--radius-sm)",
+              cursor: preview && !committing ? "pointer" : "default",
+              fontSize: "13px",
+            }}
+          >
+            {committing ? "Tracing..." : "Trace to Canvas"}
+          </button>
         </div>
       </div>
     </>

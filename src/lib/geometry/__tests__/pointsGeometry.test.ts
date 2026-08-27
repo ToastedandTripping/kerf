@@ -29,7 +29,15 @@ function makePath(id: string, points: PathPoint[], rotation = 0): DesignObject {
     id,
     type: "path",
     name: `Path ${id}`,
-    transform: { x: bb.x, y: bb.y, width: bb.width, height: bb.height, rotation, scaleX: 1, scaleY: 1 },
+    transform: {
+      x: bb.x,
+      y: bb.y,
+      width: bb.width,
+      height: bb.height,
+      rotation,
+      scaleX: 1,
+      scaleY: 1,
+    },
     layerIndex: 0,
     visible: true,
     locked: false,
@@ -42,7 +50,14 @@ function makePath(id: string, points: PathPoint[], rotation = 0): DesignObject {
   };
 }
 
-function makeRect(id: string, x: number, y: number, w: number, h: number, rotation = 0): DesignObject {
+function makeRect(
+  id: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  rotation = 0
+): DesignObject {
   return {
     id,
     type: "rectangle",
@@ -72,7 +87,10 @@ describe("pointsBBox", () => {
   });
 
   it("returns zero-extent bbox for collinear points (no clamp)", () => {
-    const bb = pointsBBox([{ x: 5, y: 7 }, { x: 25, y: 7 }]);
+    const bb = pointsBBox([
+      { x: 5, y: 7 },
+      { x: 25, y: 7 },
+    ]);
     expect(bb).toEqual({ x: 5, y: 7, width: 20, height: 0 });
   });
 
@@ -150,7 +168,10 @@ describe("scalePartial", () => {
   });
 
   it("guards degenerate source dims (no divide-by-zero, offsets preserved)", () => {
-    const obj = makePath("p1", [{ x: 5, y: 7 }, { x: 25, y: 7 }]); // height 0
+    const obj = makePath("p1", [
+      { x: 5, y: 7 },
+      { x: 25, y: 7 },
+    ]); // height 0
     const partial = scalePartial(obj, { x: 5, y: 20, width: 40, height: 0 });
     expect(Number.isFinite(partial.points![1].x)).toBe(true);
     expect(partial.points![1].x).toBeCloseTo(45, 9); // sx = 2
@@ -210,16 +231,20 @@ describe("scalePartial zero-target trapdoor (Properties W/H per-keystroke entry)
   const typeW = (obj: DesignObject, v: number): DesignObject => ({
     ...obj,
     ...scalePartial(obj, {
-      x: obj.transform.x, y: obj.transform.y,
-      width: Math.max(0, v), height: obj.transform.height,
+      x: obj.transform.x,
+      y: obj.transform.y,
+      width: Math.max(0, v),
+      height: obj.transform.height,
     }),
   });
   /** One H keystroke as the panel fires it. */
   const typeH = (obj: DesignObject, v: number): DesignObject => ({
     ...obj,
     ...scalePartial(obj, {
-      x: obj.transform.x, y: obj.transform.y,
-      width: obj.transform.width, height: Math.max(0, v),
+      x: obj.transform.x,
+      y: obj.transform.y,
+      width: obj.transform.width,
+      height: Math.max(0, v),
     }),
   });
 
@@ -293,7 +318,10 @@ describe("scalePartial zero-target trapdoor (Properties W/H per-keystroke entry)
 describe("pointsPartial", () => {
   it("derives the synced transform from a replacement points array", () => {
     const obj = makePath("p1", bezierPoints());
-    const newPoints: PathPoint[] = [{ x: 0, y: 0 }, { x: 100, y: 40 }];
+    const newPoints: PathPoint[] = [
+      { x: 0, y: 0 },
+      { x: 100, y: 40 },
+    ];
     const partial = pointsPartial(obj, newPoints);
     expect(partial.transform).toMatchObject({ x: 0, y: 0, width: 100, height: 40 });
     assertPointsInvariant({ ...obj, ...partial });
@@ -321,12 +349,18 @@ describe("assertPointsInvariant", () => {
 
   it("tolerates drift below epsilon", () => {
     const obj = makePath("p1", bezierPoints());
-    const drifted = { ...obj, transform: { ...obj.transform, x: obj.transform.x + POINTS_EPSILON / 2 } };
+    const drifted = {
+      ...obj,
+      transform: { ...obj.transform, x: obj.transform.x + POINTS_EPSILON / 2 },
+    };
     expect(() => assertPointsInvariant(drifted)).not.toThrow();
   });
 
   it("recurses into group children (group-local frame)", () => {
-    const child = makePath("c1", [{ x: 0, y: 0 }, { x: 10, y: 10 }]);
+    const child = makePath("c1", [
+      { x: 0, y: 0 },
+      { x: 10, y: 10 },
+    ]);
     const group: DesignObject = {
       ...makeRect("g1", 50, 50, 10, 10),
       type: "group",
@@ -340,17 +374,33 @@ describe("assertPointsInvariant", () => {
 
 describe("composeGroupChild (THE shared Viewport/gcodeGen flatten composition)", () => {
   it("rot==0: translates group-local points to world by the group origin", () => {
-    const child = makePath("c1", [{ x: 0, y: 0 }, { x: 10, y: 10 }]);
-    const group = { ...makeRect("g1", 100, 200, 10, 10), type: "group" as const, children: [child] };
+    const child = makePath("c1", [
+      { x: 0, y: 0 },
+      { x: 10, y: 10 },
+    ]);
+    const group = {
+      ...makeRect("g1", 100, 200, 10, 10),
+      type: "group" as const,
+      children: [child],
+    };
     const composed = composeGroupChild(child, group);
     expect(composed.points![0]).toMatchObject({ x: 100, y: 200 });
     expect(composed.points![1]).toMatchObject({ x: 110, y: 210 });
-    expect(composed.transform).toMatchObject({ x: 100, y: 200, width: 10, height: 10, rotation: 0 });
+    expect(composed.transform).toMatchObject({
+      x: 100,
+      y: 200,
+      width: 10,
+      height: 10,
+      rotation: 0,
+    });
     assertPointsInvariant(composed);
   });
 
   it("rot==0: world output FOLLOWS a group move (the F1 group-move fix)", () => {
-    const child = makePath("c1", [{ x: 0, y: 0 }, { x: 10, y: 10 }]);
+    const child = makePath("c1", [
+      { x: 0, y: 0 },
+      { x: 10, y: 10 },
+    ]);
     const group = { ...makeRect("g1", 0, 0, 10, 10), type: "group" as const, children: [child] };
     const before = composeGroupChild(child, group);
     const movedGroup = { ...group, transform: { ...group.transform, x: 40, y: 70 } };
@@ -360,9 +410,16 @@ describe("composeGroupChild (THE shared Viewport/gcodeGen flatten composition)",
   });
 
   it("rot≠0: translates to world then rotates about the group's CURRENT world center", () => {
-    const child = makePath("c1", [{ x: 0, y: 0 }, { x: 10, y: 10 }]);
+    const child = makePath("c1", [
+      { x: 0, y: 0 },
+      { x: 10, y: 10 },
+    ]);
     // group moved to (20, 30) — rotation must pivot about the MOVED center (25, 35)
-    const group = { ...makeRect("g1", 20, 30, 10, 10, 90), type: "group" as const, children: [child] };
+    const group = {
+      ...makeRect("g1", 20, 30, 10, 10, 90),
+      type: "group" as const,
+      children: [child],
+    };
     const composed = composeGroupChild(child, group);
     // world point (20,30) rotated 90° about (25,35): (30, 30)
     expect(composed.points![0].x).toBeCloseTo(30, 9);
@@ -379,7 +436,11 @@ describe("composeGroupChild (THE shared Viewport/gcodeGen flatten composition)",
       { x: 0, y: 0, handleOut: { x: 5, y: 0 } },
       { x: 10, y: 10 },
     ]);
-    const group = { ...makeRect("g1", 0, 0, 10, 10, 90), type: "group" as const, children: [child] };
+    const group = {
+      ...makeRect("g1", 0, 0, 10, 10, 90),
+      type: "group" as const,
+      children: [child],
+    };
     const composed = composeGroupChild(child, group);
     // handle (5,0) rotated 90° about (5,5): (10, 5)
     expect(composed.points![0].handleOut!.x).toBeCloseTo(10, 9);
@@ -388,7 +449,11 @@ describe("composeGroupChild (THE shared Viewport/gcodeGen flatten composition)",
 
   it("primitive children keep the AABB-center composition (characterization)", () => {
     const child = makeRect("c1", 5, 5, 10, 10);
-    const group = { ...makeRect("g1", 10, 10, 40, 40, 90), type: "group" as const, children: [child] };
+    const group = {
+      ...makeRect("g1", 10, 10, 40, 40, 90),
+      type: "group" as const,
+      children: [child],
+    };
     const composed = composeGroupChild(child, group);
     // matches composeGroupChildTransform: child center (20,20) → rotated about (30,30) by 90° → (40,20)
     expect(composed.transform.x).toBeCloseTo(35, 9);
@@ -397,9 +462,16 @@ describe("composeGroupChild (THE shared Viewport/gcodeGen flatten composition)",
   });
 
   it("is PURE: does not mutate the stored child", () => {
-    const pts: PathPoint[] = [{ x: 0, y: 0 }, { x: 10, y: 10 }];
+    const pts: PathPoint[] = [
+      { x: 0, y: 0 },
+      { x: 10, y: 10 },
+    ];
     const child = makePath("c1", pts);
-    const group = { ...makeRect("g1", 100, 200, 10, 10, 45), type: "group" as const, children: [child] };
+    const group = {
+      ...makeRect("g1", 100, 200, 10, 10, 45),
+      type: "group" as const,
+      children: [child],
+    };
     composeGroupChild(child, group);
     expect(pts[0]).toMatchObject({ x: 0, y: 0 });
     expect(child.transform.x).toBe(0);
@@ -415,14 +487,14 @@ describe("orientedHandlePoints (R1a)", () => {
     const h = orientedHandlePoints(t, rotOff);
 
     // cx=15, cy=8
-    expect(h.nw).toEqual({ x:  5, y:  3 });
-    expect(h.ne).toEqual({ x: 25, y:  3 });
-    expect(h.sw).toEqual({ x:  5, y: 13 });
+    expect(h.nw).toEqual({ x: 5, y: 3 });
+    expect(h.ne).toEqual({ x: 25, y: 3 });
+    expect(h.sw).toEqual({ x: 5, y: 13 });
     expect(h.se).toEqual({ x: 25, y: 13 });
-    expect(h.n).toEqual({ x: 15, y:  3 });
+    expect(h.n).toEqual({ x: 15, y: 3 });
     expect(h.s).toEqual({ x: 15, y: 13 });
-    expect(h.w).toEqual({ x:  5, y:  8 });
-    expect(h.e).toEqual({ x: 25, y:  8 });
+    expect(h.w).toEqual({ x: 5, y: 8 });
+    expect(h.e).toEqual({ x: 25, y: 8 });
     // Rotate handle: 5mm above top-center in local-y → world (15, 3-5) = (15, -2)
     expect(h.rotate).toEqual({ x: 15, y: -2 });
   });
@@ -436,12 +508,13 @@ describe("orientedHandlePoints (R1a)", () => {
     const t = { x: 0, y: 0, width: 20, height: 20, rotation: 45 };
     const h = orientedHandlePoints(t, 0);
     const sq2 = Math.sqrt(2);
-    const cx = 10, cy = 10;
+    const cx = 10,
+      cy = 10;
     const cos = Math.cos(Math.PI / 4);
     const sin = Math.sin(Math.PI / 4);
     // nw: local (-10, -10)
-    expect(h.nw.x).toBeCloseTo(cx + (-10) * cos - (-10) * sin, 9);
-    expect(h.nw.y).toBeCloseTo(cy + (-10) * sin + (-10) * cos, 9);
+    expect(h.nw.x).toBeCloseTo(cx + -10 * cos - -10 * sin, 9);
+    expect(h.nw.y).toBeCloseTo(cy + -10 * sin + -10 * cos, 9);
     // se: local (+10, +10)
     expect(h.se.x).toBeCloseTo(cx + 10 * cos - 10 * sin, 9);
     expect(h.se.y).toBeCloseTo(cy + 10 * sin + 10 * cos, 9);

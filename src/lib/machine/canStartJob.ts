@@ -30,7 +30,10 @@ interface MovesExtents {
 /** Bounding extents of the machine-frame move list; null when there are no moves. */
 export function movesExtents(moves: ReadonlyArray<MovesPoint>): MovesExtents | null {
   if (moves.length === 0) return null;
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
   for (const m of moves) {
     if (m.x < minX) minX = m.x;
     if (m.y < minY) minY = m.y;
@@ -65,14 +68,16 @@ export function isWithinBounds(
   ext: MovesExtents,
   workspaceWidth: number,
   workspaceHeight: number,
-  originTop?: boolean,
+  originTop?: boolean
 ): boolean {
   if (originTop) {
-    return ext.minX >= 0 && ext.maxX <= workspaceWidth &&
-           ext.maxY <= 0 && ext.minY >= -workspaceHeight;
+    return (
+      ext.minX >= 0 && ext.maxX <= workspaceWidth && ext.maxY <= 0 && ext.minY >= -workspaceHeight
+    );
   }
-  return ext.minX >= 0 && ext.minY >= 0 &&
-         ext.maxX <= workspaceWidth && ext.maxY <= workspaceHeight;
+  return (
+    ext.minX >= 0 && ext.minY >= 0 && ext.maxX <= workspaceWidth && ext.maxY <= workspaceHeight
+  );
 }
 
 /**
@@ -81,7 +86,10 @@ export function isWithinBounds(
  * before sending. Returns null when no coordinates are found.
  */
 export function gcodeExtents(gcode: string): MovesExtents | null {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
   let found = false;
   for (const line of gcode.split("\n")) {
     const trimmed = line.trim();
@@ -131,10 +139,14 @@ export interface JobGate {
  *  a user queue a new job while a pause was in progress. */
 export function canStartJob(state: JobGateState): JobGate {
   if (!state.machineConnected) return { ok: false, reason: "Machine not connected" };
-  if (state.machineState === "alarm") return { ok: false, reason: "Machine locked (ALARM) — Home ($H) or Unlock ($X) first" };
+  if (state.machineState === "alarm")
+    return { ok: false, reason: "Machine locked (ALARM) — Home ($H) or Unlock ($X) first" };
   // Gate unification: require idle — hold/run/door all block.
   if (state.machineState && state.machineState !== "idle") {
-    return { ok: false, reason: `Machine is ${state.machineState} — wait for idle before starting` };
+    return {
+      ok: false,
+      reason: `Machine is ${state.machineState} — wait for idle before starting`,
+    };
   }
   if (state.jobRunning) return { ok: false, reason: "Job already running" };
   if (!state.gcodeResult) return { ok: false, reason: "Generate G-code first" };

@@ -31,9 +31,15 @@ beforeEach(() => {
         ? {
             ...l,
             mode: "fillLine" as const,
-            lineOverlay: { power: 90, powerMin: 0, speed: 1200, passes: 1, powerMode: "constant" as const },
+            lineOverlay: {
+              power: 90,
+              powerMin: 0,
+              speed: 1200,
+              passes: 1,
+              powerMode: "constant" as const,
+            },
           }
-        : l,
+        : l
     ),
     activeLayerIndex: 0,
   });
@@ -52,7 +58,7 @@ describe("LayerPanel — fillLine mode", () => {
     // Mode select should include fillLine option
     const selects = container.querySelectorAll("select");
     const modeSelect = Array.from(selects).find((s) =>
-      Array.from(s.options).some((o) => o.value === "fillLine"),
+      Array.from(s.options).some((o) => o.value === "fillLine")
     );
     expect(modeSelect).toBeDefined();
     const fillLineOption = Array.from(modeSelect!.options).find((o) => o.value === "fillLine");
@@ -75,7 +81,9 @@ describe("LayerPanel — fillLine mode", () => {
 
     // Find the power input inside the Line Pass section (after "Line Pass" text)
     // There are multiple power inputs; the line overlay one reads from lineOverlay.power = 90
-    const numberInputs = Array.from(container.querySelectorAll("input[type='number']")) as HTMLInputElement[];
+    const numberInputs = Array.from(
+      container.querySelectorAll("input[type='number']")
+    ) as HTMLInputElement[];
     const powerInput = numberInputs.find((inp) => inp.value === "90");
     expect(powerInput).toBeDefined();
 
@@ -117,7 +125,9 @@ describe("LayerPanel — fillLine mode", () => {
     fireEvent.click(toggleBtns[0]);
 
     // Range inputs: layer power(0), layer minPwr(1), layer speed(2), line power(3), line minPwr(4), line speed(5)
-    const rangeInputs = Array.from(container.querySelectorAll("input[type='range']")) as HTMLInputElement[];
+    const rangeInputs = Array.from(
+      container.querySelectorAll("input[type='range']")
+    ) as HTMLInputElement[];
     // line overlay powerMin slider — index 4 (0-indexed, after the 3 layer sliders and line power slider)
     const lineMinPwrSlider = rangeInputs[4];
     expect(lineMinPwrSlider).toBeDefined();
@@ -140,9 +150,7 @@ describe("LayerPanel — fillLine mode", () => {
 
   it("updateLineOverlay lazy-init: works even when lineOverlay is absent", () => {
     useStore.setState({
-      layers: DEFAULT_LAYERS.map((l, i) =>
-        i === 0 ? { ...l, mode: "fillLine" as const } : l,
-      ),
+      layers: DEFAULT_LAYERS.map((l, i) => (i === 0 ? { ...l, mode: "fillLine" as const } : l)),
     });
     // lineOverlay is undefined; updateLineOverlay should create it with defaults + apply change
     useStore.getState().updateLineOverlay(0, { power: 60 });
@@ -150,7 +158,7 @@ describe("LayerPanel — fillLine mode", () => {
     expect(ov).toBeDefined();
     expect(ov!.power).toBe(60);
     expect(ov!.speed).toBe(1200); // default
-    expect(ov!.passes).toBe(1);   // default
+    expect(ov!.passes).toBe(1); // default
   });
 
   it("mode badge shows fill+line for fillLine layers", () => {
@@ -164,8 +172,8 @@ describe("LayerPanel — fillLine mode", () => {
     const toggleBtns = container.querySelectorAll("button[aria-expanded]");
     fireEvent.click(toggleBtns[0]);
     // Expand advanced settings
-    const advButtons = Array.from(container.querySelectorAll("button")).filter(
-      (b) => b.textContent?.includes("Advanced"),
+    const advButtons = Array.from(container.querySelectorAll("button")).filter((b) =>
+      b.textContent?.includes("Advanced")
     );
     if (advButtons.length > 0) fireEvent.click(advButtons[0]);
     expect(container.textContent).toContain("Overscan");
@@ -175,8 +183,8 @@ describe("LayerPanel — fillLine mode", () => {
     const { container } = render(<LayerPanel />);
     const toggleBtns = container.querySelectorAll("button[aria-expanded]");
     fireEvent.click(toggleBtns[0]);
-    const advButtons = Array.from(container.querySelectorAll("button")).filter(
-      (b) => b.textContent?.includes("Advanced"),
+    const advButtons = Array.from(container.querySelectorAll("button")).filter((b) =>
+      b.textContent?.includes("Advanced")
     );
     if (advButtons.length > 0) fireEvent.click(advButtons[0]);
     expect(container.textContent).toContain("Scan Offset");

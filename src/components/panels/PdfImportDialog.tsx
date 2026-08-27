@@ -29,7 +29,16 @@ interface PageInfo {
 
 type ImportMode = "raster" | "vector";
 
-export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, onImportVector, generateId, defaultLayerIndex }: PdfImportDialogProps) {
+export function PdfImportDialog({
+  open,
+  pdfData,
+  fileName,
+  onClose,
+  onImport,
+  onImportVector,
+  generateId,
+  defaultLayerIndex,
+}: PdfImportDialogProps) {
   const [pages, setPages] = useState<PageInfo[]>([]);
   const [selectedPage, setSelectedPage] = useState<number>(1);
   const [dpi, setDpi] = useState(150);
@@ -94,9 +103,7 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
             await page.render({ canvasContext: ctx, viewport, canvas }).promise;
             if (!cancelled) {
               setPages((prev) =>
-                prev.map((p) =>
-                  p.pageNum === i + 1 ? { ...p, thumbnail: canvas.toDataURL() } : p
-                )
+                prev.map((p) => (p.pageNum === i + 1 ? { ...p, thumbnail: canvas.toDataURL() } : p))
               );
             }
           }
@@ -112,7 +119,9 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
     }
 
     loadPdf();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [open, pdfData]);
 
   // Render preview when selection/DPI changes
@@ -147,7 +156,9 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
     }
 
     renderPreview();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [open, selectedPage, dpi]);
 
   const handleImport = useCallback(async () => {
@@ -179,8 +190,8 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
             const imageData = canvas.toDataURL("image/png");
             // Pass physical mm dimensions (from PDF points at scale 1.0)
             const baseViewport = page.getViewport({ scale: 1.0 });
-            const mmW = baseViewport.width * MM_PER_INCH / PT_PER_INCH;
-            const mmH = baseViewport.height * MM_PER_INCH / PT_PER_INCH;
+            const mmW = (baseViewport.width * MM_PER_INCH) / PT_PER_INCH;
+            const mmH = (baseViewport.height * MM_PER_INCH) / PT_PER_INCH;
             onImport(imageData, mmW, mmH);
           }
         } else {
@@ -199,8 +210,8 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
           const imageData = canvas.toDataURL("image/png");
           // Physical dimensions come from PDF points at scale 1.0, not from render DPI.
           const baseViewport = page.getViewport({ scale: 1.0 });
-          const mmW = baseViewport.width * MM_PER_INCH / PT_PER_INCH;
-          const mmH = baseViewport.height * MM_PER_INCH / PT_PER_INCH;
+          const mmW = (baseViewport.width * MM_PER_INCH) / PT_PER_INCH;
+          const mmH = (baseViewport.height * MM_PER_INCH) / PT_PER_INCH;
           onImport(imageData, mmW, mmH);
         }
       }
@@ -225,10 +236,16 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
   // Calculate pixel dimensions for the DPI readout
   // PageInfo stores dimensions in PDF points (1 pt = 1/72 inch) at scale 1.0
   const selectedPageInfo = pages.find((p) => p.pageNum === selectedPage);
-  const pxWidth = selectedPageInfo ? Math.round(selectedPageInfo.widthPt * dpi / PT_PER_INCH) : 0;
-  const pxHeight = selectedPageInfo ? Math.round(selectedPageInfo.heightPt * dpi / PT_PER_INCH) : 0;
-  const mmWidth = selectedPageInfo ? Math.round(selectedPageInfo.widthPt * MM_PER_INCH / PT_PER_INCH) : 0;
-  const mmHeight = selectedPageInfo ? Math.round(selectedPageInfo.heightPt * MM_PER_INCH / PT_PER_INCH) : 0;
+  const pxWidth = selectedPageInfo ? Math.round((selectedPageInfo.widthPt * dpi) / PT_PER_INCH) : 0;
+  const pxHeight = selectedPageInfo
+    ? Math.round((selectedPageInfo.heightPt * dpi) / PT_PER_INCH)
+    : 0;
+  const mmWidth = selectedPageInfo
+    ? Math.round((selectedPageInfo.widthPt * MM_PER_INCH) / PT_PER_INCH)
+    : 0;
+  const mmHeight = selectedPageInfo
+    ? Math.round((selectedPageInfo.heightPt * MM_PER_INCH) / PT_PER_INCH)
+    : 0;
 
   const titleId = "pdf-import-title";
 
@@ -237,7 +254,9 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
       {/* Backdrop */}
       <div
         ref={backdropRef}
-        onClick={(e) => { if (e.target === backdropRef.current) onClose(); }}
+        onClick={(e) => {
+          if (e.target === backdropRef.current) onClose();
+        }}
         style={{
           position: "fixed",
           inset: 0,
@@ -270,64 +289,77 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
         }}
       >
         {/* Title */}
-        <div id={titleId} style={{
-          fontSize: "14px",
-          fontWeight: 600,
-          color: "var(--text-primary)",
-        }}>
+        <div
+          id={titleId}
+          style={{
+            fontSize: "14px",
+            fontWeight: 600,
+            color: "var(--text-primary)",
+          }}
+        >
           Import PDF
         </div>
 
         {/* Filename + page count */}
-        <div style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "8px",
-        }}>
-          <span style={{
-            fontSize: "12px",
-            color: "var(--text-muted)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            flex: 1,
-          }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+          }}
+        >
+          <span
+            style={{
+              fontSize: "12px",
+              color: "var(--text-muted)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              flex: 1,
+            }}
+          >
             {fileName}
           </span>
-          <span style={{
-            fontSize: "11px",
-            color: "var(--text-secondary)",
-            flexShrink: 0,
-          }}>
+          <span
+            style={{
+              fontSize: "11px",
+              color: "var(--text-secondary)",
+              flexShrink: 0,
+            }}
+          >
             {pages.length > 0 ? `${pages.length} page${pages.length !== 1 ? "s" : ""}` : ""}
           </span>
         </div>
 
         {error && (
-          <div style={{
-            fontSize: "12px",
-            color: "var(--danger)",
-            padding: "8px",
-            background: "rgba(226,74,74,0.1)",
-            borderRadius: "var(--radius-sm)",
-          }}>
+          <div
+            style={{
+              fontSize: "12px",
+              color: "var(--danger)",
+              padding: "8px",
+              background: "rgba(226,74,74,0.1)",
+              borderRadius: "var(--radius-sm)",
+            }}
+          >
             {error}
           </div>
         )}
 
         {/* Thumbnail grid */}
         {pages.length > 1 && (
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(80px, 1fr))",
-            gap: "8px",
-            maxHeight: "200px",
-            overflow: "auto",
-            background: "var(--bg-input)",
-            borderRadius: "var(--radius-sm)",
-            padding: "8px",
-            border: "1px solid var(--border)",
-          }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(80px, 1fr))",
+              gap: "8px",
+              maxHeight: "200px",
+              overflow: "auto",
+              background: "var(--bg-input)",
+              borderRadius: "var(--radius-sm)",
+              padding: "8px",
+              border: "1px solid var(--border)",
+            }}
+          >
             {pages.map((page) => (
               <div
                 key={page.pageNum}
@@ -339,9 +371,10 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
                   borderRadius: "var(--radius-sm)",
                   overflow: "hidden",
                   cursor: "pointer",
-                  border: selectedPage === page.pageNum
-                    ? "2px solid var(--accent)"
-                    : "2px solid transparent",
+                  border:
+                    selectedPage === page.pageNum
+                      ? "2px solid var(--accent)"
+                      : "2px solid transparent",
                   position: "relative",
                   transition: "border-color 100ms ease",
                 }}
@@ -361,23 +394,27 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
                     style={{ width: "100%", height: "100%", objectFit: "contain" }}
                   />
                 ) : (
-                  <div style={{
-                    width: "100%",
-                    height: "100%",
-                    background: "rgba(255,255,255,0.04)",
-                  }} />
+                  <div
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      background: "rgba(255,255,255,0.04)",
+                    }}
+                  />
                 )}
-                <span style={{
-                  position: "absolute",
-                  bottom: "2px",
-                  right: "4px",
-                  fontSize: "8px",
-                  color: "var(--text-muted)",
-                  fontFamily: "var(--font-mono)",
-                  background: "rgba(0,0,0,0.5)",
-                  padding: "1px 3px",
-                  borderRadius: "2px",
-                }}>
+                <span
+                  style={{
+                    position: "absolute",
+                    bottom: "2px",
+                    right: "4px",
+                    fontSize: "8px",
+                    color: "var(--text-muted)",
+                    fontFamily: "var(--font-mono)",
+                    background: "rgba(0,0,0,0.5)",
+                    padding: "1px 3px",
+                    borderRadius: "2px",
+                  }}
+                >
                   {page.pageNum}
                 </span>
               </div>
@@ -386,16 +423,18 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
         )}
 
         {/* Page preview */}
-        <div style={{
-          background: "#111111",
-          borderRadius: "var(--radius-sm)",
-          border: "1px solid var(--border)",
-          height: "240px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          overflow: "hidden",
-        }}>
+        <div
+          style={{
+            background: "#111111",
+            borderRadius: "var(--radius-sm)",
+            border: "1px solid var(--border)",
+            height: "240px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            overflow: "hidden",
+          }}
+        >
           {preview ? (
             <img
               src={preview}
@@ -412,13 +451,15 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
         {/* DPI row */}
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <span style={{
-              fontSize: "11px",
-              color: "var(--text-muted)",
-              minWidth: "28px",
-              textTransform: "uppercase",
-              letterSpacing: "0.3px",
-            }}>
+            <span
+              style={{
+                fontSize: "11px",
+                color: "var(--text-muted)",
+                minWidth: "28px",
+                textTransform: "uppercase",
+                letterSpacing: "0.3px",
+              }}
+            >
               DPI
             </span>
             <input
@@ -451,14 +492,16 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
             <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>dpi</span>
           </div>
           {selectedPageInfo && (
-            <div style={{
-              fontSize: "10px",
-              color: "var(--text-muted)",
-              fontFamily: "var(--font-mono)",
-              display: "block",
-              marginTop: "3px",
-              paddingLeft: "36px",
-            }}>
+            <div
+              style={{
+                fontSize: "10px",
+                color: "var(--text-muted)",
+                fontFamily: "var(--font-mono)",
+                display: "block",
+                marginTop: "3px",
+                paddingLeft: "36px",
+              }}
+            >
               {"→"} {pxWidth} x {pxHeight} px ({mmWidth} x {mmHeight} mm)
             </div>
           )}
@@ -475,7 +518,8 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
                 borderRadius: "var(--radius-sm)",
                 cursor: "pointer",
                 background: mode === "raster" ? "rgba(196,165,123,0.15)" : "var(--bg-input)",
-                border: mode === "raster" ? "1px solid var(--accent-warm)" : "1px solid var(--border)",
+                border:
+                  mode === "raster" ? "1px solid var(--accent-warm)" : "1px solid var(--border)",
                 color: mode === "raster" ? "var(--accent-warm)" : "var(--text-secondary)",
               }}
             >
@@ -497,16 +541,18 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
             </button>
           </div>
           {mode === "vector" && (
-            <div style={{
-              fontSize: "10px",
-              color: "var(--text-muted)",
-              padding: "6px 8px",
-              background: "rgba(74,144,226,0.06)",
-              borderRadius: "var(--radius-sm)",
-              marginTop: "4px",
-            }}>
-              Vector extraction works best with Illustrator or Inkscape PDFs.
-              Scanned documents will fall back to raster.
+            <div
+              style={{
+                fontSize: "10px",
+                color: "var(--text-muted)",
+                padding: "6px 8px",
+                background: "rgba(74,144,226,0.06)",
+                borderRadius: "var(--radius-sm)",
+                marginTop: "4px",
+              }}
+            >
+              Vector extraction works best with Illustrator or Inkscape PDFs. Scanned documents will
+              fall back to raster.
             </div>
           )}
         </div>
@@ -531,15 +577,19 @@ export function PdfImportDialog({ open, pdfData, fileName, onClose, onImport, on
             onClick={handleImport}
             disabled={!selectedPage || loading || pages.length === 0}
             style={{
-              background: (!selectedPage || loading || pages.length === 0) ? "var(--bg-input)" : "var(--accent-warm)",
+              background:
+                !selectedPage || loading || pages.length === 0
+                  ? "var(--bg-input)"
+                  : "var(--accent-warm)",
               border: "none",
-              color: (!selectedPage || loading || pages.length === 0) ? "var(--text-muted)" : "#ffffff",
+              color:
+                !selectedPage || loading || pages.length === 0 ? "var(--text-muted)" : "#ffffff",
               padding: "6px 20px",
               borderRadius: "var(--radius-sm)",
-              cursor: (!selectedPage || loading || pages.length === 0) ? "not-allowed" : "pointer",
+              cursor: !selectedPage || loading || pages.length === 0 ? "not-allowed" : "pointer",
               fontSize: "13px",
               fontWeight: 600,
-              opacity: (!selectedPage || loading || pages.length === 0) ? 0.5 : 1,
+              opacity: !selectedPage || loading || pages.length === 0 ? 0.5 : 1,
             }}
           >
             Import

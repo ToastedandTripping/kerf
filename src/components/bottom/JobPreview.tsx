@@ -4,9 +4,9 @@ import { useStore } from "../../app/store";
 import { PX_PER_MM } from "../../lib/constants";
 
 const COLORS = {
-  rapid: "#4A90E2",     // Blue - travel moves
-  cut: "#E24A4A",       // Red - vector cuts
-  engrave: "#c4a57b",   // Gold - engrave/fill
+  rapid: "#4A90E2", // Blue - travel moves
+  cut: "#E24A4A", // Red - vector cuts
+  engrave: "#c4a57b", // Gold - engrave/fill
   laserHead: "#4AE28A", // Green - laser head dot
 };
 
@@ -38,9 +38,15 @@ export function JobPreview() {
   const lastTimeRef = useRef(0);
 
   // Keep refs in sync
-  useEffect(() => { playingRef.current = playing; }, [playing]);
-  useEffect(() => { speedRef.current = speed; }, [speed]);
-  useEffect(() => { progressRef.current = progress; }, [progress]);
+  useEffect(() => {
+    playingRef.current = playing;
+  }, [playing]);
+  useEffect(() => {
+    speedRef.current = speed;
+  }, [speed]);
+  useEffect(() => {
+    progressRef.current = progress;
+  }, [progress]);
 
   const moves = gcodeResult?.moves || [];
 
@@ -49,7 +55,8 @@ export function JobPreview() {
   useEffect(() => {
     if (!moves.length) return;
     const dists: number[] = [0];
-    let px = 0, py = 0;
+    let px = 0,
+      py = 0;
     for (let i = 0; i < moves.length; i++) {
       const d = Math.hypot(moves[i].x - px, moves[i].y - py);
       dists.push(dists[dists.length - 1] + d);
@@ -60,170 +67,185 @@ export function JobPreview() {
   }, [moves]);
 
   // Get the move index for a given progress (0-1)
-  const getMoveIndex = useCallback((p: number): number => {
-    if (!moves.length) return 0;
-    const totalDist = cumulativeDistances.current[cumulativeDistances.current.length - 1];
-    const targetDist = p * totalDist;
+  const getMoveIndex = useCallback(
+    (p: number): number => {
+      if (!moves.length) return 0;
+      const totalDist = cumulativeDistances.current[cumulativeDistances.current.length - 1];
+      const targetDist = p * totalDist;
 
-    // Binary search for the move
-    let lo = 0, hi = moves.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (cumulativeDistances.current[mid + 1] < targetDist) lo = mid + 1;
-      else hi = mid;
-    }
-    return lo;
-  }, [moves]);
+      // Binary search for the move
+      let lo = 0,
+        hi = moves.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (cumulativeDistances.current[mid + 1] < targetDist) lo = mid + 1;
+        else hi = mid;
+      }
+      return lo;
+    },
+    [moves]
+  );
 
   // Get interpolated position at progress
-  const getPositionAtProgress = useCallback((p: number): { x: number; y: number } => {
-    if (!moves.length) return { x: 0, y: 0 };
-    const totalDist = cumulativeDistances.current[cumulativeDistances.current.length - 1];
-    if (totalDist === 0) return { x: moves[0].x, y: moves[0].y };
+  const getPositionAtProgress = useCallback(
+    (p: number): { x: number; y: number } => {
+      if (!moves.length) return { x: 0, y: 0 };
+      const totalDist = cumulativeDistances.current[cumulativeDistances.current.length - 1];
+      if (totalDist === 0) return { x: moves[0].x, y: moves[0].y };
 
-    const targetDist = p * totalDist;
-    const moveIdx = getMoveIndex(p);
+      const targetDist = p * totalDist;
+      const moveIdx = getMoveIndex(p);
 
-    const distBefore = cumulativeDistances.current[moveIdx];
-    const distAfter = cumulativeDistances.current[moveIdx + 1];
-    const segmentLen = distAfter - distBefore;
+      const distBefore = cumulativeDistances.current[moveIdx];
+      const distAfter = cumulativeDistances.current[moveIdx + 1];
+      const segmentLen = distAfter - distBefore;
 
-    if (segmentLen === 0) return { x: moves[moveIdx].x, y: moves[moveIdx].y };
+      if (segmentLen === 0) return { x: moves[moveIdx].x, y: moves[moveIdx].y };
 
-    const t = (targetDist - distBefore) / segmentLen;
-    const prevX = moveIdx > 0 ? moves[moveIdx - 1].x : 0;
-    const prevY = moveIdx > 0 ? moves[moveIdx - 1].y : 0;
+      const t = (targetDist - distBefore) / segmentLen;
+      const prevX = moveIdx > 0 ? moves[moveIdx - 1].x : 0;
+      const prevY = moveIdx > 0 ? moves[moveIdx - 1].y : 0;
 
-    return {
-      x: prevX + (moves[moveIdx].x - prevX) * t,
-      y: prevY + (moves[moveIdx].y - prevY) * t,
-    };
-  }, [moves, getMoveIndex]);
+      return {
+        x: prevX + (moves[moveIdx].x - prevX) * t,
+        y: prevY + (moves[moveIdx].y - prevY) * t,
+      };
+    },
+    [moves, getMoveIndex]
+  );
 
   // Drawing function
-  const draw = useCallback((canvas: HTMLCanvasElement, currentProgress: number) => {
-    const ctx = canvas.getContext("2d");
-    if (!ctx || !moves.length) return;
+  const draw = useCallback(
+    (canvas: HTMLCanvasElement, currentProgress: number) => {
+      const ctx = canvas.getContext("2d");
+      if (!ctx || !moves.length) return;
 
-    const w = canvas.width;
-    const h = canvas.height;
+      const w = canvas.width;
+      const h = canvas.height;
 
-    ctx.clearRect(0, 0, w, h);
+      ctx.clearRect(0, 0, w, h);
 
-    // Semi-transparent overlay
-    ctx.fillStyle = "rgba(26, 26, 26, 0.85)";
-    ctx.fillRect(0, 0, w, h);
+      // Semi-transparent overlay
+      ctx.fillStyle = "rgba(26, 26, 26, 0.85)";
+      ctx.fillRect(0, 0, w, h);
 
-    // Apply camera transform -- match Viewport's coordinate system
-    ctx.save();
-    ctx.translate(camera.x, camera.y);
-    ctx.scale(camera.zoom, camera.zoom);
+      // Apply camera transform -- match Viewport's coordinate system
+      ctx.save();
+      ctx.translate(camera.x, camera.y);
+      ctx.scale(camera.zoom, camera.zoom);
 
-    // Draw workspace boundary
-    const wsW = workspaceWidth * PX_PER_MM;
-    const wsH = workspaceHeight * PX_PER_MM;
-    ctx.strokeStyle = "rgba(255,255,255,0.1)";
-    ctx.lineWidth = 1 / camera.zoom;
-    ctx.strokeRect(0, 0, wsW, wsH);
+      // Draw workspace boundary
+      const wsW = workspaceWidth * PX_PER_MM;
+      const wsH = workspaceHeight * PX_PER_MM;
+      ctx.strokeStyle = "rgba(255,255,255,0.1)";
+      ctx.lineWidth = 1 / camera.zoom;
+      ctx.strokeRect(0, 0, wsW, wsH);
 
-    // Coordinate transform: G-code coords to screen coords.
-    // Standard GRBL (origin bottom): G-code Y=0 at bottom → screen Y = (wsH - y).
-    // Origin top: G-code Y is negative (0 at top, -wsH at bottom) → screen Y = -y.
-    const toScreen = (mx: number, my: number) => ({
-      sx: mx * PX_PER_MM,
-      sy: originTop ? (-my) * PX_PER_MM : (workspaceHeight - my) * PX_PER_MM,
-    });
+      // Coordinate transform: G-code coords to screen coords.
+      // Standard GRBL (origin bottom): G-code Y=0 at bottom → screen Y = (wsH - y).
+      // Origin top: G-code Y is negative (0 at top, -wsH at bottom) → screen Y = -y.
+      const toScreen = (mx: number, my: number) => ({
+        sx: mx * PX_PER_MM,
+        sy: originTop ? -my * PX_PER_MM : (workspaceHeight - my) * PX_PER_MM,
+      });
 
-    const currentMoveIdx = getMoveIndex(currentProgress);
+      const currentMoveIdx = getMoveIndex(currentProgress);
 
-    // Draw all moves up to current progress
-    let prevX = 0, prevY = 0;
-    for (let i = 0; i <= Math.min(currentMoveIdx, moves.length - 1); i++) {
-      const move = moves[i];
-      const from = toScreen(prevX, prevY);
-      const to = toScreen(move.x, move.y);
+      // Draw all moves up to current progress
+      let prevX = 0,
+        prevY = 0;
+      for (let i = 0; i <= Math.min(currentMoveIdx, moves.length - 1); i++) {
+        const move = moves[i];
+        const from = toScreen(prevX, prevY);
+        const to = toScreen(move.x, move.y);
 
-      ctx.beginPath();
-      ctx.moveTo(from.sx, from.sy);
+        ctx.beginPath();
+        ctx.moveTo(from.sx, from.sy);
 
-      if (i < currentMoveIdx) {
+        if (i < currentMoveIdx) {
+          ctx.lineTo(to.sx, to.sy);
+        } else {
+          // Partially draw the last segment
+          const pos = getPositionAtProgress(currentProgress);
+          const partial = toScreen(pos.x, pos.y);
+          ctx.lineTo(partial.sx, partial.sy);
+        }
+
+        // Color by move type
+        const color = COLORS[move.moveType as keyof typeof COLORS] || COLORS.cut;
+        ctx.strokeStyle = i <= currentMoveIdx ? color : `${color}40`;
+        ctx.lineWidth = move.moveType === "rapid" ? 1 / camera.zoom : 1.5 / camera.zoom;
+
+        if (move.moveType === "rapid") {
+          ctx.setLineDash([4 / camera.zoom, 4 / camera.zoom]);
+        } else {
+          ctx.setLineDash([]);
+        }
+
+        ctx.stroke();
+
+        prevX = move.x;
+        prevY = move.y;
+      }
+
+      // Draw future moves (dimmed)
+      ctx.setLineDash([]);
+      for (let i = currentMoveIdx + 1; i < moves.length; i++) {
+        const move = moves[i];
+        const from = toScreen(prevX, prevY);
+        const to = toScreen(move.x, move.y);
+
+        ctx.beginPath();
+        ctx.moveTo(from.sx, from.sy);
         ctx.lineTo(to.sx, to.sy);
-      } else {
-        // Partially draw the last segment
-        const pos = getPositionAtProgress(currentProgress);
-        const partial = toScreen(pos.x, pos.y);
-        ctx.lineTo(partial.sx, partial.sy);
+
+        const color = COLORS[move.moveType as keyof typeof COLORS] || COLORS.cut;
+        ctx.strokeStyle = `${color}20`;
+        ctx.lineWidth = 0.5 / camera.zoom;
+
+        if (move.moveType === "rapid") {
+          ctx.setLineDash([3 / camera.zoom, 3 / camera.zoom]);
+        } else {
+          ctx.setLineDash([]);
+        }
+        ctx.stroke();
+
+        prevX = move.x;
+        prevY = move.y;
       }
 
-      // Color by move type
-      const color = COLORS[move.moveType as keyof typeof COLORS] || COLORS.cut;
-      ctx.strokeStyle = i <= currentMoveIdx ? color : `${color}40`;
-      ctx.lineWidth = move.moveType === "rapid" ? (1 / camera.zoom) : (1.5 / camera.zoom);
+      ctx.setLineDash([]);
 
-      if (move.moveType === "rapid") {
-        ctx.setLineDash([4 / camera.zoom, 4 / camera.zoom]);
-      } else {
-        ctx.setLineDash([]);
-      }
+      // Draw laser head position
+      const headPos = getPositionAtProgress(currentProgress);
+      const headScreen = toScreen(headPos.x, headPos.y);
 
-      ctx.stroke();
-
-      prevX = move.x;
-      prevY = move.y;
-    }
-
-    // Draw future moves (dimmed)
-    ctx.setLineDash([]);
-    for (let i = currentMoveIdx + 1; i < moves.length; i++) {
-      const move = moves[i];
-      const from = toScreen(prevX, prevY);
-      const to = toScreen(move.x, move.y);
-
+      // Glow
+      const gradient = ctx.createRadialGradient(
+        headScreen.sx,
+        headScreen.sy,
+        0,
+        headScreen.sx,
+        headScreen.sy,
+        8 / camera.zoom
+      );
+      gradient.addColorStop(0, "rgba(74,226,138,0.6)");
+      gradient.addColorStop(1, "rgba(74,226,138,0)");
+      ctx.fillStyle = gradient;
       ctx.beginPath();
-      ctx.moveTo(from.sx, from.sy);
-      ctx.lineTo(to.sx, to.sy);
+      ctx.arc(headScreen.sx, headScreen.sy, 8 / camera.zoom, 0, Math.PI * 2);
+      ctx.fill();
 
-      const color = COLORS[move.moveType as keyof typeof COLORS] || COLORS.cut;
-      ctx.strokeStyle = `${color}20`;
-      ctx.lineWidth = (0.5 / camera.zoom);
+      // Head dot
+      ctx.fillStyle = COLORS.laserHead;
+      ctx.beginPath();
+      ctx.arc(headScreen.sx, headScreen.sy, 3 / camera.zoom, 0, Math.PI * 2);
+      ctx.fill();
 
-      if (move.moveType === "rapid") {
-        ctx.setLineDash([3 / camera.zoom, 3 / camera.zoom]);
-      } else {
-        ctx.setLineDash([]);
-      }
-      ctx.stroke();
-
-      prevX = move.x;
-      prevY = move.y;
-    }
-
-    ctx.setLineDash([]);
-
-    // Draw laser head position
-    const headPos = getPositionAtProgress(currentProgress);
-    const headScreen = toScreen(headPos.x, headPos.y);
-
-    // Glow
-    const gradient = ctx.createRadialGradient(
-      headScreen.sx, headScreen.sy, 0,
-      headScreen.sx, headScreen.sy, 8 / camera.zoom
-    );
-    gradient.addColorStop(0, "rgba(74,226,138,0.6)");
-    gradient.addColorStop(1, "rgba(74,226,138,0)");
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.arc(headScreen.sx, headScreen.sy, 8 / camera.zoom, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Head dot
-    ctx.fillStyle = COLORS.laserHead;
-    ctx.beginPath();
-    ctx.arc(headScreen.sx, headScreen.sy, 3 / camera.zoom, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.restore();
-  }, [moves, camera, workspaceWidth, workspaceHeight, originTop, getMoveIndex, getPositionAtProgress]);
+      ctx.restore();
+    },
+    [moves, camera, workspaceWidth, workspaceHeight, originTop, getMoveIndex, getPositionAtProgress]
+  );
 
   // Animation loop
   useEffect(() => {
@@ -326,23 +348,58 @@ export function JobPreview() {
             border: "1px solid var(--border)",
           }}
         >
-          <div style={{ fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px", fontFamily: "var(--font-sans)" }}>
+          <div
+            style={{
+              fontWeight: 600,
+              color: "var(--text-primary)",
+              marginBottom: "4px",
+              fontFamily: "var(--font-sans)",
+            }}
+          >
             Job Preview
           </div>
-          <div>Lines: <span style={{ color: "var(--text-primary)" }}>{gcodeResult.lineCount}</span></div>
-          <div>Cut: <span style={{ color: COLORS.cut }}>{gcodeResult.cutDistance.toFixed(1)}mm</span></div>
-          <div>Travel: <span style={{ color: COLORS.rapid }}>{gcodeResult.travelDistance.toFixed(1)}mm</span></div>
-          <div>Total: <span style={{ color: "var(--text-primary)" }}>{gcodeResult.totalDistance.toFixed(1)}mm</span></div>
-          <div style={{ borderTop: "1px solid var(--border)", paddingTop: "4px", marginTop: "2px" }}>
-            Est. time: <span style={{ color: "var(--accent-warm)" }}>{formatTime(gcodeResult.estimatedTimeSecs)}</span>
+          <div>
+            Lines: <span style={{ color: "var(--text-primary)" }}>{gcodeResult.lineCount}</span>
+          </div>
+          <div>
+            Cut: <span style={{ color: COLORS.cut }}>{gcodeResult.cutDistance.toFixed(1)}mm</span>
+          </div>
+          <div>
+            Travel:{" "}
+            <span style={{ color: COLORS.rapid }}>{gcodeResult.travelDistance.toFixed(1)}mm</span>
+          </div>
+          <div>
+            Total:{" "}
+            <span style={{ color: "var(--text-primary)" }}>
+              {gcodeResult.totalDistance.toFixed(1)}mm
+            </span>
+          </div>
+          <div
+            style={{ borderTop: "1px solid var(--border)", paddingTop: "4px", marginTop: "2px" }}
+          >
+            Est. time:{" "}
+            <span style={{ color: "var(--accent-warm)" }}>
+              {formatTime(gcodeResult.estimatedTimeSecs)}
+            </span>
           </div>
           {currentMove && (
-            <div style={{ borderTop: "1px solid var(--border)", paddingTop: "4px", marginTop: "2px" }}>
-              <div>Move {currentMoveIdx + 1}/{moves.length}</div>
-              <div>Type: <span style={{ color: COLORS[currentMove.moveType as keyof typeof COLORS] || "#fff" }}>
-                {currentMove.moveType}
-              </span></div>
-              <div>Pos: X{currentMove.x.toFixed(1)} Y{currentMove.y.toFixed(1)}</div>
+            <div
+              style={{ borderTop: "1px solid var(--border)", paddingTop: "4px", marginTop: "2px" }}
+            >
+              <div>
+                Move {currentMoveIdx + 1}/{moves.length}
+              </div>
+              <div>
+                Type:{" "}
+                <span
+                  style={{ color: COLORS[currentMove.moveType as keyof typeof COLORS] || "#fff" }}
+                >
+                  {currentMove.moveType}
+                </span>
+              </div>
+              <div>
+                Pos: X{currentMove.x.toFixed(1)} Y{currentMove.y.toFixed(1)}
+              </div>
               {currentMove.power > 0 && <div>Power: S{currentMove.power.toFixed(0)}</div>}
             </div>
           )}
@@ -453,7 +510,14 @@ export function JobPreview() {
         </button>
 
         {/* Time display */}
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--text-secondary)", minWidth: "60px" }}>
+        <span
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: "11px",
+            color: "var(--text-secondary)",
+            minWidth: "60px",
+          }}
+        >
           {formatTime(elapsedTime)}
         </span>
 
@@ -472,7 +536,15 @@ export function JobPreview() {
         />
 
         {/* Remaining time */}
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--text-muted)", minWidth: "60px", textAlign: "right" }}>
+        <span
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: "11px",
+            color: "var(--text-muted)",
+            minWidth: "60px",
+            textAlign: "right",
+          }}
+        >
           -{formatTime(remainingTime)}
         </span>
 
@@ -499,7 +571,16 @@ export function JobPreview() {
         </div>
 
         {/* Progress percentage */}
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--accent)", fontWeight: 600, minWidth: "40px", textAlign: "right" }}>
+        <span
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: "11px",
+            color: "var(--accent)",
+            fontWeight: 600,
+            minWidth: "40px",
+            textAlign: "right",
+          }}
+        >
           {(progress * 100).toFixed(1)}%
         </span>
       </div>
@@ -514,11 +595,29 @@ function formatTime(secs: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function LegendItem({ color, label, dashed, dot }: { color: string; label: string; dashed?: boolean; dot?: boolean }) {
+function LegendItem({
+  color,
+  label,
+  dashed,
+  dot,
+}: {
+  color: string;
+  label: string;
+  dashed?: boolean;
+  dot?: boolean;
+}) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
       {dot ? (
-        <div style={{ width: "12px", height: "12px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div
+          style={{
+            width: "12px",
+            height: "12px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
           <div style={{ width: "6px", height: "6px", borderRadius: "50%", background: color }} />
         </div>
       ) : (

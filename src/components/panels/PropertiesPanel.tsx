@@ -16,20 +16,26 @@ export function PropertiesPanel() {
   const commitEdit = useStore((s) => s.commitPropertyEdit);
 
   const [displayUnit, setDisplayUnit] = useState<"mm" | "in">(() => {
-    try { return (localStorage.getItem(UNITS_KEY) as "mm" | "in") || "mm"; } catch { return "mm"; }
+    try {
+      return (localStorage.getItem(UNITS_KEY) as "mm" | "in") || "mm";
+    } catch {
+      return "mm";
+    }
   });
   const [aspectLocked, setAspectLocked] = useState(false);
 
   const toggleUnit = () => {
     const next = displayUnit === "mm" ? "in" : "mm";
     setDisplayUnit(next);
-    try { localStorage.setItem(UNITS_KEY, next); } catch {
+    try {
+      localStorage.setItem(UNITS_KEY, next);
+    } catch {
       // localStorage unavailable (private browsing, disabled storage) — non-critical, ignore
     }
   };
 
-  const toDisplay = (mm: number) => displayUnit === "in" ? mm / MM_PER_INCH : mm;
-  const fromDisplay = (v: number) => displayUnit === "in" ? v * MM_PER_INCH : v;
+  const toDisplay = (mm: number) => (displayUnit === "in" ? mm / MM_PER_INCH : mm);
+  const fromDisplay = (v: number) => (displayUnit === "in" ? v * MM_PER_INCH : v);
   const unitLabel = displayUnit;
 
   const selected = objects.filter((o) => selectedIds.includes(o.id));
@@ -93,27 +99,45 @@ export function PropertiesPanel() {
         const currentLayer = isMixed ? null : layers[currentIndex];
         return (
           <div style={{ padding: "0 12px 8px", display: "flex", alignItems: "center", gap: "8px" }}>
-            <div style={{
-              width: "10px", height: "10px", borderRadius: "2px", flexShrink: 0,
-              background: currentLayer?.color || "transparent",
-              border: isMixed ? "1px dashed var(--text-muted)" : "none",
-            }} />
+            <div
+              style={{
+                width: "10px",
+                height: "10px",
+                borderRadius: "2px",
+                flexShrink: 0,
+                background: currentLayer?.color || "transparent",
+                border: isMixed ? "1px dashed var(--text-muted)" : "none",
+              }}
+            />
             <select
               value={currentIndex}
               onChange={(e) => moveObjectsToLayer(selectedIds, Number(e.target.value))}
               style={{
-                flex: 1, background: "var(--bg-input)", border: "1px solid var(--border)",
-                color: "var(--text-primary)", padding: "3px 6px", borderRadius: "var(--radius-sm)",
-                fontSize: "11px", cursor: "pointer",
-                appearance: "none", WebkitAppearance: "none",
+                flex: 1,
+                background: "var(--bg-input)",
+                border: "1px solid var(--border)",
+                color: "var(--text-primary)",
+                padding: "3px 6px",
+                borderRadius: "var(--radius-sm)",
+                fontSize: "11px",
+                cursor: "pointer",
+                appearance: "none",
+                WebkitAppearance: "none",
                 backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath d='M0 2l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.5'/%3E%3C/svg%3E")`,
-                backgroundRepeat: "no-repeat", backgroundPosition: "right 6px center",
+                backgroundRepeat: "no-repeat",
+                backgroundPosition: "right 6px center",
                 paddingRight: "20px",
               }}
             >
-              {isMixed && <option value={-1} disabled>Mixed</option>}
+              {isMixed && (
+                <option value={-1} disabled>
+                  Mixed
+                </option>
+              )}
               {layers.map((l) => (
-                <option key={l.index} value={l.index}>{l.name}</option>
+                <option key={l.index} value={l.index}>
+                  {l.name}
+                </option>
               ))}
             </select>
           </div>
@@ -138,7 +162,9 @@ export function PropertiesPanel() {
             <NumberField
               label="X"
               value={toDisplay(obj.transform.x)}
-              onChange={(v) => updateObject(obj.id, movePartial(obj, fromDisplay(v), obj.transform.y))}
+              onChange={(v) =>
+                updateObject(obj.id, movePartial(obj, fromDisplay(v), obj.transform.y))
+              }
               unit={unitLabel}
               step={displayUnit === "in" ? 0.01 : 1}
               onFocus={beginEdit}
@@ -147,7 +173,9 @@ export function PropertiesPanel() {
             <NumberField
               label="Y"
               value={toDisplay(obj.transform.y)}
-              onChange={(v) => updateObject(obj.id, movePartial(obj, obj.transform.x, fromDisplay(v)))}
+              onChange={(v) =>
+                updateObject(obj.id, movePartial(obj, obj.transform.x, fromDisplay(v)))
+              }
               unit={unitLabel}
               step={displayUnit === "in" ? 0.01 : 1}
               onFocus={beginEdit}
@@ -156,46 +184,63 @@ export function PropertiesPanel() {
           </PropertyGroup>
 
           {/* Size */}
-          <PropertyGroup label="Size" trailing={
-            <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-              <button
-                onClick={() => setAspectLocked(!aspectLocked)}
-                title={aspectLocked ? "Unlock aspect ratio" : "Lock aspect ratio"}
-                style={{
-                  background: aspectLocked ? "var(--accent, #4a90e2)" : "none",
-                  border: "1px solid var(--border)", borderRadius: "var(--radius-sm)",
-                  cursor: "pointer", padding: "1px 4px",
-                  color: aspectLocked ? "#fff" : "var(--text-muted)",
-                  fontSize: "9px", lineHeight: 1,
-                }}
-              >
-                {aspectLocked ? "1:1" : "W/H"}
-              </button>
-              <button
-                onClick={toggleUnit}
-                title={`Switch to ${displayUnit === "mm" ? "inches" : "millimeters"}`}
-                style={{
-                  background: "none", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)",
-                  cursor: "pointer", padding: "1px 4px",
-                  color: "var(--text-muted)", fontSize: "9px", lineHeight: 1,
-                }}
-              >
-                {displayUnit}
-              </button>
-            </div>
-          }>
+          <PropertyGroup
+            label="Size"
+            trailing={
+              <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                <button
+                  onClick={() => setAspectLocked(!aspectLocked)}
+                  title={aspectLocked ? "Unlock aspect ratio" : "Lock aspect ratio"}
+                  style={{
+                    background: aspectLocked ? "var(--accent, #4a90e2)" : "none",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius-sm)",
+                    cursor: "pointer",
+                    padding: "1px 4px",
+                    color: aspectLocked ? "#fff" : "var(--text-muted)",
+                    fontSize: "9px",
+                    lineHeight: 1,
+                  }}
+                >
+                  {aspectLocked ? "1:1" : "W/H"}
+                </button>
+                <button
+                  onClick={toggleUnit}
+                  title={`Switch to ${displayUnit === "mm" ? "inches" : "millimeters"}`}
+                  style={{
+                    background: "none",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius-sm)",
+                    cursor: "pointer",
+                    padding: "1px 4px",
+                    color: "var(--text-muted)",
+                    fontSize: "9px",
+                    lineHeight: 1,
+                  }}
+                >
+                  {displayUnit}
+                </button>
+              </div>
+            }
+          >
             <NumberField
               label="W"
               value={toDisplay(obj.transform.width)}
               onChange={(v) => {
                 const newW = Math.max(0, fromDisplay(v));
-                const newH = aspectLocked && obj.transform.width > 0
-                  ? obj.transform.height * (newW / obj.transform.width)
-                  : obj.transform.height;
-                updateObject(obj.id, scalePartial(obj, {
-                  x: obj.transform.x, y: obj.transform.y,
-                  width: newW, height: newH,
-                }));
+                const newH =
+                  aspectLocked && obj.transform.width > 0
+                    ? obj.transform.height * (newW / obj.transform.width)
+                    : obj.transform.height;
+                updateObject(
+                  obj.id,
+                  scalePartial(obj, {
+                    x: obj.transform.x,
+                    y: obj.transform.y,
+                    width: newW,
+                    height: newH,
+                  })
+                );
               }}
               unit={unitLabel}
               step={displayUnit === "in" ? 0.01 : 1}
@@ -207,13 +252,19 @@ export function PropertiesPanel() {
               value={toDisplay(obj.transform.height)}
               onChange={(v) => {
                 const newH = Math.max(0, fromDisplay(v));
-                const newW = aspectLocked && obj.transform.height > 0
-                  ? obj.transform.width * (newH / obj.transform.height)
-                  : obj.transform.width;
-                updateObject(obj.id, scalePartial(obj, {
-                  x: obj.transform.x, y: obj.transform.y,
-                  width: newW, height: newH,
-                }));
+                const newW =
+                  aspectLocked && obj.transform.height > 0
+                    ? obj.transform.width * (newH / obj.transform.height)
+                    : obj.transform.width;
+                updateObject(
+                  obj.id,
+                  scalePartial(obj, {
+                    x: obj.transform.x,
+                    y: obj.transform.y,
+                    width: newW,
+                    height: newH,
+                  })
+                );
               }}
               unit={unitLabel}
               step={displayUnit === "in" ? 0.01 : 1}
@@ -275,7 +326,9 @@ export function PropertiesPanel() {
               <NumberField
                 label="Radius"
                 value={toDisplay(obj.cornerRadius || 0)}
-                onChange={(v) => updateObject(obj.id, { cornerRadius: Math.max(0, fromDisplay(v)) })}
+                onChange={(v) =>
+                  updateObject(obj.id, { cornerRadius: Math.max(0, fromDisplay(v)) })
+                }
                 unit={unitLabel}
                 step={displayUnit === "in" ? 0.01 : 1}
                 onFocus={beginEdit}
@@ -289,7 +342,9 @@ export function PropertiesPanel() {
             <NumberField
               label="Opacity"
               value={Math.round(obj.opacity * 100)}
-              onChange={(v) => updateObject(obj.id, { opacity: Math.max(0, Math.min(100, v)) / 100 })}
+              onChange={(v) =>
+                updateObject(obj.id, { opacity: Math.max(0, Math.min(100, v)) / 100 })
+              }
               unit="%"
               step={1}
               onFocus={beginEdit}
@@ -298,7 +353,9 @@ export function PropertiesPanel() {
             <NumberField
               label="Power Scale"
               value={Math.round((obj.powerScale ?? 1) * 100)}
-              onChange={(v) => updateObject(obj.id, { powerScale: Math.max(1, Math.min(100, v)) / 100 })}
+              onChange={(v) =>
+                updateObject(obj.id, { powerScale: Math.max(1, Math.min(100, v)) / 100 })
+              }
               unit="%"
               step={5}
               onFocus={beginEdit}
@@ -311,13 +368,22 @@ export function PropertiesPanel() {
             <NumberField
               label="Priority"
               value={obj.priority ?? 0}
-              onChange={(v) => updateObject(obj.id, { priority: Math.max(0, Math.min(99, Math.round(v))) })}
+              onChange={(v) =>
+                updateObject(obj.id, { priority: Math.max(0, Math.min(99, Math.round(v))) })
+              }
               unit=""
               step={1}
               onFocus={beginEdit}
               onBlur={commitEdit}
             />
-            <div style={{ fontSize: "10px", color: "var(--text-muted)", marginTop: "4px", lineHeight: 1.4 }}>
+            <div
+              style={{
+                fontSize: "10px",
+                color: "var(--text-muted)",
+                marginTop: "4px",
+                lineHeight: 1.4,
+              }}
+            >
               Higher cuts first. 0 = default order.
             </div>
           </PropertyGroup>
@@ -540,20 +606,12 @@ function PropertyGroup({
         {label}
         {trailing}
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-        {children}
-      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>{children}</div>
     </div>
   );
 }
 
-function PropertyRow({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
+function PropertyRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div
       style={{

@@ -17,10 +17,7 @@ const FOCUSABLE_SELECTORS = [
  * On Shift+Tab: wraps to the last element when at the first.
  * On close: restores focus to the element that triggered the dialog.
  */
-export function useFocusTrap(
-  ref: RefObject<HTMLElement | null>,
-  open: boolean,
-): void {
+export function useFocusTrap(ref: RefObject<HTMLElement | null>, open: boolean): void {
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -42,7 +39,7 @@ export function useFocusTrap(
     // Move initial focus to first focusable element
     const getFocusable = () =>
       Array.from(el.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTORS)).filter(
-        (node) => !node.closest("[disabled]") && node.offsetParent !== null,
+        (node) => !node.closest("[disabled]") && node.offsetParent !== null
       );
 
     const focusable = getFocusable();

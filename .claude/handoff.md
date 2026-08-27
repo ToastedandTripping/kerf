@@ -1,17 +1,17 @@
 # Kerf — Hand-off
 
 **What this file is:** the volatile layer. What is in flight, what is owed, what is waiting on
-Lee, and a short log. It is safe to rewrite *because nothing permanent lives here any more.*
+Lee, and a short log. It is safe to rewrite _because nothing permanent lives here any more._
 
 Supersedes the dated `kerf-handoff-*.md` files in `~/marvin/state/` (tombstoned, pointing here).
 
 **Where everything else went** (restructured 2026-08-21):
 
-| You want… | Read |
-|---|---|
+| You want…                                               | Read                                               |
+| ------------------------------------------------------- | -------------------------------------------------- |
 | Rulings, pins, operating constraints — anything decided | `.claude/DECISIONS.md` — **append-and-amend only** |
-| Named work not yet scheduled | `ROADMAP.md` → **Parking Lot** |
-| What shipped, and when | `ROADMAP.md` → `shipped` |
+| Named work not yet scheduled                            | `ROADMAP.md` → **Parking Lot**                     |
+| What shipped, and when                                  | `ROADMAP.md` → `shipped`                           |
 
 **Read `.claude/DECISIONS.md` before proposing anything.** Most of what looks like a fresh idea
 in this project has already been ruled on, usually for a reason that is not obvious from the code.
@@ -36,19 +36,20 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 ## Open questions awaiting Lee
 
-| Question | Why it matters | Raised |
-|----------|---------------|--------|
-| Is the laser repaired and back in service? | Blocks the v0.8.25 hardware test and the Phase 2 owner laser session — nothing hardware-gated can proceed without it | 2026-07-10 |
-| Can you provide a sample Inkscape SVG that reproduces the path-coordinate drift? | Bug can't be fixed without a repro; the import code has been audited clean otherwise | 2026-06-21 |
-| Clipper2 dependency decision for Phase 4 (offsetFill compound correctness, kerf-offset-on-fillLine) | Gate D2 — changes real cut geometry output, needs your sign-off before Phase 4 starts | 2026-07-05 |
-| v0.9 Camera & Rotary — do you have/plan to get the hardware? | Gate D4 — the feature stays parked with no planning until confirmed | 2026-07-05 |
-| streamingMode default: flip `perLine`→`buffered` after session #1's A/B? | Gate D1c — the rule is recorded in `DECISIONS.md`; you may override | 2026-07-05 |
+| Question                                                                                            | Why it matters                                                                                                       | Raised     |
+| --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------- |
+| Is the laser repaired and back in service?                                                          | Blocks the v0.8.25 hardware test and the Phase 2 owner laser session — nothing hardware-gated can proceed without it | 2026-07-10 |
+| Can you provide a sample Inkscape SVG that reproduces the path-coordinate drift?                    | Bug can't be fixed without a repro; the import code has been audited clean otherwise                                 | 2026-06-21 |
+| Clipper2 dependency decision for Phase 4 (offsetFill compound correctness, kerf-offset-on-fillLine) | Gate D2 — changes real cut geometry output, needs your sign-off before Phase 4 starts                                | 2026-07-05 |
+| v0.9 Camera & Rotary — do you have/plan to get the hardware?                                        | Gate D4 — the feature stays parked with no planning until confirmed                                                  | 2026-07-05 |
+| streamingMode default: flip `perLine`→`buffered` after session #1's A/B?                            | Gate D1c — the rule is recorded in `DECISIONS.md`; you may override                                                  | 2026-07-05 |
 
 ---
 
 ## Log (newest first)
 
 ### 2026-08-26
+
 Phase 2A plan gate cleared. The plan (`prancy-fluttering-wave.md`) had all four
 prior critic must-fixes already folded (Intent section, line-too-long pre-validation,
 worst-case physical outcome, STOP button sequence). Critic re-run on Opus (Fable
@@ -59,6 +60,7 @@ via relay, still blocked on the owner hardware test + laser confirmation.
 **Next:** implementation waits on Lee confirming the laser is back in service.
 
 ### 2026-08-21
+
 Hand-off restructured by lifetime, following the MARVIN convention and the Fern reference
 implementation (`fern 91b4db1`): standing decisions extracted to `.claude/DECISIONS.md`,
 deferrals indexed in the ROADMAP's Parking Lot, this file cut to the volatile layer. The

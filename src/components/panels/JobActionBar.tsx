@@ -15,7 +15,12 @@
 import { useState, useEffect, useRef } from "react";
 import { useStore } from "../../app/store";
 import { machineConnection } from "../../lib/machine/connection";
-import { canStartJob, movesExtents, frameTargets, isWithinBounds } from "../../lib/machine/canStartJob";
+import {
+  canStartJob,
+  movesExtents,
+  frameTargets,
+  isWithinBounds,
+} from "../../lib/machine/canStartJob";
 import { streamJob, pauseJob, resumeJob } from "../../lib/machine/jobStream";
 import { formatTime } from "../../lib/constants";
 
@@ -29,7 +34,7 @@ export function JobActionBar() {
   const jobProgress = useStore((s) => s.jobProgress);
   const addConsoleLine = useStore((s) => s.addConsoleLine);
   const setStatusMessage = useStore((s) => s.setStatusMessage);
-  const gcodeResult = useStore((s) => s.gcodeResult);   // whole-object ref (stable unless replaced)
+  const gcodeResult = useStore((s) => s.gcodeResult); // whole-object ref (stable unless replaced)
   const gcodeStale = useStore((s) => s.gcodeStale);
   const workspaceWidth = useStore((s) => s.workspaceWidth);
   const workspaceHeight = useStore((s) => s.workspaceHeight);
@@ -118,10 +123,17 @@ export function JobActionBar() {
     }
     // Bounds check: same gate that START uses — never send out-of-range G0s
     const ext = movesExtents(moves)!; // targets non-null implies ext non-null
-    if (!isWithinBounds(ext, storeState.workspaceWidth, storeState.workspaceHeight, storeState.originTop)) {
+    if (
+      !isWithinBounds(
+        ext,
+        storeState.workspaceWidth,
+        storeState.workspaceHeight,
+        storeState.originTop
+      )
+    ) {
       addConsoleLine(
         "FRAME blocked: G-code extends outside workspace bounds. Move or resize the design to fit.",
-        "error",
+        "error"
       );
       return;
     }
@@ -142,15 +154,27 @@ export function JobActionBar() {
 
   // --- Gate computation (scalars passed individually — same as MachinePanel IIFE) ---
   const startGate = canStartJob({
-    machineConnected, machineState, jobRunning, gcodeResult, gcodeStale,
-    workspaceWidth, workspaceHeight, originTop, workspaceVerified,
+    machineConnected,
+    machineState,
+    jobRunning,
+    gcodeResult,
+    gcodeStale,
+    workspaceWidth,
+    workspaceHeight,
+    originTop,
+    workspaceVerified,
   });
 
   // FRAME contract: framing traces the true G-code extents; fresh G-code +
   // verified workspace are prerequisites.
   const frameDisabled =
-    !machineConnected || machineState === "alarm" || machineState !== "idle" || jobRunning ||
-    !gcodeResult || gcodeStale || !workspaceVerified;
+    !machineConnected ||
+    machineState === "alarm" ||
+    machineState !== "idle" ||
+    jobRunning ||
+    !gcodeResult ||
+    gcodeStale ||
+    !workspaceVerified;
   const frameHint = !workspaceVerified
     ? "Confirm bed size before framing"
     : !gcodeResult
@@ -164,25 +188,45 @@ export function JobActionBar() {
       {/* Job progress bar — shown when job is running */}
       {jobRunning && (
         <div style={{ padding: "6px 8px 2px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10px", color: "var(--text-muted)", marginBottom: "2px" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              fontSize: "10px",
+              color: "var(--text-muted)",
+              marginBottom: "2px",
+            }}
+          >
             <span style={{ fontFamily: "var(--font-mono)" }}>
               {formatTimeMSS(elapsedSecs)}
               {jobProgress > 0.01 && (
-                <span> / ~{formatTimeMSS(Math.round(elapsedSecs / jobProgress * (1 - jobProgress)))} est.</span>
+                <span>
+                  {" "}
+                  / ~{formatTimeMSS(
+                    Math.round((elapsedSecs / jobProgress) * (1 - jobProgress))
+                  )}{" "}
+                  est.
+                </span>
               )}
             </span>
             <span>{Math.round(jobProgress * 100)}%</span>
           </div>
-          <div style={{
-            background: "var(--bg-input)", borderRadius: "var(--radius-sm)",
-            height: "4px", overflow: "hidden",
-          }}>
-            <div style={{
-              height: "100%",
-              width: `${jobProgress * 100}%`,
-              background: machineState === "hold" ? "var(--accent-warm)" : "var(--accent)",
-              transition: "width 0.3s",
-            }} />
+          <div
+            style={{
+              background: "var(--bg-input)",
+              borderRadius: "var(--radius-sm)",
+              height: "4px",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                height: "100%",
+                width: `${jobProgress * 100}%`,
+                background: machineState === "hold" ? "var(--accent-warm)" : "var(--accent)",
+                transition: "width 0.3s",
+              }}
+            />
           </div>
         </div>
       )}

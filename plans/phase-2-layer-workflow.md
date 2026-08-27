@@ -27,6 +27,7 @@ dimmed in preview).
 #### Files and changes
 
 **`src/app/types.ts`**
+
 ```ts
 // Add to Layer interface, after `locked: boolean`:
 output: boolean; // true = include in G-code output
@@ -34,6 +35,7 @@ output: boolean; // true = include in G-code output
 // Add to layerDefaults:
 output: true,
 ```
+
 Also add `output: true` to each entry in `DEFAULT_LAYERS`.
 
 Add `output` to `KerfProject` layer serialization -- already handled
@@ -42,6 +44,7 @@ backwards compat: when loading a project saved before this field exists,
 `output` will be `undefined`. The `layerDefaults` spread in
 `DEFAULT_LAYERS` handles new projects, but loaded projects bypass
 defaults. Fix: in `loadProject`, merge each loaded layer with defaults:
+
 ```ts
 layers: project.layers.map(l => ({ ...layerDefaults, ...l })),
 ```
@@ -65,6 +68,7 @@ icon). When `output` is false, show the icon struck-through and apply
 
 **`src/lib/machine/gcodeGen.ts`**
 In `toCutObjects`, add layer output check:
+
 ```ts
 const layer = layers.find((l) => l.index === obj.layerIndex) || layers[0];
 if (!layer.output) continue; // <-- add this line
@@ -73,12 +77,14 @@ if (!layer.output) continue; // <-- add this line
 **`src/components/viewport/Viewport.tsx`**
 In the object rendering loop, check the layer's output state and apply
 reduced opacity for non-output layers:
+
 ```ts
-const layer = layers.find(l => l.index === obj.layerIndex);
+const layer = layers.find((l) => l.index === obj.layerIndex);
 if (layer && !layer.output) {
   // Apply 0.3 alpha multiplier to the rendered graphic
 }
 ```
+
 This requires subscribing to `layers` in the Viewport. Currently it does
 not. Add: `const layers = useStore((s) => s.layers);` and include
 `layers` in the dependency array for the object-rendering `useEffect`.
@@ -103,6 +109,7 @@ but the lock toggle is buried inside the expanded settings area as a
 **`src/components/panels/LayerPanel.tsx`**
 Add a lock `IconButton` in the `LayerRow` header, between the output
 toggle and the visibility toggle:
+
 ```tsx
 <IconButton
   onClick={() => onUpdate({ locked: !layer.locked })}
@@ -126,8 +133,9 @@ to `obj.locked`. Two approaches:
 **Option A (recommended):** Keep them independent. Layer `locked` means
 "don't render selection handles, skip in hit test" without mutating
 object data. Modify `hitTest` to also check `layer.locked`:
+
 ```ts
-const layer = store.layers.find(l => l.index === obj.layerIndex);
+const layer = store.layers.find((l) => l.index === obj.layerIndex);
 if (layer && layer.locked) continue;
 ```
 
@@ -193,6 +201,7 @@ canvas div -- Radix handles this.
 
 **`src/app/store.ts`**
 Add a `moveObjectsToLayer` action:
+
 ```ts
 moveObjectsToLayer: (ids: string[], layerIndex: number) => void;
 
@@ -222,6 +231,7 @@ the app: `--bg-panel`, `--border`, `--text-primary`, etc.
 
 **Contextual items:** Only show "Move to Layer" when `selectedIds.length > 0`.
 Add other common items:
+
 - Delete (with shortcut display)
 - Duplicate
 - Group/Ungroup
@@ -250,7 +260,7 @@ layer color:
 for (const id of selectedIds) {
   const obj = objects.find((o) => o.id === id);
   if (!obj) continue;
-  const layer = layers.find(l => l.index === obj.layerIndex);
+  const layer = layers.find((l) => l.index === obj.layerIndex);
   const selColor = layer ? parseInt(layer.color.replace("#", ""), 16) : 0x4a90e2;
   // ...use selColor instead of hardcoded 0x4a90e2
 }
@@ -289,32 +299,36 @@ sections:
 2. **Settings** -- the existing cut settings (moved into a sub-accordion)
 
 For the objects list, render a compact row per object:
-```tsx
-const layerObjects = objects.filter(o => o.layerIndex === layer.index);
 
-{layerObjects.map(obj => (
-  <div
-    key={obj.id}
-    draggable
-    onDragStart={(e) => {
-      e.dataTransfer.setData("kerf/object-id", obj.id);
-      e.dataTransfer.effectAllowed = "move";
-    }}
-    onClick={() => setSelectedIds([obj.id])}
-    style={{
-      padding: "2px 8px 2px 28px",
-      fontSize: "10px",
-      color: selectedIds.includes(obj.id) ? "var(--text-primary)" : "var(--text-muted)",
-      background: selectedIds.includes(obj.id) ? "var(--bg-active)" : "transparent",
-      cursor: "grab",
-    }}
-  >
-    {obj.name}
-  </div>
-))}
+```tsx
+const layerObjects = objects.filter((o) => o.layerIndex === layer.index);
+
+{
+  layerObjects.map((obj) => (
+    <div
+      key={obj.id}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData("kerf/object-id", obj.id);
+        e.dataTransfer.effectAllowed = "move";
+      }}
+      onClick={() => setSelectedIds([obj.id])}
+      style={{
+        padding: "2px 8px 2px 28px",
+        fontSize: "10px",
+        color: selectedIds.includes(obj.id) ? "var(--text-primary)" : "var(--text-muted)",
+        background: selectedIds.includes(obj.id) ? "var(--bg-active)" : "transparent",
+        cursor: "grab",
+      }}
+    >
+      {obj.name}
+    </div>
+  ));
+}
 ```
 
 Add `onDragOver` and `onDrop` handlers to each `LayerRow`:
+
 ```tsx
 onDragOver={(e) => {
   e.preventDefault();
@@ -357,6 +371,7 @@ Uses `moveObjectsToLayer` from 2a.3. No additional store changes.
 
 **`src/app/store.ts`**
 Add `reorderLayers` action:
+
 ```ts
 reorderLayers: (fromIndex: number, toIndex: number) => void;
 
@@ -453,6 +468,7 @@ readout (`85% 200mm/s`), visibility icon. Replace the compact readout
 with interactive micro-controls.
 
 New header layout:
+
 ```
 [grip] [expand] [swatch] [name]  [mode] [pwr] [spd] [passes] [out] [lock] [eye]
 ```
@@ -488,6 +504,7 @@ Where `[pwr]`, `[spd]`, `[passes]` are tiny inline number inputs
 ```
 
 The mode badge becomes clickable to toggle:
+
 ```tsx
 <button
   onClick={(e) => {
@@ -508,10 +525,12 @@ mode, dither, advanced, sub-layers). The inline controls are the quick
 **Panel width concern:** The right panel width is `var(--panel-width)`.
 Check what this is set to. If it's too narrow for all these inline
 controls, consider a two-row layout for the header:
+
 ```
 Row 1: [grip] [swatch] [name]                [out] [lock] [eye]
 Row 2:        [mode] [pwr %] [spd mm/s] [x passes]
 ```
+
 This keeps the header compact vertically (two rows at 20px each = 40px
 total, vs current single row at ~24px).
 
@@ -529,6 +548,7 @@ total, vs current single row at ~24px).
 
 **`src/app/types.ts`**
 Add to `Layer` interface:
+
 ```ts
 materialPresetId?: string; // ID of applied preset, null if custom
 ```
@@ -536,6 +556,7 @@ materialPresetId?: string; // ID of applied preset, null if custom
 **`src/app/store.ts`**
 Modify `updateLayer` to clear `materialPresetId` when any setting that
 the preset controls is manually changed:
+
 ```ts
 updateLayer: (index, partial) =>
   set((state) => ({
@@ -554,6 +575,7 @@ updateLayer: (index, partial) =>
 ```
 
 Add `applyPresetToLayer` action:
+
 ```ts
 applyPresetToLayer: (layerIndex: number, presetId: string) => void;
 
@@ -576,9 +598,10 @@ applyPresetToLayer: (layerIndex, presetId) => {
 
 **`src/components/panels/LayerPanel.tsx`**
 Add a dropdown at the top of the expanded settings section:
+
 ```tsx
-const materials = useStore(s => s.materials);
-const applyPresetToLayer = useStore(s => s.applyPresetToLayer);
+const materials = useStore((s) => s.materials);
+const applyPresetToLayer = useStore((s) => s.applyPresetToLayer);
 
 // In expanded section, before Mode:
 <SettingRow label="Material">
@@ -590,24 +613,29 @@ const applyPresetToLayer = useStore(s => s.applyPresetToLayer);
     style={selectStyle}
   >
     <option value="">Custom</option>
-    {materials.map(m => (
-      <option key={m.id} value={m.id}>{m.name}</option>
+    {materials.map((m) => (
+      <option key={m.id} value={m.id}>
+        {m.name}
+      </option>
     ))}
   </select>
-</SettingRow>
+</SettingRow>;
 ```
 
 Group the options by material type using `<optgroup>`:
+
 ```tsx
-{Object.entries(groupedMaterials).map(([material, presets]) => (
-  <optgroup key={material} label={material}>
-    {presets.map(m => (
-      <option key={m.id} value={m.id}>
-        {m.thickness} {m.mode === "fill" ? "Engrave" : "Cut"}
-      </option>
-    ))}
-  </optgroup>
-))}
+{
+  Object.entries(groupedMaterials).map(([material, presets]) => (
+    <optgroup key={material} label={material}>
+      {presets.map((m) => (
+        <option key={m.id} value={m.id}>
+          {m.thickness} {m.mode === "fill" ? "Engrave" : "Cut"}
+        </option>
+      ))}
+    </optgroup>
+  ));
+}
 ```
 
 **Dependencies:** None, but logically follows 2b.1.
@@ -623,10 +651,11 @@ Group the options by material type using `<optgroup>`:
 
 **`src/components/panels/LayerPanel.tsx`**
 Add a comparison function:
+
 ```ts
 function isPresetModified(layer: Layer, materials: MaterialPreset[]): boolean {
   if (!layer.materialPresetId) return false;
-  const preset = materials.find(m => m.id === layer.materialPresetId);
+  const preset = materials.find((m) => m.id === layer.materialPresetId);
   if (!preset) return false;
   return (
     layer.mode !== preset.mode ||
@@ -641,20 +670,28 @@ function isPresetModified(layer: Layer, materials: MaterialPreset[]): boolean {
 ```
 
 Show a "Modified" chip next to the material dropdown when modified:
+
 ```tsx
-{isPresetModified(layer, materials) && (
-  <button
-    onClick={() => applyPresetToLayer(layer.index, layer.materialPresetId!)}
-    title="Reset to preset values"
-    style={{
-      fontSize: "9px", padding: "1px 4px", borderRadius: "3px",
-      background: "rgba(255, 165, 0, 0.2)", color: "#ffaa55",
-      border: "none", cursor: "pointer", fontWeight: 600,
-    }}
-  >
-    MODIFIED
-  </button>
-)}
+{
+  isPresetModified(layer, materials) && (
+    <button
+      onClick={() => applyPresetToLayer(layer.index, layer.materialPresetId!)}
+      title="Reset to preset values"
+      style={{
+        fontSize: "9px",
+        padding: "1px 4px",
+        borderRadius: "3px",
+        background: "rgba(255, 165, 0, 0.2)",
+        color: "#ffaa55",
+        border: "none",
+        cursor: "pointer",
+        fontWeight: 600,
+      }}
+    >
+      MODIFIED
+    </button>
+  );
+}
 ```
 
 **Dependencies:** 2b.2 (needs `materialPresetId`).
@@ -770,12 +807,17 @@ Add import/export buttons in the header area:
 
 ```tsx
 <div style={{ display: "flex", gap: "4px" }}>
-  <button onClick={exportPresets} title="Export presets">Export</button>
-  <button onClick={importPresets} title="Import presets">Import</button>
+  <button onClick={exportPresets} title="Export presets">
+    Export
+  </button>
+  <button onClick={importPresets} title="Import presets">
+    Import
+  </button>
 </div>
 ```
 
 **Export implementation:**
+
 ```ts
 async function exportPresets() {
   const hasTauri = await ensureTauri();
@@ -791,6 +833,7 @@ async function exportPresets() {
 ```
 
 **Import implementation:**
+
 ```ts
 async function importPresets() {
   const hasTauri = await ensureTauri();
@@ -911,15 +954,18 @@ the panel restructuring and drag-and-drop state management.
 ## Store Changes Summary
 
 New fields on `Layer` type:
+
 - `output: boolean` (default `true`)
 - `materialPresetId?: string` (optional)
 
 New actions on store:
+
 - `moveObjectsToLayer(ids: string[], layerIndex: number)`
 - `reorderLayers(fromIndex: number, toIndex: number)`
 - `applyPresetToLayer(layerIndex: number, presetId: string)`
 
 Modified actions:
+
 - `updateLayer` -- clears `materialPresetId` when preset-controlled
   fields change
 - `loadProject` -- merges loaded layers with `layerDefaults` for

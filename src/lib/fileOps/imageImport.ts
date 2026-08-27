@@ -18,14 +18,22 @@ export function parsePngPhysDpi(data: Uint8Array): number | null {
   let offset = 8;
   while (offset + 12 <= data.length) {
     const chunkLen =
-      ((data[offset] << 24) | (data[offset + 1] << 16) | (data[offset + 2] << 8) | data[offset + 3]) >>> 0;
+      ((data[offset] << 24) |
+        (data[offset + 1] << 16) |
+        (data[offset + 2] << 8) |
+        data[offset + 3]) >>>
+      0;
     // Guard against corrupt chunk lengths that would freeze the parser
     if (chunkLen > data.length - offset - 12) break;
-    const type = String.fromCharCode(data[offset + 4], data[offset + 5], data[offset + 6], data[offset + 7]);
+    const type = String.fromCharCode(
+      data[offset + 4],
+      data[offset + 5],
+      data[offset + 6],
+      data[offset + 7]
+    );
     if (type === "pHYs" && chunkLen === 9 && offset + 12 + 9 <= data.length) {
       const d = offset + 8;
-      const xppu =
-        ((data[d] << 24) | (data[d + 1] << 16) | (data[d + 2] << 8) | data[d + 3]) >>> 0;
+      const xppu = ((data[d] << 24) | (data[d + 1] << 16) | (data[d + 2] << 8) | data[d + 3]) >>> 0;
       const unit = data[d + 8];
       if (unit === 1 && xppu > 0) {
         const dpi = xppu / 39.3701; // pixels per meter → DPI
@@ -42,8 +50,12 @@ export function parsePngPhysDpi(data: Uint8Array): number | null {
 export function importImageData(data: Uint8Array, ext: string) {
   const store = useStore.getState();
   const mimeMap: Record<string, string> = {
-    png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
-    bmp: "image/bmp", gif: "image/gif", webp: "image/webp",
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    bmp: "image/bmp",
+    gif: "image/gif",
+    webp: "image/webp",
   };
   const mime = mimeMap[ext] || "image/png";
 
@@ -59,7 +71,10 @@ export function importImageData(data: Uint8Array, ext: string) {
   const img = new Image();
   img.onerror = () => {
     store.setStatusMessage("Image import failed — file may be corrupted");
-    store.addConsoleLine(`Image import failed: could not decode ${ext.toUpperCase()} data`, "error");
+    store.addConsoleLine(
+      `Image import failed: could not decode ${ext.toUpperCase()} data`,
+      "error"
+    );
   };
   img.onload = () => {
     const dpi = detectedDpi ?? 300;
@@ -71,20 +86,31 @@ export function importImageData(data: Uint8Array, ext: string) {
       type: "image",
       name: `Image ${store.objects.length + 1}`,
       transform: {
-        x: 10, y: 10,
-        width: widthMm, height: heightMm,
-        rotation: 0, scaleX: 1, scaleY: 1,
+        x: 10,
+        y: 10,
+        width: widthMm,
+        height: heightMm,
+        rotation: 0,
+        scaleX: 1,
+        scaleY: 1,
       },
       layerIndex: store.activeLayerIndex,
-      visible: true, locked: false,
-      fill: null, stroke: "#999999", strokeWidth: 0, opacity: 1,
+      visible: true,
+      locked: false,
+      fill: null,
+      stroke: "#999999",
+      strokeWidth: 0,
+      opacity: 1,
       imageData: base64,
     };
 
     store.addObject(obj);
     store.setSelectedIds([obj.id]);
     const dpiNote = detectedDpi ? ` at ${detectedDpi.toFixed(0)} DPI` : " (300 DPI assumed)";
-    store.addConsoleLine(`Image imported: ${img.width}x${img.height}px → ${widthMm.toFixed(0)}x${heightMm.toFixed(0)}mm${dpiNote}`, "info");
+    store.addConsoleLine(
+      `Image imported: ${img.width}x${img.height}px → ${widthMm.toFixed(0)}x${heightMm.toFixed(0)}mm${dpiNote}`,
+      "info"
+    );
   };
   img.src = base64;
 }

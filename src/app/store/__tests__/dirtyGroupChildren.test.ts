@@ -75,10 +75,14 @@ describe("D3 — group update marks children dirty", () => {
     useStore.getState().addObject(group);
     clearDirtyObjectIds();
 
-    useStore.getState().updateObjects([{
-      id: "group1",
-      partial: { transform: { x: 20, y: 20, width: 100, height: 100, rotation: 0, scaleX: 1, scaleY: 1 } },
-    }]);
+    useStore.getState().updateObjects([
+      {
+        id: "group1",
+        partial: {
+          transform: { x: 20, y: 20, width: 100, height: 100, rotation: 0, scaleX: 1, scaleY: 1 },
+        },
+      },
+    ]);
 
     const dirty = getDirtyObjectIds();
     expect(dirty.has("group1")).toBe(true);

@@ -94,21 +94,32 @@ export function Console() {
       }}
     >
       {/* Header */}
-      <div style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        padding: "4px 8px",
-        borderBottom: "1px solid var(--border)",
-      }}>
-        <span style={{ fontSize: "10px", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "4px 8px",
+          borderBottom: "1px solid var(--border)",
+        }}
+      >
+        <span
+          style={{
+            fontSize: "10px",
+            fontWeight: 600,
+            color: "var(--text-secondary)",
+            textTransform: "uppercase",
+          }}
+        >
           G-code Console
         </span>
         <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-          <span style={{
-            fontSize: "9px",
-            color: machineConnected ? "var(--success)" : "var(--text-muted)",
-          }}>
+          <span
+            style={{
+              fontSize: "9px",
+              color: machineConnected ? "var(--success)" : "var(--text-muted)",
+            }}
+          >
             {machineConnected ? "LIVE" : "OFFLINE"}
           </span>
           <button
@@ -152,17 +163,21 @@ export function Console() {
       </div>
 
       {/* Input */}
-      <div style={{
-        display: "flex",
-        borderTop: "1px solid var(--border)",
-      }}>
-        <span style={{
-          padding: "4px 6px",
-          color: "var(--accent)",
-          fontFamily: "var(--font-mono)",
-          fontSize: "12px",
-          fontWeight: 600,
-        }}>
+      <div
+        style={{
+          display: "flex",
+          borderTop: "1px solid var(--border)",
+        }}
+      >
+        <span
+          style={{
+            padding: "4px 6px",
+            color: "var(--accent)",
+            fontFamily: "var(--font-mono)",
+            fontSize: "12px",
+            fontWeight: 600,
+          }}
+        >
           &gt;
         </span>
         <input

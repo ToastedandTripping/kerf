@@ -20,12 +20,23 @@ import { useStore } from "../../../app/store";
 import type { DesignObject } from "../../../app/types";
 import { DEFAULT_LAYERS } from "../../../app/types";
 import { deepCloneObject } from "../../../app/store/storeTypes";
-import { toCutObjectsForTest, flattenObjectsForTest, synthesizeFillContourForTest } from "../gcodeGen";
+import {
+  toCutObjectsForTest,
+  flattenObjectsForTest,
+  synthesizeFillContourForTest,
+} from "../gcodeGen";
 import type { Layer } from "../../../app/types";
 
 // ─── Factory helpers ─────────────────────────────────────────────────────────
 
-function makeRect(id: string, x: number, y: number, w: number, h: number, rotation = 0): DesignObject {
+function makeRect(
+  id: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  rotation = 0
+): DesignObject {
   return {
     id,
     type: "rectangle",
@@ -41,7 +52,12 @@ function makeRect(id: string, x: number, y: number, w: number, h: number, rotati
   };
 }
 
-function makePath(id: string, pts: Array<{ x: number; y: number }>, rotation = 0, closed = true): DesignObject {
+function makePath(
+  id: string,
+  pts: Array<{ x: number; y: number }>,
+  rotation = 0,
+  closed = true
+): DesignObject {
   const xs = pts.map((p) => p.x);
   const ys = pts.map((p) => p.y);
   return {
@@ -69,7 +85,14 @@ function makePath(id: string, pts: Array<{ x: number; y: number }>, rotation = 0
   };
 }
 
-function makeEllipse(id: string, x: number, y: number, w: number, h: number, rotation = 0): DesignObject {
+function makeEllipse(
+  id: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  rotation = 0
+): DesignObject {
   return {
     id,
     type: "ellipse",
@@ -102,7 +125,15 @@ function makeImage(id: string, x: number, y: number, w: number, h: number): Desi
   };
 }
 
-function makeGroup(id: string, x: number, y: number, w: number, h: number, rotation: number, children: DesignObject[]): DesignObject {
+function makeGroup(
+  id: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  rotation: number,
+  children: DesignObject[]
+): DesignObject {
   return {
     id,
     type: "group",
@@ -150,7 +181,14 @@ describe("Fix 1: deepCloneObject re-IDs children", () => {
     expect(clone.children![0].id).not.toBe("c1");
     expect(clone.children![1].id).not.toBe("c2");
     // No ID collision between clone children and originals
-    const allIds = new Set([group.id, child1.id, child2.id, clone.id, clone.children![0].id, clone.children![1].id]);
+    const allIds = new Set([
+      group.id,
+      child1.id,
+      child2.id,
+      clone.id,
+      clone.children![0].id,
+      clone.children![1].id,
+    ]);
     expect(allIds.size).toBe(6);
   });
 
@@ -167,7 +205,11 @@ describe("Fix 1: deepCloneObject re-IDs children", () => {
   });
 
   it("preserves geometry but not references", () => {
-    const pts = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }];
+    const pts = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+    ];
     const path = makePath("p1", pts);
     const clone = deepCloneObject(path);
 
@@ -275,7 +317,12 @@ describe("Fix 2: objectToPolygon applies rotation to paths", () => {
   it("rotated path produces different polygon than unrotated (via boolean union sanity check)", () => {
     // A 10x10 square path centered at (15,15), rotated 45 degrees.
     // After rotation, the polygon corners should be at 45-degree offsets.
-    const pts = [{ x: 10, y: 10 }, { x: 20, y: 10 }, { x: 20, y: 20 }, { x: 10, y: 20 }];
+    const pts = [
+      { x: 10, y: 10 },
+      { x: 20, y: 10 },
+      { x: 20, y: 20 },
+      { x: 10, y: 20 },
+    ];
     const rotatedPath = makePath("p1", pts, 45);
 
     // Route through toCutObjects on a fill layer (which calls maskFill path).
@@ -307,7 +354,12 @@ describe("Fix 3: offsetPaths sets rotation to 0", () => {
   });
 
   it("offset of a rotated object has rotation 0", () => {
-    const pts = [{ x: 10, y: 10 }, { x: 20, y: 10 }, { x: 20, y: 20 }, { x: 10, y: 20 }];
+    const pts = [
+      { x: 10, y: 10 },
+      { x: 20, y: 10 },
+      { x: 20, y: 20 },
+      { x: 10, y: 20 },
+    ];
     const rotatedPath = makePath("p1", pts, 45);
     useStore.getState().addObject(rotatedPath);
     useStore.getState().setSelectedIds(["p1"]);
@@ -326,9 +378,19 @@ describe("Fix 3: offsetPaths sets rotation to 0", () => {
 describe("Fix 4: coalesced fill bakes per-child rotation", () => {
   it("coalesced CutObject has rotation 0 (child rotations baked into points)", () => {
     // Two path children in a group, child A rotated 30 degrees, child B unrotated.
-    const ptsA = [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }, { x: 0, y: 5 }];
+    const ptsA = [
+      { x: 0, y: 0 },
+      { x: 5, y: 0 },
+      { x: 5, y: 5 },
+      { x: 0, y: 5 },
+    ];
     const childA = makePath("ca", ptsA, 30);
-    const ptsB = [{ x: 10, y: 0 }, { x: 15, y: 0 }, { x: 15, y: 5 }, { x: 10, y: 5 }];
+    const ptsB = [
+      { x: 10, y: 0 },
+      { x: 15, y: 0 },
+      { x: 15, y: 5 },
+      { x: 10, y: 5 },
+    ];
     const childB = makePath("cb", ptsB, 0);
     const group = makeGroup("g1", 0, 0, 15, 5, 0, [childA, childB]);
 
@@ -344,7 +406,12 @@ describe("Fix 4: coalesced fill bakes per-child rotation", () => {
 
   it("baked rotation changes point positions vs unbaked", () => {
     // A rotated child's contour points should differ from the raw (unrotated) points.
-    const pts = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }];
+    const pts = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+    ];
     const rotatedChild = makePath("rc", pts, 45);
     const group = makeGroup("g1", 0, 0, 10, 10, 0, [rotatedChild]);
 
@@ -376,7 +443,10 @@ describe("Fix 5: synthesizeFillContour", () => {
     expect(contour!.closed).toBe(true);
     expect(contour!.points.length).toBeGreaterThanOrEqual(16);
     // Points should lie on the ellipse outline
-    const cx = 20, cy = 15, rx = 10, ry = 5;
+    const cx = 20,
+      cy = 15,
+      rx = 10,
+      ry = 5;
     for (const pt of contour!.points) {
       const dx = (pt.x - cx) / rx;
       const dy = (pt.y - cy) / ry;
@@ -403,7 +473,11 @@ describe("Fix 5: synthesizeFillContour", () => {
   });
 
   it("returns null for a path (already has points)", () => {
-    const path = makePath("p1", [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }]);
+    const path = makePath("p1", [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+    ]);
     const contour = synthesizeFillContourForTest(path);
     expect(contour).toBeNull();
   });
@@ -426,8 +500,17 @@ describe("Fix 5: ungrouped ellipse on fill layer produces a CutObject", () => {
   it("ellipse on fillLine layer emits both maskFill and line overlay", () => {
     const ellipse = makeEllipse("e1", 10, 10, 20, 10);
     const layers = [
-      { ...fillLayer(0, "fillLine" as "fill"), mode: "fillLine" as const,
-        lineOverlay: { power: 90, powerMin: 0, speed: 1200, passes: 1, powerMode: "constant" as const } },
+      {
+        ...fillLayer(0, "fillLine" as "fill"),
+        mode: "fillLine" as const,
+        lineOverlay: {
+          power: 90,
+          powerMin: 0,
+          speed: 1200,
+          passes: 1,
+          powerMode: "constant" as const,
+        },
+      },
       ...DEFAULT_LAYERS.slice(1),
     ];
     const { objects } = toCutObjectsForTest([ellipse], layers);
@@ -498,10 +581,16 @@ describe("Fix 7: compound offsetFill routes through maskFill", () => {
   it("grouped paths on offsetFill layer coalesce into a single maskFill CutObject", () => {
     // Two path children in a group (simulates boolean result with outer + hole)
     const outer = makePath("outer", [
-      { x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 20 }, { x: 0, y: 20 },
+      { x: 0, y: 0 },
+      { x: 20, y: 0 },
+      { x: 20, y: 20 },
+      { x: 0, y: 20 },
     ]);
     const hole = makePath("hole", [
-      { x: 5, y: 5 }, { x: 15, y: 5 }, { x: 15, y: 15 }, { x: 5, y: 15 },
+      { x: 5, y: 5 },
+      { x: 15, y: 5 },
+      { x: 15, y: 15 },
+      { x: 5, y: 15 },
     ]);
     const group = makeGroup("g1", 0, 0, 20, 20, 0, [outer, hole]);
 
@@ -521,7 +610,10 @@ describe("Fix 7: compound offsetFill routes through maskFill", () => {
 
   it("ungrouped path on offsetFill stays offsetFill (no compound routing needed)", () => {
     const path = makePath("p1", [
-      { x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 },
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
     ]);
     const layers = [fillLayer(0, "offsetFill"), ...DEFAULT_LAYERS.slice(1)];
     const { objects } = toCutObjectsForTest([path], layers);

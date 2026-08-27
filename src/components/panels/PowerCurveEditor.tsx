@@ -230,7 +230,7 @@ export function PowerCurveEditor({
       }
       return null;
     },
-    [points],
+    [points]
   );
 
   const getCanvasPos = (e: React.MouseEvent<HTMLCanvasElement>): [number, number] => {
@@ -305,7 +305,8 @@ export function PowerCurveEditor({
     return "crosshair";
   };
 
-  const activePreset = Object.entries(PRESETS).find(([, pts]) => pointsMatch(points, pts))?.[0] ?? null;
+  const activePreset =
+    Object.entries(PRESETS).find(([, pts]) => pointsMatch(points, pts))?.[0] ?? null;
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -395,9 +396,21 @@ export function PowerCurveEditor({
               pointerEvents: "none",
             }}
           >
-            <span style={{ fontSize: 9, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>100%</span>
-            <span style={{ fontSize: 9, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>50%</span>
-            <span style={{ fontSize: 9, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>0%</span>
+            <span
+              style={{ fontSize: 9, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}
+            >
+              100%
+            </span>
+            <span
+              style={{ fontSize: 9, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}
+            >
+              50%
+            </span>
+            <span
+              style={{ fontSize: 9, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}
+            >
+              0%
+            </span>
           </div>
 
           <div
@@ -423,9 +436,21 @@ export function PowerCurveEditor({
 
           {/* X axis label + ticks */}
           <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
-            <span style={{ fontSize: 9, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>0</span>
-            <span style={{ fontSize: 9, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>128</span>
-            <span style={{ fontSize: 9, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>255</span>
+            <span
+              style={{ fontSize: 9, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}
+            >
+              0
+            </span>
+            <span
+              style={{ fontSize: 9, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}
+            >
+              128
+            </span>
+            <span
+              style={{ fontSize: 9, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}
+            >
+              255
+            </span>
           </div>
           <div
             style={{

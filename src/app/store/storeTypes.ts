@@ -115,8 +115,8 @@ export interface AppState {
   grblLaserMode: boolean;
   grblAccelX: number;
   grblAccelY: number;
-  grblMaxFeedRateX: number;  // $110 — 0 = unknown (not yet connected/parsed)
-  grblMaxFeedRateY: number;  // $111 — 0 = unknown
+  grblMaxFeedRateX: number; // $110 — 0 = unknown (not yet connected/parsed)
+  grblMaxFeedRateY: number; // $111 — 0 = unknown
   setMachineConnected: (connected: boolean) => void;
   setMachineState: (state: "idle" | "run" | "hold" | "alarm" | "door" | "disconnected") => void;
   setMachinePosition: (pos: { x: number; y: number; z: number }) => void;
@@ -126,10 +126,10 @@ export interface AppState {
   setGrblMaxFeedRate: (x: number, y: number) => void;
 
   // Machine limit/homing flags (read from $20/$21/$22 on connect)
-  grblSoftLimits: boolean;       // $20: soft limits enabled in firmware
-  grblHardLimits: boolean;       // $21: hard limits enabled in firmware
-  grblHoming: boolean;           // $22: homing cycle enabled (requires limit switches)
-  machineHomed: boolean;         // true after a successful homing cycle this session
+  grblSoftLimits: boolean; // $20: soft limits enabled in firmware
+  grblHardLimits: boolean; // $21: hard limits enabled in firmware
+  grblHoming: boolean; // $22: homing cycle enabled (requires limit switches)
+  machineHomed: boolean; // true after a successful homing cycle this session
   setGrblSoftLimits: (v: boolean) => void;
   setGrblHardLimits: (v: boolean) => void;
   setGrblHoming: (v: boolean) => void;
@@ -260,7 +260,14 @@ export interface AppState {
   // Dialog data (payloads for dialogs that need them)
   dialogData: {
     svgContent: string | null;
-    pendingImage: { data: string; name: string; width: number; height: number; widthMm?: number; heightMm?: number } | null;
+    pendingImage: {
+      data: string;
+      name: string;
+      width: number;
+      height: number;
+      widthMm?: number;
+      heightMm?: number;
+    } | null;
     ditherPreviewObjectId: string | null;
     pendingPdf: { data: ArrayBuffer; name: string } | null;
   };

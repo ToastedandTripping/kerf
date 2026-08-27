@@ -13,7 +13,7 @@
  */
 
 export const SPEED_FALLBACK_MAX = 30000; // mm/min — used when GRBL max unknown
-export const SPEED_SLIDER_FLOOR = 50;    // mm/min — log-scale low end
+export const SPEED_SLIDER_FLOOR = 50; // mm/min — log-scale low end
 
 /** Coerce non-finite values (NaN / ±Infinity from empty/garbage fields) to a
  *  safe positive number before they can reach Math.log. */
@@ -26,7 +26,7 @@ export function safeNum(v: number, fallback = 1): number {
 export function sliderPosToSpeed(
   pos: number,
   max: number,
-  floor: number = SPEED_SLIDER_FLOOR,
+  floor: number = SPEED_SLIDER_FLOOR
 ): number {
   const safeMax = safeNum(max, SPEED_FALLBACK_MAX);
   const effectiveFloor = Math.min(floor, safeMax);
@@ -41,7 +41,7 @@ export function sliderPosToSpeed(
 export function speedToSliderPos(
   speed: number,
   max: number,
-  floor: number = SPEED_SLIDER_FLOOR,
+  floor: number = SPEED_SLIDER_FLOOR
 ): number {
   const safeMax = safeNum(max, SPEED_FALLBACK_MAX);
   const effectiveFloor = Math.min(floor, safeMax);

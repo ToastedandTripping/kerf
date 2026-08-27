@@ -21,6 +21,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 Accept the defaults. Then restart your terminal (or run `source ~/.cargo/env`).
 
 Verify:
+
 ```bash
 rustc --version
 cargo --version
@@ -29,6 +30,7 @@ cargo --version
 ### 3. Node.js
 
 If you don't have it:
+
 ```bash
 brew install node
 ```
@@ -36,6 +38,7 @@ brew install node
 Or use nvm if you prefer. Kerf needs Node 18+.
 
 Verify:
+
 ```bash
 node --version
 npm --version
@@ -81,6 +84,7 @@ Select GitHub.com, HTTPS, and authenticate.
 Xcode CLT not installed. Run `xcode-select --install`.
 
 **Rust compilation errors about openssl or pkg-config**
+
 ```bash
 brew install pkg-config openssl
 ```

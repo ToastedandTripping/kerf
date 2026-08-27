@@ -2,7 +2,10 @@ import { useState, useEffect, useCallback } from "react";
 import { useStore } from "../../app/store";
 import { machineConnection, type ConnectionError } from "../../lib/machine/connection";
 import { generateGcode } from "../../lib/machine/gcodeGen";
-import { MACHINE_STATE_COLORS, GRBL_ALARM_DESCRIPTIONS } from "../../lib/machine/machineStateDisplay";
+import {
+  MACHINE_STATE_COLORS,
+  GRBL_ALARM_DESCRIPTIONS,
+} from "../../lib/machine/machineStateDisplay";
 import { CollapsibleSection } from "./CollapsibleSection";
 import type { StartCorner } from "../../app/types";
 import { formatTime } from "../../lib/constants";
@@ -18,12 +21,18 @@ async function getImageContentRatio(dataUrl: string): Promise<number> {
       canvas.width = SIZE;
       canvas.height = SIZE;
       const ctx = canvas.getContext("2d");
-      if (!ctx) { resolve(0); return; }
+      if (!ctx) {
+        resolve(0);
+        return;
+      }
       ctx.drawImage(img, 0, 0, SIZE, SIZE);
       const { data } = ctx.getImageData(0, 0, SIZE, SIZE);
       let content = 0;
       for (let i = 0; i < data.length; i += 4) {
-        const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+        const r = data[i],
+          g = data[i + 1],
+          b = data[i + 2],
+          a = data[i + 3];
         // Transparent = empty, near-white (>230 all channels) = empty
         if (a < 10) continue;
         if (r > 230 && g > 230 && b > 230) continue;
@@ -69,12 +78,17 @@ export function MachinePanel() {
   const setStatusMessage = useStore((s) => s.setStatusMessage);
 
   const [selectedPort, setSelectedPort] = useState("");
-  const [ports, setPorts] = useState<Array<{ name: string; portType: string; vid: number | null; pid: number | null }>>([]);
+  const [ports, setPorts] = useState<
+    Array<{ name: string; portType: string; vid: number | null; pid: number | null }>
+  >([]);
   const [jogStep, setJogStep] = useState(10);
   const [positioningOpen, setPositioningOpen] = useState(false);
   const [expanded, setExpanded] = useState(true);
   const [generating, setGenerating] = useState(false);
-  const [connectionError, setConnectionError] = useState<{ message: string; suggestions: string[] } | null>(null);
+  const [connectionError, setConnectionError] = useState<{
+    message: string;
+    suggestions: string[];
+  } | null>(null);
   const [sparseImageWarning, setSparseImageWarning] = useState(false);
   const [confirmBedOpen, setConfirmBedOpen] = useState(false);
   const [bedWInput, setBedWInput] = useState("");
@@ -88,7 +102,7 @@ export function MachinePanel() {
     setPorts(found);
     if (!selectedPort && found.length > 0) {
       const last = machineConnection.getLastPort();
-      const match = found.find(p => p.name === last?.name);
+      const match = found.find((p) => p.name === last?.name);
       setSelectedPort(match ? match.name : found[0].name);
     }
   }, [selectedPort]);
@@ -96,9 +110,12 @@ export function MachinePanel() {
   useEffect(() => {
     refreshPorts();
     if (!machineConnected) {
-      machineConnection.autoConnect().then(ok => {
-        if (ok) refreshPorts();
-      }).catch(console.error);
+      machineConnection
+        .autoConnect()
+        .then((ok) => {
+          if (ok) refreshPorts();
+        })
+        .catch(console.error);
     }
   }, []);
 
@@ -151,14 +168,14 @@ export function MachinePanel() {
       if (result.estimatedTimeSecs > 30 * 60) {
         const store = useStore.getState();
         const imageObjs = store.objects.filter(
-          (o) => o.type === "image" && o.visible && o.imageData,
+          (o) => o.type === "image" && o.visible && o.imageData
         );
         if (imageObjs.length > 0) {
           const ratios = await Promise.all(
-            imageObjs.map((o) => getImageContentRatio(o.imageData!)),
+            imageObjs.map((o) => getImageContentRatio(o.imageData!))
           );
           const avgContent = ratios.reduce((s, r) => s + r, 0) / ratios.length;
-          if (avgContent < 0.20) {
+          if (avgContent < 0.2) {
             setSparseImageWarning(true);
           }
         }
@@ -177,7 +194,12 @@ export function MachinePanel() {
     <div style={{ borderBottom: "1px solid var(--border)" }}>
       <div
         onClick={() => setExpanded(!expanded)}
-        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded(!expanded); } }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setExpanded(!expanded);
+          }
+        }}
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
@@ -208,7 +230,14 @@ export function MachinePanel() {
             marginLeft: "auto",
           }}
         />
-        <span style={{ fontSize: "9px", color: MACHINE_STATE_COLORS[machineState], fontWeight: 400, textTransform: "capitalize" }}>
+        <span
+          style={{
+            fontSize: "9px",
+            color: MACHINE_STATE_COLORS[machineState],
+            fontWeight: 400,
+            textTransform: "capitalize",
+          }}
+        >
           {machineState}
         </span>
       </div>
@@ -216,39 +245,68 @@ export function MachinePanel() {
       {expanded && (
         <div style={{ padding: "0 8px 8px", display: "flex", flexDirection: "column", gap: "8px" }}>
           {/* Alarm recovery */}
-          {machineState === "alarm" && (() => {
-            // U15: Parse last ALARM line from console to show alarm code
-            const alarmLine = [...consoleLines].reverse().find(l => l.text.includes("ALARM:"));
-            const alarmCode = alarmLine?.text.match(/ALARM:(\d+)/)?.[1];
-            const alarmDesc = alarmCode ? GRBL_ALARM_DESCRIPTIONS[alarmCode] : null;
-            return (
-            <div style={{
-              background: "rgba(220,50,50,0.1)", border: "1px solid rgba(220,50,50,0.3)",
-              borderRadius: "var(--radius-sm)", padding: "8px", fontSize: "11px",
-            }}>
-              <div style={{ fontWeight: 600, color: "var(--danger, #dc3232)", marginBottom: "4px" }}>
-                Machine in ALARM state{alarmCode ? ` (ALARM:${alarmCode})` : ""}
-              </div>
-              <div style={{ color: "var(--text-secondary)", marginBottom: "6px" }}>
-                {alarmDesc || "A limit switch was triggered or motion was lost."} Unlock and re-home to resume.
-              </div>
-              <div style={{ display: "flex", gap: "4px" }}>
-                <button
-                  onClick={() => machineConnection.send("$X")}
-                  style={{ padding: "3px 8px", fontSize: "10px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "3px", color: "var(--text-primary)", cursor: "pointer" }}
+          {machineState === "alarm" &&
+            (() => {
+              // U15: Parse last ALARM line from console to show alarm code
+              const alarmLine = [...consoleLines].reverse().find((l) => l.text.includes("ALARM:"));
+              const alarmCode = alarmLine?.text.match(/ALARM:(\d+)/)?.[1];
+              const alarmDesc = alarmCode ? GRBL_ALARM_DESCRIPTIONS[alarmCode] : null;
+              return (
+                <div
+                  style={{
+                    background: "rgba(220,50,50,0.1)",
+                    border: "1px solid rgba(220,50,50,0.3)",
+                    borderRadius: "var(--radius-sm)",
+                    padding: "8px",
+                    fontSize: "11px",
+                  }}
                 >
-                  Unlock ($X)
-                </button>
-                <button
-                  onClick={() => machineConnection.send("$H")}
-                  style={{ padding: "3px 8px", fontSize: "10px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "3px", color: "var(--text-primary)", cursor: "pointer" }}
-                >
-                  Home ($H)
-                </button>
-              </div>
-            </div>
-            );
-          })()}
+                  <div
+                    style={{
+                      fontWeight: 600,
+                      color: "var(--danger, #dc3232)",
+                      marginBottom: "4px",
+                    }}
+                  >
+                    Machine in ALARM state{alarmCode ? ` (ALARM:${alarmCode})` : ""}
+                  </div>
+                  <div style={{ color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    {alarmDesc || "A limit switch was triggered or motion was lost."} Unlock and
+                    re-home to resume.
+                  </div>
+                  <div style={{ display: "flex", gap: "4px" }}>
+                    <button
+                      onClick={() => machineConnection.send("$X")}
+                      style={{
+                        padding: "3px 8px",
+                        fontSize: "10px",
+                        background: "var(--bg-input)",
+                        border: "1px solid var(--border)",
+                        borderRadius: "3px",
+                        color: "var(--text-primary)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Unlock ($X)
+                    </button>
+                    <button
+                      onClick={() => machineConnection.send("$H")}
+                      style={{
+                        padding: "3px 8px",
+                        fontSize: "10px",
+                        background: "var(--bg-input)",
+                        border: "1px solid var(--border)",
+                        borderRadius: "3px",
+                        color: "var(--text-primary)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Home ($H)
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
 
           {/* Connection */}
           <div style={{ display: "flex", gap: "4px" }}>
@@ -312,50 +370,73 @@ export function MachinePanel() {
 
           {/* Connection error with suggestions */}
           {connectionError && (
-            <div style={{
-              background: "rgba(220,50,50,0.08)", border: "1px solid rgba(220,50,50,0.25)",
-              borderRadius: "var(--radius-sm)", padding: "8px", fontSize: "11px",
-            }}>
-              <div style={{ fontWeight: 600, color: "var(--danger, #dc3232)", marginBottom: "4px" }}>
+            <div
+              style={{
+                background: "rgba(220,50,50,0.08)",
+                border: "1px solid rgba(220,50,50,0.25)",
+                borderRadius: "var(--radius-sm)",
+                padding: "8px",
+                fontSize: "11px",
+              }}
+            >
+              <div
+                style={{ fontWeight: 600, color: "var(--danger, #dc3232)", marginBottom: "4px" }}
+              >
                 {connectionError.message}
               </div>
               <ul style={{ margin: "0", paddingLeft: "16px", color: "var(--text-secondary)" }}>
                 {connectionError.suggestions.map((s, i) => (
-                  <li key={i} style={{ marginBottom: "2px" }}>{s}</li>
+                  <li key={i} style={{ marginBottom: "2px" }}>
+                    {s}
+                  </li>
                 ))}
               </ul>
             </div>
           )}
 
           {/* Position readout */}
-          <div style={{
-            background: "var(--bg-input)",
-            borderRadius: "var(--radius-sm)",
-            padding: "6px 8px",
-            fontFamily: "var(--font-mono)",
-            fontSize: "12px",
-            display: "flex",
-            justifyContent: "space-between",
-          }}>
-            <span>X: <strong>{machinePosition.x.toFixed(2)}</strong></span>
-            <span>Y: <strong>{machinePosition.y.toFixed(2)}</strong></span>
-            <span>Z: <strong>{machinePosition.z.toFixed(2)}</strong></span>
+          <div
+            style={{
+              background: "var(--bg-input)",
+              borderRadius: "var(--radius-sm)",
+              padding: "6px 8px",
+              fontFamily: "var(--font-mono)",
+              fontSize: "12px",
+              display: "flex",
+              justifyContent: "space-between",
+            }}
+          >
+            <span>
+              X: <strong>{machinePosition.x.toFixed(2)}</strong>
+            </span>
+            <span>
+              Y: <strong>{machinePosition.y.toFixed(2)}</strong>
+            </span>
+            <span>
+              Z: <strong>{machinePosition.z.toFixed(2)}</strong>
+            </span>
           </div>
 
           {/* Workstream A: soft limits banner — three states + enable/disable control */}
           {machineConnected && (
-            <div style={{
-              fontSize: "10px",
-              padding: "5px 8px",
-              borderRadius: "var(--radius-sm)",
-              border: `1px solid ${softLimitsActive ? "rgba(74,226,138,0.2)" : "rgba(226,160,74,0.35)"}`,
-              borderLeft: softLimitsActive ? undefined : !grblSoftLimits ? "3px solid var(--accent-warm)" : undefined,
-              background: softLimitsActive ? "rgba(74,226,138,0.06)" : "rgba(226,160,74,0.08)",
-              color: softLimitsActive ? "var(--success)" : "var(--accent-warm)",
-              display: "flex",
-              flexDirection: "column",
-              gap: "4px",
-            }}>
+            <div
+              style={{
+                fontSize: "10px",
+                padding: "5px 8px",
+                borderRadius: "var(--radius-sm)",
+                border: `1px solid ${softLimitsActive ? "rgba(74,226,138,0.2)" : "rgba(226,160,74,0.35)"}`,
+                borderLeft: softLimitsActive
+                  ? undefined
+                  : !grblSoftLimits
+                    ? "3px solid var(--accent-warm)"
+                    : undefined,
+                background: softLimitsActive ? "rgba(74,226,138,0.06)" : "rgba(226,160,74,0.08)",
+                color: softLimitsActive ? "var(--success)" : "var(--accent-warm)",
+                display: "flex",
+                flexDirection: "column",
+                gap: "4px",
+              }}
+            >
               <span>
                 {softLimitsActive
                   ? "Soft limits active — firmware will stop before frame edges"
@@ -364,8 +445,8 @@ export function MachinePanel() {
                     : "Soft limits OFF — Kerf bounds checks are your only protection"}
               </span>
               {/* SPEC_GAP: Enable/Disable soft limits action */}
-              {!softLimitsEnabling && (
-                grblSoftLimits ? (
+              {!softLimitsEnabling &&
+                (grblSoftLimits ? (
                   <button
                     onClick={async () => {
                       await machineConnection.send("$20=0");
@@ -401,28 +482,29 @@ export function MachinePanel() {
                   >
                     Enable soft limits…
                   </button>
-                )
-              )}
+                ))}
               {/* Enable confirmation — inline, same pattern as bed confirm */}
               {softLimitsConfirmOpen && !grblSoftLimits && (
-                <div style={{
-                  marginTop: "2px",
-                  padding: "6px 8px",
-                  background: "var(--bg-input)",
-                  borderLeft: "2px solid var(--accent-warm)",
-                  borderRadius: "var(--radius-sm)",
-                  fontSize: "9px",
-                  color: "var(--text-secondary)",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "5px",
-                }}>
+                <div
+                  style={{
+                    marginTop: "2px",
+                    padding: "6px 8px",
+                    background: "var(--bg-input)",
+                    borderLeft: "2px solid var(--accent-warm)",
+                    borderRadius: "var(--radius-sm)",
+                    fontSize: "9px",
+                    color: "var(--text-secondary)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "5px",
+                  }}
+                >
                   <span style={{ fontWeight: 600, color: "var(--accent-warm)" }}>
                     Enabling soft limits writes $22=1 (homing required) and $20=1.
                   </span>
                   <span>
-                    GRBL will require a homing cycle at every power-on. If your machine has
-                    no working limit switches this will lock up on the next start.
+                    GRBL will require a homing cycle at every power-on. If your machine has no
+                    working limit switches this will lock up on the next start.
                   </span>
                   <span style={{ fontWeight: 600 }}>
                     Only proceed if you have working limit switches installed and tested.
@@ -477,20 +559,23 @@ export function MachinePanel() {
 
           {/* Lever 1: laser mode ($32) banner — two states: warning+action or confirmed */}
           {machineConnected && !grblLaserMode && (
-            <div style={{
-              fontSize: "10px",
-              padding: "5px 8px",
-              borderRadius: "var(--radius-sm)",
-              border: "3px solid var(--danger)",
-              borderLeft: "3px solid var(--danger)",
-              background: "rgba(226,74,74,0.08)",
-              color: "var(--danger)",
-              display: "flex",
-              flexDirection: "column",
-              gap: "4px",
-            }}>
+            <div
+              style={{
+                fontSize: "10px",
+                padding: "5px 8px",
+                borderRadius: "var(--radius-sm)",
+                border: "3px solid var(--danger)",
+                borderLeft: "3px solid var(--danger)",
+                background: "rgba(226,74,74,0.08)",
+                color: "var(--danger)",
+                display: "flex",
+                flexDirection: "column",
+                gap: "4px",
+              }}
+            >
               <span style={{ fontWeight: 600 }}>
-                Laser mode ($32) is off — M4 dynamic power won't work and the laser can fire during travel
+                Laser mode ($32) is off — M4 dynamic power won't work and the laser can fire during
+                travel
               </span>
               {!enablingLaserMode ? (
                 <button
@@ -519,32 +604,39 @@ export function MachinePanel() {
             </div>
           )}
           {machineConnected && grblLaserMode && (
-            <div style={{
-              fontSize: "10px",
-              padding: "4px 8px",
-              borderRadius: "var(--radius-sm)",
-              border: "1px solid rgba(74,226,138,0.2)",
-              background: "rgba(74,226,138,0.06)",
-              color: "var(--success)",
-            }}>
+            <div
+              style={{
+                fontSize: "10px",
+                padding: "4px 8px",
+                borderRadius: "var(--radius-sm)",
+                border: "1px solid rgba(74,226,138,0.2)",
+                background: "rgba(74,226,138,0.06)",
+                color: "var(--success)",
+              }}
+            >
               Laser mode ($32=1) — M4 dynamic power active
             </div>
           )}
 
           {/* Workstream B: work coordinate offset warning */}
           {machineConnected && (workCoordOffset.x !== 0 || workCoordOffset.y !== 0) && (
-            <div style={{
-              fontSize: "10px",
-              padding: "5px 8px",
-              borderRadius: "var(--radius-sm)",
-              border: "1px solid rgba(226,160,74,0.3)",
-              background: "rgba(226,160,74,0.06)",
-              color: "var(--accent-warm)",
-              display: "flex",
-              flexDirection: "column",
-              gap: "3px",
-            }}>
-              <span>Work origin offset: X{workCoordOffset.x.toFixed(3)} Y{workCoordOffset.y.toFixed(3)} from machine zero</span>
+            <div
+              style={{
+                fontSize: "10px",
+                padding: "5px 8px",
+                borderRadius: "var(--radius-sm)",
+                border: "1px solid rgba(226,160,74,0.3)",
+                background: "rgba(226,160,74,0.06)",
+                color: "var(--accent-warm)",
+                display: "flex",
+                flexDirection: "column",
+                gap: "3px",
+              }}
+            >
+              <span>
+                Work origin offset: X{workCoordOffset.x.toFixed(3)} Y{workCoordOffset.y.toFixed(3)}{" "}
+                from machine zero
+              </span>
               <button
                 onClick={() => machineConnection.send("G92.1")}
                 style={{
@@ -565,17 +657,19 @@ export function MachinePanel() {
 
           {/* Workstream E: unverified bed size prompt */}
           {machineConnected && !workspaceVerified && (
-            <div style={{
-              fontSize: "10px",
-              padding: "6px 8px",
-              borderRadius: "var(--radius-sm)",
-              border: "1px solid rgba(226,74,74,0.35)",
-              background: "rgba(226,74,74,0.06)",
-              color: "var(--danger)",
-              display: "flex",
-              flexDirection: "column",
-              gap: "4px",
-            }}>
+            <div
+              style={{
+                fontSize: "10px",
+                padding: "6px 8px",
+                borderRadius: "var(--radius-sm)",
+                border: "1px solid rgba(226,74,74,0.35)",
+                background: "rgba(226,74,74,0.06)",
+                color: "var(--danger)",
+                display: "flex",
+                flexDirection: "column",
+                gap: "4px",
+              }}
+            >
               <span style={{ fontWeight: 600 }}>Bed size unconfirmed</span>
               <span style={{ color: "var(--text-secondary)" }}>
                 Machine did not report $130/$131. Confirm bed size before cutting.
@@ -601,16 +695,23 @@ export function MachinePanel() {
                   Set bed size
                 </button>
               ) : (
-                <div style={{ display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap" }}>
+                <div
+                  style={{ display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap" }}
+                >
                   <span style={{ color: "var(--text-secondary)" }}>W:</span>
                   <input
                     type="number"
                     value={bedWInput}
                     onChange={(e) => setBedWInput(e.target.value)}
                     style={{
-                      width: "56px", fontSize: "10px", padding: "2px 4px",
-                      background: "var(--bg-input)", border: "1px solid var(--border)",
-                      borderRadius: "var(--radius-sm)", color: "var(--text-primary)", textAlign: "right",
+                      width: "56px",
+                      fontSize: "10px",
+                      padding: "2px 4px",
+                      background: "var(--bg-input)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "var(--radius-sm)",
+                      color: "var(--text-primary)",
+                      textAlign: "right",
                     }}
                   />
                   <span style={{ color: "var(--text-muted)", fontSize: "9px" }}>mm</span>
@@ -620,9 +721,14 @@ export function MachinePanel() {
                     value={bedHInput}
                     onChange={(e) => setBedHInput(e.target.value)}
                     style={{
-                      width: "56px", fontSize: "10px", padding: "2px 4px",
-                      background: "var(--bg-input)", border: "1px solid var(--border)",
-                      borderRadius: "var(--radius-sm)", color: "var(--text-primary)", textAlign: "right",
+                      width: "56px",
+                      fontSize: "10px",
+                      padding: "2px 4px",
+                      background: "var(--bg-input)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "var(--radius-sm)",
+                      color: "var(--text-primary)",
+                      textAlign: "right",
                     }}
                   />
                   <span style={{ color: "var(--text-muted)", fontSize: "9px" }}>mm</span>
@@ -635,9 +741,13 @@ export function MachinePanel() {
                       setConfirmBedOpen(false);
                     }}
                     style={{
-                      fontSize: "9px", padding: "2px 8px", cursor: "pointer",
-                      background: "var(--accent)", border: "none",
-                      color: "#fff", borderRadius: "var(--radius-sm)",
+                      fontSize: "9px",
+                      padding: "2px 8px",
+                      cursor: "pointer",
+                      background: "var(--accent)",
+                      border: "none",
+                      color: "#fff",
+                      borderRadius: "var(--radius-sm)",
                     }}
                   >
                     Confirm
@@ -645,9 +755,13 @@ export function MachinePanel() {
                   <button
                     onClick={() => setConfirmBedOpen(false)}
                     style={{
-                      fontSize: "9px", padding: "2px 6px", cursor: "pointer",
-                      background: "none", border: "1px solid var(--border)",
-                      color: "var(--text-muted)", borderRadius: "var(--radius-sm)",
+                      fontSize: "9px",
+                      padding: "2px 6px",
+                      cursor: "pointer",
+                      background: "none",
+                      border: "1px solid var(--border)",
+                      color: "var(--text-muted)",
+                      borderRadius: "var(--radius-sm)",
                     }}
                   >
                     Cancel
@@ -659,10 +773,15 @@ export function MachinePanel() {
 
           {/* Laser power max (S-value / $30) */}
           <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-            <span style={{
-              fontSize: "10px", color: "var(--text-muted)", minWidth: "50px",
-              textTransform: "uppercase", letterSpacing: "0.3px",
-            }}>
+            <span
+              style={{
+                fontSize: "10px",
+                color: "var(--text-muted)",
+                minWidth: "50px",
+                textTransform: "uppercase",
+                letterSpacing: "0.3px",
+              }}
+            >
               Power max ($30)
             </span>
             <input
@@ -695,22 +814,54 @@ export function MachinePanel() {
             open={positioningOpen}
             onToggle={() => setPositioningOpen((v) => !v)}
           >
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "2px", padding: "8px" }}>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: "2px",
+                padding: "8px",
+              }}
+            >
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 32px)", gap: "2px" }}>
                 <div />
-                <JogButton label="&#x25B2;" onClick={() => machineConnection.jog("Y", jogStep)} title="Y+" disabled={machineState === "alarm"} />
+                <JogButton
+                  label="&#x25B2;"
+                  onClick={() => machineConnection.jog("Y", jogStep)}
+                  title="Y+"
+                  disabled={machineState === "alarm"}
+                />
                 <div />
-                <JogButton label="&#x25C0;" onClick={() => machineConnection.jog("X", -jogStep)} title="X-" disabled={machineState === "alarm"} />
+                <JogButton
+                  label="&#x25C0;"
+                  onClick={() => machineConnection.jog("X", -jogStep)}
+                  title="X-"
+                  disabled={machineState === "alarm"}
+                />
                 <JogButton
                   label="&#x2302;"
                   onClick={() => machineConnection.home()}
-                  title={grblHoming ? "Home ($H)" : "Home disabled — machine has no limit switches ($22=0)"}
+                  title={
+                    grblHoming
+                      ? "Home ($H)"
+                      : "Home disabled — machine has no limit switches ($22=0)"
+                  }
                   accent={grblHoming}
                   disabled={!grblHoming}
                 />
-                <JogButton label="&#x25B6;" onClick={() => machineConnection.jog("X", jogStep)} title="X+" disabled={machineState === "alarm"} />
+                <JogButton
+                  label="&#x25B6;"
+                  onClick={() => machineConnection.jog("X", jogStep)}
+                  title="X+"
+                  disabled={machineState === "alarm"}
+                />
                 <div />
-                <JogButton label="&#x25BC;" onClick={() => machineConnection.jog("Y", -jogStep)} title="Y-" disabled={machineState === "alarm"} />
+                <JogButton
+                  label="&#x25BC;"
+                  onClick={() => machineConnection.jog("Y", -jogStep)}
+                  title="Y-"
+                  disabled={machineState === "alarm"}
+                />
                 <div />
               </div>
               {/* Step size */}
@@ -744,7 +895,7 @@ export function MachinePanel() {
               color="var(--accent-warm)"
               disabled={!machineConnected || machineState !== "idle" || jobRunning}
               onClick={async () => {
-                const sVal = Math.round(5 / 1000 * useStore.getState().grblSValueMax);
+                const sVal = Math.round((5 / 1000) * useStore.getState().grblSValueMax);
                 // F17 Fix 2.3: three awaited sends. A single 3-line send's pump
                 // stops at the FIRST ok, leaving two unread acks to misattribute
                 // to later commands.
@@ -757,19 +908,34 @@ export function MachinePanel() {
               label="Home"
               color="var(--accent)"
               disabled={!machineConnected || jobRunning || !grblHoming}
-              title={grblHoming ? "Home ($H)" : "Home disabled — machine has no limit switches ($22=0)"}
+              title={
+                grblHoming ? "Home ($H)" : "Home disabled — machine has no limit switches ($22=0)"
+              }
               onClick={() => machineConnection.home()}
             />
-            <ActionButton label="Set Origin" color="var(--text-secondary)" disabled={!machineConnected || jobRunning} onClick={() => machineConnection.setOrigin()} />
+            <ActionButton
+              label="Set Origin"
+              color="var(--text-secondary)"
+              disabled={!machineConnected || jobRunning}
+              onClick={() => machineConnection.setOrigin()}
+            />
             <button
-              onClick={() => setActiveTool(activeTool === "positionLaser" ? "select" : "positionLaser")}
+              onClick={() =>
+                setActiveTool(activeTool === "positionLaser" ? "select" : "positionLaser")
+              }
               disabled={!machineConnected || machineState !== "idle"}
               style={{
                 padding: "4px 8px",
                 borderRadius: "var(--radius-sm)",
                 border: `1px solid ${activeTool === "positionLaser" ? "var(--accent)" : "color-mix(in srgb, var(--accent) 20%, transparent)"}`,
-                background: activeTool === "positionLaser" ? "rgba(74,144,226,0.25)" : "rgba(74,144,226,0.08)",
-                color: !machineConnected || machineState !== "idle" ? "var(--text-muted)" : "var(--accent)",
+                background:
+                  activeTool === "positionLaser"
+                    ? "rgba(74,144,226,0.25)"
+                    : "rgba(74,144,226,0.08)",
+                color:
+                  !machineConnected || machineState !== "idle"
+                    ? "var(--text-muted)"
+                    : "var(--accent)",
                 fontSize: "10px",
                 fontWeight: 600,
                 cursor: machineConnected && machineState === "idle" ? "pointer" : "not-allowed",
@@ -783,39 +949,62 @@ export function MachinePanel() {
 
           {/* Start Corner selector */}
           <div>
-            <div style={{
-              fontSize: "10px",
-              color: "var(--text-muted)",
-              textTransform: "uppercase",
-              letterSpacing: "0.3px",
-              marginBottom: "4px",
-            }}>
+            <div
+              style={{
+                fontSize: "10px",
+                color: "var(--text-muted)",
+                textTransform: "uppercase",
+                letterSpacing: "0.3px",
+                marginBottom: "4px",
+              }}
+            >
               Start Corner
             </div>
-            <label style={{
-              display: "flex", alignItems: "center", gap: "6px", marginBottom: "6px",
-              fontSize: "10px", color: "var(--text-secondary)", cursor: "pointer",
-            }}>
-              <input type="checkbox" checked={originTop} onChange={(e) => setOriginTop(e.target.checked)} />
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                marginBottom: "6px",
+                fontSize: "10px",
+                color: "var(--text-secondary)",
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={originTop}
+                onChange={(e) => setOriginTop(e.target.checked)}
+              />
               Origin top-left (Y=0 at top)
             </label>
-            <div style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(3, 32px)",
-              gridTemplateRows: "repeat(3, 32px)",
-              gap: "2px",
-              width: "fit-content",
-              margin: "0 auto",
-            }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(3, 32px)",
+                gridTemplateRows: "repeat(3, 32px)",
+                gap: "2px",
+                width: "fit-content",
+                margin: "0 auto",
+              }}
+            >
               <StartCornerButton corner="topLeft" active={startCorner} onClick={setStartCorner} />
               <div />
               <StartCornerButton corner="topRight" active={startCorner} onClick={setStartCorner} />
               <div />
               <StartCornerButton corner="center" active={startCorner} onClick={setStartCorner} />
               <div />
-              <StartCornerButton corner="bottomLeft" active={startCorner} onClick={setStartCorner} />
+              <StartCornerButton
+                corner="bottomLeft"
+                active={startCorner}
+                onClick={setStartCorner}
+              />
               <div />
-              <StartCornerButton corner="bottomRight" active={startCorner} onClick={setStartCorner} />
+              <StartCornerButton
+                corner="bottomRight"
+                active={startCorner}
+                onClick={setStartCorner}
+              />
             </div>
           </div>
 
@@ -829,7 +1018,9 @@ export function MachinePanel() {
                 flex: 1,
                 padding: "5px",
                 borderRadius: "var(--radius-sm)",
-                border: gcodeStale ? "1px solid var(--accent-warm)" : "1px solid color-mix(in srgb, var(--accent) 20%, transparent)",
+                border: gcodeStale
+                  ? "1px solid var(--accent-warm)"
+                  : "1px solid color-mix(in srgb, var(--accent) 20%, transparent)",
                 fontSize: "10px",
                 fontWeight: 600,
                 cursor: "pointer",
@@ -845,7 +1036,10 @@ export function MachinePanel() {
               onClick={() => {
                 // Gate the preview open on generation success — a failed
                 // first generation must not open an empty preview.
-                if (!gcodeResult) handleGenerateGcode().then((ok) => { if (ok) setPreviewVisible(true); });
+                if (!gcodeResult)
+                  handleGenerateGcode().then((ok) => {
+                    if (ok) setPreviewVisible(true);
+                  });
                 else setPreviewVisible(true);
               }}
               disabled={generating}
@@ -868,16 +1062,18 @@ export function MachinePanel() {
 
           {/* Job stats (if gcode generated) */}
           {gcodeResult && (
-            <div style={{
-              background: "var(--bg-input)",
-              borderRadius: "var(--radius-sm)",
-              padding: "6px 8px",
-              fontSize: "10px",
-              color: "var(--text-secondary)",
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: "2px 8px",
-            }}>
+            <div
+              style={{
+                background: "var(--bg-input)",
+                borderRadius: "var(--radius-sm)",
+                padding: "6px 8px",
+                fontSize: "10px",
+                color: "var(--text-secondary)",
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: "2px 8px",
+              }}
+            >
               <span>Lines: {gcodeResult.lineCount}</span>
               <span>Cut: {gcodeResult.cutDistance.toFixed(1)}mm</span>
               <span>Travel: {gcodeResult.travelDistance.toFixed(1)}mm</span>
@@ -887,14 +1083,16 @@ export function MachinePanel() {
 
           {/* Fix 6: sparse image guidance — shown when engraving a mostly-empty image */}
           {sparseImageWarning && (
-            <div style={{
-              padding: "8px 10px",
-              background: "rgba(226,160,74,0.1)",
-              border: "1px solid rgba(226,160,74,0.3)",
-              borderRadius: "var(--radius-sm)",
-              fontSize: "11px",
-              color: "var(--accent-warm)",
-            }}>
+            <div
+              style={{
+                padding: "8px 10px",
+                background: "rgba(226,160,74,0.1)",
+                border: "1px solid rgba(226,160,74,0.3)",
+                borderRadius: "var(--radius-sm)",
+                fontSize: "11px",
+                color: "var(--accent-warm)",
+              }}
+            >
               <div style={{ fontWeight: 600, marginBottom: "4px" }}>
                 This image is mostly empty space.
               </div>
@@ -910,8 +1108,12 @@ export function MachinePanel() {
                     setSparseImageWarning(false);
                   }}
                   style={{
-                    fontSize: "11px", padding: "3px 10px", cursor: "pointer",
-                    background: "var(--accent-warm)", border: "none", color: "#fff",
+                    fontSize: "11px",
+                    padding: "3px 10px",
+                    cursor: "pointer",
+                    background: "var(--accent-warm)",
+                    border: "none",
+                    color: "#fff",
                     borderRadius: "var(--radius-sm)",
                   }}
                 >
@@ -920,9 +1122,13 @@ export function MachinePanel() {
                 <button
                   onClick={() => setSparseImageWarning(false)}
                   style={{
-                    fontSize: "11px", padding: "3px 10px", cursor: "pointer",
-                    background: "none", border: "1px solid var(--border)",
-                    color: "var(--text-secondary)", borderRadius: "var(--radius-sm)",
+                    fontSize: "11px",
+                    padding: "3px 10px",
+                    cursor: "pointer",
+                    background: "none",
+                    border: "1px solid var(--border)",
+                    color: "var(--text-secondary)",
+                    borderRadius: "var(--radius-sm)",
                   }}
                 >
                   Continue
@@ -930,7 +1136,6 @@ export function MachinePanel() {
               </div>
             </div>
           )}
-
         </div>
       )}
     </div>
@@ -938,9 +1143,17 @@ export function MachinePanel() {
 }
 
 function JogButton({
-  label, onClick, title, accent, disabled,
+  label,
+  onClick,
+  title,
+  accent,
+  disabled,
 }: {
-  label: string; onClick: () => void; title: string; accent?: boolean; disabled?: boolean;
+  label: string;
+  onClick: () => void;
+  title: string;
+  accent?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -1027,15 +1240,35 @@ function StartCornerButton({
       }}
     >
       <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-        <rect x="2" y="2" width="16" height="16" rx="1"
-          stroke="currentColor" strokeWidth="1" fill="none" />
+        <rect
+          x="2"
+          y="2"
+          width="16"
+          height="16"
+          rx="1"
+          stroke="currentColor"
+          strokeWidth="1"
+          fill="none"
+        />
         <circle cx={dot.cx} cy={dot.cy} r="2" fill="currentColor" />
       </svg>
     </button>
   );
 }
 
-function ActionButton({ label, color, onClick, disabled, title }: { label: string; color: string; onClick: () => void; disabled?: boolean; title?: string }) {
+function ActionButton({
+  label,
+  color,
+  onClick,
+  disabled,
+  title,
+}: {
+  label: string;
+  color: string;
+  onClick: () => void;
+  disabled?: boolean;
+  title?: string;
+}) {
   return (
     <button
       onClick={onClick}

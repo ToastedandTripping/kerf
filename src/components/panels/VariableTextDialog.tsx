@@ -1,7 +1,12 @@
 import { useState, useMemo, useEffect } from "react";
 import { useStore } from "../../app/store";
 import type { VariableTextConfig, VariableDataSource, SerialConfig } from "../../app/types";
-import { extractPlaceholders, generateSerialValues, hasPlaceholders, parseCsv } from "../../lib/variableText";
+import {
+  extractPlaceholders,
+  generateSerialValues,
+  hasPlaceholders,
+  parseCsv,
+} from "../../lib/variableText";
 
 interface Props {
   open: boolean;
@@ -65,7 +70,14 @@ export function VariableTextDialog({ open, onClose }: Props) {
   // Preview of first 3 serial values
   const serialPreview = useMemo(() => {
     if (mode !== "serial") return [];
-    const config: SerialConfig = { start, increment, count: Math.min(count, 3), zeroPad, prefix, suffix };
+    const config: SerialConfig = {
+      start,
+      increment,
+      count: Math.min(count, 3),
+      zeroPad,
+      prefix,
+      suffix,
+    };
     return generateSerialValues(config);
   }, [mode, start, increment, count, zeroPad, prefix, suffix]);
 
@@ -130,24 +142,41 @@ export function VariableTextDialog({ open, onClose }: Props) {
   }
 
   const canGenerate =
-    templateObjects.length > 0 &&
-    (mode === "serial" ? count > 0 : csvRows.length > 0);
+    templateObjects.length > 0 && (mode === "serial" ? count > 0 : csvRows.length > 0);
 
   return (
     <>
-      <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999 }} />
+      <div
+        onClick={onClose}
+        style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999 }}
+      />
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="variable-text-dialog-title"
         style={{
-          position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
-          width: "540px", background: "var(--bg-panel)", border: "1px solid var(--border)",
-          borderRadius: "var(--radius-lg)", boxShadow: "var(--shadow-modal)", zIndex: 10000,
+          position: "fixed",
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%, -50%)",
+          width: "540px",
+          background: "var(--bg-panel)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-lg)",
+          boxShadow: "var(--shadow-modal)",
+          zIndex: 10000,
           padding: "20px",
         }}
       >
-        <div id="variable-text-dialog-title" style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "16px" }}>
+        <div
+          id="variable-text-dialog-title"
+          style={{
+            fontSize: "14px",
+            fontWeight: 600,
+            color: "var(--text-primary)",
+            marginBottom: "16px",
+          }}
+        >
           Variable Text
         </div>
 
@@ -160,7 +189,15 @@ export function VariableTextDialog({ open, onClose }: Props) {
 
         {/* Mode chips */}
         <div style={{ marginBottom: "16px" }}>
-          <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "6px" }}>
+          <div
+            style={{
+              fontSize: "11px",
+              fontWeight: 600,
+              color: "var(--text-secondary)",
+              textTransform: "uppercase",
+              marginBottom: "6px",
+            }}
+          >
             Data Source
           </div>
           <div style={{ display: "flex", gap: "4px" }}>
@@ -169,7 +206,9 @@ export function VariableTextDialog({ open, onClose }: Props) {
                 key={m}
                 onClick={() => setMode(m)}
                 style={{
-                  padding: "5px 14px", fontSize: "11px", borderRadius: "var(--radius-sm)",
+                  padding: "5px 14px",
+                  fontSize: "11px",
+                  borderRadius: "var(--radius-sm)",
                   border: mode === m ? "none" : "1px solid var(--border)",
                   background: mode === m ? "var(--accent-warm)" : "transparent",
                   color: mode === m ? "#fff" : "var(--text-secondary)",
@@ -185,47 +224,166 @@ export function VariableTextDialog({ open, onClose }: Props) {
 
         {/* Serial mode */}
         {mode === "serial" && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", marginBottom: "16px" }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr 1fr",
+              gap: "8px",
+              marginBottom: "16px",
+            }}
+          >
             <label style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-              <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase" }}>Start</span>
+              <span
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  color: "var(--text-secondary)",
+                  textTransform: "uppercase",
+                }}
+              >
+                Start
+              </span>
               <input
-                type="number" value={start} onChange={(e) => setStart(Number(e.target.value))}
-                style={{ background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: "11px", padding: "3px 6px", color: "var(--text-primary)" }}
+                type="number"
+                value={start}
+                onChange={(e) => setStart(Number(e.target.value))}
+                style={{
+                  background: "var(--bg-input)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  fontSize: "11px",
+                  padding: "3px 6px",
+                  color: "var(--text-primary)",
+                }}
               />
             </label>
             <label style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-              <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase" }}>Increment</span>
+              <span
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  color: "var(--text-secondary)",
+                  textTransform: "uppercase",
+                }}
+              >
+                Increment
+              </span>
               <input
-                type="number" value={increment} onChange={(e) => setIncrement(Number(e.target.value))}
-                style={{ background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: "11px", padding: "3px 6px", color: "var(--text-primary)" }}
+                type="number"
+                value={increment}
+                onChange={(e) => setIncrement(Number(e.target.value))}
+                style={{
+                  background: "var(--bg-input)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  fontSize: "11px",
+                  padding: "3px 6px",
+                  color: "var(--text-primary)",
+                }}
               />
             </label>
             <label style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-              <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase" }}>Count</span>
+              <span
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  color: "var(--text-secondary)",
+                  textTransform: "uppercase",
+                }}
+              >
+                Count
+              </span>
               <input
-                type="number" value={count} min={1} max={9999} onChange={(e) => setCount(Number(e.target.value))}
-                style={{ background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: "11px", padding: "3px 6px", color: "var(--text-primary)" }}
+                type="number"
+                value={count}
+                min={1}
+                max={9999}
+                onChange={(e) => setCount(Number(e.target.value))}
+                style={{
+                  background: "var(--bg-input)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  fontSize: "11px",
+                  padding: "3px 6px",
+                  color: "var(--text-primary)",
+                }}
               />
             </label>
             <label style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-              <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase" }}>Zero Pad</span>
+              <span
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  color: "var(--text-secondary)",
+                  textTransform: "uppercase",
+                }}
+              >
+                Zero Pad
+              </span>
               <input
-                type="number" value={zeroPad} min={0} max={10} onChange={(e) => setZeroPad(Number(e.target.value))}
-                style={{ background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: "11px", padding: "3px 6px", color: "var(--text-primary)" }}
+                type="number"
+                value={zeroPad}
+                min={0}
+                max={10}
+                onChange={(e) => setZeroPad(Number(e.target.value))}
+                style={{
+                  background: "var(--bg-input)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  fontSize: "11px",
+                  padding: "3px 6px",
+                  color: "var(--text-primary)",
+                }}
               />
             </label>
             <label style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-              <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase" }}>Prefix</span>
+              <span
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  color: "var(--text-secondary)",
+                  textTransform: "uppercase",
+                }}
+              >
+                Prefix
+              </span>
               <input
-                type="text" value={prefix} onChange={(e) => setPrefix(e.target.value)}
-                style={{ background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: "11px", padding: "3px 6px", color: "var(--text-primary)" }}
+                type="text"
+                value={prefix}
+                onChange={(e) => setPrefix(e.target.value)}
+                style={{
+                  background: "var(--bg-input)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  fontSize: "11px",
+                  padding: "3px 6px",
+                  color: "var(--text-primary)",
+                }}
               />
             </label>
             <label style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-              <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase" }}>Suffix</span>
+              <span
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  color: "var(--text-secondary)",
+                  textTransform: "uppercase",
+                }}
+              >
+                Suffix
+              </span>
               <input
-                type="text" value={suffix} onChange={(e) => setSuffix(e.target.value)}
-                style={{ background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontSize: "11px", padding: "3px 6px", color: "var(--text-primary)" }}
+                type="text"
+                value={suffix}
+                onChange={(e) => setSuffix(e.target.value)}
+                style={{
+                  background: "var(--bg-input)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  fontSize: "11px",
+                  padding: "3px 6px",
+                  color: "var(--text-primary)",
+                }}
               />
             </label>
           </div>
@@ -241,10 +399,16 @@ export function VariableTextDialog({ open, onClose }: Props) {
               style={{ fontSize: "11px", color: "var(--text-secondary)", marginBottom: "8px" }}
             />
             {csvHeaders.length > 0 && (
-              <div style={{
-                background: "var(--bg-input)", border: "1px solid var(--border)",
-                borderRadius: "var(--radius-sm)", padding: "8px", maxHeight: "120px", overflow: "auto",
-              }}>
+              <div
+                style={{
+                  background: "var(--bg-input)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  padding: "8px",
+                  maxHeight: "120px",
+                  overflow: "auto",
+                }}
+              >
                 <div style={{ fontSize: "10px", color: "var(--text-muted)", marginBottom: "4px" }}>
                   {csvFileName} -- {csvRows.length} rows, {csvHeaders.length} columns
                 </div>
@@ -252,7 +416,15 @@ export function VariableTextDialog({ open, onClose }: Props) {
                   <thead>
                     <tr>
                       {csvHeaders.map((h, i) => (
-                        <th key={i} style={{ textAlign: "left", padding: "2px 4px", color: "var(--text-secondary)", borderBottom: "1px solid var(--border)" }}>
+                        <th
+                          key={i}
+                          style={{
+                            textAlign: "left",
+                            padding: "2px 4px",
+                            color: "var(--text-secondary)",
+                            borderBottom: "1px solid var(--border)",
+                          }}
+                        >
                           {h}
                         </th>
                       ))}
@@ -283,42 +455,78 @@ export function VariableTextDialog({ open, onClose }: Props) {
         {/* Preview */}
         {mode === "serial" && serialPreview.length > 0 && (
           <div style={{ marginBottom: "16px" }}>
-            <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "4px" }}>
+            <div
+              style={{
+                fontSize: "11px",
+                fontWeight: 600,
+                color: "var(--text-secondary)",
+                textTransform: "uppercase",
+                marginBottom: "4px",
+              }}
+            >
               Preview
             </div>
-            <div style={{ fontSize: "11px", color: "var(--text-primary)", fontFamily: "monospace" }}>
-              {serialPreview.join(", ")}{count > 3 ? `, ... (${count} total)` : ""}
+            <div
+              style={{ fontSize: "11px", color: "var(--text-primary)", fontFamily: "monospace" }}
+            >
+              {serialPreview.join(", ")}
+              {count > 3 ? `, ... (${count} total)` : ""}
             </div>
           </div>
         )}
 
         {/* Auto-nest option */}
-        <label style={{
-          display: "flex", alignItems: "center", gap: "6px",
-          marginBottom: nestStatus ? "8px" : "16px", cursor: "pointer", fontSize: "12px", color: "var(--text-secondary)",
-        }}>
-          <input type="checkbox" checked={autoNest} onChange={(e) => setAutoNest(e.target.checked)} />
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+            marginBottom: nestStatus ? "8px" : "16px",
+            cursor: "pointer",
+            fontSize: "12px",
+            color: "var(--text-secondary)",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={autoNest}
+            onChange={(e) => setAutoNest(e.target.checked)}
+          />
           Auto-nest after generation
         </label>
 
         {/* Nest status */}
         {nestStatus && (
-          <div style={{
-            marginBottom: "16px", fontSize: "11px", color: "var(--text-muted)",
-            padding: "4px 8px", background: "rgba(80, 180, 100, 0.1)",
-            borderRadius: "var(--radius-sm)",
-          }}>
+          <div
+            style={{
+              marginBottom: "16px",
+              fontSize: "11px",
+              color: "var(--text-muted)",
+              padding: "4px 8px",
+              background: "rgba(80, 180, 100, 0.1)",
+              borderRadius: "var(--radius-sm)",
+            }}
+          >
             {nestStatus}
           </div>
         )}
 
         {/* Buttons */}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
-          <button onClick={onClose} style={{
-            background: "none", border: "1px solid var(--border)",
-            color: "var(--text-secondary)", padding: "6px 16px",
-            borderRadius: "var(--radius-sm)", cursor: "pointer", fontSize: "13px",
-          }}>Cancel</button>
+          <button
+            onClick={onClose}
+            style={{
+              background: "none",
+              border: "1px solid var(--border)",
+              color: "var(--text-secondary)",
+              padding: "6px 16px",
+              borderRadius: "var(--radius-sm)",
+              cursor: "pointer",
+              fontSize: "13px",
+            }}
+          >
+            Cancel
+          </button>
           <button
             onClick={handleGenerate}
             disabled={!canGenerate}
@@ -326,11 +534,15 @@ export function VariableTextDialog({ open, onClose }: Props) {
               background: canGenerate ? "var(--accent-warm)" : "var(--bg-input)",
               border: "none",
               color: canGenerate ? "#fff" : "var(--text-muted)",
-              padding: "6px 16px", borderRadius: "var(--radius-sm)",
+              padding: "6px 16px",
+              borderRadius: "var(--radius-sm)",
               cursor: canGenerate ? "pointer" : "not-allowed",
-              fontSize: "13px", fontWeight: 600,
+              fontSize: "13px",
+              fontWeight: 600,
             }}
-          >Generate</button>
+          >
+            Generate
+          </button>
         </div>
       </div>
     </>

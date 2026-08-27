@@ -41,7 +41,7 @@ export async function extractVectorPaths(
   page: any,
   pageHeightPt: number,
   generateId: () => string,
-  layerIndex: number,
+  layerIndex: number
 ): Promise<DesignObject[]> {
   const pdfjsLib = await import("pdfjs-dist");
   const OPS = pdfjsLib.OPS;
@@ -284,20 +284,23 @@ export async function extractVectorPaths(
         while (j < buf.length) {
           const drawOp = buf[j++];
           switch (drawOp) {
-            case 0: { // moveTo
+            case 0: {
+              // moveTo
               flushSubPath();
               const pt = toKerf(buf[j], buf[j + 1]);
               currentSubPath = [pt];
               j += 2;
               break;
             }
-            case 1: { // lineTo
+            case 1: {
+              // lineTo
               const pt = toKerf(buf[j], buf[j + 1]);
               currentSubPath.push(pt);
               j += 2;
               break;
             }
-            case 2: { // curveTo (cubic bezier): cp1x,cp1y,cp2x,cp2y,x,y
+            case 2: {
+              // curveTo (cubic bezier): cp1x,cp1y,cp2x,cp2y,x,y
               const cp1 = toKerf(buf[j], buf[j + 1]);
               const cp2 = toKerf(buf[j + 2], buf[j + 3]);
               const end = toKerf(buf[j + 4], buf[j + 5]);
@@ -309,9 +312,12 @@ export async function extractVectorPaths(
               j += 6;
               break;
             }
-            case 3: { // quadraticCurveTo: qx,qy,x,y — promote to cubic
-              const qx = buf[j], qy = buf[j + 1];
-              const ex = buf[j + 2], ey = buf[j + 3];
+            case 3: {
+              // quadraticCurveTo: qx,qy,x,y — promote to cubic
+              const qx = buf[j],
+                qy = buf[j + 1];
+              const ex = buf[j + 2],
+                ey = buf[j + 3];
               if (currentSubPath.length > 0) {
                 // Reverse-transform last Kerf point back to PDF space is complex;
                 // instead compute cubic CPs in Kerf space directly.
@@ -357,9 +363,12 @@ export async function extractVectorPaths(
           emitPaths(currentPath);
           currentPath = [];
         } else if (
-          finishOp === OPS.fill || finishOp === OPS.eoFill ||
-          finishOp === OPS.fillStroke || finishOp === OPS.eoFillStroke ||
-          finishOp === OPS.closeFillStroke || finishOp === OPS.closeEOFillStroke
+          finishOp === OPS.fill ||
+          finishOp === OPS.eoFill ||
+          finishOp === OPS.fillStroke ||
+          finishOp === OPS.eoFillStroke ||
+          finishOp === OPS.closeFillStroke ||
+          finishOp === OPS.closeEOFillStroke
         ) {
           flushSubPath();
           for (const sub of currentPath) sub.closed = true;

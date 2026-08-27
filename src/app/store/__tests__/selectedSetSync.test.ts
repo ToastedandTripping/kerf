@@ -146,7 +146,9 @@ describe("D1 — selectedSet stays in sync with selectedIds", () => {
     useStore.getState().addObject(makeRect("r1"));
     useStore.getState().setSelectedIds(["r1"]);
     useStore.getState().beginPropertyEdit();
-    useStore.getState().updateObject("r1", { transform: { x: 99, y: 10, width: 20, height: 20, rotation: 0, scaleX: 1, scaleY: 1 } });
+    useStore.getState().updateObject("r1", {
+      transform: { x: 99, y: 10, width: 20, height: 20, rotation: 0, scaleX: 1, scaleY: 1 },
+    });
     useStore.getState().commitPropertyEdit();
     assertSync();
     useStore.getState().undo();

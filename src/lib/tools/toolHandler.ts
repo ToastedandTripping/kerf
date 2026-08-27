@@ -1,25 +1,30 @@
 import { useStore, generateId } from "../../app/store";
 import type { DesignObject, PathPoint, ToolType } from "../../app/types";
 import { machineConnection } from "../machine/connection";
-import { movePartial, scalePartial, pointsPartial, pointsBBox, POINTS_EPSILON, orientedHandlePoints } from "../geometry";
+import {
+  movePartial,
+  scalePartial,
+  pointsPartial,
+  pointsBBox,
+  POINTS_EPSILON,
+  orientedHandlePoints,
+} from "../geometry";
 import { computeAABB } from "../geometry";
 import { findNearestSnapPoint, snapThresholdMm, ellipseDiameter } from "../measure";
 import { PX_PER_MM } from "../constants";
 
 // Handle types for resize/rotate
-export type HandleType =
-  | "nw" | "n" | "ne"
-  | "w" | "e"
-  | "sw" | "s" | "se"
-  | "rotate"
-  | null;
+export type HandleType = "nw" | "n" | "ne" | "w" | "e" | "sw" | "s" | "se" | "rotate" | null;
 
 interface DragState {
   startX: number;
   startY: number;
   isDragging: boolean;
   dragTarget: string | null;
-  originalTransforms: Map<string, { x: number; y: number; width: number; height: number; rotation: number }>;
+  originalTransforms: Map<
+    string,
+    { x: number; y: number; width: number; height: number; rotation: number }
+  >;
   // Marquee selection
   isMarquee: boolean;
   marqueeDirection: "ltr" | "rtl";
@@ -112,10 +117,7 @@ function hitTestEllipse(worldX: number, worldY: number): DesignObject | null {
     const obj = objects[i];
     if (!obj.visible || obj.locked || obj.type !== "ellipse") continue;
     const t = obj.transform;
-    if (
-      worldX >= t.x && worldX <= t.x + t.width &&
-      worldY >= t.y && worldY <= t.y + t.height
-    ) {
+    if (worldX >= t.x && worldX <= t.x + t.width && worldY >= t.y && worldY <= t.y + t.height) {
       return obj;
     }
   }
@@ -150,12 +152,7 @@ export function isPointerDragging(): boolean {
   return drag.isDragging;
 }
 
-
-export function handleViewportPointerDown(
-  worldX: number,
-  worldY: number,
-  e: React.PointerEvent
-) {
+export function handleViewportPointerDown(worldX: number, worldY: number, e: React.PointerEvent) {
   const store = useStore.getState();
   const tool = store.activeTool;
 
@@ -197,11 +194,7 @@ export function handleViewportPointerDown(
   }
 }
 
-export function handleViewportPointerMove(
-  worldX: number,
-  worldY: number,
-  _e: React.PointerEvent
-) {
+export function handleViewportPointerMove(worldX: number, worldY: number, _e: React.PointerEvent) {
   const store = useStore.getState();
   const tool = store.activeTool;
 
@@ -242,11 +235,7 @@ export function handleViewportPointerMove(
   }
 }
 
-export function handleViewportPointerUp(
-  worldX: number,
-  worldY: number,
-  _e: React.PointerEvent
-) {
+export function handleViewportPointerUp(worldX: number, worldY: number, _e: React.PointerEvent) {
   if (!drag.isDragging) return;
 
   const store = useStore.getState();
@@ -295,7 +284,7 @@ function hitTest(worldX: number, worldY: number): string | null {
     const obj = objects[i];
     if (!obj.visible || obj.locked) continue;
     const t = obj.transform;
-    const rot = (t.rotation || 0) * Math.PI / 180;
+    const rot = ((t.rotation || 0) * Math.PI) / 180;
 
     if (obj.type === "line" && obj.points && obj.points.length >= 2) {
       const p1 = obj.points[0];
@@ -306,8 +295,14 @@ function hitTest(worldX: number, worldY: number): string | null {
         const cy = t.y + t.height / 2;
         const cos = Math.cos(rot);
         const sin = Math.sin(rot);
-        const rp1 = { x: cx + (p1.x - cx) * cos - (p1.y - cy) * sin, y: cy + (p1.x - cx) * sin + (p1.y - cy) * cos };
-        const rp2 = { x: cx + (p2.x - cx) * cos - (p2.y - cy) * sin, y: cy + (p2.x - cx) * sin + (p2.y - cy) * cos };
+        const rp1 = {
+          x: cx + (p1.x - cx) * cos - (p1.y - cy) * sin,
+          y: cy + (p1.x - cx) * sin + (p1.y - cy) * cos,
+        };
+        const rp2 = {
+          x: cx + (p2.x - cx) * cos - (p2.y - cy) * sin,
+          y: cy + (p2.x - cx) * sin + (p2.y - cy) * cos,
+        };
         const dist = pointToSegmentDist(worldX, worldY, rp1.x, rp1.y, rp2.x, rp2.y);
         if (dist < SEGMENT_HIT_TOLERANCE_MM) return obj.id;
       } else {
@@ -371,7 +366,10 @@ export function hitTestHandle(worldX: number, worldY: number, zoom: number): Han
 
     // Corners
     const corners: [keyof typeof handles, HandleType][] = [
-      ["nw", "nw"], ["ne", "ne"], ["sw", "sw"], ["se", "se"],
+      ["nw", "nw"],
+      ["ne", "ne"],
+      ["sw", "sw"],
+      ["se", "se"],
     ];
     for (const [key, handle] of corners) {
       const h = handles[key];
@@ -382,7 +380,10 @@ export function hitTestHandle(worldX: number, worldY: number, zoom: number): Han
 
     // Edges
     const edges: [keyof typeof handles, HandleType][] = [
-      ["n", "n"], ["s", "s"], ["w", "w"], ["e", "e"],
+      ["n", "n"],
+      ["s", "s"],
+      ["w", "w"],
+      ["e", "e"],
     ];
     for (const [key, handle] of edges) {
       const h = handles[key];
@@ -400,8 +401,7 @@ export function hitTestHandle(worldX: number, worldY: number, zoom: number): Han
 
   // Rotation handle (above top center)
   const rotHandleY = bbox.y - 20 / zoom;
-  if (Math.abs(worldX - (bbox.x + bbox.w / 2)) < hs * 2 &&
-      Math.abs(worldY - rotHandleY) < hs * 2) {
+  if (Math.abs(worldX - (bbox.x + bbox.w / 2)) < hs * 2 && Math.abs(worldY - rotHandleY) < hs * 2) {
     return "rotate";
   }
 
@@ -443,10 +443,13 @@ export function getSelectionBBox(): { x: number; y: number; w: number; h: number
     .filter((o): o is DesignObject => o != null);
   if (selected.length === 0) return null;
 
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
   for (const obj of selected) {
     const t = obj.transform;
-    const rot = (t.rotation || 0) * Math.PI / 180;
+    const rot = ((t.rotation || 0) * Math.PI) / 180;
     if (rot !== 0) {
       // Compute AABB of rotated rectangle corners
       const cx = t.x + t.width / 2;
@@ -455,7 +458,12 @@ export function getSelectionBBox(): { x: number; y: number; w: number; h: number
       const sin = Math.sin(rot);
       const hw = t.width / 2;
       const hh = t.height / 2;
-      for (const [dx, dy] of [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]] as [number, number][]) {
+      for (const [dx, dy] of [
+        [-hw, -hh],
+        [hw, -hh],
+        [hw, hh],
+        [-hw, hh],
+      ] as [number, number][]) {
         const rx = cx + dx * cos - dy * sin;
         const ry = cy + dx * sin + dy * cos;
         minX = Math.min(minX, rx);
@@ -474,9 +482,12 @@ export function getSelectionBBox(): { x: number; y: number; w: number; h: number
 }
 
 function pointToSegmentDist(
-  px: number, py: number,
-  ax: number, ay: number,
-  bx: number, by: number
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number
 ): number {
   const dx = bx - ax;
   const dy = by - ay;
@@ -586,7 +597,10 @@ function handleSelectMove(worldX: number, worldY: number, e: React.PointerEvent)
   );
 
   // Compute selected objects' bounding box (at new position)
-  let selMinX = Infinity, selMinY = Infinity, selMaxX = -Infinity, selMaxY = -Infinity;
+  let selMinX = Infinity,
+    selMinY = Infinity,
+    selMaxX = -Infinity,
+    selMaxY = -Infinity;
   for (const id of store.selectedIds) {
     const orig = drag.originalTransforms.get(id);
     if (!orig) continue;
@@ -598,19 +612,29 @@ function handleSelectMove(worldX: number, worldY: number, e: React.PointerEvent)
   const selCenterX = (selMinX + selMaxX) / 2;
   const selCenterY = (selMinY + selMaxY) / 2;
 
-  let snapDx = 0, snapDy = 0;
-  let snappedH = false, snappedV = false;
+  let snapDx = 0,
+    snapDy = 0;
+  let snappedH = false,
+    snappedV = false;
 
   for (const other of otherObjects) {
     const ot = other.transform;
-    const oLeft = ot.x, oRight = ot.x + ot.width, oCenterX = ot.x + ot.width / 2;
-    const oTop = ot.y, oBottom = ot.y + ot.height, oCenterY = ot.y + ot.height / 2;
+    const oLeft = ot.x,
+      oRight = ot.x + ot.width,
+      oCenterX = ot.x + ot.width / 2;
+    const oTop = ot.y,
+      oBottom = ot.y + ot.height,
+      oCenterY = ot.y + ot.height / 2;
 
     // Vertical guides (snap X positions)
     if (!snappedV) {
       const xEdges = [
-        { sel: selMinX, ref: oLeft }, { sel: selMinX, ref: oRight }, { sel: selMinX, ref: oCenterX },
-        { sel: selMaxX, ref: oLeft }, { sel: selMaxX, ref: oRight }, { sel: selMaxX, ref: oCenterX },
+        { sel: selMinX, ref: oLeft },
+        { sel: selMinX, ref: oRight },
+        { sel: selMinX, ref: oCenterX },
+        { sel: selMaxX, ref: oLeft },
+        { sel: selMaxX, ref: oRight },
+        { sel: selMaxX, ref: oCenterX },
         { sel: selCenterX, ref: oCenterX },
       ];
       for (const { sel, ref } of xEdges) {
@@ -626,8 +650,12 @@ function handleSelectMove(worldX: number, worldY: number, e: React.PointerEvent)
     // Horizontal guides (snap Y positions)
     if (!snappedH) {
       const yEdges = [
-        { sel: selMinY, ref: oTop }, { sel: selMinY, ref: oBottom }, { sel: selMinY, ref: oCenterY },
-        { sel: selMaxY, ref: oTop }, { sel: selMaxY, ref: oBottom }, { sel: selMaxY, ref: oCenterY },
+        { sel: selMinY, ref: oTop },
+        { sel: selMinY, ref: oBottom },
+        { sel: selMinY, ref: oCenterY },
+        { sel: selMaxY, ref: oTop },
+        { sel: selMaxY, ref: oBottom },
+        { sel: selMaxY, ref: oCenterY },
         { sel: selCenterY, ref: oCenterY },
       ];
       for (const { sel, ref } of yEdges) {
@@ -643,7 +671,8 @@ function handleSelectMove(worldX: number, worldY: number, e: React.PointerEvent)
 
   // P2: Diff guides before writing to avoid unnecessary Zustand set() calls
   const currentGuides = store.guides;
-  const guidesChanged = guides.length !== currentGuides.length ||
+  const guidesChanged =
+    guides.length !== currentGuides.length ||
     guides.some((g, i) => g.type !== currentGuides[i]?.type || g.pos !== currentGuides[i]?.pos);
   if (guidesChanged) store.setGuides(guides);
 
@@ -727,7 +756,7 @@ function handleResizeMove(worldX: number, worldY: number, e: React.PointerEvent)
         // Orbit the object's ORIGINAL center about the selection center
         const origCx = objOrig.x + objOrig.width / 2;
         const origCy = objOrig.y + objOrig.height / 2;
-        const cumRad = cumulativeAngle * Math.PI / 180;
+        const cumRad = (cumulativeAngle * Math.PI) / 180;
         const cosCum = Math.cos(cumRad);
         const sinCum = Math.sin(cumRad);
         const dx0 = origCx - selCx;
@@ -736,10 +765,15 @@ function handleResizeMove(worldX: number, worldY: number, e: React.PointerEvent)
         const newCy = selCy + dx0 * sinCum + dy0 * cosCum;
         const newX = newCx - objOrig.width / 2;
         const newY = newCy - objOrig.height / 2;
-        const newRot = ((objOrig.rotation + cumulativeAngle) % 360 + 360) % 360;
+        const newRot = (((objOrig.rotation + cumulativeAngle) % 360) + 360) % 360;
 
         // W1b: route through scalePartial to keep points in sync
-        const partial = scalePartial(obj, { x: newX, y: newY, width: objOrig.width, height: objOrig.height });
+        const partial = scalePartial(obj, {
+          x: newX,
+          y: newY,
+          width: objOrig.width,
+          height: objOrig.height,
+        });
         rotUpdates.push({
           id,
           partial: {
@@ -756,7 +790,10 @@ function handleResizeMove(worldX: number, worldY: number, e: React.PointerEvent)
         rotUpdates.push({
           id,
           partial: {
-            transform: { ...obj.transform, rotation: ((obj.transform.rotation + delta) % 360 + 360) % 360 },
+            transform: {
+              ...obj.transform,
+              rotation: (((obj.transform.rotation + delta) % 360) + 360) % 360,
+            },
           },
         });
       }
@@ -782,7 +819,7 @@ function handleResizeMove(worldX: number, worldY: number, e: React.PointerEvent)
     if (objOrig && obj) {
       const rot = objOrig.rotation || 0;
       if (rot !== 0) {
-        const rad = rot * Math.PI / 180;
+        const rad = (rot * Math.PI) / 180;
         const cosR = Math.cos(rad);
         const sinR = Math.sin(rad);
         const ow = objOrig.width;
@@ -807,14 +844,50 @@ function handleResizeMove(worldX: number, worldY: number, e: React.PointerEvent)
         let fixSy = 0;
 
         switch (handle) {
-          case "se": nlw = ow + dlx; nlh = oh + dly; fixSx = -1; fixSy = -1; break;
-          case "sw": nlw = ow - dlx; nlh = oh + dly; fixSx =  1; fixSy = -1; break;
-          case "ne": nlw = ow + dlx; nlh = oh - dly; fixSx = -1; fixSy =  1; break;
-          case "nw": nlw = ow - dlx; nlh = oh - dly; fixSx =  1; fixSy =  1; break;
-          case "e":  nlw = ow + dlx;                 fixSx = -1; fixSy =  0; break;
-          case "w":  nlw = ow - dlx;                 fixSx =  1; fixSy =  0; break;
-          case "s":                  nlh = oh + dly; fixSx =  0; fixSy = -1; break;
-          case "n":                  nlh = oh - dly; fixSx =  0; fixSy =  1; break;
+          case "se":
+            nlw = ow + dlx;
+            nlh = oh + dly;
+            fixSx = -1;
+            fixSy = -1;
+            break;
+          case "sw":
+            nlw = ow - dlx;
+            nlh = oh + dly;
+            fixSx = 1;
+            fixSy = -1;
+            break;
+          case "ne":
+            nlw = ow + dlx;
+            nlh = oh - dly;
+            fixSx = -1;
+            fixSy = 1;
+            break;
+          case "nw":
+            nlw = ow - dlx;
+            nlh = oh - dly;
+            fixSx = 1;
+            fixSy = 1;
+            break;
+          case "e":
+            nlw = ow + dlx;
+            fixSx = -1;
+            fixSy = 0;
+            break;
+          case "w":
+            nlw = ow - dlx;
+            fixSx = 1;
+            fixSy = 0;
+            break;
+          case "s":
+            nlh = oh + dly;
+            fixSx = 0;
+            fixSy = -1;
+            break;
+          case "n":
+            nlh = oh - dly;
+            fixSx = 0;
+            fixSy = 1;
+            break;
         }
 
         // Shift aspect-lock compares LOCAL deltas (critic must-fix #3)
@@ -835,15 +908,15 @@ function handleResizeMove(worldX: number, worldY: number, e: React.PointerEvent)
         // The fixed corner in LOCAL frame is at offset (fixSx * ow/2, fixSy * oh/2)
         const origCx = objOrig.x + objOrig.width / 2;
         const origCy = objOrig.y + objOrig.height / 2;
-        const origFixLocalX = fixSx * ow / 2;
-        const origFixLocalY = fixSy * oh / 2;
+        const origFixLocalX = (fixSx * ow) / 2;
+        const origFixLocalY = (fixSy * oh) / 2;
         const anchorWorldX = origCx + origFixLocalX * cosR - origFixLocalY * sinR;
         const anchorWorldY = origCy + origFixLocalX * sinR + origFixLocalY * cosR;
 
         // The same corner on the NEW rect has local offset (fixSx * nlw/2, fixSy * nlh/2)
         // using CLAMPED half-extents — so the fixed corner doesn't drift at the 1mm floor
-        const newFixLocalX = fixSx * nlw / 2;
-        const newFixLocalY = fixSy * nlh / 2;
+        const newFixLocalX = (fixSx * nlw) / 2;
+        const newFixLocalY = (fixSy * nlh) / 2;
 
         // Solve for new center: anchorWorld = newCenter + rotated(newFixLocal)
         // newCx = anchorWorldX − (newFixLocalX·cos − newFixLocalY·sin)
@@ -855,13 +928,15 @@ function handleResizeMove(worldX: number, worldY: number, e: React.PointerEvent)
 
         // scalePartial contract unchanged — we supply the new AABB rect + preserve rotation
         const partial = scalePartial(obj, { x: newX, y: newY, width: nlw, height: nlh });
-        store.updateObjects([{
-          id,
-          partial: {
-            ...partial,
-            transform: { ...partial.transform, rotation: rot },
+        store.updateObjects([
+          {
+            id,
+            partial: {
+              ...partial,
+              transform: { ...partial.transform, rotation: rot },
+            },
           },
-        }]);
+        ]);
         return;
       }
     }
@@ -877,14 +952,40 @@ function handleResizeMove(worldX: number, worldY: number, e: React.PointerEvent)
   const dy = worldY - drag.startY;
 
   switch (handle) {
-    case "se": newW = orig.width + dx; newH = orig.height + dy; break;
-    case "sw": newX = orig.x + dx; newW = orig.width - dx; newH = orig.height + dy; break;
-    case "ne": newY = orig.y + dy; newW = orig.width + dx; newH = orig.height - dy; break;
-    case "nw": newX = orig.x + dx; newY = orig.y + dy; newW = orig.width - dx; newH = orig.height - dy; break;
-    case "n": newY = orig.y + dy; newH = orig.height - dy; break;
-    case "s": newH = orig.height + dy; break;
-    case "w": newX = orig.x + dx; newW = orig.width - dx; break;
-    case "e": newW = orig.width + dx; break;
+    case "se":
+      newW = orig.width + dx;
+      newH = orig.height + dy;
+      break;
+    case "sw":
+      newX = orig.x + dx;
+      newW = orig.width - dx;
+      newH = orig.height + dy;
+      break;
+    case "ne":
+      newY = orig.y + dy;
+      newW = orig.width + dx;
+      newH = orig.height - dy;
+      break;
+    case "nw":
+      newX = orig.x + dx;
+      newY = orig.y + dy;
+      newW = orig.width - dx;
+      newH = orig.height - dy;
+      break;
+    case "n":
+      newY = orig.y + dy;
+      newH = orig.height - dy;
+      break;
+    case "s":
+      newH = orig.height + dy;
+      break;
+    case "w":
+      newX = orig.x + dx;
+      newW = orig.width - dx;
+      break;
+    case "e":
+      newW = orig.width + dx;
+      break;
   }
 
   // Maintain aspect ratio with Shift
@@ -904,8 +1005,12 @@ function handleResizeMove(worldX: number, worldY: number, e: React.PointerEvent)
   }
 
   // Prevent negative sizes
-  if (newW < 1) { newW = 1; }
-  if (newH < 1) { newH = 1; }
+  if (newW < 1) {
+    newW = 1;
+  }
+  if (newH < 1) {
+    newH = 1;
+  }
 
   // Scale each selected object proportionally (P1: batched, P6: O(1) lookup)
   const scaleUpdates: Array<{ id: string; partial: Partial<DesignObject> }> = [];
@@ -980,14 +1085,19 @@ function handleSelectUp(_worldX: number, _worldY: number) {
     // Push undo command for resize/rotate
     const store = useStore.getState();
     const originalPositions = new Map(drag.originalTransforms);
-    const finalPositions = new Map<string, { x: number; y: number; width: number; height: number; rotation: number }>();
+    const finalPositions = new Map<
+      string,
+      { x: number; y: number; width: number; height: number; rotation: number }
+    >();
 
     for (const id of store.selectedIds) {
       const obj = store.objectsById.get(id);
       if (obj) {
         finalPositions.set(id, {
-          x: obj.transform.x, y: obj.transform.y,
-          width: obj.transform.width, height: obj.transform.height,
+          x: obj.transform.x,
+          y: obj.transform.y,
+          width: obj.transform.width,
+          height: obj.transform.height,
           rotation: obj.transform.rotation,
         });
       }
@@ -996,9 +1106,14 @@ function handleSelectUp(_worldX: number, _worldY: number) {
     let changed = false;
     for (const [id, orig] of originalPositions) {
       const final = finalPositions.get(id);
-      if (final && (orig.x !== final.x || orig.y !== final.y ||
-          orig.width !== final.width || orig.height !== final.height ||
-          orig.rotation !== final.rotation)) {
+      if (
+        final &&
+        (orig.x !== final.x ||
+          orig.y !== final.y ||
+          orig.width !== final.width ||
+          orig.height !== final.height ||
+          orig.rotation !== final.rotation)
+      ) {
         changed = true;
         break;
       }
@@ -1010,7 +1125,12 @@ function handleSelectUp(_worldX: number, _worldY: number) {
       // (visual no-op + re-manufactured desync). Whole-object snapshots are
       // not used here on purpose: they'd bypass pushObjectsUndo's image-strip
       // machinery and balloon the undo stack on image-bearing selections.
-      const restoreTo = (positions: Map<string, { x: number; y: number; width: number; height: number; rotation: number }>) => {
+      const restoreTo = (
+        positions: Map<
+          string,
+          { x: number; y: number; width: number; height: number; rotation: number }
+        >
+      ) => {
         for (const [id, pos] of positions) {
           const obj = useStore.getState().objectsById.get(id);
           if (obj) {
@@ -1089,7 +1209,7 @@ function handleShapeDown(worldX: number, worldY: number, tool: string) {
 
   const baseObj: DesignObject = {
     id: generateId(),
-    type: tool === "line" ? "line" : tool as "rectangle" | "ellipse",
+    type: tool === "line" ? "line" : (tool as "rectangle" | "ellipse"),
     name: `${tool.charAt(0).toUpperCase() + tool.slice(1)} ${store.objects.length + 1}`,
     transform: {
       x: worldX,
@@ -1427,7 +1547,10 @@ function handleNodeDown(worldX: number, worldY: number, _e: React.PointerEvent) 
           handleIn: p.handleIn ? { ...p.handleIn } : undefined,
           handleOut: p.handleOut ? { ...p.handleOut } : undefined,
         }));
-        store.setNodeEditState({ pathId: store.nodeEditState.pathId, selectedNodeIndex: hit.index });
+        store.setNodeEditState({
+          pathId: store.nodeEditState.pathId,
+          selectedNodeIndex: hit.index,
+        });
         store.beginPropertyEdit();
       }
       return;
@@ -1551,7 +1674,8 @@ export function deleteSelectedNode() {
   }
 
   const newPoints = obj.points.filter((_, i) => i !== selectedNodeIndex);
-  const newSelectedIdx = selectedNodeIndex >= newPoints.length ? newPoints.length - 1 : selectedNodeIndex;
+  const newSelectedIdx =
+    selectedNodeIndex >= newPoints.length ? newPoints.length - 1 : selectedNodeIndex;
 
   store.withUndo("delete-node", () => {
     // W1b: deleting a node can shrink the bbox — keep the transform synced
@@ -1588,7 +1712,11 @@ export function handleViewportDoubleClick(worldX: number, worldY: number) {
       if (!obj || !obj.points) return;
 
       const pt = obj.points[hit.index];
-      const newPoints = obj.points.map((p) => ({ ...p, handleIn: p.handleIn ? { ...p.handleIn } : undefined, handleOut: p.handleOut ? { ...p.handleOut } : undefined }));
+      const newPoints = obj.points.map((p) => ({
+        ...p,
+        handleIn: p.handleIn ? { ...p.handleIn } : undefined,
+        handleOut: p.handleOut ? { ...p.handleOut } : undefined,
+      }));
 
       if (pt.handleIn || pt.handleOut) {
         // Has handles -> remove them (corner)
@@ -1780,7 +1908,10 @@ export function handleViewportKeyDown(e: KeyboardEvent): boolean {
 
   // Node tool key intercepts
   if (tool === "node") {
-    if ((e.key === "Delete" || e.key === "Backspace") && store.nodeEditState.selectedNodeIndex !== null) {
+    if (
+      (e.key === "Delete" || e.key === "Backspace") &&
+      store.nodeEditState.selectedNodeIndex !== null
+    ) {
       e.preventDefault();
       deleteSelectedNode();
       return true;

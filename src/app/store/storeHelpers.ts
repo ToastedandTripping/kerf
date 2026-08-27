@@ -35,7 +35,7 @@ export function selectionPatch(ids: string[]): { selectedIds: string[]; selected
  */
 export function applyObjects(
   objects: DesignObject[],
-  selectedIds?: string[],
+  selectedIds?: string[]
 ): (state: AppState) => Partial<AppState> {
   return (state) => ({
     objects,

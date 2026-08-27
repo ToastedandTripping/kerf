@@ -5,7 +5,19 @@ import { useStore } from "../../app/store";
 import { getDirtyObjectIds, clearDirtyObjectIds, setCursorPosition } from "../../app/store";
 import type { DesignObject } from "../../app/types";
 import { hasPlaceholders } from "../../lib/variableText";
-import { handleViewportPointerDown, handleViewportPointerMove, handleViewportPointerUp, getMarqueeState, getSelectionBBox, handleViewportDoubleClick, hitTestHandle, isDraggingRotateHandle, getActiveDragHandle, isPointerDragging, getMeasureState } from "../../lib/tools/toolHandler";
+import {
+  handleViewportPointerDown,
+  handleViewportPointerMove,
+  handleViewportPointerUp,
+  getMarqueeState,
+  getSelectionBBox,
+  handleViewportDoubleClick,
+  hitTestHandle,
+  isDraggingRotateHandle,
+  getActiveDragHandle,
+  isPointerDragging,
+  getMeasureState,
+} from "../../lib/tools/toolHandler";
 import { measureDistance, measureAngleDeg, formatMeasureLabel } from "../../lib/measure";
 
 import { PX_PER_MM, MIN_ZOOM, MAX_ZOOM } from "../../lib/constants";
@@ -79,72 +91,79 @@ export function Viewport() {
 
   // P7: Derived slice -- re-renders selection overlay when selected objects change.
   // Returns original store references so useShallow's === comparison is stable.
-  const selectedTransforms = useStore(useShallow((s) => {
-    return s.selectedIds
-      .map((id) => s.objectsById.get(id))
-      .filter((x): x is DesignObject => x != null);
-  }));
+  const selectedTransforms = useStore(
+    useShallow((s) => {
+      return s.selectedIds
+        .map((id) => s.objectsById.get(id))
+        .filter((x): x is DesignObject => x != null);
+    })
+  );
 
   // Initialize Pixi.js
   useEffect(() => {
     if (!canvasRef.current || appRef.current) return;
 
     const app = new Application();
-    const initPromise = app.init({
-      preference: 'webgl',
-      resizeTo: canvasRef.current,
-      background: 0x1a1a1a,
-      antialias: true,
-      resolution: window.devicePixelRatio || 1,
-      autoDensity: true,
-    }).then(() => {
-      if (!canvasRef.current) return;
-      canvasRef.current.appendChild(app.canvas as HTMLCanvasElement);
-      appRef.current = app;
+    const initPromise = app
+      .init({
+        preference: "webgl",
+        resizeTo: canvasRef.current,
+        background: 0x1a1a1a,
+        antialias: true,
+        resolution: window.devicePixelRatio || 1,
+        autoDensity: true,
+      })
+      .then(() => {
+        if (!canvasRef.current) return;
+        canvasRef.current.appendChild(app.canvas as HTMLCanvasElement);
+        appRef.current = app;
 
-      const world = new Container();
-      worldRef.current = world;
-      app.stage.addChild(world);
+        const world = new Container();
+        worldRef.current = world;
+        app.stage.addChild(world);
 
-      const workspace = new Graphics();
-      workspaceRef.current = workspace;
-      world.addChild(workspace);
+        const workspace = new Graphics();
+        workspaceRef.current = workspace;
+        world.addChild(workspace);
 
-      const grid = new Graphics();
-      gridRef.current = grid;
-      world.addChild(grid);
+        const grid = new Graphics();
+        gridRef.current = grid;
+        world.addChild(grid);
 
-      const objectsContainer = new Container();
-      objectsContainerRef.current = objectsContainer;
-      world.addChild(objectsContainer);
+        const objectsContainer = new Container();
+        objectsContainerRef.current = objectsContainer;
+        world.addChild(objectsContainer);
 
-      const drawingLayer = new Graphics();
-      drawingLayerRef.current = drawingLayer;
-      world.addChild(drawingLayer);
+        const drawingLayer = new Graphics();
+        drawingLayerRef.current = drawingLayer;
+        world.addChild(drawingLayer);
 
-      const selectionOverlay = new Graphics();
-      selectionOverlayRef.current = selectionOverlay;
-      world.addChild(selectionOverlay);
+        const selectionOverlay = new Graphics();
+        selectionOverlayRef.current = selectionOverlay;
+        world.addChild(selectionOverlay);
 
-      // Center workspace
-      const cx = app.screen.width / 2;
-      const cy = app.screen.height / 2;
-      useStore.getState().setCamera({
-        x: cx - (workspaceWidth * PX_PER_MM) / 2,
-        y: cy - (workspaceHeight * PX_PER_MM) / 2,
-        zoom: 1,
-      });
-    }).catch((err) => console.error("Pixi.js init failed:", err));
+        // Center workspace
+        const cx = app.screen.width / 2;
+        const cy = app.screen.height / 2;
+        useStore.getState().setCamera({
+          x: cx - (workspaceWidth * PX_PER_MM) / 2,
+          y: cy - (workspaceHeight * PX_PER_MM) / 2,
+          zoom: 1,
+        });
+      })
+      .catch((err) => console.error("Pixi.js init failed:", err));
 
     return () => {
-      initPromise.then(() => {
-        app.destroy(true);
-        appRef.current = null;
-        // Clear module-level caches — textures belong to the destroyed GPU context
-        for (const tex of textureCache.values()) tex.destroy(true);
-        textureCache.clear();
-        contentHashCache.clear();
-      }).catch((err) => console.error("Pixi.js destroy failed:", err));
+      initPromise
+        .then(() => {
+          app.destroy(true);
+          appRef.current = null;
+          // Clear module-level caches — textures belong to the destroyed GPU context
+          for (const tex of textureCache.values()) tex.destroy(true);
+          textureCache.clear();
+          contentHashCache.clear();
+        })
+        .catch((err) => console.error("Pixi.js destroy failed:", err));
     };
   }, []);
 
@@ -245,8 +264,12 @@ export function Viewport() {
           cache.delete(key);
           container.removeChild(existing);
           existing.destroy({ children: true });
-          const newEl = obj.type === "text" ? renderTextObject(obj)
-            : obj.type === "image" ? renderImageObject(obj) : null;
+          const newEl =
+            obj.type === "text"
+              ? renderTextObject(obj)
+              : obj.type === "image"
+                ? renderImageObject(obj)
+                : null;
           if (newEl) {
             contentHashCache.set(key, hash);
             applyObjectRotation(newEl, obj.transform);
@@ -349,7 +372,7 @@ export function Viewport() {
       const py = t.y * PX_PER_MM;
       const pw = t.width * PX_PER_MM;
       const ph = t.height * PX_PER_MM;
-      const rot = (t.rotation || 0) * Math.PI / 180;
+      const rot = ((t.rotation || 0) * Math.PI) / 180;
 
       const layerColor = layers[sel.layerIndex]?.color || "#4a90e2";
       const selColor = parseInt(layerColor.replace("#", ""), 16);
@@ -361,8 +384,13 @@ export function Viewport() {
         const cos = Math.cos(rot);
         const sin = Math.sin(rot);
         const corners = [
-          [-pw / 2, -ph / 2], [pw / 2, -ph / 2], [pw / 2, ph / 2], [-pw / 2, ph / 2],
-        ].map(([dx, dy]) => [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos] as [number, number]);
+          [-pw / 2, -ph / 2],
+          [pw / 2, -ph / 2],
+          [pw / 2, ph / 2],
+          [-pw / 2, ph / 2],
+        ].map(
+          ([dx, dy]) => [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos] as [number, number]
+        );
         g.moveTo(corners[0][0], corners[0][1]);
         for (let i = 1; i < 4; i++) g.lineTo(corners[i][0], corners[i][1]);
         g.closePath().stroke();
@@ -406,7 +434,10 @@ export function Viewport() {
           const handles = orientedHandlePoints(t, rotateOffsetMm);
 
           // Helper: convert mm handle pos to px
-          const toPx = (pt: { x: number; y: number }) => ({ x: pt.x * PX_PER_MM, y: pt.y * PX_PER_MM });
+          const toPx = (pt: { x: number; y: number }) => ({
+            x: pt.x * PX_PER_MM,
+            y: pt.y * PX_PER_MM,
+          });
 
           // Corner handles
           for (const key of ["nw", "ne", "sw", "se"] as const) {
@@ -429,11 +460,12 @@ export function Viewport() {
           const { x: rx, y: ry } = toPx(handles.rotate);
           const rotR = 4 / camera.zoom;
           g.setStrokeStyle({ width: 0.5 / camera.zoom, color: 0x4a90e2, alpha: 0.6 });
-          g.moveTo(nx, ny).lineTo(rx, ry + rotR).stroke();
+          g.moveTo(nx, ny)
+            .lineTo(rx, ry + rotR)
+            .stroke();
           g.circle(rx, ry, rotR).fill({ color: 0xffffff });
           g.setStrokeStyle({ width: 1 / camera.zoom, color: 0x4a90e2, alpha: 1 });
           g.circle(rx, ry, rotR).stroke();
-
         } else {
           // Multi-select: AABB-based handles (unchanged)
           const bx = bbox.x * PX_PER_MM;
@@ -443,8 +475,10 @@ export function Viewport() {
 
           // Corner handles
           const corners = [
-            [bx, by], [bx + bw, by],
-            [bx, by + bh], [bx + bw, by + bh],
+            [bx, by],
+            [bx + bw, by],
+            [bx, by + bh],
+            [bx + bw, by + bh],
           ];
           for (const [cx, cy] of corners) {
             g.rect(cx - hs, cy - hs, handleSize, handleSize).fill({ color: 0xffffff });
@@ -454,8 +488,10 @@ export function Viewport() {
 
           // Edge midpoint handles
           const edges = [
-            [bx + bw / 2, by], [bx + bw / 2, by + bh],
-            [bx, by + bh / 2], [bx + bw, by + bh / 2],
+            [bx + bw / 2, by],
+            [bx + bw / 2, by + bh],
+            [bx, by + bh / 2],
+            [bx + bw, by + bh / 2],
           ];
           for (const [cx, cy] of edges) {
             g.rect(cx - ehs, cy - ehs, edgeSize, edgeSize).fill({ color: 0xffffff });
@@ -467,7 +503,9 @@ export function Viewport() {
           const rotY = by - 20 / camera.zoom;
           const rotR = 4 / camera.zoom;
           g.setStrokeStyle({ width: 0.5 / camera.zoom, color: 0x4a90e2, alpha: 0.6 });
-          g.moveTo(bx + bw / 2, by).lineTo(bx + bw / 2, rotY + rotR).stroke();
+          g.moveTo(bx + bw / 2, by)
+            .lineTo(bx + bw / 2, rotY + rotR)
+            .stroke();
           g.circle(bx + bw / 2, rotY, rotR).fill({ color: 0xffffff });
           g.setStrokeStyle({ width: 1 / camera.zoom, color: 0x4a90e2, alpha: 1 });
           g.circle(bx + bw / 2, rotY, rotR).stroke();
@@ -591,7 +629,13 @@ export function Viewport() {
   }, [selectedTransforms, camera.zoom, activeTool, nodeEditState, measureTick]);
 
   // Track marquee box for HTML overlay rendering
-  const marqueeRef = useRef<{ x: number; y: number; w: number; h: number; dir: "ltr" | "rtl" } | null>(null);
+  const marqueeRef = useRef<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    dir: "ltr" | "rtl";
+  } | null>(null);
 
   // Space key for pan mode
   useEffect(() => {
@@ -660,7 +704,11 @@ export function Viewport() {
       // Middle-button pan, spacebar-held pan, OR pan-tool left-drag all enter the same
       // isPanning / panCameraRef deferred-write path (no new camera math).
       const isPanTool = useStore.getState().activeTool === "pan";
-      if (e.button === 1 || (e.button === 0 && spaceHeld.current) || (e.button === 0 && isPanTool)) {
+      if (
+        e.button === 1 ||
+        (e.button === 0 && spaceHeld.current) ||
+        (e.button === 0 && isPanTool)
+      ) {
         isPanning.current = true;
         lastPan.current = { x: e.clientX, y: e.clientY };
         // P5: Initialize pan camera ref from current camera state
@@ -802,23 +850,24 @@ export function Viewport() {
   );
 
   // Derive the object currently being text-edited (stable: objects array is already selected above)
-  const textEditingObj = textEditingId != null
-    ? objects.find((o) => o.id === textEditingId) ?? null
-    : null;
+  const textEditingObj =
+    textEditingId != null ? (objects.find((o) => o.id === textEditingId) ?? null) : null;
 
   // Compute marquee screen rect for overlay
   const mq = marqueeRef.current;
-  const marqueeStyle: React.CSSProperties | null = mq ? {
-    position: "absolute",
-    left: camera.x + mq.x * PX_PER_MM * camera.zoom,
-    top: camera.y + mq.y * PX_PER_MM * camera.zoom,
-    width: mq.w * PX_PER_MM * camera.zoom,
-    height: mq.h * PX_PER_MM * camera.zoom,
-    border: `1px solid ${mq.dir === "ltr" ? "rgba(74,144,226,0.8)" : "rgba(78,226,74,0.8)"}`,
-    background: mq.dir === "ltr" ? "rgba(74,144,226,0.1)" : "rgba(78,226,74,0.1)",
-    pointerEvents: "none",
-    zIndex: 5,
-  } : null;
+  const marqueeStyle: React.CSSProperties | null = mq
+    ? {
+        position: "absolute",
+        left: camera.x + mq.x * PX_PER_MM * camera.zoom,
+        top: camera.y + mq.y * PX_PER_MM * camera.zoom,
+        width: mq.w * PX_PER_MM * camera.zoom,
+        height: mq.h * PX_PER_MM * camera.zoom,
+        border: `1px solid ${mq.dir === "ltr" ? "rgba(74,144,226,0.8)" : "rgba(78,226,74,0.8)"}`,
+        background: mq.dir === "ltr" ? "rgba(74,144,226,0.1)" : "rgba(78,226,74,0.1)",
+        pointerEvents: "none",
+        zIndex: 5,
+      }
+    : null;
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
@@ -855,7 +904,10 @@ export function Viewport() {
           <div
             style={{ position: "fixed", inset: 0, zIndex: 100 }}
             onClick={() => setContextMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setContextMenu(null);
+            }}
           />
           <ContextMenuContent
             x={contextMenu.x}
@@ -866,143 +918,159 @@ export function Viewport() {
       )}
       {/* R3: Live rotation readout during rotate drag */}
       {rotationReadout !== null && (
-        <div style={{
-          position: "absolute",
-          bottom: "12px",
-          left: "50%",
-          transform: "translateX(-50%)",
-          background: "var(--bg-panel)",
-          color: "var(--text-primary)",
-          fontSize: "12px",
-          padding: "4px 10px",
-          borderRadius: "var(--radius-sm)",
-          border: "1px solid var(--border)",
-          pointerEvents: "none",
-          zIndex: 10,
-          letterSpacing: "0.3px",
-        }}>
+        <div
+          style={{
+            position: "absolute",
+            bottom: "12px",
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "var(--bg-panel)",
+            color: "var(--text-primary)",
+            fontSize: "12px",
+            padding: "4px 10px",
+            borderRadius: "var(--radius-sm)",
+            border: "1px solid var(--border)",
+            pointerEvents: "none",
+            zIndex: 10,
+            letterSpacing: "0.3px",
+          }}
+        >
           {rotationReadout}°
         </div>
       )}
       {/* Smart alignment guides */}
       {guides.map((g, i) =>
         g.type === "v" ? (
-          <div key={`guide-${i}`} style={{
-            position: "absolute",
-            left: camera.x + g.pos * PX_PER_MM * camera.zoom,
-            top: 0, width: "1px", height: "100%",
-            background: "rgba(255, 100, 100, 0.6)",
-            pointerEvents: "none", zIndex: 6,
-          }} />
+          <div
+            key={`guide-${i}`}
+            style={{
+              position: "absolute",
+              left: camera.x + g.pos * PX_PER_MM * camera.zoom,
+              top: 0,
+              width: "1px",
+              height: "100%",
+              background: "rgba(255, 100, 100, 0.6)",
+              pointerEvents: "none",
+              zIndex: 6,
+            }}
+          />
         ) : (
-          <div key={`guide-${i}`} style={{
-            position: "absolute",
-            left: 0, width: "100%",
-            top: camera.y + g.pos * PX_PER_MM * camera.zoom,
-            height: "1px",
-            background: "rgba(255, 100, 100, 0.6)",
-            pointerEvents: "none", zIndex: 6,
-          }} />
+          <div
+            key={`guide-${i}`}
+            style={{
+              position: "absolute",
+              left: 0,
+              width: "100%",
+              top: camera.y + g.pos * PX_PER_MM * camera.zoom,
+              height: "1px",
+              background: "rgba(255, 100, 100, 0.6)",
+              pointerEvents: "none",
+              zIndex: 6,
+            }}
+          />
         )
       )}
       {/* Text editing HTML overlay — absolutely positioned over the canvas, not a Pixi object */}
-      {textEditingObj && (() => {
-        const fontSize = textEditingObj.fontSize ?? 16;
-        const screenX = textEditingObj.transform.x * PX_PER_MM * camera.zoom + camera.x;
-        const screenY = textEditingObj.transform.y * PX_PER_MM * camera.zoom + camera.y;
+      {textEditingObj &&
+        (() => {
+          const fontSize = textEditingObj.fontSize ?? 16;
+          const screenX = textEditingObj.transform.x * PX_PER_MM * camera.zoom + camera.x;
+          const screenY = textEditingObj.transform.y * PX_PER_MM * camera.zoom + camera.y;
 
-        const handleCommit = () => {
-          const store = useStore.getState();
-          const obj = store.textEditingId ? store.objectsById.get(store.textEditingId) : null;
-          if (obj && (!obj.text || !obj.text.trim())) {
-            removeObjects([obj.id]);
-          }
-          store.commitPropertyEdit();
-          setTextEditingId(null);
-          setActiveTool("select");
-        };
-
-        const handleCancel = () => {
-          const store = useStore.getState();
-          const obj = store.textEditingId ? store.objectsById.get(store.textEditingId) : null;
-          if (obj) {
-            const original = textEditOriginalRef.current;
-            if (!original || !original.trim()) {
+          const handleCommit = () => {
+            const store = useStore.getState();
+            const obj = store.textEditingId ? store.objectsById.get(store.textEditingId) : null;
+            if (obj && (!obj.text || !obj.text.trim())) {
               removeObjects([obj.id]);
-            } else {
-              updateObject(obj.id, { text: original });
             }
-          }
-          store.commitPropertyEdit();
-          setTextEditingId(null);
-          setActiveTool("select");
-        };
+            store.commitPropertyEdit();
+            setTextEditingId(null);
+            setActiveTool("select");
+          };
 
-        return (
-          <input
-            key={textEditingObj.id}
-            type="text"
-            autoFocus
-            value={textEditingObj.text ?? ""}
-            style={{
-              position: "absolute",
-              left: screenX,
-              top: screenY,
-              fontSize: `${fontSize * camera.zoom}px`,
-              fontFamily: textEditingObj.fontFamily ?? "sans-serif",
-              color: textEditingObj.fill || "#e8e8e8",
-              background: "transparent",
-              border: "none",
-              outline: "none",
-              minWidth: "80px",
-              zIndex: 20,
-              pointerEvents: "all",
-              padding: 0,
-              margin: 0,
-              lineHeight: 1,
-            }}
-            onChange={(e) => {
-              const text = e.target.value;
-              const fs = textEditingObj.fontSize ?? 16;
-              updateObject(textEditingObj.id, {
-                text,
-                transform: {
-                  ...textEditingObj.transform,
-                  width: Math.max(fs * 2, text.length * fs * 0.6),
-                  height: fs * 1.3,
-                },
-              });
-            }}
-            onKeyDown={(e) => {
-              e.stopPropagation();
-              if (e.key === "Enter") {
-                e.preventDefault();
-                textEditCommittingRef.current = true;
+          const handleCancel = () => {
+            const store = useStore.getState();
+            const obj = store.textEditingId ? store.objectsById.get(store.textEditingId) : null;
+            if (obj) {
+              const original = textEditOriginalRef.current;
+              if (!original || !original.trim()) {
+                removeObjects([obj.id]);
+              } else {
+                updateObject(obj.id, { text: original });
+              }
+            }
+            store.commitPropertyEdit();
+            setTextEditingId(null);
+            setActiveTool("select");
+          };
+
+          return (
+            <input
+              key={textEditingObj.id}
+              type="text"
+              autoFocus
+              value={textEditingObj.text ?? ""}
+              style={{
+                position: "absolute",
+                left: screenX,
+                top: screenY,
+                fontSize: `${fontSize * camera.zoom}px`,
+                fontFamily: textEditingObj.fontFamily ?? "sans-serif",
+                color: textEditingObj.fill || "#e8e8e8",
+                background: "transparent",
+                border: "none",
+                outline: "none",
+                minWidth: "80px",
+                zIndex: 20,
+                pointerEvents: "all",
+                padding: 0,
+                margin: 0,
+                lineHeight: 1,
+              }}
+              onChange={(e) => {
+                const text = e.target.value;
+                const fs = textEditingObj.fontSize ?? 16;
+                updateObject(textEditingObj.id, {
+                  text,
+                  transform: {
+                    ...textEditingObj.transform,
+                    width: Math.max(fs * 2, text.length * fs * 0.6),
+                    height: fs * 1.3,
+                  },
+                });
+              }}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  textEditCommittingRef.current = true;
+                  handleCommit();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  textEditCommittingRef.current = true;
+                  handleCancel();
+                }
+              }}
+              onBlur={() => {
+                if (textEditCommittingRef.current) {
+                  textEditCommittingRef.current = false;
+                  return;
+                }
                 handleCommit();
-              } else if (e.key === "Escape") {
-                e.preventDefault();
-                textEditCommittingRef.current = true;
-                handleCancel();
-              }
-            }}
-            onBlur={() => {
-              if (textEditCommittingRef.current) {
-                textEditCommittingRef.current = false;
-                return;
-              }
-              handleCommit();
-            }}
-          />
-        );
-      })()}
+              }}
+            />
+          );
+        })()}
     </div>
   );
 }
 
 /** P8: Content hash for text/image objects -- skip GPU texture rebuild when only transform changed */
 function contentHash(obj: DesignObject): string {
-  if (obj.type === "text") return `${obj.text}|${obj.fontSize}|${obj.fontFamily}|${obj.fill}|${obj.stroke}|${obj.opacity}|${obj.transform.width}`;
-  if (obj.type === "image") return `${obj.imageData?.slice(0, 50)}|${obj.opacity}|${JSON.stringify(obj.imageAdjustments)}`;
+  if (obj.type === "text")
+    return `${obj.text}|${obj.fontSize}|${obj.fontFamily}|${obj.fill}|${obj.stroke}|${obj.opacity}|${obj.transform.width}`;
+  if (obj.type === "image")
+    return `${obj.imageData?.slice(0, 50)}|${obj.opacity}|${JSON.stringify(obj.imageAdjustments)}`;
   return "";
 }
 
@@ -1013,7 +1081,7 @@ function applyTextImageTransform(displayObj: Container, obj: DesignObject) {
   const py = t.y * PX_PER_MM;
   const pw = t.width * PX_PER_MM;
   const ph = t.height * PX_PER_MM;
-  const rot = (t.rotation || 0) * Math.PI / 180;
+  const rot = ((t.rotation || 0) * Math.PI) / 180;
 
   // Reset pivot/position/rotation first
   displayObj.pivot.set(0, 0);
@@ -1027,15 +1095,31 @@ function applyTextImageTransform(displayObj: Container, obj: DesignObject) {
     displayObj.height = ph;
     const sx = t.scaleX ?? 1;
     const sy = t.scaleY ?? 1;
-    if (sx < 0) { displayObj.scale.x *= -1; displayObj.x += pw; }
-    if (sy < 0) { displayObj.scale.y *= -1; displayObj.y += ph; }
+    if (sx < 0) {
+      displayObj.scale.x *= -1;
+      displayObj.x += pw;
+    }
+    if (sy < 0) {
+      displayObj.scale.y *= -1;
+      displayObj.y += ph;
+    }
   } else if (displayObj instanceof Text) {
     displayObj.x = px;
     displayObj.y = py;
     const sx = t.scaleX ?? 1;
     const sy = t.scaleY ?? 1;
-    if (sx < 0) { displayObj.scale.x = -1; displayObj.x += pw; } else { displayObj.scale.x = 1; }
-    if (sy < 0) { displayObj.scale.y = -1; displayObj.y += ph; } else { displayObj.scale.y = 1; }
+    if (sx < 0) {
+      displayObj.scale.x = -1;
+      displayObj.x += pw;
+    } else {
+      displayObj.scale.x = 1;
+    }
+    if (sy < 0) {
+      displayObj.scale.y = -1;
+      displayObj.y += ph;
+    } else {
+      displayObj.scale.y = 1;
+    }
   } else {
     // Container (template text) -- update child positions
     for (const child of displayObj.children) {
@@ -1054,7 +1138,7 @@ function applyTextImageTransform(displayObj: Container, obj: DesignObject) {
 
 /** Apply rotation transform to a Pixi display object around its bounding box center */
 function applyObjectRotation(displayObj: Container, t: DesignObject["transform"]) {
-  const rot = (t.rotation || 0) * Math.PI / 180;
+  const rot = ((t.rotation || 0) * Math.PI) / 180;
   if (rot === 0) return;
   const cx = t.x * PX_PER_MM + (t.width * PX_PER_MM) / 2;
   const cy = t.y * PX_PER_MM + (t.height * PX_PER_MM) / 2;
@@ -1065,13 +1149,20 @@ function applyObjectRotation(displayObj: Container, t: DesignObject["transform"]
 
 function getCursor(tool: string): string {
   switch (tool) {
-    case "select": return "default";
-    case "pen": return "crosshair";
-    case "node": return "default";
-    case "text": return "text";
-    case "measure": return "crosshair";
-    case "pan": return "grab";
-    default: return "crosshair";
+    case "select":
+      return "default";
+    case "pen":
+      return "crosshair";
+    case "node":
+      return "default";
+    case "text":
+      return "text";
+    case "measure":
+      return "crosshair";
+    case "pan":
+      return "grab";
+    default:
+      return "crosshair";
   }
 }
 
@@ -1082,30 +1173,42 @@ function getCursor(tool: string): string {
  * For the rotate handle: "grab".
  * For null (no handle): "default".
  */
-function getHandleCursor(handle: import("../../lib/tools/toolHandler").HandleType, rotationDeg: number): string {
+function getHandleCursor(
+  handle: import("../../lib/tools/toolHandler").HandleType,
+  rotationDeg: number
+): string {
   if (!handle) return "default";
   if (handle === "rotate") return "grab";
 
   // Base screen angle for each handle in an unrotated object (degrees, 0=east, CCW)
   const baseAngles: Record<string, number> = {
-    e:  0,   w:  180,
-    s:  270, n:  90,
-    se: 315, nw: 135,
-    ne: 45,  sw: 225,
+    e: 0,
+    w: 180,
+    s: 270,
+    n: 90,
+    se: 315,
+    nw: 135,
+    ne: 45,
+    sw: 225,
   };
   const baseAngle = baseAngles[handle] ?? 0;
   // Actual screen angle after rotation
-  const actualAngle = ((baseAngle + rotationDeg) % 360 + 360) % 360;
+  const actualAngle = (((baseAngle + rotationDeg) % 360) + 360) % 360;
 
   // Snap to the 4 CSS resize cursor directions (each spans 45° either side)
   // 0°/180°=ew, 90°/270°=ns, 45°/225°=nesw, 135°/315°=nwse
-  const snapped = Math.round(actualAngle / 45) * 45 % 180;
+  const snapped = (Math.round(actualAngle / 45) * 45) % 180;
   switch (snapped) {
-    case 0:   return "ew-resize";
-    case 45:  return "nesw-resize";
-    case 90:  return "ns-resize";
-    case 135: return "nwse-resize";
-    default:  return "ew-resize";
+    case 0:
+      return "ew-resize";
+    case 45:
+      return "nesw-resize";
+    case 90:
+      return "ns-resize";
+    case 135:
+      return "nwse-resize";
+    default:
+      return "ew-resize";
   }
 }
 
@@ -1183,9 +1286,12 @@ function renderObject(g: Graphics, obj: DesignObject) {
           const firstPt = obj.points[0];
           if (lastPt.handleOut && firstPt.handleIn) {
             g.bezierCurveTo(
-              lastPt.handleOut.x * PX_PER_MM, lastPt.handleOut.y * PX_PER_MM,
-              firstPt.handleIn.x * PX_PER_MM, firstPt.handleIn.y * PX_PER_MM,
-              firstPt.x * PX_PER_MM, firstPt.y * PX_PER_MM
+              lastPt.handleOut.x * PX_PER_MM,
+              lastPt.handleOut.y * PX_PER_MM,
+              firstPt.handleIn.x * PX_PER_MM,
+              firstPt.handleIn.y * PX_PER_MM,
+              firstPt.x * PX_PER_MM,
+              firstPt.y * PX_PER_MM
             );
           }
           g.closePath();
@@ -1226,8 +1332,14 @@ function renderTextObject(obj: DesignObject): Container | null {
 
     const sx = t.scaleX ?? 1;
     const sy = t.scaleY ?? 1;
-    if (sx < 0) { text.scale.x *= -1; text.x += t.width * PX_PER_MM; }
-    if (sy < 0) { text.scale.y *= -1; text.y += t.height * PX_PER_MM; }
+    if (sx < 0) {
+      text.scale.x *= -1;
+      text.x += t.width * PX_PER_MM;
+    }
+    if (sy < 0) {
+      text.scale.y *= -1;
+      text.y += t.height * PX_PER_MM;
+    }
 
     container.addChild(text);
 
@@ -1253,8 +1365,14 @@ function renderTextObject(obj: DesignObject): Container | null {
   // Apply flip (scaleX/scaleY from transform)
   const sx = t.scaleX ?? 1;
   const sy = t.scaleY ?? 1;
-  if (sx < 0) { text.scale.x *= -1; text.x += t.width * PX_PER_MM; }
-  if (sy < 0) { text.scale.y *= -1; text.y += t.height * PX_PER_MM; }
+  if (sx < 0) {
+    text.scale.x *= -1;
+    text.x += t.width * PX_PER_MM;
+  }
+  if (sy < 0) {
+    text.scale.y *= -1;
+    text.y += t.height * PX_PER_MM;
+  }
 
   return text;
 }
@@ -1279,8 +1397,14 @@ function renderImageObject(obj: DesignObject): Container | null {
     // Apply flip (scaleX/scaleY from transform)
     const sx = t.scaleX ?? 1;
     const sy = t.scaleY ?? 1;
-    if (sx < 0) { sprite.scale.x *= -1; sprite.x += pw; }
-    if (sy < 0) { sprite.scale.y *= -1; sprite.y += ph; }
+    if (sx < 0) {
+      sprite.scale.x *= -1;
+      sprite.x += pw;
+    }
+    if (sy < 0) {
+      sprite.scale.y *= -1;
+      sprite.y += ph;
+    }
 
     return sprite;
   } catch {
@@ -1289,8 +1413,12 @@ function renderImageObject(obj: DesignObject): Container | null {
     g.setStrokeStyle({ width: 1, color: 0x999999, alpha: 0.5 });
     g.rect(px, py, pw, ph).stroke();
     // X through the box
-    g.moveTo(px, py).lineTo(px + pw, py + ph).stroke();
-    g.moveTo(px + pw, py).lineTo(px, py + ph).stroke();
+    g.moveTo(px, py)
+      .lineTo(px + pw, py + ph)
+      .stroke();
+    g.moveTo(px + pw, py)
+      .lineTo(px, py + ph)
+      .stroke();
     return g;
   }
 }
@@ -1305,23 +1433,43 @@ function ContextMenuContent({ x, y, onClose }: { x: number; y: number; onClose: 
   }
 
   const itemStyle: React.CSSProperties = {
-    display: "flex", alignItems: "center", gap: "8px",
-    padding: "6px 12px", fontSize: "12px", color: "var(--text-primary)",
-    cursor: "pointer", border: "none", background: "none", width: "100%",
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    padding: "6px 12px",
+    fontSize: "12px",
+    color: "var(--text-primary)",
+    cursor: "pointer",
+    border: "none",
+    background: "none",
+    width: "100%",
     textAlign: "left",
   };
 
   return (
-    <div style={{
-      position: "fixed", left: x, top: y, zIndex: 101,
-      background: "var(--bg-panel)", border: "1px solid var(--border)",
-      borderRadius: "var(--radius-sm)", boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
-      minWidth: "160px", padding: "4px 0",
-    }}>
-      <div style={{
-        padding: "4px 12px 6px", fontSize: "10px", color: "var(--text-muted)",
-        textTransform: "uppercase", letterSpacing: "0.5px",
-      }}>
+    <div
+      style={{
+        position: "fixed",
+        left: x,
+        top: y,
+        zIndex: 101,
+        background: "var(--bg-panel)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-sm)",
+        boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+        minWidth: "160px",
+        padding: "4px 0",
+      }}
+    >
+      <div
+        style={{
+          padding: "4px 12px 6px",
+          fontSize: "10px",
+          color: "var(--text-muted)",
+          textTransform: "uppercase",
+          letterSpacing: "0.5px",
+        }}
+      >
         Move to Layer
       </div>
       {layers.map((l) => (
@@ -1329,13 +1477,22 @@ function ContextMenuContent({ x, y, onClose }: { x: number; y: number; onClose: 
           key={l.index}
           style={itemStyle}
           onClick={() => moveToLayer(l.index)}
-          onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--bg-hover)"; }}
-          onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "none"; }}
+          onMouseEnter={(e) => {
+            (e.target as HTMLElement).style.background = "var(--bg-hover)";
+          }}
+          onMouseLeave={(e) => {
+            (e.target as HTMLElement).style.background = "none";
+          }}
         >
-          <div style={{
-            width: "10px", height: "10px", borderRadius: "2px",
-            background: l.color, flexShrink: 0,
-          }} />
+          <div
+            style={{
+              width: "10px",
+              height: "10px",
+              borderRadius: "2px",
+              background: l.color,
+              flexShrink: 0,
+            }}
+          />
           <span>{l.name}</span>
         </button>
       ))}
@@ -1347,8 +1504,12 @@ function ContextMenuContent({ x, y, onClose }: { x: number; y: number; onClose: 
           store.withUndo("delete", () => store.removeObjects(selectedIds));
           onClose();
         }}
-        onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--bg-hover)"; }}
-        onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "none"; }}
+        onMouseEnter={(e) => {
+          (e.target as HTMLElement).style.background = "var(--bg-hover)";
+        }}
+        onMouseLeave={(e) => {
+          (e.target as HTMLElement).style.background = "none";
+        }}
       >
         <span style={{ color: "#e24a4a" }}>Delete</span>
       </button>

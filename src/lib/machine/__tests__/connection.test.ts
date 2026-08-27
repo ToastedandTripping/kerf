@@ -157,7 +157,9 @@ describe("connection.ts (TN3)", () => {
       await machineConnection.queryGrblSettings();
 
       const texts = consoleTexts();
-      expect(texts.some((t) => t.includes("Max feed rate") && t.includes("8000") && t.includes("6000"))).toBe(true);
+      expect(
+        texts.some((t) => t.includes("Max feed rate") && t.includes("8000") && t.includes("6000"))
+      ).toBe(true);
     });
 
     it("returns false when the response contains no $N=V lines", async () => {
@@ -277,10 +279,16 @@ describe("connection.ts (TN3)", () => {
         if (cmd === "serial_get_status")
           return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
         if (cmd === "list_serial_ports")
-          return [{
-            name: "/dev/ttyUSB0", portType: "USB", vid: null, pid: null,
-            manufacturer: null, product: null,
-          }];
+          return [
+            {
+              name: "/dev/ttyUSB0",
+              portType: "USB",
+              vid: null,
+              pid: null,
+              manufacturer: null,
+              product: null,
+            },
+          ];
         if (cmd === "serial_disconnect") return undefined;
         return undefined;
       });
@@ -347,22 +355,24 @@ describe("connection.ts (TN3)", () => {
     // serial_connect (before it returns). The TS side just queries $$ after.
     it("queries GRBL settings immediately after connect (reset is Rust-side)", async () => {
       const invokeOrder: string[] = [];
-      mockInvoke.mockImplementation(async (cmd: string, args?: { command?: string; byte?: number }) => {
-        if (cmd === "serial_connect") return "Grbl 1.1h ['$' for help]";
-        if (cmd === "serial_send_byte") {
-          invokeOrder.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
+      mockInvoke.mockImplementation(
+        async (cmd: string, args?: { command?: string; byte?: number }) => {
+          if (cmd === "serial_connect") return "Grbl 1.1h ['$' for help]";
+          if (cmd === "serial_send_byte") {
+            invokeOrder.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
+            return undefined;
+          }
+          if (cmd === "serial_send" && args?.command === "$$") {
+            invokeOrder.push("send($$)");
+            return { responses: ["$30=1000", "$32=1"], drained: [] };
+          }
+          if (cmd === "serial_send") return { responses: ["ok"], drained: [] };
+          if (cmd === "serial_get_status")
+            return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
+          if (cmd === "serial_disconnect") return undefined;
           return undefined;
         }
-        if (cmd === "serial_send" && args?.command === "$$") {
-          invokeOrder.push("send($$)");
-          return { responses: ["$30=1000", "$32=1"], drained: [] };
-        }
-        if (cmd === "serial_send") return { responses: ["ok"], drained: [] };
-        if (cmd === "serial_get_status")
-          return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
-        if (cmd === "serial_disconnect") return undefined;
-        return undefined;
-      });
+      );
 
       await machineConnection.connect("/dev/ttyUSB0", 115200);
 
@@ -381,21 +391,23 @@ describe("connection.ts (TN3)", () => {
   describe("emergencyStop sequencing (new contract)", () => {
     function mockEStop(statusOutcome: { status: string; events: string[] }) {
       const calls: string[] = [];
-      mockInvoke.mockImplementation(async (cmd: string, args?: { byte?: number; command?: string }) => {
-        if (cmd === "serial_send_byte") {
-          calls.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
-          return;
+      mockInvoke.mockImplementation(
+        async (cmd: string, args?: { byte?: number; command?: string }) => {
+          if (cmd === "serial_send_byte") {
+            calls.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
+            return;
+          }
+          if (cmd === "serial_send") {
+            calls.push(`send(${args?.command ?? "?"})`);
+            return { responses: ["ok"], drained: [] };
+          }
+          if (cmd === "serial_get_status") {
+            calls.push("status");
+            return statusOutcome;
+          }
+          return undefined;
         }
-        if (cmd === "serial_send") {
-          calls.push(`send(${args?.command ?? "?"})`);
-          return { responses: ["ok"], drained: [] };
-        }
-        if (cmd === "serial_get_status") {
-          calls.push("status");
-          return statusOutcome;
-        }
-        return undefined;
-      });
+      );
       return calls;
     }
 
@@ -422,7 +434,7 @@ describe("connection.ts (TN3)", () => {
       // M5 into a post-reset alarm earns the confusing error:9 — never sent.
       expect(calls).toEqual(["byte(21)", "byte(18)", "status"]);
       expect(consoleTexts()).toContain(
-        "Machine in alarm after stop -- laser off, unlock to continue",
+        "Machine in alarm after stop -- laser off, unlock to continue"
       );
       // The alarm panel keys off machineState — refreshed from the report.
       expect(useStore.getState().machineState).toBe("alarm");
@@ -440,7 +452,7 @@ describe("connection.ts (TN3)", () => {
       // the laser); NEVER fall back to store.machineState (stale during jobs).
       expect(calls).toEqual(["byte(21)", "byte(18)", "status"]);
       expect(consoleTexts()).toContain(
-        "Emergency stop complete -- machine reset, laser de-energized",
+        "Emergency stop complete -- machine reset, laser de-energized"
       );
     });
   });
@@ -450,25 +462,27 @@ describe("connection.ts (TN3)", () => {
     it("fires emergencyStop before teardown when a job is running", async () => {
       vi.useFakeTimers();
       const calls: string[] = [];
-      mockInvoke.mockImplementation(async (cmd: string, args?: { byte?: number; command?: string }) => {
-        if (cmd === "serial_send_byte") {
-          calls.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
-          return;
-        }
-        if (cmd === "serial_send") {
-          calls.push(`send(${args?.command ?? "?"})`);
-          return { responses: ["ok"], drained: [] };
-        }
-        if (cmd === "serial_get_status") {
-          calls.push("status");
-          return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
-        }
-        if (cmd === "serial_disconnect") {
-          calls.push("disconnect");
+      mockInvoke.mockImplementation(
+        async (cmd: string, args?: { byte?: number; command?: string }) => {
+          if (cmd === "serial_send_byte") {
+            calls.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
+            return;
+          }
+          if (cmd === "serial_send") {
+            calls.push(`send(${args?.command ?? "?"})`);
+            return { responses: ["ok"], drained: [] };
+          }
+          if (cmd === "serial_get_status") {
+            calls.push("status");
+            return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
+          }
+          if (cmd === "serial_disconnect") {
+            calls.push("disconnect");
+            return undefined;
+          }
           return undefined;
         }
-        return undefined;
-      });
+      );
 
       useStore.setState({ jobRunning: true, machineState: "run" });
       const disconnectPromise = machineConnection.disconnect();
@@ -508,9 +522,13 @@ describe("connection.ts (TN3)", () => {
           calls.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
           return;
         }
-        if (cmd === "serial_get_status") return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
+        if (cmd === "serial_get_status")
+          return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
         if (cmd === "serial_send") return { responses: ["ok"], drained: [] };
-        if (cmd === "serial_disconnect") { calls.push("disconnect"); return undefined; }
+        if (cmd === "serial_disconnect") {
+          calls.push("disconnect");
+          return undefined;
+        }
         return undefined;
       });
 
@@ -549,7 +567,9 @@ describe("connection.ts (TN3)", () => {
       expect(r1).toBe(r2);
 
       // serial_connect was only called once (not twice)
-      const connectCalls = mockInvoke.mock.calls.filter(([cmd]: string[]) => cmd === "serial_connect");
+      const connectCalls = mockInvoke.mock.calls.filter(
+        ([cmd]: string[]) => cmd === "serial_connect"
+      );
       expect(connectCalls).toHaveLength(1);
 
       await machineConnection.disconnect();

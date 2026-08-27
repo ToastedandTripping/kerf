@@ -28,7 +28,9 @@ import { orientedHandlePoints } from "../../geometry";
 import { assertPointsInvariant } from "../../geometry/__tests__/pointsInvariant";
 import { flattenObjectsForTest } from "../../machine/gcodeGen";
 
-function pe(opts: Partial<{ ctrlKey: boolean; shiftKey: boolean; button: number }> = {}): React.PointerEvent {
+function pe(
+  opts: Partial<{ ctrlKey: boolean; shiftKey: boolean; button: number }> = {}
+): React.PointerEvent {
   return { ctrlKey: false, shiftKey: false, button: 0, ...opts } as unknown as React.PointerEvent;
 }
 
@@ -72,7 +74,14 @@ function makeRect(id: string, x: number, y: number, w: number, h: number): Desig
   };
 }
 
-function makeRotatedRect(id: string, x: number, y: number, w: number, h: number, rotation: number): DesignObject {
+function makeRotatedRect(
+  id: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  rotation: number
+): DesignObject {
   return {
     id,
     type: "rectangle",
@@ -286,7 +295,10 @@ describe("handle-resize (select tool pointer pipeline)", () => {
       return makeRotatedRect("r1", 0, 0, 30, 10, ROT);
     }
 
-    function getHandlePos(t: { x: number; y: number; width: number; height: number; rotation?: number }, key: "e" | "w" | "nw" | "se" | "n" | "s" | "ne" | "sw" | "rotate") {
+    function getHandlePos(
+      t: { x: number; y: number; width: number; height: number; rotation?: number },
+      key: "e" | "w" | "nw" | "se" | "n" | "s" | "ne" | "sw" | "rotate"
+    ) {
       // zoom=1 so rotateOffset = 20/1 = 20mm
       return orientedHandlePoints(t, 20)[key];
     }

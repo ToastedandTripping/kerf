@@ -13,6 +13,7 @@ will have evolved by the time we get here.
 ## 5a. Camera Alignment (USB Webcam + Calibration Wizard)
 
 ### Why
+
 The number one pain point for laser users: "I can't see where my
 material is." Camera overlay lets you place designs visually on the
 actual workpiece, eliminating test cuts and wasted material.
@@ -43,30 +44,30 @@ could add.
 ### Key Decisions
 
 - [ ] **Camera library:** Use `nokhwa` (Rust, cross-platform USB camera).
-  Supports Linux (v4l2), macOS (AVFoundation), Windows (MediaFoundation).
-  Alternatively, capture in JS via `getUserMedia` and skip the Rust
-  layer -- simpler but less control over resolution/exposure.
-  Decision: start with `getUserMedia` for v1 (simpler), move to Rust
-  `nokhwa` if we need exposure/gain control or better performance.
+      Supports Linux (v4l2), macOS (AVFoundation), Windows (MediaFoundation).
+      Alternatively, capture in JS via `getUserMedia` and skip the Rust
+      layer -- simpler but less control over resolution/exposure.
+      Decision: start with `getUserMedia` for v1 (simpler), move to Rust
+      `nokhwa` if we need exposure/gain control or better performance.
 
 - [ ] **Calibration method:** 4-point perspective transform (homography).
-  User places material with 4 known markers (printed calibration card),
-  clicks each marker in the camera view, system computes the 3x3
-  transform matrix. Store matrix per camera+mount combo.
+      User places material with 4 known markers (printed calibration card),
+      clicks each marker in the camera view, system computes the 3x3
+      transform matrix. Store matrix per camera+mount combo.
 
 - [ ] **Lens correction:** Most cheap USB cameras have barrel distortion.
-  Offer a lens calibration step: user holds up a checkerboard pattern,
-  system detects grid intersections, computes distortion coefficients.
-  This is a solved problem (OpenCV `calibrateCamera`). Since we don't
-  want to ship OpenCV in Rust, either:
+      Offer a lens calibration step: user holds up a checkerboard pattern,
+      system detects grid intersections, computes distortion coefficients.
+      This is a solved problem (OpenCV `calibrateCamera`). Since we don't
+      want to ship OpenCV in Rust, either:
   - Use a lightweight Rust lens correction crate
   - Do lens calibration once in a helper script, store coefficients
   - Ship a few presets for common cameras (Logitech C920, etc.)
 
 - [ ] **Frame streaming:** Camera captures frames at ~15fps. Don't
-  push full frames over IPC -- use shared memory or a temporary file.
-  In the JS-first approach (`getUserMedia`), the browser handles
-  everything and we just draw the `<video>` element as a Pixi texture.
+      push full frames over IPC -- use shared memory or a temporary file.
+      In the JS-first approach (`getUserMedia`), the browser handles
+      everything and we just draw the `<video>` element as a Pixi texture.
 
 ### Calibration Wizard (UI)
 
@@ -92,6 +93,7 @@ could add.
 ## 5b. Rotary Axis Support
 
 ### Why
+
 Rotary attachments let you engrave on cylindrical objects (cups, pens,
 bottles). Most laser owners buy a rotary eventually. GRBL supports
 it natively by remapping the Y axis.
@@ -100,6 +102,7 @@ it natively by remapping the Y axis.
 
 The rotary is conceptually simple: the Y axis becomes a rotation axis.
 The G-code doesn't change -- what changes is:
+
 1. Steps-per-mm on the Y axis (depends on roller diameter)
 2. The "workspace" in Y becomes circumference of the object
 3. Objects need to wrap correctly (preview should show unwrapped cylinder)
@@ -107,8 +110,8 @@ The G-code doesn't change -- what changes is:
 ### Key Decisions
 
 - [ ] **Rotary type:** Support both roller and chuck rotary.
-  - Roller: Y steps = (motor steps per rev * microstepping) / (roller circumference)
-  - Chuck: Y steps = (motor steps per rev * microstepping * gear ratio) / (object circumference)
+  - Roller: Y steps = (motor steps per rev \* microstepping) / (roller circumference)
+  - Chuck: Y steps = (motor steps per rev _ microstepping _ gear ratio) / (object circumference)
   - User inputs: roller/chuck diameter, object diameter, steps per rev
 
 - [ ] **GRBL configuration:** Rotary mode temporarily overrides:
@@ -128,11 +131,11 @@ The G-code doesn't change -- what changes is:
 interface RotaryConfig {
   enabled: boolean;
   type: "roller" | "chuck";
-  rollerDiameter: number;    // mm
-  objectDiameter: number;    // mm
-  stepsPerRev: number;       // motor steps per revolution
-  gearRatio: number;         // for chuck type
-  testMode: boolean;         // single rotation test
+  rollerDiameter: number; // mm
+  objectDiameter: number; // mm
+  stepsPerRev: number; // motor steps per revolution
+  gearRatio: number; // for chuck type
+  testMode: boolean; // single rotation test
 }
 ```
 
@@ -149,6 +152,7 @@ interface RotaryConfig {
 ## 5c. Multiple Machine Profiles
 
 ### Why
+
 Users upgrade machines, have multiple machines, or share files with
 others who have different setups. Currently Kerf stores one implicit
 machine configuration.
@@ -158,34 +162,34 @@ machine configuration.
 ```typescript
 interface MachineProfile {
   id: string;
-  name: string;           // "K40", "xTool D1 Pro", etc.
-  bedWidth: number;       // mm
-  bedHeight: number;      // mm
-  maxSpeedX: number;      // mm/min
-  maxSpeedY: number;      // mm/min
-  sValueMax: number;      // S parameter max
-  laserMode: boolean;     // GRBL $32
-  serialPort?: string;    // last-used port
-  firmwareType: "grbl";   // future: "grbl-hal", "marlin"
-  materialPresets: MaterialPreset[];  // per-machine presets
+  name: string; // "K40", "xTool D1 Pro", etc.
+  bedWidth: number; // mm
+  bedHeight: number; // mm
+  maxSpeedX: number; // mm/min
+  maxSpeedY: number; // mm/min
+  sValueMax: number; // S parameter max
+  laserMode: boolean; // GRBL $32
+  serialPort?: string; // last-used port
+  firmwareType: "grbl"; // future: "grbl-hal", "marlin"
+  materialPresets: MaterialPreset[]; // per-machine presets
 }
 ```
 
 ### Key Decisions
 
 - [ ] **Storage:** Profiles saved in Tauri `appDataDir` as
-  `machines/<id>.json`. Loaded on startup, selectable from a dropdown.
+      `machines/<id>.json`. Loaded on startup, selectable from a dropdown.
 
 - [ ] **Active profile:** One profile is active at a time. Switching
-  profiles updates workspace size, speed limits, and S-value scaling.
+      profiles updates workspace size, speed limits, and S-value scaling.
 
 - [ ] **Material presets per machine:** The same material needs
-  different settings on different machines. Presets are scoped to
-  machine profile but can be copied between profiles.
+      different settings on different machines. Presets are scoped to
+      machine profile but can be copied between profiles.
 
 - [ ] **Auto-detection:** When connecting to a machine, read `$$`
-  settings and try to match to an existing profile by S-value max,
-  bed size, etc. Offer to create new profile if no match.
+      settings and try to match to an existing profile by S-value max,
+      bed size, etc. Offer to create new profile if no match.
 
 ### Implementation Phases
 
@@ -200,6 +204,7 @@ interface MachineProfile {
 ## 5d. Plugin/Extension System
 
 ### Why
+
 Kerf can't and shouldn't do everything. A plugin system lets the
 community add capabilities without bloating the core: custom
 importers, novel generators (gear generators, living hinges), machine
@@ -227,8 +232,8 @@ integrations, post-processors.
 ### Key Decisions
 
 - [ ] **Runtime:** Web Workers for JS plugins (sandboxed, can't crash
-  main thread). Communication via `postMessage` with a structured
-  API. No direct store access -- plugins go through an API proxy.
+      main thread). Communication via `postMessage` with a structured
+      API. No direct store access -- plugins go through an API proxy.
 
 - [ ] **API surface:** Start extremely small. First version:
   - `kerf.objects.add(obj)` -- add a design object
@@ -239,25 +244,24 @@ integrations, post-processors.
   - That's it. Expand based on what plugin authors actually need.
 
 - [ ] **Discovery:** Plugins are folders in `~/.kerf/plugins/<name>/`
-  with a `manifest.json`:
+      with a `manifest.json`:
+
   ```json
   {
     "name": "gear-generator",
     "version": "1.0.0",
     "entry": "index.js",
-    "commands": [
-      { "id": "generate-gear", "label": "Generate Gear" }
-    ]
+    "commands": [{ "id": "generate-gear", "label": "Generate Gear" }]
   }
   ```
 
 - [ ] **Security:** Plugins run in Workers with no DOM access, no
-  filesystem access, no network access. They can only interact with
-  the design through the API proxy. This is the firewall.
+      filesystem access, no network access. They can only interact with
+      the design through the API proxy. This is the firewall.
 
 - [ ] **No plugin store for v1.** Users install plugins by dropping
-  folders into the plugins directory. A plugin browser/installer is
-  Phase 6+.
+      folders into the plugins directory. A plugin browser/installer is
+      Phase 6+.
 
 ### Example Plugin: Gear Generator
 
@@ -289,6 +293,7 @@ kerf.commands.register("gear", "Generate Spur Gear", async () => {
 ## 5e. Auto-Nesting (Bin-Packing)
 
 ### Why
+
 Material waste is real money. A good nesting algorithm can reduce
 material usage by 15-30% on typical laser jobs. LightBurn charges
 extra for this. Every commercial laser tool has it. The open-source
@@ -324,7 +329,7 @@ Output: new positions and rotations for each object
     depending on complexity, and we already have the Tauri bridge.
 
 - [ ] **Object representation:** Convert each design object to a
-  polygon outline for nesting purposes:
+      polygon outline for nesting purposes:
   - Rectangles/ellipses: use bounding box (fast) or actual outline
   - Paths: use the path boundary
   - Groups: use the group's bounding box
@@ -339,8 +344,8 @@ Output: new positions and rotations for each object
 
 ```typescript
 interface NestingConfig {
-  spacing: number;        // mm between objects
-  rotationSteps: number;  // 4 = 90-degree increments, 8 = 45-degree
+  spacing: number; // mm between objects
+  rotationSteps: number; // 4 = 90-degree increments, 8 = 45-degree
   mode: "tight" | "sheet" | "linear";
 }
 ```
@@ -359,6 +364,7 @@ interface NestingConfig {
 New module: `src-tauri/src/engine/nesting.rs`
 
 Tauri command:
+
 ```rust
 #[tauri::command]
 fn auto_nest(
@@ -376,6 +382,7 @@ Where `NestResult` contains the new `(x, y, rotation)` for each object.
 ## 5f. Community Material Library
 
 ### Why
+
 Every laser user re-discovers the same settings for 3mm plywood.
 A shared library eliminates this trial-and-error, especially for
 beginners. It's also a community-building feature that drives
@@ -398,10 +405,11 @@ adoption.
 ### Key Decisions
 
 - [ ] **Data source:** GitHub repository with a `materials.json` file.
-  No server infrastructure needed. Community contributes via PRs.
-  Kerf fetches the latest version periodically (daily, or on-demand).
+      No server infrastructure needed. Community contributes via PRs.
+      Kerf fetches the latest version periodically (daily, or on-demand).
 
 - [ ] **Data format:**
+
   ```json
   {
     "presets": [
@@ -424,28 +432,28 @@ adoption.
   ```
 
 - [ ] **Machine class tagging:** Settings vary wildly between a 5W
-  diode and a 60W CO2. Presets are tagged with machine class:
+      diode and a 60W CO2. Presets are tagged with machine class:
   - `diode_5w`, `diode_10w`, `diode_20w`
   - `co2_40w`, `co2_60w`, `co2_80w`, `co2_100w`
   - User sets their machine class in profile (5c); library filters
     to show relevant presets
 
 - [ ] **No user accounts.** Contributions go through GitHub PRs.
-  Voting/ranking can be done via GitHub reactions on issues, or
-  just by PR merge count. Keep it simple.
+      Voting/ranking can be done via GitHub reactions on issues, or
+      just by PR merge count. Keep it simple.
 
 - [ ] **Offline-first.** The library works entirely offline using the
-  last-cached version. Network fetch is opportunistic, never blocking.
+      last-cached version. Network fetch is opportunistic, never blocking.
 
 ### UI Integration
 
 - [ ] Extend the existing MaterialLibrary panel
-  (`src/components/panels/MaterialLibrary.tsx`)
+      (`src/components/panels/MaterialLibrary.tsx`)
 - [ ] Add a "Community" tab alongside "My Presets"
 - [ ] Search/filter by material name, thickness, machine class
 - [ ] "Add to My Library" copies a community preset into local storage
 - [ ] "Contribute" button opens the GitHub PR template with the
-  user's preset pre-filled
+      user's preset pre-filled
 
 ### Implementation Phases
 
@@ -480,6 +488,7 @@ adoption.
 ```
 
 **Recommended order:**
+
 1. **5c Machine Profiles** -- foundational, needed by 5a/5b/5f
 2. **5b Rotary Axis** -- low complexity, high value for users who have rotaries
 3. **5e Auto-Nesting** -- independent, high value, the Rust engine is a clean project

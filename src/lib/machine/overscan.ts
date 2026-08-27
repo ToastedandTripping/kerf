@@ -16,6 +16,6 @@ export function computeOverscan(speedMmMin: number, accelX: number): number {
   if (!Number.isFinite(speedMmMin) || speedMmMin <= 0) return 3;
   const v = speedMmMin / 60; // mm/min → mm/s
   const a = accelX > 0 ? accelX : 300; // fallback: 300 mm/s²
-  const raw = 1.2 * (v * v) / (2 * a);
+  const raw = (1.2 * (v * v)) / (2 * a);
   return Math.max(3, Math.min(50, raw));
 }

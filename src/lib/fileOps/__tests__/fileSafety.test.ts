@@ -47,9 +47,11 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
 
 vi.mock("@tauri-apps/api/path", () => ({
   appDataDir: vi.fn().mockResolvedValue("/mock/appdata/"),
-  join: vi.fn().mockImplementation((...parts: string[]) =>
-    Promise.resolve(parts.join("/").replace(/\/+/g, "/")),
-  ),
+  join: vi
+    .fn()
+    .mockImplementation((...parts: string[]) =>
+      Promise.resolve(parts.join("/").replace(/\/+/g, "/"))
+    ),
 }));
 
 vi.mock("../../autoSave", () => ({
@@ -199,7 +201,7 @@ describe("P3-A Finding 4: PNG chunk length guard", () => {
     // larger than the file — should bail instead of looping
     const sig = [137, 80, 78, 71, 13, 10, 26, 10];
     // Chunk length = 0xFFFFFFFF (4 GB) — far beyond the file size
-    const badLen = [0xFF, 0xFF, 0xFF, 0xFF];
+    const badLen = [0xff, 0xff, 0xff, 0xff];
     const ihdrType = [73, 72, 68, 82];
     const data = new Uint8Array([...sig, ...badLen, ...ihdrType, 0, 0, 0, 0]);
 
@@ -240,10 +242,7 @@ describe("P3-A Finding 6: .bak per-path tracking", () => {
   it("capabilities/default.json includes fs:allow-rename", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
-    const capPath = path.resolve(
-      __dirname,
-      "../../../../src-tauri/capabilities/default.json",
-    );
+    const capPath = path.resolve(__dirname, "../../../../src-tauri/capabilities/default.json");
     const raw = fs.readFileSync(capPath, "utf-8");
     const cap = JSON.parse(raw) as { permissions: string[] };
     expect(cap.permissions).toContain("fs:allow-rename");

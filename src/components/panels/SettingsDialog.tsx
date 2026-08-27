@@ -74,7 +74,8 @@ export function SettingsDialog({ open, onClose }: Props) {
       <div
         onClick={onClose}
         style={{
-          position: "fixed", inset: 0,
+          position: "fixed",
+          inset: 0,
           background: "rgba(0,0,0,0.5)",
           zIndex: 9999,
         }}
@@ -85,33 +86,47 @@ export function SettingsDialog({ open, onClose }: Props) {
         aria-modal="true"
         aria-labelledby="settings-dialog-title"
         style={{
-        position: "fixed",
-        top: "50%", left: "50%",
-        transform: "translate(-50%, -50%)",
-        width: "400px",
-        background: "var(--bg-panel)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-lg)",
-        boxShadow: "var(--shadow-modal)",
-        zIndex: 10000,
-        padding: "20px",
-      }}>
-        <div id="settings-dialog-title" style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "16px" }}>
+          position: "fixed",
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%, -50%)",
+          width: "400px",
+          background: "var(--bg-panel)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-lg)",
+          boxShadow: "var(--shadow-modal)",
+          zIndex: 10000,
+          padding: "20px",
+        }}
+      >
+        <div
+          id="settings-dialog-title"
+          style={{
+            fontSize: "14px",
+            fontWeight: 600,
+            color: "var(--text-primary)",
+            marginBottom: "16px",
+          }}
+        >
           Settings
         </div>
 
         {/* Workspace */}
-        <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" }}>
+        <div
+          style={{
+            fontSize: "11px",
+            color: "var(--text-muted)",
+            textTransform: "uppercase",
+            letterSpacing: "0.5px",
+            marginBottom: "8px",
+          }}
+        >
           Workspace
         </div>
         <div style={rowStyle}>
           <span style={labelStyle}>Width</span>
           <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-            <input
-              value={wWidth}
-              onChange={(e) => setWWidth(e.target.value)}
-              style={inputStyle}
-            />
+            <input value={wWidth} onChange={(e) => setWWidth(e.target.value)} style={inputStyle} />
             <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>mm</span>
           </div>
         </div>
@@ -130,17 +145,21 @@ export function SettingsDialog({ open, onClose }: Props) {
         <div style={{ height: "1px", background: "var(--border)", margin: "12px 0" }} />
 
         {/* Grid */}
-        <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" }}>
+        <div
+          style={{
+            fontSize: "11px",
+            color: "var(--text-muted)",
+            textTransform: "uppercase",
+            letterSpacing: "0.5px",
+            marginBottom: "8px",
+          }}
+        >
           Grid
         </div>
         <div style={rowStyle}>
           <span style={labelStyle}>Grid Size</span>
           <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-            <input
-              value={gSize}
-              onChange={(e) => setGSize(e.target.value)}
-              style={inputStyle}
-            />
+            <input value={gSize} onChange={(e) => setGSize(e.target.value)} style={inputStyle} />
             <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>mm</span>
           </div>
         </div>
@@ -150,9 +169,13 @@ export function SettingsDialog({ open, onClose }: Props) {
           <button
             onClick={onClose}
             style={{
-              background: "none", border: "1px solid var(--border)",
-              color: "var(--text-secondary)", padding: "6px 16px",
-              borderRadius: "var(--radius-sm)", cursor: "pointer", fontSize: "13px",
+              background: "none",
+              border: "1px solid var(--border)",
+              color: "var(--text-secondary)",
+              padding: "6px 16px",
+              borderRadius: "var(--radius-sm)",
+              cursor: "pointer",
+              fontSize: "13px",
             }}
           >
             Cancel
@@ -160,9 +183,13 @@ export function SettingsDialog({ open, onClose }: Props) {
           <button
             onClick={handleSave}
             style={{
-              background: "var(--accent-warm)", border: "none",
-              color: "#fff", padding: "6px 16px",
-              borderRadius: "var(--radius-sm)", cursor: "pointer", fontSize: "13px",
+              background: "var(--accent-warm)",
+              border: "none",
+              color: "#fff",
+              padding: "6px 16px",
+              borderRadius: "var(--radius-sm)",
+              cursor: "pointer",
+              fontSize: "13px",
             }}
           >
             Save

@@ -96,7 +96,7 @@ function resetStore() {
     selectedSet: new Set(),
     undoStack: [],
     redoStack: [],
-    isDirty: true,          // start dirty so save paths are exercised
+    isDirty: true, // start dirty so save paths are exercised
     projectPath: "/tmp/test.kerf",
     projectName: "TestProject",
     layers: DEFAULT_LAYERS,
@@ -329,10 +329,7 @@ describe("Regression guard: capabilities/default.json permission grants", () => 
     // Resolve path relative to this test file's location:
     // __dirname = src/lib/fileOps/__tests__
     // capabilities is at: src-tauri/capabilities/default.json
-    const capPath = path.resolve(
-      __dirname,
-      "../../../../src-tauri/capabilities/default.json",
-    );
+    const capPath = path.resolve(__dirname, "../../../../src-tauri/capabilities/default.json");
     const raw = fs.readFileSync(capPath, "utf-8");
     const cap = JSON.parse(raw) as { permissions: string[] };
     expect(cap.permissions).toContain("fs:allow-write-text-file");
@@ -342,16 +339,12 @@ describe("Regression guard: capabilities/default.json permission grants", () => 
     // fs:allow-write only grants the low-level write-to-handle command, NOT
     // writeTextFile. If it's present alongside fs:allow-write-text-file that's
     // fine; but it must NOT be the only write-capable permission.
-    const capPath = path.resolve(
-      __dirname,
-      "../../../../src-tauri/capabilities/default.json",
-    );
+    const capPath = path.resolve(__dirname, "../../../../src-tauri/capabilities/default.json");
     const raw = fs.readFileSync(capPath, "utf-8");
     const cap = JSON.parse(raw) as { permissions: string[] };
 
     const hasWriteTextFile = cap.permissions.includes("fs:allow-write-text-file");
-    const hasOnlyBareWrite =
-      cap.permissions.includes("fs:allow-write") && !hasWriteTextFile;
+    const hasOnlyBareWrite = cap.permissions.includes("fs:allow-write") && !hasWriteTextFile;
 
     expect(hasOnlyBareWrite).toBe(false);
   });

@@ -2,15 +2,15 @@
 
 ## Stack
 
-| Layer | Technology | Purpose |
-|-------|-----------|---------|
-| Frontend | React 18 + Pixi.js 8 | UI panels + WebGL canvas |
-| State | Zustand | Single store with action factory slices |
-| Styling | CSS custom properties + inline styles | Dark mode, design tokens |
-| Backend | Rust (Tauri v2) | Serial/GRBL, G-code gen, image tracing, dithering |
-| Build | Vite | Frontend bundling |
-| CI | GitHub Actions | macOS + Linux builds, tests |
-| Desktop | Tauri v2 | Native window, file dialogs, serial port access |
+| Layer    | Technology                            | Purpose                                           |
+| -------- | ------------------------------------- | ------------------------------------------------- |
+| Frontend | React 18 + Pixi.js 8                  | UI panels + WebGL canvas                          |
+| State    | Zustand                               | Single store with action factory slices           |
+| Styling  | CSS custom properties + inline styles | Dark mode, design tokens                          |
+| Backend  | Rust (Tauri v2)                       | Serial/GRBL, G-code gen, image tracing, dithering |
+| Build    | Vite                                  | Frontend bundling                                 |
+| CI       | GitHub Actions                        | macOS + Linux builds, tests                       |
+| Desktop  | Tauri v2                              | Native window, file dialogs, serial port access   |
 
 ## Directory Structure
 

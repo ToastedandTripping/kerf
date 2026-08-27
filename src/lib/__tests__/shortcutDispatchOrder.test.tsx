@@ -47,9 +47,7 @@ function makeRect(id: string): DesignObject {
 }
 
 function key(opts: KeyboardEventInit) {
-  window.dispatchEvent(
-    new KeyboardEvent("keydown", { cancelable: true, ...opts }),
-  );
+  window.dispatchEvent(new KeyboardEvent("keydown", { cancelable: true, ...opts }));
 }
 
 beforeEach(() => {

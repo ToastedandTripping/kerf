@@ -24,11 +24,13 @@ Currently images can only be imported via `File > Import Image...` which opens a
   - Export `importImageData` so Viewport can call it directly (currently it's a module-private function)
 
 **New state (optional):**
+
 - Add `isDraggingOver: boolean` to a local `useState` in Viewport (no need for Zustand -- this is ephemeral UI state)
 
 **Dependencies:** None. Can be implemented independently.
 
 **Implementation notes:**
+
 - Tauri v2 supports web-standard drag-and-drop for files dropped from the OS file manager. The `dataTransfer.files` API works as expected.
 - The Tauri `fs` plugin is NOT needed here -- we're reading the file via web `File.arrayBuffer()`, not the Tauri filesystem API.
 - For SVG and DXF files dropped on canvas, detect by extension and route to `importSvgContent` / `importDxfContent` respectively. This is a nice freebie.
@@ -71,6 +73,7 @@ The current `ImageTraceDialog` is a modal dialog at `src/components/panels/Image
 **Dependencies:** None, but pairs well with 1a.1 (drag-drop gives you images to trace).
 
 **Implementation notes:**
+
 - The existing `invoke("trace_image_command")` call is already async with debounce (300ms timeout, generation counter for stale cancellation). This mechanism is solid -- keep it.
 - `previewScale: 0.5` is the sweet spot. At 0.25 (current), the preview is too coarse and misses thin details. At 1.0, traces over 2000x2000px take >500ms which makes sliders feel sluggish.
 - The preview overlay MUST be a separate Graphics object in the Pixi container, NOT rendered into the main objects layer. It needs to be cleared independently when the panel closes.
@@ -96,6 +99,7 @@ The current "Trace to Canvas" button in `ImageTraceDialog.handleCommit()` alread
 **Dependencies:** 1a.2 (inline panel must exist first).
 
 **Implementation notes:**
+
 - The full-resolution trace (`previewScale: 1.0`) can take 1-3 seconds for large images. Show a progress spinner on the button, disable controls during trace.
 - The `withUndo("trace", ...)` wrapping is already correct. One undo step removes all traced paths.
 
@@ -123,6 +127,7 @@ Add preset buttons that set optimal slider combinations for common use cases, re
 **Dependencies:** 1a.2 (inline panel).
 
 **Implementation notes:**
+
 - The preset values above are starting points. They should be tuned by testing against real-world images (logos, line art, photos with text).
 - Consider persisting the last-used preset/settings in localStorage so they survive app restart.
 
@@ -165,6 +170,7 @@ After tracing, the source image should remain visible (dimmed) as a reference so
 **Dependencies:** 1a.3 (trace commit logic).
 
 **Implementation notes:**
+
 - The `reference` field is a general mechanism. It could be applied to any object type (e.g., importing a PDF page as a reference), so don't restrict it to images in the type system.
 - Reference objects should still be selectable and movable, just excluded from output.
 - Consider a keyboard shortcut `R` to toggle reference on selected objects.
@@ -194,6 +200,7 @@ The current SVG import (`importSvgContent` in `src/lib/fileOps.ts`, line 538) fl
 **Dependencies:** None, but should be implemented before 1b.2 (layer mapping builds on the structure).
 
 **Implementation notes:**
+
 - Some SVGs (especially from Illustrator) have deeply nested groups that are purely structural. Consider a max nesting depth of 3 or flattening single-child groups.
 - The existing transform accumulation via `multiplyMatrices(parentMatrix, localMatrix)` is correct for flattened output. When preserving groups, the group's own transform should be the identity (since children are already in absolute coordinates after matrix application) OR the matrix should be decomposed into position+rotation and applied to the group transform. The simpler approach: apply matrix to children (current behavior), then wrap in a group using absolute positions, then convert to relative positions for the group.
 
@@ -224,6 +231,7 @@ Currently, all imported SVG objects go to `store.activeLayerIndex` (the currentl
 **Dependencies:** None, but designed to feed into 1b.3 (the import dialog).
 
 **Implementation notes:**
+
 - Default layer colors from `DEFAULT_LAYERS`:
   - Cut: `#4a90e2` (blue)
   - Engrave: `#e24a4a` (red)
@@ -284,6 +292,7 @@ When importing an SVG with multiple colors, show a dialog that lets the user rev
 **Dependencies:** 1b.2 (auto-mapping logic).
 
 **Implementation notes:**
+
 - The dialog should feel fast. Parse the SVG and extract colors synchronously -- DOMParser is fast for typical laser-cutting SVGs (usually <1MB).
 - If the SVG has >8 unique colors, show the top 8 by element count and group the rest as "Other" mapped to the active layer.
 - The dialog preview can reuse the SVG directly in an `<img>` tag (simpler than re-rendering in canvas).
@@ -332,6 +341,7 @@ The current SVG import already handles some of this. Here's what needs hardening
 **Dependencies:** 1b.1 (group structure), 1b.3 (import dialog for the checkbox).
 
 **Implementation notes:**
+
 - The viewBox offset fix is the highest priority here. SVGs from Figma frequently have non-zero viewBox offsets, causing all elements to be mispositioned.
 - Stroke-to-path is a nice-to-have for Phase 1. It can be deferred if it proves complex.
 
@@ -360,6 +370,7 @@ Currently, SVG `<text>` elements are imported as Kerf `text` objects (see `parse
 **Dependencies:** 1b.1 (must happen after basic import works).
 
 **Implementation notes:**
+
 - This is an imperfect solution because the converted paths use OpenSans, not the original font. The ROADMAP explicitly says "Built-in font rendering" is NOT being built, and the preferred workflow is "trace from PNG instead." This SVG text-to-path conversion is a fallback for users who don't follow that workflow.
 - Consider showing a warning in the import dialog: "Text elements will be converted to paths using a substitute font. For accurate text, export as PNG from your design tool and use Image Trace."
 - If the text-to-path conversion fails (font loading error), fall back to keeping the text object with a warning badge.
@@ -411,6 +422,7 @@ The current DXF import (`parseDxfManual()` in `src/lib/fileOps.ts`, line 253) ig
 **Dependencies:** 1b.2 (reuses `findClosestLayer()` color-matching function).
 
 **Implementation notes:**
+
 - DXF files from different CAD tools have wildly different conventions. Fusion 360 uses layer names meaningfully; AutoCAD uses color indices. CorelDRAW uses both. Support both paths.
 - The ACI color table is a one-time constant. There are many open-source versions available; it doesn't need to be generated.
 
@@ -459,6 +471,7 @@ The current arc handling (`parseDxfManual()` ARC entity, line 352) samples arcs 
 **Dependencies:** None. Can be implemented independently.
 
 **Implementation notes:**
+
 - SPLINE support is the most requested missing feature for DXF import. Fusion 360, SolidWorks, and AutoCAD all export splines heavily.
 - The bulge handling in LWPOLYLINE is critical for accurate arc import from Inkscape DXF export, which uses bulge values for curves.
 - Testing: use DXF files exported from Fusion 360, Inkscape, CorelDRAW, and AutoCAD to verify all entity types render correctly.
@@ -491,21 +504,21 @@ Week 3: SVG + Polish
 
 ## File Change Summary
 
-| File | Changes |
-|------|---------|
-| `src/components/viewport/Viewport.tsx` | Drag-and-drop handlers, trace preview overlay |
-| `src/components/panels/ImageTraceDialog.tsx` | Rewrite as inline panel, presets, reference toggle |
-| `src/components/panels/SvgImportDialog.tsx` | **New** -- color-to-layer mapping dialog |
-| `src/components/panels/PropertiesPanel.tsx` | Reference object toggle |
-| `src/lib/fileOps.ts` | Export `importImageData`, position param, SVG color extraction, group preservation, viewBox fix, text post-process, DXF layer/color parsing, arc Bezier, SPLINE/ELLIPSE/bulge |
-| `src/lib/dxfColors.ts` | **New** -- ACI color index lookup table |
-| `src/app/types.ts` | Add `reference?: boolean` to `DesignObject` |
-| `src/app/store.ts` | Add `tracePreview` state |
-| `src/app/App.tsx` | SVG import dialog state, trace panel rendering changes |
-| `src/lib/machine/gcodeGen.ts` | Filter out `reference` objects |
-| `src-tauri/src/engine/tracer.rs` | No changes |
-| `src-tauri/src/commands/image_trace.rs` | No changes |
-| `src-tauri/Cargo.toml` | No changes |
+| File                                         | Changes                                                                                                                                                                       |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/components/viewport/Viewport.tsx`       | Drag-and-drop handlers, trace preview overlay                                                                                                                                 |
+| `src/components/panels/ImageTraceDialog.tsx` | Rewrite as inline panel, presets, reference toggle                                                                                                                            |
+| `src/components/panels/SvgImportDialog.tsx`  | **New** -- color-to-layer mapping dialog                                                                                                                                      |
+| `src/components/panels/PropertiesPanel.tsx`  | Reference object toggle                                                                                                                                                       |
+| `src/lib/fileOps.ts`                         | Export `importImageData`, position param, SVG color extraction, group preservation, viewBox fix, text post-process, DXF layer/color parsing, arc Bezier, SPLINE/ELLIPSE/bulge |
+| `src/lib/dxfColors.ts`                       | **New** -- ACI color index lookup table                                                                                                                                       |
+| `src/app/types.ts`                           | Add `reference?: boolean` to `DesignObject`                                                                                                                                   |
+| `src/app/store.ts`                           | Add `tracePreview` state                                                                                                                                                      |
+| `src/app/App.tsx`                            | SVG import dialog state, trace panel rendering changes                                                                                                                        |
+| `src/lib/machine/gcodeGen.ts`                | Filter out `reference` objects                                                                                                                                                |
+| `src-tauri/src/engine/tracer.rs`             | No changes                                                                                                                                                                    |
+| `src-tauri/src/commands/image_trace.rs`      | No changes                                                                                                                                                                    |
+| `src-tauri/Cargo.toml`                       | No changes                                                                                                                                                                    |
 
 ## Testing Checklist
 

@@ -113,12 +113,12 @@ export function findNearestSnapPoint(
     // Candidate snap points
     const candidates: SnapPoint[] = [
       // 4 corners
-      { x: t.x,             y: t.y,             kind: "corner" },
-      { x: t.x + t.width,   y: t.y,             kind: "corner" },
-      { x: t.x,             y: t.y + t.height,  kind: "corner" },
-      { x: t.x + t.width,   y: t.y + t.height,  kind: "corner" },
+      { x: t.x, y: t.y, kind: "corner" },
+      { x: t.x + t.width, y: t.y, kind: "corner" },
+      { x: t.x, y: t.y + t.height, kind: "corner" },
+      { x: t.x + t.width, y: t.y + t.height, kind: "corner" },
       // center
-      { x: cx,              y: cy,              kind: "center" },
+      { x: cx, y: cy, kind: "center" },
     ];
 
     // For ellipses: add the 4 axis-rim points (cardinal on-curve points)
@@ -127,10 +127,10 @@ export function findNearestSnapPoint(
       const rx = t.width / 2;
       const ry = t.height / 2;
       candidates.push(
-        { x: cx + rx, y: cy,      kind: "rim" }, // east
-        { x: cx - rx, y: cy,      kind: "rim" }, // west
-        { x: cx,      y: cy + ry, kind: "rim" }, // south
-        { x: cx,      y: cy - ry, kind: "rim" }, // north
+        { x: cx + rx, y: cy, kind: "rim" }, // east
+        { x: cx - rx, y: cy, kind: "rim" }, // west
+        { x: cx, y: cy + ry, kind: "rim" }, // south
+        { x: cx, y: cy - ry, kind: "rim" } // north
       );
     }
 

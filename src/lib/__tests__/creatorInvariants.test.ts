@@ -31,11 +31,27 @@ vi.mock("@tauri-apps/api/core", () => ({
 // operator-interpretation logic is exercised faithfully regardless of values.
 vi.mock("pdfjs-dist", () => ({
   OPS: {
-    save: 10, restore: 11, transform: 12, moveTo: 13, lineTo: 14,
-    curveTo: 15, curveTo2: 16, curveTo3: 17, closePath: 18, rectangle: 19,
-    stroke: 20, closeStroke: 21, fill: 22, eoFill: 23, fillStroke: 24,
-    eoFillStroke: 25, closeFillStroke: 26, closeEOFillStroke: 27, endPath: 28,
-    setStrokeRGBColor: 58, setStrokeGray: 51,
+    save: 10,
+    restore: 11,
+    transform: 12,
+    moveTo: 13,
+    lineTo: 14,
+    curveTo: 15,
+    curveTo2: 16,
+    curveTo3: 17,
+    closePath: 18,
+    rectangle: 19,
+    stroke: 20,
+    closeStroke: 21,
+    fill: 22,
+    eoFill: 23,
+    fillStroke: 24,
+    eoFillStroke: 25,
+    closeFillStroke: 26,
+    closeEOFillStroke: 27,
+    endPath: 28,
+    setStrokeRGBColor: 58,
+    setStrokeGray: 51,
   },
 }));
 
@@ -111,7 +127,14 @@ function makeText(id: string, text: string): DesignObject {
   };
 }
 
-function makeRect(id: string, x: number, y: number, w: number, h: number, cornerRadius = 0): DesignObject {
+function makeRect(
+  id: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  cornerRadius = 0
+): DesignObject {
   return {
     id,
     type: "rectangle",
@@ -151,7 +174,7 @@ describe("SVG import", () => {
       `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100mm" height="100mm">
          <path d="M 10 10 C 20 0 40 0 50 10 L 50 50 Z" stroke="#000"/>
        </svg>`,
-      null,
+      null
     );
     expect(useStore.getState().objects.length).toBeGreaterThan(0);
     sweepStore();
@@ -162,7 +185,7 @@ describe("SVG import", () => {
       `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100mm" height="100mm">
          <path d="M 10 50 L 90 50" stroke="#000"/>
        </svg>`,
-      null,
+      null
     );
     const obj = useStore.getState().objects[0];
     expect(obj.transform.height).toBe(0); // no ||1 clamp
@@ -251,7 +274,9 @@ EOF`);
 });
 
 describe("PDF import", () => {
-  async function extract(build: (OPS: Record<string, number>) => { fnArray: number[]; argsArray: unknown[][] }) {
+  async function extract(
+    build: (OPS: Record<string, number>) => { fnArray: number[]; argsArray: unknown[][] }
+  ) {
     const { OPS } = await import("pdfjs-dist");
     const opList = build(OPS as unknown as Record<string, number>);
     const page = { getOperatorList: () => Promise.resolve(opList) };
@@ -286,7 +311,11 @@ describe("image trace", () => {
   it("typical traced path satisfies the invariant", () => {
     const objects = buildTracedPathObjects(
       `<svg><path d="M 0 0 L 100 0 L 100 80 Z"/></svg>`,
-      imgT, 100, 80, 0, "#4a90e2",
+      imgT,
+      100,
+      80,
+      0,
+      "#4a90e2"
     );
     expect(objects.length).toBe(1);
     for (const o of objects) assertPointsInvariant(o);
@@ -295,7 +324,11 @@ describe("image trace", () => {
   it("DEGENERATE: collinear trace output gets a true zero-height bbox", () => {
     const objects = buildTracedPathObjects(
       `<svg><path d="M 0 40 L 100 40"/></svg>`,
-      imgT, 100, 80, 0, "#4a90e2",
+      imgT,
+      100,
+      80,
+      0,
+      "#4a90e2"
     );
     expect(objects.length).toBe(1);
     expect(objects[0].transform.height).toBe(0);
@@ -331,10 +364,11 @@ describe("image trace", () => {
     expect(objects.length).toBe(1);
     expect(objects[0].type).toBe("path");
     const pts = objects[0].points!;
-    const area = pts.reduce((acc, p, i) => {
-      const j = (i + 1) % pts.length;
-      return acc + p.x * pts[j].y - pts[j].x * p.y;
-    }, 0) / 2;
+    const area =
+      pts.reduce((acc, p, i) => {
+        const j = (i + 1) % pts.length;
+        return acc + p.x * pts[j].y - pts[j].x * p.y;
+      }, 0) / 2;
     // CCW in screen Y-down coords = positive signedArea
     expect(area).toBeGreaterThanOrEqual(0);
   });
@@ -375,8 +409,13 @@ describe("text to path", () => {
   // The old behavior silently substituted a bounding-box rectangle — a laser
   // safety hazard (cuts a rectangle where text was expected).
   it("convertTextToPath FALLBACK (font load failure) leaves text object unchanged", async () => {
-    (opentype.load as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("no font in jsdom"));
-    const text = { ...makeText("t1", "A"), transform: { x: 20, y: 30, width: 40, height: 18, rotation: 0, scaleX: 1, scaleY: 1 } };
+    (opentype.load as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("no font in jsdom")
+    );
+    const text = {
+      ...makeText("t1", "A"),
+      transform: { x: 20, y: 30, width: 40, height: 18, rotation: 0, scaleX: 1, scaleY: 1 },
+    };
     useStore.getState().addObject(text);
     await useStore.getState().convertTextToPath("t1");
     const obj = useStore.getState().objects.find((o) => o.id === "t1")!;

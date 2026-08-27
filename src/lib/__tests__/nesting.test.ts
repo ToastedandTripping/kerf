@@ -3,7 +3,14 @@ import { nestItems } from "../nesting";
 import { computeAABB } from "../geometry";
 import type { DesignObject } from "../../app/types";
 
-function makeObject(id: string, x: number, y: number, w: number, h: number, rotation = 0): DesignObject {
+function makeObject(
+  id: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  rotation = 0
+): DesignObject {
   return {
     id,
     type: "rectangle",
@@ -66,9 +73,7 @@ describe("nestItems", () => {
       for (let j = i + 1; j < placements.length; j++) {
         const a = placements[i];
         const b = placements[j];
-        const overlap =
-          a.x < b.x + b.w && a.x + a.w > b.x &&
-          a.y < b.y + b.h && a.y + a.h > b.y;
+        const overlap = a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
         expect(overlap).toBe(false);
       }
     }
@@ -138,15 +143,16 @@ describe("nestItems", () => {
 
     // Verify no overlaps
     const placements = result.placed.map((p) => ({
-      x: p.x, y: p.y, w: 5, h: 5,
+      x: p.x,
+      y: p.y,
+      w: 5,
+      h: 5,
     }));
     for (let i = 0; i < placements.length; i++) {
       for (let j = i + 1; j < placements.length; j++) {
         const a = placements[i];
         const b = placements[j];
-        const overlap =
-          a.x < b.x + b.w && a.x + a.w > b.x &&
-          a.y < b.y + b.h && a.y + a.h > b.y;
+        const overlap = a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
         expect(overlap).toBe(false);
       }
     }

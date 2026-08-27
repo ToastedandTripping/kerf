@@ -135,7 +135,8 @@ export function GrblSettingsDialog({ open, onClose }: Props) {
       <div
         onClick={onClose}
         style={{
-          position: "fixed", inset: 0,
+          position: "fixed",
+          inset: 0,
           background: "rgba(0,0,0,0.5)",
           zIndex: 9999,
         }}
@@ -145,28 +146,37 @@ export function GrblSettingsDialog({ open, onClose }: Props) {
         aria-modal="true"
         aria-labelledby="grbl-settings-dialog-title"
         style={{
-        position: "fixed",
-        top: "50%", left: "50%",
-        transform: "translate(-50%, -50%)",
-        width: "560px",
-        maxHeight: "70vh",
-        background: "var(--bg-panel)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-lg)",
-        boxShadow: "var(--shadow-modal)",
-        zIndex: 10000,
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}>
+          position: "fixed",
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%, -50%)",
+          width: "560px",
+          maxHeight: "70vh",
+          background: "var(--bg-panel)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-lg)",
+          boxShadow: "var(--shadow-modal)",
+          zIndex: 10000,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
         {/* Header */}
-        <div style={{
-          padding: "12px 16px",
-          borderBottom: "1px solid var(--border)",
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-        }}>
+        <div
+          style={{
+            padding: "12px 16px",
+            borderBottom: "1px solid var(--border)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
           <div>
-            <span id="grbl-settings-dialog-title" style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)" }}>
+            <span
+              id="grbl-settings-dialog-title"
+              style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)" }}
+            >
               GRBL Machine Settings
             </span>
             {firmware && (
@@ -179,9 +189,13 @@ export function GrblSettingsDialog({ open, onClose }: Props) {
             <button
               onClick={loadSettings}
               style={{
-                background: "var(--bg-input)", border: "1px solid var(--border)",
-                color: "var(--text-secondary)", padding: "4px 10px",
-                borderRadius: "var(--radius-sm)", cursor: "pointer", fontSize: "12px",
+                background: "var(--bg-input)",
+                border: "1px solid var(--border)",
+                color: "var(--text-secondary)",
+                padding: "4px 10px",
+                borderRadius: "var(--radius-sm)",
+                cursor: "pointer",
+                fontSize: "12px",
               }}
             >
               Refresh
@@ -189,8 +203,11 @@ export function GrblSettingsDialog({ open, onClose }: Props) {
             <button
               onClick={onClose}
               style={{
-                background: "none", border: "none",
-                color: "var(--text-muted)", cursor: "pointer", fontSize: "16px",
+                background: "none",
+                border: "none",
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                fontSize: "16px",
               }}
             >
               x
@@ -201,12 +218,26 @@ export function GrblSettingsDialog({ open, onClose }: Props) {
         {/* Settings list */}
         <div style={{ overflow: "auto", flex: 1, padding: "8px 0" }}>
           {loading && (
-            <div style={{ padding: "16px", textAlign: "center", color: "var(--text-muted)", fontSize: "13px" }}>
+            <div
+              style={{
+                padding: "16px",
+                textAlign: "center",
+                color: "var(--text-muted)",
+                fontSize: "13px",
+              }}
+            >
               Loading settings...
             </div>
           )}
           {!loading && settings.length === 0 && (
-            <div style={{ padding: "16px", textAlign: "center", color: "var(--text-muted)", fontSize: "13px" }}>
+            <div
+              style={{
+                padding: "16px",
+                textAlign: "center",
+                color: "var(--text-muted)",
+                fontSize: "13px",
+              }}
+            >
               No settings received. Is the machine connected?
             </div>
           )}
@@ -214,11 +245,21 @@ export function GrblSettingsDialog({ open, onClose }: Props) {
             <div
               key={s.key}
               style={{
-                display: "flex", alignItems: "center", padding: "4px 16px",
-                fontSize: "13px", gap: "8px",
+                display: "flex",
+                alignItems: "center",
+                padding: "4px 16px",
+                fontSize: "13px",
+                gap: "8px",
               }}
             >
-              <span style={{ width: "40px", color: "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: "11px" }}>
+              <span
+                style={{
+                  width: "40px",
+                  color: "var(--text-muted)",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: "11px",
+                }}
+              >
                 ${s.key}
               </span>
               <span style={{ flex: 1, color: "var(--text-primary)" }}>{s.label}</span>
@@ -227,32 +268,55 @@ export function GrblSettingsDialog({ open, onClose }: Props) {
                   <input
                     autoFocus
                     value={editValue}
-                    onChange={(e) => { setEditValue(e.target.value); setEditError(null); }}
+                    onChange={(e) => {
+                      setEditValue(e.target.value);
+                      setEditError(null);
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") saveSetting(s.key, editValue);
-                      if (e.key === "Escape") { setEditingKey(null); setEditError(null); }
+                      if (e.key === "Escape") {
+                        setEditingKey(null);
+                        setEditError(null);
+                      }
                     }}
-                    onBlur={() => { setEditingKey(null); setEditError(null); }}
+                    onBlur={() => {
+                      setEditingKey(null);
+                      setEditError(null);
+                    }}
                     style={{
-                      width: "80px", background: "var(--bg-input)",
+                      width: "80px",
+                      background: "var(--bg-input)",
                       border: `1px solid ${editError ? "var(--danger)" : "var(--accent-warm)"}`,
-                      color: "var(--text-primary)", padding: "2px 6px",
-                      borderRadius: "3px", fontSize: "12px", fontFamily: "var(--font-mono)",
+                      color: "var(--text-primary)",
+                      padding: "2px 6px",
+                      borderRadius: "3px",
+                      fontSize: "12px",
+                      fontFamily: "var(--font-mono)",
                       textAlign: "right",
                     }}
                   />
                   {editError && (
-                    <span style={{ fontSize: "9px", color: "var(--danger)", marginTop: "2px" }}>{editError}</span>
+                    <span style={{ fontSize: "9px", color: "var(--danger)", marginTop: "2px" }}>
+                      {editError}
+                    </span>
                   )}
                 </div>
               ) : (
                 <span
-                  onClick={() => { setEditingKey(s.key); setEditValue(s.value); }}
+                  onClick={() => {
+                    setEditingKey(s.key);
+                    setEditValue(s.value);
+                  }}
                   style={{
-                    width: "80px", textAlign: "right", cursor: "pointer",
-                    color: "var(--text-primary)", fontFamily: "var(--font-mono)",
-                    fontSize: "12px", padding: "2px 6px",
-                    borderRadius: "3px", background: "var(--bg-input)",
+                    width: "80px",
+                    textAlign: "right",
+                    cursor: "pointer",
+                    color: "var(--text-primary)",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: "12px",
+                    padding: "2px 6px",
+                    borderRadius: "3px",
+                    background: "var(--bg-input)",
                   }}
                   title="Click to edit"
                 >

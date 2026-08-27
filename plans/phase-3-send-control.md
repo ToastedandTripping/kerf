@@ -64,16 +64,16 @@ interface PortInfo {
 
 Add a known-device table and a filtering/sorting function that puts recognized laser controllers at the top of the port list. Common GRBL-based laser controllers:
 
-| Device | VID | PID | Notes |
-|--------|------|------|-------|
-| CH340 (most Chinese laser boards) | `0x1A86` | `0x7523` | |
-| CH341 | `0x1A86` | `0x5523` | |
-| FTDI FT232R | `0x0403` | `0x6001` | Ortur, some Atomstack |
-| FTDI FT232H | `0x0403` | `0x6014` | |
-| CP2102 (SiLabs) | `0x10C6` | `0xEA60` | Sculpfun, some xTool |
-| Arduino Uno/Mega (ATmega16U2) | `0x2341` | `0x0043`/`0x0042` | DIY GRBL shields |
-| Espressif (ESP32-S2/S3 native) | `0x303A` | varies | ESP32-based boards |
-| STM32 DFU/VCP | `0x0483` | `0x5740` | STM32-based controllers |
+| Device                            | VID      | PID               | Notes                   |
+| --------------------------------- | -------- | ----------------- | ----------------------- |
+| CH340 (most Chinese laser boards) | `0x1A86` | `0x7523`          |                         |
+| CH341                             | `0x1A86` | `0x5523`          |                         |
+| FTDI FT232R                       | `0x0403` | `0x6001`          | Ortur, some Atomstack   |
+| FTDI FT232H                       | `0x0403` | `0x6014`          |                         |
+| CP2102 (SiLabs)                   | `0x10C6` | `0xEA60`          | Sculpfun, some xTool    |
+| Arduino Uno/Mega (ATmega16U2)     | `0x2341` | `0x0043`/`0x0042` | DIY GRBL shields        |
+| Espressif (ESP32-S2/S3 native)    | `0x303A` | varies            | ESP32-based boards      |
+| STM32 DFU/VCP                     | `0x0483` | `0x5740`          | STM32-based controllers |
 
 Also match by port name pattern on Linux: `/dev/ttyUSB*`, `/dev/ttyACM*`.
 
@@ -89,11 +89,11 @@ export interface KnownDevice {
 }
 
 export const KNOWN_LASER_DEVICES: KnownDevice[] = [
-  { vid: 0x1A86, pid: 0x7523, label: "CH340 (GRBL)" },
-  { vid: 0x1A86, pid: 0x5523, label: "CH341 (GRBL)" },
+  { vid: 0x1a86, pid: 0x7523, label: "CH340 (GRBL)" },
+  { vid: 0x1a86, pid: 0x5523, label: "CH341 (GRBL)" },
   { vid: 0x0403, pid: 0x6001, label: "FTDI FT232R" },
   { vid: 0x0403, pid: 0x6014, label: "FTDI FT232H" },
-  { vid: 0x10C6, pid: 0xEA60, label: "CP2102 (SiLabs)" },
+  { vid: 0x10c6, pid: 0xea60, label: "CP2102 (SiLabs)" },
   { vid: 0x2341, pid: 0x0043, label: "Arduino Uno" },
   { vid: 0x2341, pid: 0x0042, label: "Arduino Mega" },
   { vid: 0x0483, pid: 0x5740, label: "STM32 VCP" },
@@ -101,7 +101,7 @@ export const KNOWN_LASER_DEVICES: KnownDevice[] = [
 
 export function isKnownLaser(vid: number | null, pid: number | null): KnownDevice | null {
   if (vid === null || pid === null) return null;
-  return KNOWN_LASER_DEVICES.find(d => d.vid === vid && d.pid === pid) || null;
+  return KNOWN_LASER_DEVICES.find((d) => d.vid === vid && d.pid === pid) || null;
 }
 
 export function sortPortsByRelevance(ports: PortInfo[]): PortInfo[] {
@@ -277,7 +277,10 @@ The Frame button already exists and works -- it sends four `G0` rapid moves trac
 async function handleFrame(withLaser: boolean = false) {
   const store = useStore.getState();
   const bounds = getDesignBounds(store.objects);
-  if (!bounds) { addConsoleLine("No objects to frame", "error"); return; }
+  if (!bounds) {
+    addConsoleLine("No objects to frame", "error");
+    return;
+  }
 
   const { workspaceHeight, grblSValueMax } = store;
   const returnPos = { ...store.machinePosition };
@@ -313,6 +316,7 @@ async function handleFrame(withLaser: boolean = false) {
 ### 3b.4 Cut order visualization (animate path sequence)
 
 The `JobPreview` component already does this fully:
+
 - Canvas overlay with all moves drawn
 - Color-coded by type (rapid=blue, cut=red, engrave=gold)
 - Animated playback with play/pause, scrubber, speed controls (0.25x to 10x)
@@ -353,24 +357,45 @@ setJobEstimatedTotalSecs: (s: number) => void;
 - [ ] `src/components/panels/MachinePanel.tsx` -- Replace the current 4px-tall progress bar with a richer display:
 
 ```tsx
-{jobRunning && (
-  <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-    {/* Progress bar */}
-    <div style={{ background: "var(--bg-input)", borderRadius: "var(--radius-sm)", height: "6px", overflow: "hidden" }}>
-      <div style={{
-        height: "100%",
-        width: `${jobProgress * 100}%`,
-        background: machineState === "hold" ? "var(--accent-warm)" : "var(--accent)",
-        transition: "width 0.3s",
-      }} />
+{
+  jobRunning && (
+    <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+      {/* Progress bar */}
+      <div
+        style={{
+          background: "var(--bg-input)",
+          borderRadius: "var(--radius-sm)",
+          height: "6px",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            height: "100%",
+            width: `${jobProgress * 100}%`,
+            background: machineState === "hold" ? "var(--accent-warm)" : "var(--accent)",
+            transition: "width 0.3s",
+          }}
+        />
+      </div>
+      {/* Stats line */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          fontSize: "10px",
+          color: "var(--text-secondary)",
+          fontFamily: "var(--font-mono)",
+        }}
+      >
+        <span>{(jobProgress * 100).toFixed(1)}%</span>
+        <span>
+          {machineState === "hold" ? "PAUSED" : `~${formatTime(estimatedRemaining)} remaining`}
+        </span>
+      </div>
     </div>
-    {/* Stats line */}
-    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10px", color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}>
-      <span>{(jobProgress * 100).toFixed(1)}%</span>
-      <span>{machineState === "hold" ? "PAUSED" : `~${formatTime(estimatedRemaining)} remaining`}</span>
-    </div>
-  </div>
-)}
+  );
+}
 ```
 
 The bar turns amber when paused (hold state).
@@ -509,9 +534,10 @@ export async function requestNotificationPermission(): Promise<void> {
 
 export function notifyJobComplete(durationSecs: number): void {
   if (!permissionGranted) return;
-  const time = durationSecs < 60
-    ? `${Math.ceil(durationSecs)}s`
-    : `${Math.floor(durationSecs / 60)}m ${Math.ceil(durationSecs % 60)}s`;
+  const time =
+    durationSecs < 60
+      ? `${Math.ceil(durationSecs)}s`
+      : `${Math.floor(durationSecs / 60)}m ${Math.ceil(durationSecs % 60)}s`;
 
   new Notification("Kerf -- Job Complete", {
     body: `Cut finished in ${time}.`,
@@ -586,27 +612,30 @@ Week 3: 3c.3 + 3c.4 (in parallel)
 ## Files Summary
 
 ### New files (3)
-| File | Purpose |
-|------|---------|
-| `src/lib/machine/knownDevices.ts` | VID/PID table, port sorting |
+
+| File                               | Purpose                              |
+| ---------------------------------- | ------------------------------------ |
+| `src/lib/machine/knownDevices.ts`  | VID/PID table, port sorting          |
 | `src/lib/machine/notifications.ts` | Job completion/failure notifications |
-| `plans/phase-3-send-control.md` | This plan |
+| `plans/phase-3-send-control.md`    | This plan                            |
 
 ### Modified files (7)
-| File | Changes |
-|------|---------|
-| `src-tauri/src/commands/serial.rs` | Extend `PortInfo` with vid/pid/manufacturer/product |
-| `src-tauri/src/engine/gcode_gen.rs` | Improve time estimate with trapezoidal acceleration model |
-| `src/lib/machine/connection.ts` | Last-port persistence, poll-error disconnect detection, pause/resume polling fix, port name in store |
-| `src/app/store.ts` | Add `connectedPortName`, `lastJobInterruptLine`, `jobStartTime`, `jobElapsedSecs`, `jobEstimatedTotalSecs`, `jobBoundsVisible` |
-| `src/components/panels/MachinePanel.tsx` | Auto-connect, enhanced frame, progress with ETA, disconnect recovery, notifications, completion beep |
-| `src/components/bottom/StatusBar.tsx` | Show connected port name |
-| `src/components/viewport/Viewport.tsx` | Draw job bounding box overlay |
+
+| File                                     | Changes                                                                                                                        |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `src-tauri/src/commands/serial.rs`       | Extend `PortInfo` with vid/pid/manufacturer/product                                                                            |
+| `src-tauri/src/engine/gcode_gen.rs`      | Improve time estimate with trapezoidal acceleration model                                                                      |
+| `src/lib/machine/connection.ts`          | Last-port persistence, poll-error disconnect detection, pause/resume polling fix, port name in store                           |
+| `src/app/store.ts`                       | Add `connectedPortName`, `lastJobInterruptLine`, `jobStartTime`, `jobElapsedSecs`, `jobEstimatedTotalSecs`, `jobBoundsVisible` |
+| `src/components/panels/MachinePanel.tsx` | Auto-connect, enhanced frame, progress with ETA, disconnect recovery, notifications, completion beep                           |
+| `src/components/bottom/StatusBar.tsx`    | Show connected port name                                                                                                       |
+| `src/components/viewport/Viewport.tsx`   | Draw job bounding box overlay                                                                                                  |
 
 ### No changes needed
-| File | Reason |
-|------|--------|
+
+| File                                   | Reason                                   |
+| -------------------------------------- | ---------------------------------------- |
 | `src/components/bottom/JobPreview.tsx` | Cut order visualization already complete |
-| `src/components/bottom/Console.tsx` | No changes required |
-| `src-tauri/src/lib.rs` | No new Tauri commands needed |
-| `src-tauri/Cargo.toml` | No new crate dependencies |
+| `src/components/bottom/Console.tsx`    | No changes required                      |
+| `src-tauri/src/lib.rs`                 | No new Tauri commands needed             |
+| `src-tauri/Cargo.toml`                 | No new crate dependencies                |

@@ -4,9 +4,21 @@ import type { DesignObject, VariableTextConfig, NestConfig, NestResult } from ".
 import type { StoreSet, StoreGet } from "./storeTypes";
 import { generateId, deepCloneObject } from "./storeTypes";
 import { applyObjects } from "./storeHelpers";
-import { hasPlaceholders, extractPlaceholders, substitutePlaceholders, generateSerialValues } from "../../lib/variableText";
+import {
+  hasPlaceholders,
+  extractPlaceholders,
+  substitutePlaceholders,
+  generateSerialValues,
+} from "../../lib/variableText";
 import { nestItems } from "../../lib/nesting";
-import { offsetRingByDistance, movePartial, pointsBBox, buildGroupObject, composeGroupChild, computeAABB } from "../../lib/geometry";
+import {
+  offsetRingByDistance,
+  movePartial,
+  pointsBBox,
+  buildGroupObject,
+  composeGroupChild,
+  computeAABB,
+} from "../../lib/geometry";
 
 // Module-level font cache to avoid reloading on every conversion
 let cachedFont: opentype.Font | null = null;
@@ -15,13 +27,16 @@ let fontLoadPromise: Promise<opentype.Font> | null = null;
 async function loadFont(): Promise<opentype.Font> {
   if (cachedFont) return cachedFont;
   if (fontLoadPromise) return fontLoadPromise;
-  fontLoadPromise = opentype.load("/fonts/OpenSans-Regular.ttf").then((font) => {
-    cachedFont = font;
-    return font;
-  }).catch((err) => {
-    fontLoadPromise = null;
-    throw err;
-  });
+  fontLoadPromise = opentype
+    .load("/fonts/OpenSans-Regular.ttf")
+    .then((font) => {
+      cachedFont = font;
+      return font;
+    })
+    .catch((err) => {
+      fontLoadPromise = null;
+      throw err;
+    });
   return fontLoadPromise;
 }
 
@@ -52,8 +67,20 @@ export async function textObjectToPaths(obj: DesignObject): Promise<DesignObject
     // W1c (F20): split glyph CONTOURS at M commands — pre-fix they were
     // concatenated into one points array, so a glyph "O" bridged its hole
     // to its outline and the bridge was CUT through the workpiece.
-    const contours: Array<Array<{ x: number; y: number; handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } }>> = [];
-    let pathPoints: Array<{ x: number; y: number; handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } }> = [];
+    const contours: Array<
+      Array<{
+        x: number;
+        y: number;
+        handleIn?: { x: number; y: number };
+        handleOut?: { x: number; y: number };
+      }>
+    > = [];
+    let pathPoints: Array<{
+      x: number;
+      y: number;
+      handleIn?: { x: number; y: number };
+      handleOut?: { x: number; y: number };
+    }> = [];
     let currentX: number, currentY: number;
 
     for (const cmd of commands) {
@@ -63,12 +90,18 @@ export async function textObjectToPaths(obj: DesignObject): Promise<DesignObject
           pathPoints = [];
           currentX = cmd.x! * scale;
           currentY = cmd.y! * scale;
-          pathPoints.push({ x: obj.transform.x + xOffset + currentX, y: obj.transform.y + fontSize + currentY });
+          pathPoints.push({
+            x: obj.transform.x + xOffset + currentX,
+            y: obj.transform.y + fontSize + currentY,
+          });
           break;
         case "L":
           currentX = cmd.x! * scale;
           currentY = cmd.y! * scale;
-          pathPoints.push({ x: obj.transform.x + xOffset + currentX, y: obj.transform.y + fontSize + currentY });
+          pathPoints.push({
+            x: obj.transform.x + xOffset + currentX,
+            y: obj.transform.y + fontSize + currentY,
+          });
           break;
         case "C": {
           const prevPt = pathPoints[pathPoints.length - 1];
@@ -142,8 +175,10 @@ export async function textObjectToPaths(obj: DesignObject): Promise<DesignObject
           closed: true,
           transform: {
             ...obj.transform,
-            x: bb.x, y: bb.y,
-            width: bb.width, height: bb.height,
+            x: bb.x,
+            y: bb.y,
+            width: bb.width,
+            height: bb.height,
           },
         };
       });
@@ -163,7 +198,10 @@ export async function textObjectToPaths(obj: DesignObject): Promise<DesignObject
 // B4.2: single shared boolean implementation; four public actions are thin wrappers.
 // clip signature matches polygonClipping.*: (subject, ...clippers) — preserves polys[0],...rest
 // order so difference/xor (order-sensitive) behave identically to before.
-type ClipFn = (subject: polygonClipping.Polygon, ...clippers: polygonClipping.Polygon[]) => polygonClipping.MultiPolygon;
+type ClipFn = (
+  subject: polygonClipping.Polygon,
+  ...clippers: polygonClipping.Polygon[]
+) => polygonClipping.MultiPolygon;
 
 function runBoolean(get: StoreGet, clip: ClipFn) {
   if (get().selectedIds.length < 2) return;
@@ -176,7 +214,10 @@ function runBoolean(get: StoreGet, clip: ClipFn) {
     if (polys.length < 2) return;
     const result = clip(polys[0], ...polys.slice(1));
     removeObjects(selectedIds);
-    const newIds = multiPolygonToObjects(result, selected[0]).map((obj) => { addObject(obj); return obj.id; });
+    const newIds = multiPolygonToObjects(result, selected[0]).map((obj) => {
+      addObject(obj);
+      return obj.id;
+    });
     setSelectedIds(newIds);
   });
 }
@@ -321,15 +362,20 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
               if (axis === "horizontal") {
                 fp.x = 2 * centerX - p.x;
                 if (p.handleIn) fp.handleIn = { x: 2 * centerX - p.handleIn.x, y: p.handleIn.y };
-                if (p.handleOut) fp.handleOut = { x: 2 * centerX - p.handleOut.x, y: p.handleOut.y };
+                if (p.handleOut)
+                  fp.handleOut = { x: 2 * centerX - p.handleOut.x, y: p.handleOut.y };
               } else {
                 fp.y = 2 * centerY - p.y;
                 if (p.handleIn) fp.handleIn = { x: p.handleIn.x, y: 2 * centerY - p.handleIn.y };
-                if (p.handleOut) fp.handleOut = { x: p.handleOut.x, y: 2 * centerY - p.handleOut.y };
+                if (p.handleOut)
+                  fp.handleOut = { x: p.handleOut.x, y: 2 * centerY - p.handleOut.y };
               }
               return fp;
             });
-            updateObject(obj.id, { points: flippedPoints, transform: { ...t, scaleX: 1, scaleY: 1 } });
+            updateObject(obj.id, {
+              points: flippedPoints,
+              transform: { ...t, scaleX: 1, scaleY: 1 },
+            });
           } else if (obj.type === "image" || obj.type === "text") {
             if (axis === "horizontal") {
               updateObject(obj.id, { transform: { ...t, scaleX: t.scaleX * -1 } });
@@ -361,15 +407,30 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
                 const flippedPoints = obj.points.map((p) => ({
                   ...p,
                   x: flipAxisX - p.x,
-                  handleIn: p.handleIn ? { x: flipAxisX - p.handleIn.x, y: p.handleIn.y } : undefined,
-                  handleOut: p.handleOut ? { x: flipAxisX - p.handleOut.x, y: p.handleOut.y } : undefined,
+                  handleIn: p.handleIn
+                    ? { x: flipAxisX - p.handleIn.x, y: p.handleIn.y }
+                    : undefined,
+                  handleOut: p.handleOut
+                    ? { x: flipAxisX - p.handleOut.x, y: p.handleOut.y }
+                    : undefined,
                 }));
                 const bb = pointsBBox(flippedPoints);
-                updateObject(obj.id, { points: flippedPoints, transform: { ...obj.transform, x: bb.x, y: bb.y, width: bb.width, height: bb.height } });
+                updateObject(obj.id, {
+                  points: flippedPoints,
+                  transform: {
+                    ...obj.transform,
+                    x: bb.x,
+                    y: bb.y,
+                    width: bb.width,
+                    height: bb.height,
+                  },
+                });
               } else {
                 // Reposition AND mirror (rect, ellipse, image, text, group)
                 const newX = allRight - (obj.transform.x - allLeft) - obj.transform.width;
-                updateObject(obj.id, { transform: { ...obj.transform, x: newX, scaleX: obj.transform.scaleX * -1 } });
+                updateObject(obj.id, {
+                  transform: { ...obj.transform, x: newX, scaleX: obj.transform.scaleX * -1 },
+                });
               }
             } else {
               if ((obj.type === "path" || obj.type === "line") && obj.points) {
@@ -378,15 +439,30 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
                 const flippedPoints = obj.points.map((p) => ({
                   ...p,
                   y: flipAxisY - p.y,
-                  handleIn: p.handleIn ? { x: p.handleIn.x, y: flipAxisY - p.handleIn.y } : undefined,
-                  handleOut: p.handleOut ? { x: p.handleOut.x, y: flipAxisY - p.handleOut.y } : undefined,
+                  handleIn: p.handleIn
+                    ? { x: p.handleIn.x, y: flipAxisY - p.handleIn.y }
+                    : undefined,
+                  handleOut: p.handleOut
+                    ? { x: p.handleOut.x, y: flipAxisY - p.handleOut.y }
+                    : undefined,
                 }));
                 const bb = pointsBBox(flippedPoints);
-                updateObject(obj.id, { points: flippedPoints, transform: { ...obj.transform, x: bb.x, y: bb.y, width: bb.width, height: bb.height } });
+                updateObject(obj.id, {
+                  points: flippedPoints,
+                  transform: {
+                    ...obj.transform,
+                    x: bb.x,
+                    y: bb.y,
+                    width: bb.width,
+                    height: bb.height,
+                  },
+                });
               } else {
                 // Reposition AND mirror (rect, ellipse, image, text, group)
                 const newY = allBottom - (obj.transform.y - allTop) - obj.transform.height;
-                updateObject(obj.id, { transform: { ...obj.transform, y: newY, scaleY: obj.transform.scaleY * -1 } });
+                updateObject(obj.id, {
+                  transform: { ...obj.transform, y: newY, scaleY: obj.transform.scaleY * -1 },
+                });
               }
             }
           }
@@ -406,7 +482,10 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
         // builder shared with the compound-path importers.
         const groupId = generateId();
         const group = buildGroupObject(
-          selected, groupId, `Group ${remaining.length + 1}`, selected[0].layerIndex,
+          selected,
+          groupId,
+          `Group ${remaining.length + 1}`,
+          selected[0].layerIndex
         );
 
         const insertIdx = objects.findIndex((o) => o.id === selected[0].id);
@@ -432,7 +511,11 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
               // r_g (children land unrotated at their stored offsets).
               const expanded = {
                 ...child,
-                ...movePartial(child, child.transform.x + obj.transform.x, child.transform.y + obj.transform.y),
+                ...movePartial(
+                  child,
+                  child.transform.x + obj.transform.x,
+                  child.transform.y + obj.transform.y
+                ),
               };
               newObjects.push(expanded);
               newSelectedIds.push(expanded.id);
@@ -456,14 +539,20 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
       get().withUndo("convert-to-path", () => {
         const { updateObject } = get();
 
-        let points: Array<{ x: number; y: number; handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } }>;
+        let points: Array<{
+          x: number;
+          y: number;
+          handleIn?: { x: number; y: number };
+          handleOut?: { x: number; y: number };
+        }>;
         const t = obj.transform;
 
         switch (obj.type) {
           case "rectangle": {
             const r = obj.cornerRadius || 0;
             if (r > 0) {
-              const w = t.width, h = t.height;
+              const w = t.width,
+                h = t.height;
               const cr = Math.min(r, w / 2, h / 2);
               const k = 0.5522847498;
               points = [
@@ -491,10 +580,30 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
             const ry = t.height / 2;
             const k = 0.5522847498;
             points = [
-              { x: rx, y: 0, handleIn: { x: rx + rx * k, y: 0 }, handleOut: { x: rx - rx * k, y: 0 } },
-              { x: 0, y: ry, handleIn: { x: 0, y: ry - ry * k }, handleOut: { x: 0, y: ry + ry * k } },
-              { x: rx, y: ry * 2, handleIn: { x: rx - rx * k, y: ry * 2 }, handleOut: { x: rx + rx * k, y: ry * 2 } },
-              { x: rx * 2, y: ry, handleIn: { x: rx * 2, y: ry + ry * k }, handleOut: { x: rx * 2, y: ry - ry * k } },
+              {
+                x: rx,
+                y: 0,
+                handleIn: { x: rx + rx * k, y: 0 },
+                handleOut: { x: rx - rx * k, y: 0 },
+              },
+              {
+                x: 0,
+                y: ry,
+                handleIn: { x: 0, y: ry - ry * k },
+                handleOut: { x: 0, y: ry + ry * k },
+              },
+              {
+                x: rx,
+                y: ry * 2,
+                handleIn: { x: rx - rx * k, y: ry * 2 },
+                handleOut: { x: rx + rx * k, y: ry * 2 },
+              },
+              {
+                x: rx * 2,
+                y: ry,
+                handleIn: { x: rx * 2, y: ry + ry * k },
+                handleOut: { x: rx * 2, y: ry - ry * k },
+              },
             ];
             break;
           }
@@ -551,7 +660,10 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
           const obj = objects.find((o) => o.id === id);
           if (!obj) continue;
           updateObject(id, {
-            transform: { ...obj.transform, rotation: ((obj.transform.rotation + angle) % 360 + 360) % 360 },
+            transform: {
+              ...obj.transform,
+              rotation: (((obj.transform.rotation + angle) % 360) + 360) % 360,
+            },
           });
         }
       });
@@ -577,7 +689,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
                 ...movePartial(
                   obj,
                   obj.transform.x + c * (obj.transform.width + spacingX),
-                  obj.transform.y + r * (obj.transform.height + spacingY),
+                  obj.transform.y + r * (obj.transform.height + spacingY)
                 ),
               });
               newIds.push(clone.id);
@@ -595,7 +707,8 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
         const selected = objects.filter((o) => selectedIds.includes(o.id));
         const newIds: string[] = [...selectedIds];
 
-        let cx = 0, cy = 0;
+        let cx = 0,
+          cy = 0;
         for (const obj of selected) {
           cx += obj.transform.x + obj.transform.width / 2;
           cy += obj.transform.y + obj.transform.height / 2;
@@ -613,14 +726,18 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
             const clone = deepCloneObject(obj);
             // W1b: movePartial for the position write (points move, aliasing
             // broken); the rotation field merges on top of the synced transform.
-            const moved = movePartial(obj, newCx - obj.transform.width / 2, newCy - obj.transform.height / 2);
+            const moved = movePartial(
+              obj,
+              newCx - obj.transform.width / 2,
+              newCy - obj.transform.height / 2
+            );
             addObject({
               ...clone,
               name: obj.name + ` [${i}]`,
               ...moved,
               transform: {
                 ...moved.transform,
-                rotation: ((obj.transform.rotation + angleStep * i) % 360 + 360) % 360,
+                rotation: (((obj.transform.rotation + angleStep * i) % 360) + 360) % 360,
               },
             });
             newIds.push(clone.id);
@@ -649,8 +766,10 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
           const newId = generateId();
           const xs = offsetRing.map((p) => p[0]);
           const ys = offsetRing.map((p) => p[1]);
-          const minX = Math.min(...xs), minY = Math.min(...ys);
-          const maxX = Math.max(...xs), maxY = Math.max(...ys);
+          const minX = Math.min(...xs),
+            minY = Math.min(...ys);
+          const maxX = Math.max(...xs),
+            maxY = Math.max(...ys);
           addObject({
             ...obj,
             id: newId,
@@ -659,7 +778,14 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
             closed: true,
             // rotation: 0 — objectToPolygon already baked rotation into world-frame
             // points. Keeping the source rotation would double-apply it downstream.
-            transform: { ...obj.transform, x: minX, y: minY, width: maxX - minX, height: maxY - minY, rotation: 0 },
+            transform: {
+              ...obj.transform,
+              x: minX,
+              y: minY,
+              width: maxX - minX,
+              height: maxY - minY,
+              rotation: 0,
+            },
           });
           newIds.push(newId);
         }
@@ -688,7 +814,9 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
         const values = generateSerialValues(config.dataSource.config);
         // Find the placeholder name from the first template
         const firstTemplate = templates.find((t) => t.text && hasPlaceholders(t));
-        const placeholderNames = firstTemplate ? extractPlaceholders(firstTemplate.text!) : ["serial"];
+        const placeholderNames = firstTemplate
+          ? extractPlaceholders(firstTemplate.text!)
+          : ["serial"];
         const primaryName = placeholderNames[0] || "serial";
         rows = values.map((v) => ({ [primaryName]: v }));
       } else {
@@ -752,19 +880,23 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
           }
         }
       });
-
     },
 
     nestObjects: async (config: NestConfig): Promise<NestResult> => {
       const { objects, selectedIds, workspaceWidth, workspaceHeight } = get();
 
       // Clamp spacing to valid range
-      const spacing = Math.max(0, Math.min(config.spacing, Math.min(workspaceWidth, workspaceHeight) / 2));
+      const spacing = Math.max(
+        0,
+        Math.min(config.spacing, Math.min(workspaceWidth, workspaceHeight) / 2)
+      );
 
       // Select candidates: selected if useSelection + selection exists, else all visible/unlocked
       let candidates: DesignObject[];
       if (config.useSelection && selectedIds.length > 0) {
-        candidates = objects.filter((o) => selectedIds.includes(o.id) && o.visible && !o.locked && !o.isTemplate);
+        candidates = objects.filter(
+          (o) => selectedIds.includes(o.id) && o.visible && !o.locked && !o.isTemplate
+        );
       } else {
         candidates = objects.filter((o) => o.visible && !o.locked && !o.isTemplate);
       }
@@ -790,7 +922,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
         workspaceWidth,
         workspaceHeight,
         spacing,
-        config.rotation,
+        config.rotation
       );
 
       // Apply placements in single undo snapshot
@@ -812,7 +944,7 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
             const moved = movePartial(
               obj,
               placement.x + (newAABB.w - obj.transform.width) / 2,
-              placement.y + (newAABB.h - obj.transform.height) / 2,
+              placement.y + (newAABB.h - obj.transform.height) / 2
             );
             updateObject(placement.objectId, {
               ...moved,
@@ -832,9 +964,14 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
 
 // F28: rotate a polygon ring around (cx, cy) by degrees — used in objectToPolygon
 // to world-frame rotate rect/ellipse rings before boolean ops.
-function applyRotation(ring: polygonClipping.Ring, cx: number, cy: number, deg: number): polygonClipping.Ring {
+function applyRotation(
+  ring: polygonClipping.Ring,
+  cx: number,
+  cy: number,
+  deg: number
+): polygonClipping.Ring {
   if (deg === 0) return ring;
-  const rad = deg * Math.PI / 180;
+  const rad = (deg * Math.PI) / 180;
   const cos = Math.cos(rad);
   const sin = Math.sin(rad);
   return ring.map(([x, y]): polygonClipping.Pair => {
@@ -858,14 +995,16 @@ function sampleBezierSegment(
   cp1: { x: number; y: number },
   cp2: { x: number; y: number },
   p1: { x: number; y: number },
-  steps = 16,
+  steps = 16
 ): Array<polygonClipping.Pair> {
   const points: Array<polygonClipping.Pair> = [];
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
     const mt = 1 - t;
-    const x = mt * mt * mt * p0.x + 3 * mt * mt * t * cp1.x + 3 * mt * t * t * cp2.x + t * t * t * p1.x;
-    const y = mt * mt * mt * p0.y + 3 * mt * mt * t * cp1.y + 3 * mt * t * t * cp2.y + t * t * t * p1.y;
+    const x =
+      mt * mt * mt * p0.x + 3 * mt * mt * t * cp1.x + 3 * mt * t * t * cp2.x + t * t * t * p1.x;
+    const y =
+      mt * mt * mt * p0.y + 3 * mt * mt * t * cp1.y + 3 * mt * t * t * cp2.y + t * t * t * p1.y;
     points.push([x, y]);
   }
   return points;
@@ -877,16 +1016,25 @@ function objectToPolygon(obj: DesignObject): polygonClipping.Polygon | null {
     case "rectangle": {
       const cx = t.x + t.width / 2;
       const cy = t.y + t.height / 2;
-      const ring: polygonClipping.Ring = applyRotation([
-        [t.x, t.y], [t.x + t.width, t.y],
-        [t.x + t.width, t.y + t.height], [t.x, t.y + t.height],
-        [t.x, t.y],
-      ], cx, cy, t.rotation || 0);
+      const ring: polygonClipping.Ring = applyRotation(
+        [
+          [t.x, t.y],
+          [t.x + t.width, t.y],
+          [t.x + t.width, t.y + t.height],
+          [t.x, t.y + t.height],
+          [t.x, t.y],
+        ],
+        cx,
+        cy,
+        t.rotation || 0
+      );
       return [ring];
     }
     case "ellipse": {
-      const cx = t.x + t.width / 2, cy = t.y + t.height / 2;
-      const rx = t.width / 2, ry = t.height / 2;
+      const cx = t.x + t.width / 2,
+        cy = t.y + t.height / 2;
+      const rx = t.width / 2,
+        ry = t.height / 2;
       const segments = 64;
       const ring: polygonClipping.Ring = [];
       for (let i = 0; i <= segments; i++) {
@@ -902,9 +1050,12 @@ function objectToPolygon(obj: DesignObject): polygonClipping.Polygon | null {
         const prev = obj.points[i - 1];
         const pt = obj.points[i];
         if (prev.handleOut && pt.handleIn) {
-          ring.push(...sampleBezierSegment(
-            { x: prev.x, y: prev.y }, prev.handleOut, pt.handleIn, { x: pt.x, y: pt.y },
-          ));
+          ring.push(
+            ...sampleBezierSegment({ x: prev.x, y: prev.y }, prev.handleOut, pt.handleIn, {
+              x: pt.x,
+              y: pt.y,
+            })
+          );
         } else {
           ring.push([pt.x, pt.y]);
         }
@@ -913,12 +1064,18 @@ function objectToPolygon(obj: DesignObject): polygonClipping.Polygon | null {
         const last = obj.points[obj.points.length - 1];
         const first = obj.points[0];
         if (last.handleOut && first.handleIn) {
-          ring.push(...sampleBezierSegment(
-            { x: last.x, y: last.y }, last.handleOut, first.handleIn, { x: first.x, y: first.y },
-          ));
+          ring.push(
+            ...sampleBezierSegment({ x: last.x, y: last.y }, last.handleOut, first.handleIn, {
+              x: first.x,
+              y: first.y,
+            })
+          );
         }
       }
-      if (ring.length > 0 && (ring[0][0] !== ring[ring.length - 1][0] || ring[0][1] !== ring[ring.length - 1][1])) {
+      if (
+        ring.length > 0 &&
+        (ring[0][0] !== ring[ring.length - 1][0] || ring[0][1] !== ring[ring.length - 1][1])
+      ) {
         ring.push([ring[0][0], ring[0][1]]);
       }
       // F28-path: apply rotation about transform center (matches rect/ellipse pattern).
@@ -931,7 +1088,10 @@ function objectToPolygon(obj: DesignObject): polygonClipping.Polygon | null {
   }
 }
 
-function multiPolygonToObjects(mp: polygonClipping.MultiPolygon, template: DesignObject): DesignObject[] {
+function multiPolygonToObjects(
+  mp: polygonClipping.MultiPolygon,
+  template: DesignObject
+): DesignObject[] {
   // F28: preserve holes — polygon[0] is the outer ring, polygon[1..] are holes.
   // Each ring becomes a path object. Multi-ring polygons group the outer + holes together.
   const allContours: DesignObject[] = [];
@@ -947,16 +1107,29 @@ function multiPolygonToObjects(mp: polygonClipping.MultiPolygon, template: Desig
         type: "path" as const,
         points,
         closed: true,
-        transform: { ...template.transform, x: bb.x, y: bb.y, width: bb.width, height: bb.height, rotation: 0 },
+        transform: {
+          ...template.transform,
+          x: bb.x,
+          y: bb.y,
+          width: bb.width,
+          height: bb.height,
+          rotation: 0,
+        },
       });
     }
     if (contourObjects.length === 1) {
       allContours.push(contourObjects[0]);
     } else if (contourObjects.length > 1) {
-      allContours.push(buildGroupObject(contourObjects, generateId(), template.name || "Boolean", template.layerIndex));
+      allContours.push(
+        buildGroupObject(
+          contourObjects,
+          generateId(),
+          template.name || "Boolean",
+          template.layerIndex
+        )
+      );
     }
   }
 
   return allContours;
 }
-

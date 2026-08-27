@@ -41,7 +41,11 @@ export function multiplyMatrix2x3(a: ReadonlyArray<number>, b: ReadonlyArray<num
 }
 
 /** Apply a 2x3 affine matrix to a point. */
-export function applyMatrix2x3(m: ReadonlyArray<number>, x: number, y: number): { x: number; y: number } {
+export function applyMatrix2x3(
+  m: ReadonlyArray<number>,
+  x: number,
+  y: number
+): { x: number; y: number } {
   return { x: m[0] * x + m[2] * y + m[4], y: m[1] * x + m[3] * y + m[5] };
 }
 
@@ -71,8 +75,16 @@ export function applyMatrix2x3(m: ReadonlyArray<number>, x: number, y: number): 
  * @returns { x, y, rotation } for the flattened/composed child transform
  */
 export function composeGroupChildTransform(
-  childX: number, childY: number, childW: number, childH: number, childRot: number,
-  groupX: number, groupY: number, groupW: number, groupH: number, groupRot: number,
+  childX: number,
+  childY: number,
+  childW: number,
+  childH: number,
+  childRot: number,
+  groupX: number,
+  groupY: number,
+  groupW: number,
+  groupH: number,
+  groupRot: number
 ): { x: number; y: number; rotation: number } {
   if (groupRot === 0) {
     // Fast path: no rotation — only apply translation
@@ -92,14 +104,14 @@ export function composeGroupChildTransform(
   const childCy = groupY + childY + childH / 2;
 
   // Rotate child center around group center by groupRot degrees
-  const rad = groupRot * Math.PI / 180;
+  const rad = (groupRot * Math.PI) / 180;
   const cos = Math.cos(rad);
   const sin = Math.sin(rad);
   const rotCx = gcx + (childCx - gcx) * cos - (childCy - gcy) * sin;
   const rotCy = gcy + (childCx - gcx) * sin + (childCy - gcy) * cos;
 
   // Combined rotation angle normalized to [0, 360)
-  const combined = ((groupRot + childRot) % 360 + 360) % 360;
+  const combined = (((groupRot + childRot) % 360) + 360) % 360;
 
   return {
     x: rotCx - childW / 2,
@@ -114,12 +126,22 @@ export function composeGroupChildTransform(
  * load-time rotation bake in the W1b migration.
  */
 export function rotatePathPoint(
-  pt: { x: number; y: number; handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } },
+  pt: {
+    x: number;
+    y: number;
+    handleIn?: { x: number; y: number };
+    handleOut?: { x: number; y: number };
+  },
   cx: number,
   cy: number,
-  deg: number,
-): { x: number; y: number; handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } } {
-  const rad = deg * Math.PI / 180;
+  deg: number
+): {
+  x: number;
+  y: number;
+  handleIn?: { x: number; y: number };
+  handleOut?: { x: number; y: number };
+} {
+  const rad = (deg * Math.PI) / 180;
   const cos = Math.cos(rad);
   const sin = Math.sin(rad);
 
@@ -171,8 +193,16 @@ function isPointsBearing(obj: DesignObject): boolean {
  * Anchors-only AABB of a points array. Loop-based on purpose — never spread
  * into Math.min/max (RangeError on multi-thousand-point traces).
  */
-export function pointsBBox(points: ReadonlyArray<PathPoint>): { x: number; y: number; width: number; height: number } {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+export function pointsBBox(points: ReadonlyArray<PathPoint>): {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+} {
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
   for (const p of points) {
     if (p.x < minX) minX = p.x;
     if (p.y < minY) minY = p.y;
@@ -189,7 +219,7 @@ export function pointsBBox(points: ReadonlyArray<PathPoint>): { x: number; y: nu
  * footprint used for placement is the same number the selection frame shows.
  */
 export function rotatedExtents(w: number, h: number, angleDeg: number): { w: number; h: number } {
-  const rad = ((angleDeg % 360 + 360) % 360) * Math.PI / 180;
+  const rad = ((((angleDeg % 360) + 360) % 360) * Math.PI) / 180;
   const cos = Math.abs(Math.cos(rad));
   const sin = Math.abs(Math.sin(rad));
   return { w: w * cos + h * sin, h: w * sin + h * cos };
@@ -204,7 +234,7 @@ export function computeAABB(obj: DesignObject): { x: number; y: number; w: numbe
   const t = obj.transform;
   const w = t.width;
   const h = t.height;
-  const rot = (t.rotation % 360 + 360) % 360;
+  const rot = ((t.rotation % 360) + 360) % 360;
 
   if (rot === 0) {
     return { x: t.x, y: t.y, w, h };
@@ -225,7 +255,11 @@ export function computeAABB(obj: DesignObject): { x: number; y: number; w: numbe
 }
 
 /** Pure translation of a points array — fresh point and handle objects, never mutates. */
-export function translatePoints(points: ReadonlyArray<PathPoint>, dx: number, dy: number): PathPoint[] {
+export function translatePoints(
+  points: ReadonlyArray<PathPoint>,
+  dx: number,
+  dy: number
+): PathPoint[] {
   const result: PathPoint[] = new Array(points.length);
   for (let i = 0; i < points.length; i++) {
     const p = points[i];
@@ -277,7 +311,7 @@ export function movePartial(obj: DesignObject, newX: number, newY: number): Geom
  */
 export function scalePartial(
   obj: DesignObject,
-  target: { x: number; y: number; width: number; height: number },
+  target: { x: number; y: number; width: number; height: number }
 ): GeometryPartial {
   if (obj.type === "group" && obj.children && obj.children.length > 0) {
     const t = obj.transform;
@@ -307,7 +341,10 @@ export function scalePartial(
     return {
       transform: {
         ...obj.transform,
-        x: target.x, y: target.y, width: target.width, height: target.height,
+        x: target.x,
+        y: target.y,
+        width: target.width,
+        height: target.height,
       },
     };
   }
@@ -375,7 +412,11 @@ export function composeGroupChild(child: DesignObject, group: DesignObject): Des
   const g = group.transform;
   const groupRot = g.rotation || 0;
 
-  if ((child.type === "path" || child.type === "line") && child.points && child.points.length >= 1) {
+  if (
+    (child.type === "path" || child.type === "line") &&
+    child.points &&
+    child.points.length >= 1
+  ) {
     let worldPoints = translatePoints(child.points, g.x, g.y);
     if (groupRot !== 0) {
       const gcx = g.x + g.width / 2;
@@ -388,15 +429,26 @@ export function composeGroupChild(child: DesignObject, group: DesignObject): Des
       points: worldPoints,
       transform: {
         ...t,
-        x: bb.x, y: bb.y, width: bb.width, height: bb.height,
+        x: bb.x,
+        y: bb.y,
+        width: bb.width,
+        height: bb.height,
         rotation: t.rotation || 0, // r_c only — r_g is baked into the points
       },
     };
   }
 
   const composed = composeGroupChildTransform(
-    t.x, t.y, t.width, t.height, t.rotation || 0,
-    g.x, g.y, g.width, g.height, groupRot,
+    t.x,
+    t.y,
+    t.width,
+    t.height,
+    t.rotation || 0,
+    g.x,
+    g.y,
+    g.width,
+    g.height,
+    groupRot
   );
   return {
     ...child,
@@ -427,9 +479,12 @@ export function buildGroupObject(
   children: DesignObject[],
   id: string,
   name: string,
-  layerIndex: number,
+  layerIndex: number
 ): DesignObject {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
   for (const obj of children) {
     minX = Math.min(minX, obj.transform.x);
     minY = Math.min(minY, obj.transform.y);
@@ -447,13 +502,21 @@ export function buildGroupObject(
     type: "group",
     name,
     transform: {
-      x: minX, y: minY,
-      width: maxX - minX, height: maxY - minY,
-      rotation: 0, scaleX: 1, scaleY: 1,
+      x: minX,
+      y: minY,
+      width: maxX - minX,
+      height: maxY - minY,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
     },
     layerIndex,
-    visible: true, locked: false,
-    fill: null, stroke: "#ffffff", strokeWidth: 0, opacity: 1,
+    visible: true,
+    locked: false,
+    fill: null,
+    stroke: "#ffffff",
+    strokeWidth: 0,
+    opacity: 1,
     children: rebased,
   };
 }
@@ -475,8 +538,16 @@ const MAX_SAMPLING_DEPTH = 24;
 
 /** Perpendicular distance from (px,py) to the chord (ax,ay)-(bx,by);
  *  falls back to point distance when the chord is degenerate. */
-function chordDistance(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
-  const dx = bx - ax, dy = by - ay;
+function chordDistance(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number
+): number {
+  const dx = bx - ax,
+    dy = by - ay;
   const len2 = dx * dx + dy * dy;
   if (len2 === 0) return Math.hypot(px - ax, py - ay);
   return Math.abs(dx * (py - ay) - dy * (px - ax)) / Math.sqrt(len2);
@@ -488,12 +559,21 @@ function chordDistance(px: number, py: number, ax: number, ay: number, bx: numbe
  *  input (malformed imports must error loudly, not hang Generate). */
 function flattenCubicInto(
   emit: (x: number, y: number) => void,
-  p0x: number, p0y: number, p1x: number, p1y: number,
-  p2x: number, p2y: number, p3x: number, p3y: number,
-  tolerance: number, depth: number,
+  p0x: number,
+  p0y: number,
+  p1x: number,
+  p1y: number,
+  p2x: number,
+  p2y: number,
+  p3x: number,
+  p3y: number,
+  tolerance: number,
+  depth: number
 ): void {
   if (depth === 0 && !Number.isFinite(p0x + p0y + p1x + p1y + p2x + p2y + p3x + p3y)) {
-    throw new Error("Path contains non-finite curve coordinates -- repair or re-import the geometry");
+    throw new Error(
+      "Path contains non-finite curve coordinates -- repair or re-import the geometry"
+    );
   }
   if (
     depth >= MAX_SAMPLING_DEPTH ||
@@ -504,12 +584,18 @@ function flattenCubicInto(
     return;
   }
   // de Casteljau split at t = 0.5
-  const q0x = (p0x + p1x) / 2, q0y = (p0y + p1y) / 2;
-  const q1x = (p1x + p2x) / 2, q1y = (p1y + p2y) / 2;
-  const q2x = (p2x + p3x) / 2, q2y = (p2y + p3y) / 2;
-  const r0x = (q0x + q1x) / 2, r0y = (q0y + q1y) / 2;
-  const r1x = (q1x + q2x) / 2, r1y = (q1y + q2y) / 2;
-  const sx = (r0x + r1x) / 2, sy = (r0y + r1y) / 2;
+  const q0x = (p0x + p1x) / 2,
+    q0y = (p0y + p1y) / 2;
+  const q1x = (p1x + p2x) / 2,
+    q1y = (p1y + p2y) / 2;
+  const q2x = (p2x + p3x) / 2,
+    q2y = (p2y + p3y) / 2;
+  const r0x = (q0x + q1x) / 2,
+    r0y = (q0y + q1y) / 2;
+  const r1x = (q1x + q2x) / 2,
+    r1y = (q1y + q2y) / 2;
+  const sx = (r0x + r1x) / 2,
+    sy = (r0y + r1y) / 2;
   flattenCubicInto(emit, p0x, p0y, q0x, q0y, r0x, r0y, sx, sy, tolerance, depth + 1);
   flattenCubicInto(emit, sx, sy, r1x, r1y, q2x, q2y, p3x, p3y, tolerance, depth + 1);
 }
@@ -538,14 +624,15 @@ function flattenCubicInto(
 export function sampleBezierPath(
   points: ReadonlyArray<PathPoint>,
   closed: boolean,
-  tolerance: number = CURVE_CHORD_TOLERANCE_MM,
+  tolerance: number = CURVE_CHORD_TOLERANCE_MM
 ): Array<{ x: number; y: number }> {
   const out: Array<{ x: number; y: number }> = [];
   if (points.length === 0) return out;
 
   const emit = (x: number, y: number): void => {
     const last = out[out.length - 1];
-    if (last && Math.abs(last.x - x) <= POINTS_EPSILON && Math.abs(last.y - y) <= POINTS_EPSILON) return;
+    if (last && Math.abs(last.x - x) <= POINTS_EPSILON && Math.abs(last.y - y) <= POINTS_EPSILON)
+      return;
     out.push({ x, y });
   };
 
@@ -556,9 +643,16 @@ export function sampleBezierPath(
     if (prev.handleOut && pt.handleIn) {
       flattenCubicInto(
         emit,
-        prev.x, prev.y, prev.handleOut.x, prev.handleOut.y,
-        pt.handleIn.x, pt.handleIn.y, pt.x, pt.y,
-        tolerance, 0,
+        prev.x,
+        prev.y,
+        prev.handleOut.x,
+        prev.handleOut.y,
+        pt.handleIn.x,
+        pt.handleIn.y,
+        pt.x,
+        pt.y,
+        tolerance,
+        0
       );
     } else {
       emit(pt.x, pt.y);
@@ -574,9 +668,16 @@ export function sampleBezierPath(
       const raw: Array<{ x: number; y: number }> = [];
       flattenCubicInto(
         (x, y) => raw.push({ x, y }),
-        last.x, last.y, last.handleOut.x, last.handleOut.y,
-        first.handleIn.x, first.handleIn.y, first.x, first.y,
-        tolerance, 0,
+        last.x,
+        last.y,
+        last.handleOut.x,
+        last.handleOut.y,
+        first.handleIn.x,
+        first.handleIn.y,
+        first.x,
+        first.y,
+        tolerance,
+        0
       );
       raw.pop();
       for (const p of raw) emit(p.x, p.y);
@@ -584,7 +685,8 @@ export function sampleBezierPath(
     // Return-to-start dedup: many real files close with an explicit duplicate
     // of the start point before Z — Rust's close-append would double it.
     if (out.length >= 2) {
-      const a = out[0], b = out[out.length - 1];
+      const a = out[0],
+        b = out[out.length - 1];
       if (Math.abs(a.x - b.x) <= POINTS_EPSILON && Math.abs(a.y - b.y) <= POINTS_EPSILON) out.pop();
     }
   }
@@ -619,7 +721,7 @@ export function signedArea(pts: ReadonlyArray<[number, number]>): number {
  */
 export function offsetRingByDistance(
   ring: Array<[number, number]>,
-  distance: number,
+  distance: number
 ): Array<[number, number]> {
   const n = ring.length;
   if (n < 3) return ring;
@@ -641,15 +743,20 @@ export function offsetRingByDistance(
     const prev = pts[(i - 1 + len) % len];
     const curr = pts[i];
     const next = pts[(i + 1) % len];
-    const dx1 = curr[0] - prev[0], dy1 = curr[1] - prev[1];
-    const dx2 = next[0] - curr[0], dy2 = next[1] - curr[1];
+    const dx1 = curr[0] - prev[0],
+      dy1 = curr[1] - prev[1];
+    const dx2 = next[0] - curr[0],
+      dy2 = next[1] - curr[1];
     const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1) || 1;
     const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2) || 1;
     // Unit normals (left-hand normal of each edge)
-    const nx1 = -dy1 / len1, ny1 = dx1 / len1;
-    const nx2 = -dy2 / len2, ny2 = dx2 / len2;
+    const nx1 = -dy1 / len1,
+      ny1 = dx1 / len1;
+    const nx2 = -dy2 / len2,
+      ny2 = dx2 / len2;
     // Bisector direction (average of the two edge normals)
-    const bx = nx1 + nx2, by = ny1 + ny2;
+    const bx = nx1 + nx2,
+      by = ny1 + ny2;
     const blen = Math.sqrt(bx * bx + by * by);
     if (blen < 1e-10) {
       // Degenerate (180° turn): use either normal
@@ -684,22 +791,22 @@ export function offsetRingByDistance(
  * @param rotateOffset    world-mm distance above the top-center for the rotate handle
  */
 export interface OrientedHandles {
-  nw:     { x: number; y: number };
-  n:      { x: number; y: number };
-  ne:     { x: number; y: number };
-  w:      { x: number; y: number };
-  e:      { x: number; y: number };
-  sw:     { x: number; y: number };
-  s:      { x: number; y: number };
-  se:     { x: number; y: number };
+  nw: { x: number; y: number };
+  n: { x: number; y: number };
+  ne: { x: number; y: number };
+  w: { x: number; y: number };
+  e: { x: number; y: number };
+  sw: { x: number; y: number };
+  s: { x: number; y: number };
+  se: { x: number; y: number };
   rotate: { x: number; y: number };
 }
 
 export function orientedHandlePoints(
   t: { x: number; y: number; width: number; height: number; rotation?: number },
-  rotateOffset: number,
+  rotateOffset: number
 ): OrientedHandles {
-  const rot = (t.rotation || 0) * Math.PI / 180;
+  const rot = ((t.rotation || 0) * Math.PI) / 180;
   const cos = Math.cos(rot);
   const sin = Math.sin(rot);
   const cx = t.x + t.width / 2;
@@ -716,15 +823,15 @@ export function orientedHandlePoints(
   }
 
   return {
-    nw:     L(-hw, -hh),
-    n:      L(   0, -hh),
-    ne:     L( hw, -hh),
-    w:      L(-hw,    0),
-    e:      L( hw,    0),
-    sw:     L(-hw,  hh),
-    s:      L(   0,  hh),
-    se:     L( hw,  hh),
+    nw: L(-hw, -hh),
+    n: L(0, -hh),
+    ne: L(hw, -hh),
+    w: L(-hw, 0),
+    e: L(hw, 0),
+    sw: L(-hw, hh),
+    s: L(0, hh),
+    se: L(hw, hh),
     // Rotate handle: rotateOffset above the top-center in local-y direction
-    rotate: L(   0, -hh - rotateOffset),
+    rotate: L(0, -hh - rotateOffset),
   };
 }

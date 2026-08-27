@@ -106,10 +106,16 @@ describe("SVG import: compound path → grouped per-contour objects", () => {
     const flat = flattenObjectsForTest(objects);
     expect(flat).toHaveLength(2);
     expect(pts(flat[0])).toEqual([
-      { x: 5, y: 7 }, { x: 15, y: 7 }, { x: 15, y: 17 }, { x: 5, y: 17 },
+      { x: 5, y: 7 },
+      { x: 15, y: 7 },
+      { x: 15, y: 17 },
+      { x: 5, y: 17 },
     ]);
     expect(pts(flat[1])).toEqual([
-      { x: 7, y: 9 }, { x: 13, y: 9 }, { x: 13, y: 15 }, { x: 7, y: 15 },
+      { x: 7, y: 9 },
+      { x: 13, y: 9 },
+      { x: 13, y: 15 },
+      { x: 7, y: 15 },
     ]);
     expect(flat[0].closed).toBe(true);
     expect(flat[1].closed).toBe(true);
@@ -141,7 +147,9 @@ describe("SVG import: compound path → grouped per-contour objects", () => {
     expect(fillCut[0].height).toBeCloseTo(10, 5);
 
     // On a LINE layer, the group emits TWO separate CutObjects (unchanged)
-    const lineLayers = DEFAULT_LAYERS.map((l, i) => i === 0 ? { ...l, mode: "line" as const } : l);
+    const lineLayers = DEFAULT_LAYERS.map((l, i) =>
+      i === 0 ? { ...l, mode: "line" as const } : l
+    );
     const { objects: lineCut } = toCutObjectsForTest(objects, lineLayers);
     expect(lineCut).toHaveLength(2);
     for (const c of lineCut) {
@@ -157,14 +165,17 @@ describe("SVG import: compound path → grouped per-contour objects", () => {
       `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100mm" height="100mm">
          <path d="M0 0 H10 V10 H0 Z" stroke="#000"/>
        </svg>`,
-      null,
+      null
     );
     const objects = useStore.getState().objects;
     expect(objects).toHaveLength(1);
     expect(objects[0].type).toBe("path");
     expect(objects[0].closed).toBe(true);
     expect(pts(objects[0])).toEqual([
-      { x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 },
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
     ]);
   });
 
@@ -173,7 +184,7 @@ describe("SVG import: compound path → grouped per-contour objects", () => {
       `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100mm" height="100mm">
          <path d="M0 0 H10 V10 H0 Z M20 20 L30 20 L30 30" stroke="#000"/>
        </svg>`,
-      null,
+      null
     );
     const flat = flattenObjectsForTest(useStore.getState().objects);
     expect(flat).toHaveLength(2);
@@ -186,7 +197,7 @@ describe("SVG import: compound path → grouped per-contour objects", () => {
       `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100mm" height="100mm">
          <path d="M5 5 M0 0 H10 V10 H0 Z" stroke="#000"/>
        </svg>`,
-      null,
+      null
     );
     const objects = useStore.getState().objects;
     expect(objects).toHaveLength(1);
@@ -202,15 +213,21 @@ describe("SVG import: compound path inside transformed groups", () => {
            <path d="M0 0 H10 V10 H0 Z M20 0 H30 V10 H20 Z" stroke="#000"/>
          </g>
        </svg>`,
-      null,
+      null
     );
     const flat = flattenObjectsForTest(useStore.getState().objects);
     expect(flat).toHaveLength(2);
     expect(pts(flat[0])).toEqual([
-      { x: 50, y: 50 }, { x: 60, y: 50 }, { x: 60, y: 60 }, { x: 50, y: 60 },
+      { x: 50, y: 50 },
+      { x: 60, y: 50 },
+      { x: 60, y: 60 },
+      { x: 50, y: 60 },
     ]);
     expect(pts(flat[1])).toEqual([
-      { x: 70, y: 50 }, { x: 80, y: 50 }, { x: 80, y: 60 }, { x: 70, y: 60 },
+      { x: 70, y: 50 },
+      { x: 80, y: 50 },
+      { x: 80, y: 60 },
+      { x: 70, y: 60 },
     ]);
   });
 
@@ -221,15 +238,21 @@ describe("SVG import: compound path inside transformed groups", () => {
            <path d="M5 5 H15 V15 H5 Z M20 5 H30 V15 H20 Z" stroke="#000"/>
          </g>
        </svg>`,
-      null,
+      null
     );
     const flat = flattenObjectsForTest(useStore.getState().objects);
     expect(flat).toHaveLength(2);
     expect(pts(flat[0])).toEqual([
-      { x: 10, y: 10 }, { x: 30, y: 10 }, { x: 30, y: 30 }, { x: 10, y: 30 },
+      { x: 10, y: 10 },
+      { x: 30, y: 10 },
+      { x: 30, y: 30 },
+      { x: 10, y: 30 },
     ]);
     expect(pts(flat[1])).toEqual([
-      { x: 40, y: 10 }, { x: 60, y: 10 }, { x: 60, y: 30 }, { x: 40, y: 30 },
+      { x: 40, y: 10 },
+      { x: 60, y: 10 },
+      { x: 60, y: 30 },
+      { x: 40, y: 30 },
     ]);
   });
 
@@ -241,15 +264,21 @@ describe("SVG import: compound path inside transformed groups", () => {
            <path d="M20 0 H30 V10 H20 Z" stroke="#000"/>
          </g>
        </svg>`,
-      null,
+      null
     );
     const objects = useStore.getState().objects;
     expect(objects).toHaveLength(2);
     expect(pts(objects[0])).toEqual([
-      { x: 100, y: 100 }, { x: 110, y: 100 }, { x: 110, y: 110 }, { x: 100, y: 110 },
+      { x: 100, y: 100 },
+      { x: 110, y: 100 },
+      { x: 110, y: 110 },
+      { x: 100, y: 110 },
     ]);
     expect(pts(objects[1])).toEqual([
-      { x: 120, y: 100 }, { x: 130, y: 100 }, { x: 130, y: 110 }, { x: 120, y: 110 },
+      { x: 120, y: 100 },
+      { x: 130, y: 100 },
+      { x: 130, y: 110 },
+      { x: 120, y: 110 },
     ]);
   });
 
@@ -262,12 +291,15 @@ describe("SVG import: compound path inside transformed groups", () => {
            </g>
          </g>
        </svg>`,
-      null,
+      null
     );
     const objects = useStore.getState().objects;
     expect(objects).toHaveLength(1);
     expect(pts(objects[0])).toEqual([
-      { x: 60, y: 60 }, { x: 65, y: 60 }, { x: 65, y: 65 }, { x: 60, y: 65 },
+      { x: 60, y: 60 },
+      { x: 65, y: 60 },
+      { x: 65, y: 65 },
+      { x: 60, y: 65 },
     ]);
   });
 
@@ -276,16 +308,22 @@ describe("SVG import: compound path inside transformed groups", () => {
       `<svg xmlns="http://www.w3.org/2000/svg" viewBox="10 10 100 100" width="100mm" height="100mm">
          <path d="M10 10 H20 V20 H10 Z M30 10 H40 V20 H30 Z" stroke="#000"/>
        </svg>`,
-      null,
+      null
     );
     const flat = flattenObjectsForTest(useStore.getState().objects);
     expect(flat).toHaveLength(2);
     // viewBox="10 10 ..." → initial matrix translates by (-10, -10)
     expect(pts(flat[0])).toEqual([
-      { x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 },
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
     ]);
     expect(pts(flat[1])).toEqual([
-      { x: 20, y: 0 }, { x: 30, y: 0 }, { x: 30, y: 10 }, { x: 20, y: 10 },
+      { x: 20, y: 0 },
+      { x: 30, y: 0 },
+      { x: 30, y: 10 },
+      { x: 20, y: 10 },
     ]);
   });
 
@@ -295,7 +333,7 @@ describe("SVG import: compound path inside transformed groups", () => {
       `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
          <path d="M0 0 H100 V100 H0 Z M10 10 H90 V90 H10 Z" stroke="#000"/>
        </svg>`,
-      null,
+      null
     );
     const flat = flattenObjectsForTest(useStore.getState().objects);
     expect(flat).toHaveLength(2);
@@ -386,7 +424,11 @@ describe("image trace: compound d split, single-subpath traces ungrouped", () =>
     // image space 100×80 px mapped onto imgT (50×30 mm at (10,20))
     const objects = buildTracedPathObjects(
       `<svg><path d="M0 0 L100 0 L100 80 L0 80 Z M20 16 L80 16 L80 64 L20 64 Z"/></svg>`,
-      imgT, 100, 80, 0, "#4a90e2",
+      imgT,
+      100,
+      80,
+      0,
+      "#4a90e2"
     );
     expect(objects).toHaveLength(1);
     const group = objects[0];
@@ -396,10 +438,16 @@ describe("image trace: compound d split, single-subpath traces ungrouped", () =>
 
     const flat = flattenObjectsForTest(objects);
     expect(pts(flat[0])).toEqual([
-      { x: 10, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 50 }, { x: 10, y: 50 },
+      { x: 10, y: 20 },
+      { x: 60, y: 20 },
+      { x: 60, y: 50 },
+      { x: 10, y: 50 },
     ]);
     expect(pts(flat[1])).toEqual([
-      { x: 20, y: 26 }, { x: 50, y: 26 }, { x: 50, y: 44 }, { x: 20, y: 44 },
+      { x: 20, y: 26 },
+      { x: 50, y: 26 },
+      { x: 50, y: 44 },
+      { x: 20, y: 44 },
     ]);
     expect(flat[0].closed).toBe(true);
     expect(flat[1].closed).toBe(true);
@@ -408,7 +456,11 @@ describe("image trace: compound d split, single-subpath traces ungrouped", () =>
   it("CHARACTERIZATION: single-subpath trace stays an ungrouped path", () => {
     const objects = buildTracedPathObjects(
       `<svg><path d="M 0 0 L 100 0 L 100 80 Z"/></svg>`,
-      imgT, 100, 80, 0, "#4a90e2",
+      imgT,
+      100,
+      80,
+      0,
+      "#4a90e2"
     );
     expect(objects).toHaveLength(1);
     expect(objects[0].type).toBe("path");
@@ -436,7 +488,9 @@ describe("Phase 1: toCutObjects — fill layer coalesces grouped compound shapes
   it("line layer: donut group → two separate CutObjects (unchanged)", () => {
     _testImportSvgWithLayers(DONUT_SVG, null);
     const objects = useStore.getState().objects;
-    const lineLayers = DEFAULT_LAYERS.map((l, i) => i === 0 ? { ...l, mode: "line" as const } : l);
+    const lineLayers = DEFAULT_LAYERS.map((l, i) =>
+      i === 0 ? { ...l, mode: "line" as const } : l
+    );
     const { objects: cut } = toCutObjectsForTest(objects, lineLayers);
     // line mode → NOT coalesced: 2 CutObjects
     expect(cut).toHaveLength(2);
@@ -456,9 +510,15 @@ describe("Phase 1: toCutObjects — fill layer coalesces grouped compound shapes
       name: "IO",
       transform: { x: 0, y: 30, width: 0, height: 0, rotation: 0, scaleX: 1, scaleY: 1 },
       layerIndex: 0,
-      visible: true, locked: false,
-      fill: "#e8e8e8", stroke: "#e8e8e8", strokeWidth: 0, opacity: 1,
-      text: "IO", fontSize: 18, fontFamily: "sans-serif",
+      visible: true,
+      locked: false,
+      fill: "#e8e8e8",
+      stroke: "#e8e8e8",
+      strokeWidth: 0,
+      opacity: 1,
+      text: "IO",
+      fontSize: 18,
+      fontFamily: "sans-serif",
     });
     // prepared = [I_path, O_group]
     expect(prepared).toHaveLength(2);

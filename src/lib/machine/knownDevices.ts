@@ -17,10 +17,12 @@ const KNOWN_LASER_DEVICES: KnownDevice[] = [
 
 function isKnownLaserDevice(vid: number | null, pid: number | null): KnownDevice | undefined {
   if (vid === null || pid === null) return undefined;
-  return KNOWN_LASER_DEVICES.find(d => d.vid === vid && d.pid === pid);
+  return KNOWN_LASER_DEVICES.find((d) => d.vid === vid && d.pid === pid);
 }
 
-export function sortPortsByPriority<T extends { vid: number | null; pid: number | null; name: string }>(ports: T[]): T[] {
+export function sortPortsByPriority<
+  T extends { vid: number | null; pid: number | null; name: string },
+>(ports: T[]): T[] {
   return [...ports].sort((a, b) => {
     const aKnown = isKnownLaserDevice(a.vid, a.pid);
     const bKnown = isKnownLaserDevice(b.vid, b.pid);

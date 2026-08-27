@@ -36,12 +36,27 @@ describe("parsePngPhysDpi", () => {
     const sig = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
     // pHYs chunk: 4-byte length (9), 4-byte type "pHYs", 9 bytes data, 4-byte CRC (dummy)
     const chunkData = new Uint8Array([
-      0, 0, 0, 9,         // length = 9
-      112, 72, 89, 115,   // "pHYs"
-      (ppm >> 24) & 0xff, (ppm >> 16) & 0xff, (ppm >> 8) & 0xff, ppm & 0xff, // X ppu
-      (ppm >> 24) & 0xff, (ppm >> 16) & 0xff, (ppm >> 8) & 0xff, ppm & 0xff, // Y ppu
-      1,                  // unit = meter
-      0, 0, 0, 0,         // CRC (ignored)
+      0,
+      0,
+      0,
+      9, // length = 9
+      112,
+      72,
+      89,
+      115, // "pHYs"
+      (ppm >> 24) & 0xff,
+      (ppm >> 16) & 0xff,
+      (ppm >> 8) & 0xff,
+      ppm & 0xff, // X ppu
+      (ppm >> 24) & 0xff,
+      (ppm >> 16) & 0xff,
+      (ppm >> 8) & 0xff,
+      ppm & 0xff, // Y ppu
+      1, // unit = meter
+      0,
+      0,
+      0,
+      0, // CRC (ignored)
     ]);
     // Add IDAT after so the parser stops
     const idat = new Uint8Array([0, 0, 0, 0, 73, 68, 65, 84, 0, 0, 0, 0]);
@@ -61,12 +76,27 @@ describe("parsePngPhysDpi", () => {
     const ppm = 2835;
     const sig = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
     const chunkData = new Uint8Array([
-      0, 0, 0, 9,
-      112, 72, 89, 115,
-      (ppm >> 24) & 0xff, (ppm >> 16) & 0xff, (ppm >> 8) & 0xff, ppm & 0xff,
-      (ppm >> 24) & 0xff, (ppm >> 16) & 0xff, (ppm >> 8) & 0xff, ppm & 0xff,
-      0,                  // unit = unknown (not meter)
-      0, 0, 0, 0,
+      0,
+      0,
+      0,
+      9,
+      112,
+      72,
+      89,
+      115,
+      (ppm >> 24) & 0xff,
+      (ppm >> 16) & 0xff,
+      (ppm >> 8) & 0xff,
+      ppm & 0xff,
+      (ppm >> 24) & 0xff,
+      (ppm >> 16) & 0xff,
+      (ppm >> 8) & 0xff,
+      ppm & 0xff,
+      0, // unit = unknown (not meter)
+      0,
+      0,
+      0,
+      0,
     ]);
     const idat = new Uint8Array([0, 0, 0, 0, 73, 68, 65, 84, 0, 0, 0, 0]);
     const buf = new Uint8Array(sig.length + chunkData.length + idat.length);
@@ -109,9 +139,7 @@ function extractTextFonts(svgText: string): string[] {
   for (const el of doc.querySelectorAll("text, tspan")) {
     const style = el.getAttribute("style") || "";
     const fontFamilyMatch = style.match(/font-family\s*:\s*([^;]+)/);
-    const fontFamily = fontFamilyMatch
-      ? fontFamilyMatch[1].trim()
-      : el.getAttribute("font-family");
+    const fontFamily = fontFamilyMatch ? fontFamilyMatch[1].trim() : el.getAttribute("font-family");
     if (fontFamily) {
       const primary = fontFamily.replace(/['"]/g, "").split(",")[0].trim();
       if (primary) fonts.add(primary);

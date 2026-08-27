@@ -30,14 +30,16 @@ export function assertPointsInvariant(obj: DesignObject, epsilon: number = POINT
   const bb = pointsBBox(obj.points!);
   const t = obj.transform;
   const drift = Math.max(
-    Math.abs(t.x - bb.x), Math.abs(t.y - bb.y),
-    Math.abs(t.width - bb.width), Math.abs(t.height - bb.height),
+    Math.abs(t.x - bb.x),
+    Math.abs(t.y - bb.y),
+    Math.abs(t.width - bb.width),
+    Math.abs(t.height - bb.height)
   );
   if (drift > epsilon) {
     throw new Error(
       `points invariant violated for "${obj.id}" (${obj.type}): transform=` +
-      `{x:${t.x}, y:${t.y}, w:${t.width}, h:${t.height}} vs pointsBBox=` +
-      `{x:${bb.x}, y:${bb.y}, w:${bb.width}, h:${bb.height}} (drift ${drift})`,
+        `{x:${t.x}, y:${t.y}, w:${t.width}, h:${t.height}} vs pointsBBox=` +
+        `{x:${bb.x}, y:${bb.y}, w:${bb.width}, h:${bb.height}} (drift ${drift})`
     );
   }
 }

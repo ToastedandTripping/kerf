@@ -106,12 +106,17 @@ function buildCutLayer(layer: Layer): CutObject["layer"] {
   };
 }
 
-
 /** Build a line-mode CutObject layer for the line overlay of a fillLine layer.
  *  Uses lineOverlay settings (power/speed/etc.) but inherits all geometry-affecting
  *  fields (kerfOffset, leadIn/Out, etc.) from the parent layer. */
 function buildLineOverlayCutLayer(layer: Layer): CutObject["layer"] {
-  const ov = layer.lineOverlay ?? { power: 100, powerMin: 0, speed: 1200, passes: 1, powerMode: "constant" as const };
+  const ov = layer.lineOverlay ?? {
+    power: 100,
+    powerMin: 0,
+    speed: 1200,
+    passes: 1,
+    powerMode: "constant" as const,
+  };
   return {
     mode: "line",
     power: ov.power,
@@ -151,8 +156,10 @@ function synthesizeFillContour(obj: DesignObject): CutObject["paths"][0] | null 
   const { x, y, width, height } = obj.transform;
   if (obj.type === "ellipse") {
     const steps = 64;
-    const cx = x + width / 2, cy = y + height / 2;
-    const rx = width / 2, ry = height / 2;
+    const cx = x + width / 2,
+      cy = y + height / 2;
+    const rx = width / 2,
+      ry = height / 2;
     const pts: Array<{ x: number; y: number }> = [];
     for (let s = 0; s < steps; s++) {
       const angle = (2 * Math.PI * s) / steps;
@@ -173,7 +180,7 @@ function synthesizeFillContour(obj: DesignObject): CutObject["paths"][0] | null 
     ];
     for (const c of corners) {
       for (let s = 0; s <= steps; s++) {
-        const angle = c.startAngle + (c.endAngle - c.startAngle) * s / steps;
+        const angle = c.startAngle + ((c.endAngle - c.startAngle) * s) / steps;
         pts.push({ x: c.cx + Math.cos(angle) * r, y: c.cy + Math.sin(angle) * r });
       }
     }
@@ -214,7 +221,10 @@ function flattenObjects(objects: DesignObject[], parentGroupId?: string): Design
 export { flattenObjects as flattenObjectsForTest };
 
 /** Convert store objects to CutObjects for the Rust engine, sorted by layer order */
-function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutObject[]; warnings: string[] } {
+function toCutObjects(
+  objects: DesignObject[],
+  layers: Layer[]
+): { objects: CutObject[]; warnings: string[] } {
   const flat = flattenObjects(objects);
   // Sort by layer array position (cut sequence order).
   // Orphan objects (unknown layerIndex) are clamped to end (layers.length) rather than
@@ -246,7 +256,10 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
   // not any outer word-group id. One coalesced CutObject is emitted per key.
   type GroupEntry = {
     paths: CutObject["paths"];
-    minX: number; minY: number; maxX: number; maxY: number;
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
     firstObj: DesignObject;
     layer: Layer;
   };
@@ -275,7 +288,11 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
     // route through maskFill so holes are respected (even-odd rule); only
     // simple single-contour objects use the Rust offsetFill spiral arm.
     // Rectangles keep the AABB fill path (their bbox IS the shape, no coalescing needed).
-    if ((layer.mode === "fill" || layer.mode === "fillLine" || layer.mode === "offsetFill") && isNonRectShape && obj.groupId) {
+    if (
+      (layer.mode === "fill" || layer.mode === "fillLine" || layer.mode === "offsetFill") &&
+      isNonRectShape &&
+      obj.groupId
+    ) {
       // Use the resolved layer.index for the group key so orphan groups (unknown
       // layerIndex → resolved to layers[0] above) are keyed on the same layer
       // whose settings they actually use — not on the raw (possibly undefined)
@@ -293,7 +310,7 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
         if (childRot !== 0) {
           const ccx = obj.transform.x + obj.transform.width / 2;
           const ccy = obj.transform.y + obj.transform.height / 2;
-          const rad = childRot * Math.PI / 180;
+          const rad = (childRot * Math.PI) / 180;
           const cos = Math.cos(rad);
           const sin = Math.sin(rad);
           sampled = sampled.map((p) => {
@@ -323,7 +340,10 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
         bx2 = Math.max(...pts.map((p) => p.x));
         by2 = Math.max(...pts.map((p) => p.y));
       } else {
-        bx = x; by = y; bx2 = x + width; by2 = y + height;
+        bx = x;
+        by = y;
+        bx2 = x + width;
+        by2 = y + height;
       }
       const x2 = bx2;
       const y2 = by2;
@@ -338,7 +358,10 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
       } else {
         groupBuf.set(key, {
           paths: [...contourPaths],
-          minX: bx, minY: by, maxX: x2, maxY: y2,
+          minX: bx,
+          minY: by,
+          maxX: x2,
+          maxY: y2,
           firstObj: obj,
           layer,
         });
@@ -363,7 +386,10 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
     // Synthesize fill contour for shapes without explicit points (ellipses,
     // rounded rectangles) heading to fill/fillLine/maskFill. Without this,
     // the Rust maskFill arm receives zero contours and returns Err (silent no-op).
-    if (paths.length === 0 && (layer.mode === "fill" || layer.mode === "fillLine" || layer.mode === "offsetFill")) {
+    if (
+      paths.length === 0 &&
+      (layer.mode === "fill" || layer.mode === "fillLine" || layer.mode === "offsetFill")
+    ) {
       const synth = synthesizeFillContour(obj);
       if (synth) paths.push(synth);
     }
@@ -376,7 +402,12 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
       effectiveMode = "maskFill";
     }
     // Rounded rectangles also need maskFill (their cornerRadius means AABB != shape).
-    if ((layer.mode === "fill" || layer.mode === "fillLine") && obj.type === "rectangle" && (obj.cornerRadius || 0) > 0 && paths.length > 0) {
+    if (
+      (layer.mode === "fill" || layer.mode === "fillLine") &&
+      obj.type === "rectangle" &&
+      (obj.cornerRadius || 0) > 0 &&
+      paths.length > 0
+    ) {
       effectiveMode = "maskFill";
     }
 
@@ -418,7 +449,7 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
           ];
           for (const c of corners) {
             for (let s = 0; s <= steps; s++) {
-              const angle = c.startAngle + (c.endAngle - c.startAngle) * s / steps;
+              const angle = c.startAngle + ((c.endAngle - c.startAngle) * s) / steps;
               pts.push({ x: c.cx + Math.cos(angle) * r, y: c.cy + Math.sin(angle) * r });
             }
           }
@@ -427,8 +458,10 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
       } else if (obj.type === "ellipse") {
         // Sample ellipse as dense polyline
         const steps = 64;
-        const cx = x + width / 2, cy = y + height / 2;
-        const rx = width / 2, ry = height / 2;
+        const cx = x + width / 2,
+          cy = y + height / 2;
+        const rx = width / 2,
+          ry = height / 2;
         const pts: Array<{ x: number; y: number }> = [];
         for (let s = 0; s < steps; s++) {
           const angle = (2 * Math.PI * s) / steps;
@@ -542,14 +575,14 @@ function toCutObjects(objects: DesignObject[], layers: Layer[]): { objects: CutO
   // F11: emit info message when locked objects are present in the output
   if (lockedCount > 0) {
     console.info(
-      `Note: ${lockedCount} locked object(s) included in G-code — use layer Output toggle to exclude from cut`,
+      `Note: ${lockedCount} locked object(s) included in G-code — use layer Output toggle to exclude from cut`
     );
   }
 
   // Orphan warning: objects with unknown layerIndex were clamped to end (emitted last).
   if (orphanIds.length > 0) {
     warnings.push(
-      `${orphanIds.length} object(s) have an unknown layer and will be emitted last: ${orphanIds.slice(0, 3).join(", ")}${orphanIds.length > 3 ? "..." : ""}`,
+      `${orphanIds.length} object(s) have an unknown layer and will be emitted last: ${orphanIds.slice(0, 3).join(", ")}${orphanIds.length > 3 ? "..." : ""}`
     );
   }
 
@@ -576,16 +609,14 @@ async function generateImageGcodeByLayer(
   workspaceHeight: number,
   originTop: boolean,
   sValueMax: number,
-  accelX: number = 0,
+  accelX: number = 0
 ): Promise<{ byLayer: Map<number, GcodeResult[]>; lockedCount: number }> {
   const layerOrder = new Map(layers.map((l, pos) => [l.index, pos]));
   // Flatten groups so images nested inside groups are included with their
   // composed transforms (position, rotation). Without this, only top-level
   // images reached the image pipeline — grouped images silently vanished.
   const flat = flattenObjects(objects);
-  const imageObjects = flat.filter(
-    (obj) => obj.type === "image" && obj.visible && obj.imageData,
-  );
+  const imageObjects = flat.filter((obj) => obj.type === "image" && obj.visible && obj.imageData);
 
   const byLayer = new Map<number, GcodeResult[]>();
   let lockedCount = 0;
@@ -600,7 +631,14 @@ async function generateImageGcodeByLayer(
       ? layerOrder.get(obj.layerIndex)!
       : layers.length;
 
-    const adj = obj.imageAdjustments || { brightness: 0, contrast: 0, gamma: 1, invert: false, removeBackground: false, bgTolerance: 20 };
+    const adj = obj.imageAdjustments || {
+      brightness: 0,
+      contrast: 0,
+      gamma: 1,
+      invert: false,
+      removeBackground: false,
+      bgTolerance: 20,
+    };
     // Fix 5: apply per-object powerScale (default 1) to image engraving power
     const powerScale = obj.powerScale ?? 1;
 
@@ -763,12 +801,7 @@ function assembleGcode(fragments: GcodeResult[]): GcodeResult {
   ].join("\n");
 
   // Document footer — emitted exactly once
-  const docFooter = [
-    "",
-    "M5 ; laser off",
-    "G0 X0 Y0 ; return home",
-    "M2 ; program end",
-  ].join("\n");
+  const docFooter = ["", "M5 ; laser off", "G0 X0 Y0 ; return home", "M2 ; program end"].join("\n");
 
   // Strip each fragment's preamble/footer and join with M5 seams
   const bodyParts: string[] = [];
@@ -840,7 +873,7 @@ export async function generateGcode(): Promise<GcodeResult> {
     if (obj.layer.powerMode !== "variable") {
       store.addConsoleLine(
         `Layer uses constant power (M3). Laser will not reduce power during speed changes. Use variable power (M4) unless doing constant-speed through-cuts.`,
-        "warning",
+        "warning"
       );
       break; // One warning is enough
     }
@@ -858,14 +891,14 @@ export async function generateGcode(): Promise<GcodeResult> {
       return m === "fill" || m === "fillLine" || m === "maskFill" || m === "offsetFill";
     });
     const hasImageLayer = store.objects.some(
-      (obj) => obj.type === "image" && obj.visible && obj.imageData,
+      (obj) => obj.type === "image" && obj.visible && obj.imageData
     );
     if (hasFillLayer || hasImageLayer) {
       store.addConsoleLine(
         "GRBL laser mode ($32) is disabled — M4 is a no-op, dynamic power scaling is off, " +
-        "and the laser may fire during G0 travel on fill/raster jobs. " +
-        "Use the 'Enable Laser Mode' button in the Machine panel, or run $32=1 in the console.",
-        "warning",
+          "and the laser may fire during G0 travel on fill/raster jobs. " +
+          "Use the 'Enable Laser Mode' button in the Machine panel, or run $32=1 in the console.",
+        "warning"
       );
     }
   }
@@ -888,9 +921,13 @@ export async function generateGcode(): Promise<GcodeResult> {
       // Does this layer have any objects?
       const hasVectorObjs = cutObjects.some((obj) => obj.layerIndex === layer.index);
       const hasImageObjs = store.objects.some(
-        (obj) => obj.type === "image" && obj.visible && obj.imageData &&
-          (store.layers.find((l) => l.index === obj.layerIndex) || store.layers[0]).index === layer.index &&
-          (store.layers.find((l) => l.index === obj.layerIndex) || store.layers[0]).output !== false,
+        (obj) =>
+          obj.type === "image" &&
+          obj.visible &&
+          obj.imageData &&
+          (store.layers.find((l) => l.index === obj.layerIndex) || store.layers[0]).index ===
+            layer.index &&
+          (store.layers.find((l) => l.index === obj.layerIndex) || store.layers[0]).output !== false
       );
 
       if (!hasVectorObjs && !hasImageObjs) continue;
@@ -909,15 +946,15 @@ export async function generateGcode(): Promise<GcodeResult> {
     // Warn if ANY line-mode position < ANY engrave/fill/image position
     // i.e. a cut fires before an engrave that comes after it in layer order
     const riskyOrder = lineModePositions.some((linePos) =>
-      engraveModePositions.some((engravePos) => linePos < engravePos),
+      engraveModePositions.some((engravePos) => linePos < engravePos)
     );
 
     if (riskyOrder) {
       store.addConsoleLine(
         "Warning: a Cut/Line layer fires before an Engrave/Fill layer. " +
-        "The part may be freed before engraving completes. " +
-        "Drag the Engrave layer above the Cut layer to prevent this.",
-        "warning",
+          "The part may be freed before engraving completes. " +
+          "Drag the Engrave layer above the Cut layer to prevent this.",
+        "warning"
       );
     }
   }
@@ -925,19 +962,18 @@ export async function generateGcode(): Promise<GcodeResult> {
   const sValueMax = store.grblSValueMax;
 
   // Step 1: Generate image fragments keyed by layer position
-  const { byLayer: imageByLayer, lockedCount: lockedImageCount } =
-    await generateImageGcodeByLayer(
-      store.layers,
-      store.objects,
-      store.workspaceHeight,
-      store.originTop,
-      sValueMax,
-      accelX,
-    );
+  const { byLayer: imageByLayer, lockedCount: lockedImageCount } = await generateImageGcodeByLayer(
+    store.layers,
+    store.objects,
+    store.workspaceHeight,
+    store.originTop,
+    sValueMax,
+    accelX
+  );
 
   if (lockedImageCount > 0) {
     console.info(
-      `Note: ${lockedImageCount} locked image(s) included in G-code — use layer Output toggle to exclude from cut`,
+      `Note: ${lockedImageCount} locked image(s) included in G-code — use layer Output toggle to exclude from cut`
     );
   }
 
@@ -947,9 +983,8 @@ export async function generateGcode(): Promise<GcodeResult> {
   const vectorByLayer = new Map<number, CutObject[]>();
   for (const obj of cutObjects) {
     const idx = obj.layerIndex;
-    const pos = (idx !== undefined && layerOrder.has(idx))
-      ? layerOrder.get(idx)!
-      : store.layers.length;
+    const pos =
+      idx !== undefined && layerOrder.has(idx) ? layerOrder.get(idx)! : store.layers.length;
     const existing = vectorByLayer.get(pos);
     if (existing) {
       existing.push(obj);
@@ -959,10 +994,7 @@ export async function generateGcode(): Promise<GcodeResult> {
   }
 
   // Step 3: Collect all layer positions that have content
-  const allPositions = new Set<number>([
-    ...imageByLayer.keys(),
-    ...vectorByLayer.keys(),
-  ]);
+  const allPositions = new Set<number>([...imageByLayer.keys(), ...vectorByLayer.keys()]);
   const sortedPositions = Array.from(allPositions).sort((a, b) => a - b);
 
   // Step 4: Build ordered fragments list. For each layer position:
@@ -1005,7 +1037,14 @@ export async function previewImageDither(objectId: string): Promise<PreviewDithe
     throw new Error("No image object found");
   }
   const layer = store.layers.find((l) => l.index === obj.layerIndex) || store.layers[0];
-  const adj = obj.imageAdjustments || { brightness: 0, contrast: 0, gamma: 1, invert: false, removeBackground: false, bgTolerance: 20 };
+  const adj = obj.imageAdjustments || {
+    brightness: 0,
+    contrast: 0,
+    gamma: 1,
+    invert: false,
+    removeBackground: false,
+    bgTolerance: 20,
+  };
 
   return invoke<PreviewDitherResult>("preview_image_dither", {
     request: {
@@ -1042,4 +1081,3 @@ export async function previewImageDither(objectId: string): Promise<PreviewDithe
     },
   });
 }
-

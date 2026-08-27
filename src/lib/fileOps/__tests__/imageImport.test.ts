@@ -20,8 +20,14 @@ function makePngWithPhys(ppu: number, unit: number): Uint8Array {
   const physType = [112, 72, 89, 115]; // "pHYs"
   const physLen = [0, 0, 0, 9];
   const physData = [
-    (ppu >> 24) & 0xff, (ppu >> 16) & 0xff, (ppu >> 8) & 0xff, ppu & 0xff, // x-ppu
-    (ppu >> 24) & 0xff, (ppu >> 16) & 0xff, (ppu >> 8) & 0xff, ppu & 0xff, // y-ppu
+    (ppu >> 24) & 0xff,
+    (ppu >> 16) & 0xff,
+    (ppu >> 8) & 0xff,
+    ppu & 0xff, // x-ppu
+    (ppu >> 24) & 0xff,
+    (ppu >> 16) & 0xff,
+    (ppu >> 8) & 0xff,
+    ppu & 0xff, // y-ppu
     unit,
   ];
   const physCrc = [0, 0, 0, 0]; // dummy CRC
@@ -33,9 +39,17 @@ function makePngWithPhys(ppu: number, unit: number): Uint8Array {
 
   const bytes = [
     ...sig,
-    ...ihdrLen, ...ihdrType, ...ihdrData, ...ihdrCrc,
-    ...physLen, ...physType, ...physData, ...physCrc,
-    ...idatLen, ...idatType, ...idatCrc,
+    ...ihdrLen,
+    ...ihdrType,
+    ...ihdrData,
+    ...ihdrCrc,
+    ...physLen,
+    ...physType,
+    ...physData,
+    ...physCrc,
+    ...idatLen,
+    ...idatType,
+    ...idatCrc,
   ];
   return new Uint8Array(bytes);
 }
@@ -48,7 +62,9 @@ describe("parsePngPhysDpi — F21 PNG pHYs DPI extraction", () => {
 
   it("returns null for PNG without pHYs chunk", () => {
     // Just the signature
-    const data = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0, 73, 68, 65, 84, 0, 0, 0, 0]);
+    const data = new Uint8Array([
+      137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0, 73, 68, 65, 84, 0, 0, 0, 0,
+    ]);
     expect(parsePngPhysDpi(data)).toBeNull();
   });
 

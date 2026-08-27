@@ -69,7 +69,15 @@ beforeEach(() => {
 describe("textToGcode — emitted sequence", () => {
   it("frames an open contour as header, G0, power-on, G1 stream, M5", async () => {
     textObjectToPaths.mockResolvedValue([
-      makePath("c0", [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 2 }], false),
+      makePath(
+        "c0",
+        [
+          { x: 0, y: 0 },
+          { x: 1, y: 0 },
+          { x: 1, y: 2 },
+        ],
+        false
+      ),
     ]);
 
     const lines = await textToGcode("A", 10, 20, 3, 800, 1500, "M4");
@@ -86,7 +94,15 @@ describe("textToGcode — emitted sequence", () => {
 
   it("appends a return-to-start G1 for a closed contour, before M5", async () => {
     textObjectToPaths.mockResolvedValue([
-      makePath("c0", [{ x: 0, y: 0 }, { x: 2, y: 0 }, { x: 2, y: 2 }], true),
+      makePath(
+        "c0",
+        [
+          { x: 0, y: 0 },
+          { x: 2, y: 0 },
+          { x: 2, y: 2 },
+        ],
+        true
+      ),
     ]);
 
     const lines = await textToGcode("A", 0, 0, 3, 500, 1000, "M3");
@@ -99,8 +115,22 @@ describe("textToGcode — emitted sequence", () => {
 
   it("emits one G0/power-on/M5 cycle per contour", async () => {
     textObjectToPaths.mockResolvedValue([
-      makePath("c0", [{ x: 0, y: 0 }, { x: 1, y: 0 }], false),
-      makePath("c1", [{ x: 5, y: 5 }, { x: 6, y: 5 }], false),
+      makePath(
+        "c0",
+        [
+          { x: 0, y: 0 },
+          { x: 1, y: 0 },
+        ],
+        false
+      ),
+      makePath(
+        "c1",
+        [
+          { x: 5, y: 5 },
+          { x: 6, y: 5 },
+        ],
+        false
+      ),
     ]);
 
     const lines = await textToGcode("AB", 0, 0, 3, 500, 1000, "M4");
@@ -113,7 +143,14 @@ describe("textToGcode — emitted sequence", () => {
 
   it("coordinates are fixed to 3 decimals", async () => {
     textObjectToPaths.mockResolvedValue([
-      makePath("c0", [{ x: 0.12345, y: 0.98765 }, { x: 1, y: 1 }], false),
+      makePath(
+        "c0",
+        [
+          { x: 0.12345, y: 0.98765 },
+          { x: 1, y: 1 },
+        ],
+        false
+      ),
     ]);
 
     const lines = await textToGcode("A", 0, 0, 3, 500, 1000, "M4");
@@ -149,7 +186,14 @@ describe("textToGcode — group composition", () => {
    * that gap rather than endorsing it.
    */
   it("adds group x/y to child points as pure translation, ignoring group rotation", async () => {
-    const child = makePath("inner", [{ x: 1, y: 1 }, { x: 2, y: 1 }], false);
+    const child = makePath(
+      "inner",
+      [
+        { x: 1, y: 1 },
+        { x: 2, y: 1 },
+      ],
+      false
+    );
     const group = makeGroup("glyph_O", 10, 20, [child]);
     // A rotation the composition does not apply — proving it is dropped.
     group.transform.rotation = 90;
@@ -166,7 +210,14 @@ describe("textToGcode — group composition", () => {
   });
 
   it("accumulates offsets through nested groups", async () => {
-    const child = makePath("inner", [{ x: 1, y: 1 }, { x: 2, y: 1 }], false);
+    const child = makePath(
+      "inner",
+      [
+        { x: 1, y: 1 },
+        { x: 2, y: 1 },
+      ],
+      false
+    );
     const inner = makeGroup("inner_group", 5, 5, [child]);
     const outer = makeGroup("outer_group", 10, 10, [inner]);
 
@@ -180,7 +231,14 @@ describe("textToGcode — group composition", () => {
 
   it("passes the caller's text and fontSize through to the path builder", async () => {
     textObjectToPaths.mockResolvedValue([
-      makePath("c0", [{ x: 0, y: 0 }, { x: 1, y: 0 }], false),
+      makePath(
+        "c0",
+        [
+          { x: 0, y: 0 },
+          { x: 1, y: 0 },
+        ],
+        false
+      ),
     ]);
 
     await textToGcode("HELLO", 0, 0, 2.5, 500, 1000, "M4");

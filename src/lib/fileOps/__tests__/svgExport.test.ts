@@ -12,7 +12,14 @@ import { exportSvgContent } from "../svgExport";
 import { _testImportSvgWithLayers } from "../../../components/panels/SvgImportDialog";
 import { toCutObjectsForTest } from "../../machine/gcodeGen";
 
-function makeRotatedRect(id: string, x: number, y: number, w: number, h: number, rotation: number): DesignObject {
+function makeRotatedRect(
+  id: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  rotation: number
+): DesignObject {
   return {
     id,
     type: "rectangle",
@@ -168,7 +175,10 @@ describe("P3-A Finding 9: path/line rotation export", () => {
       stroke: "#000",
       strokeWidth: 1,
       opacity: 1,
-      points: [{ x: 0, y: 0 }, { x: 10, y: 10 }],
+      points: [
+        { x: 0, y: 0 },
+        { x: 10, y: 10 },
+      ],
       closed: false,
     };
     useStore.getState().addObject(obj);
@@ -211,8 +221,10 @@ describe("svgExport groups (W1c Fix 4)", () => {
       strokeWidth: 1,
       opacity: 1,
       points: [
-        { x: off, y: off }, { x: off + size, y: off },
-        { x: off + size, y: off + size }, { x: off, y: off + size },
+        { x: off, y: off },
+        { x: off + size, y: off },
+        { x: off + size, y: off + size },
+        { x: off, y: off + size },
       ],
       closed: true,
     });
@@ -258,11 +270,19 @@ describe("svgExport groups (W1c Fix 4)", () => {
       { x: 40, y: 30, handleIn: { x: 40, y: 30 + k }, handleOut: { x: 40, y: 30 - k } },
     ];
     useStore.getState().addObject({
-      id: "c1", type: "path", name: "Circle",
+      id: "c1",
+      type: "path",
+      name: "Circle",
       transform: { x: 20, y: 20, width: 20, height: 20, rotation: 0, scaleX: 1, scaleY: 1 },
-      layerIndex: 0, visible: true, locked: false,
-      fill: null, stroke: "#4a90e2", strokeWidth: 1, opacity: 1,
-      points: circle, closed: true,
+      layerIndex: 0,
+      visible: true,
+      locked: false,
+      fill: null,
+      stroke: "#4a90e2",
+      strokeWidth: 1,
+      opacity: 1,
+      points: circle,
+      closed: true,
     });
     const svg = exportSvgContent();
     // 4 segments of a 4-anchor closed circle: 3 inner C + 1 closing C, then Z
@@ -277,13 +297,21 @@ describe("svgExport groups (W1c Fix 4)", () => {
       `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100mm" height="100mm">
          <path d="M0 0 H10 V10 H0 Z M2 2 H8 V8 H2 Z" stroke="#000"/>
        </svg>`,
-      null,
+      null
     );
     expect(useStore.getState().objects).toHaveLength(1); // the F20 group
     const exported = exportSvgContent();
 
     // Re-import into a clean store
-    useStore.setState({ objects: [], objectsById: new Map(), selectedIds: [], selectedSet: new Set(), undoStack: [], redoStack: [], consoleLines: [] });
+    useStore.setState({
+      objects: [],
+      objectsById: new Map(),
+      selectedIds: [],
+      selectedSet: new Set(),
+      undoStack: [],
+      redoStack: [],
+      consoleLines: [],
+    });
     _testImportSvgWithLayers(exported, null);
     const reimported = useStore.getState().objects;
 
@@ -293,10 +321,16 @@ describe("svgExport groups (W1c Fix 4)", () => {
     expect(reimported).toHaveLength(2);
     expect(reimported.every((o) => o.type === "path")).toBe(true);
     expect(reimported[0].points!.map((p) => ({ x: p.x, y: p.y }))).toEqual([
-      { x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 },
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
     ]);
     expect(reimported[1].points!.map((p) => ({ x: p.x, y: p.y }))).toEqual([
-      { x: 2, y: 2 }, { x: 8, y: 2 }, { x: 8, y: 8 }, { x: 2, y: 8 },
+      { x: 2, y: 2 },
+      { x: 8, y: 2 },
+      { x: 8, y: 8 },
+      { x: 2, y: 8 },
     ]);
     expect(reimported[0].closed).toBe(true);
     expect(reimported[1].closed).toBe(true);
@@ -315,16 +349,32 @@ describe("svgExport groups (W1c Fix 4)", () => {
       { x: 40, y: 30, handleIn: { x: 40, y: 30 + k }, handleOut: { x: 40, y: 30 - k } },
     ];
     const original: DesignObject = {
-      id: "c1", type: "path", name: "Circle",
+      id: "c1",
+      type: "path",
+      name: "Circle",
       transform: { x: 20, y: 20, width: 20, height: 20, rotation: 0, scaleX: 1, scaleY: 1 },
-      layerIndex: 0, visible: true, locked: false,
-      fill: null, stroke: "#4a90e2", strokeWidth: 1, opacity: 1,
-      points: circle, closed: true,
+      layerIndex: 0,
+      visible: true,
+      locked: false,
+      fill: null,
+      stroke: "#4a90e2",
+      strokeWidth: 1,
+      opacity: 1,
+      points: circle,
+      closed: true,
     };
     useStore.getState().addObject(original);
     const exported = exportSvgContent();
 
-    useStore.setState({ objects: [], objectsById: new Map(), selectedIds: [], selectedSet: new Set(), undoStack: [], redoStack: [], consoleLines: [] });
+    useStore.setState({
+      objects: [],
+      objectsById: new Map(),
+      selectedIds: [],
+      selectedSet: new Set(),
+      undoStack: [],
+      redoStack: [],
+      consoleLines: [],
+    });
     _testImportSvgWithLayers(exported, null);
     const reimported = useStore.getState().objects;
     expect(reimported).toHaveLength(1);

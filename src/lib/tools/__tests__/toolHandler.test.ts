@@ -14,7 +14,14 @@ import {
   _testHitTest,
 } from "../toolHandler";
 
-function makeRect(id: string, x: number, y: number, w: number, h: number, rotation = 0): DesignObject {
+function makeRect(
+  id: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  rotation = 0
+): DesignObject {
   return {
     id,
     type: "rectangle",
@@ -174,7 +181,10 @@ describe("toolHandler geometry helpers (TN2)", () => {
 
       const cos = Math.cos(Math.PI / 4);
       const sin = Math.sin(Math.PI / 4);
-      const cx = 10, cy = 10, hw = 10, hh = 10;
+      const cx = 10,
+        cy = 10,
+        hw = 10,
+        hh = 10;
       const seX = cx + hw * cos - hh * sin; // = 10 + 10·cos45 − 10·sin45 = 10
       const seY = cy + hw * sin + hh * cos; // = 10 + 10·sin45 + 10·cos45 = 10 + 10√2
 

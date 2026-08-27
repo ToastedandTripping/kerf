@@ -18,7 +18,14 @@ function makeRect(id: string, x: number, y: number, w: number, h: number): Desig
   };
 }
 
-function makeRotatedRect(id: string, x: number, y: number, w: number, h: number, rotation: number): DesignObject {
+function makeRotatedRect(
+  id: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  rotation: number
+): DesignObject {
   return {
     ...makeRect(id, x, y, w, h),
     transform: { x, y, width: w, height: h, rotation, scaleX: 1, scaleY: 1 },
@@ -304,7 +311,10 @@ describe("Geometry Actions", () => {
     });
 
     it("normalizes rotation past 360 (270 cw → 0)", () => {
-      const obj: DesignObject = { ...makeRect("r1", 0, 0, 10, 10), transform: { ...makeRect("r1", 0, 0, 10, 10).transform, rotation: 270 } };
+      const obj: DesignObject = {
+        ...makeRect("r1", 0, 0, 10, 10),
+        transform: { ...makeRect("r1", 0, 0, 10, 10).transform, rotation: 270 },
+      };
       useStore.getState().addObject(obj);
       useStore.getState().setSelectedIds(["r1"]);
       useStore.getState().rotate90("cw");
@@ -321,9 +331,12 @@ describe("Geometry Actions", () => {
       // 2×3 grid: 6 objects total (1 original + 5 new)
       expect(useStore.getState().objects).toHaveLength(6);
       // Check col-2 of row-0: x = 0 + 2*(10+5) = 30
-      const col2 = useStore.getState().objects.find(
-        (o) => o.id !== "r1" && Math.abs(o.transform.x - 30) < 0.01 && Math.abs(o.transform.y) < 0.01
-      );
+      const col2 = useStore
+        .getState()
+        .objects.find(
+          (o) =>
+            o.id !== "r1" && Math.abs(o.transform.x - 30) < 0.01 && Math.abs(o.transform.y) < 0.01
+        );
       expect(col2).toBeDefined();
     });
   });
@@ -443,7 +456,11 @@ describe("Geometry Actions", () => {
 
     it("multi-select flip: path points are mirrored across the selection axis", () => {
       // Path at x=0..10, rect at x=30..40
-      const path = makePath("p1", [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 5, y: 10 }]);
+      const path = makePath("p1", [
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 5, y: 10 },
+      ]);
       const rect = makeRect("r1", 30, 0, 10, 10);
       useStore.getState().addObject(path);
       useStore.getState().addObject(rect);

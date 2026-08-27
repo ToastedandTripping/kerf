@@ -87,7 +87,7 @@ export const machineConnection = {
     const last = this.getLastPort();
     if (!last) return false;
     const ports = await this.listPorts();
-    const exists = ports.find(p => p.name === last.name);
+    const exists = ports.find((p) => p.name === last.name);
     if (!exists) return false;
     try {
       await this.connect(last.name, last.baudRate);
@@ -103,107 +103,113 @@ export const machineConnection = {
     if (connectingPromise) return connectingPromise;
 
     const doConnect = async (): Promise<string> => {
-    const store = useStore.getState();
-    try {
-      const response = await invoke<string>("serial_connect", {
-        portName,
-        baudRate,
-      });
-      store.setMachineConnected(true);
-      // NOTE: machineState is set below after a real status query (companion fix
-      // for BUG 3). We set "idle" here as a safe initial value so the UI is never
-      // left in "disconnected" while the status query is in-flight.
-      store.setMachineState("idle");
-      store.addConsoleLine(response, "received");
-
+      const store = useStore.getState();
       try {
-        localStorage.setItem(LAST_PORT_KEY, portName);
-        localStorage.setItem(LAST_BAUD_KEY, String(baudRate));
-      } catch {
-        // localStorage unavailable (private browsing, disabled storage) — non-critical, ignore
-      }
+        const response = await invoke<string>("serial_connect", {
+          portName,
+          baudRate,
+        });
+        store.setMachineConnected(true);
+        // NOTE: machineState is set below after a real status query (companion fix
+        // for BUG 3). We set "idle" here as a safe initial value so the UI is never
+        // left in "disconnected" while the status query is in-flight.
+        store.setMachineState("idle");
+        store.addConsoleLine(response, "received");
 
-      // DTR hardware-reset + 0x18 soft-reset now happen in Rust during
-      // serial_connect, before it returns. No TS-side reset needed.
+        try {
+          localStorage.setItem(LAST_PORT_KEY, portName);
+          localStorage.setItem(LAST_BAUD_KEY, String(baudRate));
+        } catch {
+          // localStorage unavailable (private browsing, disabled storage) — non-critical, ignore
+        }
 
-      // A7: clear any leaked intervals/subscriptions from a prior connect
-      // (e.g. reconnect after a 3-strike disconnect) BEFORE reassigning.
-      if (statusPollInterval) {
-        clearInterval(statusPollInterval);
-        statusPollInterval = null;
-      }
-      if (unsubscribeJobRunning) {
-        unsubscribeJobRunning();
-        unsubscribeJobRunning = null;
-      }
+        // DTR hardware-reset + 0x18 soft-reset now happen in Rust during
+        // serial_connect, before it returns. No TS-side reset needed.
 
-      // Start status polling
-      statusPollInterval = setInterval(() => this.pollStatus(), 250);
+        // A7: clear any leaked intervals/subscriptions from a prior connect
+        // (e.g. reconnect after a 3-strike disconnect) BEFORE reassigning.
+        if (statusPollInterval) {
+          clearInterval(statusPollInterval);
+          statusPollInterval = null;
+        }
+        if (unsubscribeJobRunning) {
+          unsubscribeJobRunning();
+          unsubscribeJobRunning = null;
+        }
 
-      // Suspend polling automatically when a job is running to prevent
-      // the status '?' query from interleaving with G-code commands on
-      // the shared serial port mutex, which causes garbled responses.
-      unsubscribeJobRunning = useStore.subscribe((state) => {
-        jobPollingSuspended = state.jobRunning;
-      });
+        // Start status polling
+        statusPollInterval = setInterval(() => this.pollStatus(), 250);
 
-      // F14: the post-connect settings sequence lives HERE so it is structurally
-      // impossible to connect without it. autoConnect used to skip it entirely:
-      // sValueMax stayed 1000 on a $30=255 machine (4x overpower), no laser-mode
-      // warning, default workspace. Both entry paths now produce identical output.
-      const settingsVerified = await this.queryGrblSettings();
+        // Suspend polling automatically when a job is running to prevent
+        // the status '?' query from interleaving with G-code commands on
+        // the shared serial port mutex, which causes garbled responses.
+        unsubscribeJobRunning = useStore.subscribe((state) => {
+          jobPollingSuspended = state.jobRunning;
+        });
 
-      // BUG 3 companion fix: query the real machine state immediately after
-      // connect so the UI reflects ALARM (or any other state) before the first
-      // 250ms poll fires. This closes the window where the UI shows "idle" while
-      // the machine is actually locked.
-      try {
-        const initStatus = await this.getStatusReport();
-        if (initStatus) {
-          const initMatch = initStatus.match(/<(\w+(?::\d+)?)\|/);
-          if (initMatch) {
-            const rawState = initMatch[1].toLowerCase().split(":")[0] as
-              "idle" | "run" | "hold" | "alarm" | "door";
-            store.setMachineState(rawState);
-            if (rawState === "alarm") {
-              store.addConsoleLine(
-                "Machine is in ALARM state — Home ($H) or Unlock ($X) before starting a job.",
-                "warning",
-              );
+        // F14: the post-connect settings sequence lives HERE so it is structurally
+        // impossible to connect without it. autoConnect used to skip it entirely:
+        // sValueMax stayed 1000 on a $30=255 machine (4x overpower), no laser-mode
+        // warning, default workspace. Both entry paths now produce identical output.
+        const settingsVerified = await this.queryGrblSettings();
+
+        // BUG 3 companion fix: query the real machine state immediately after
+        // connect so the UI reflects ALARM (or any other state) before the first
+        // 250ms poll fires. This closes the window where the UI shows "idle" while
+        // the machine is actually locked.
+        try {
+          const initStatus = await this.getStatusReport();
+          if (initStatus) {
+            const initMatch = initStatus.match(/<(\w+(?::\d+)?)\|/);
+            if (initMatch) {
+              const rawState = initMatch[1].toLowerCase().split(":")[0] as
+                | "idle"
+                | "run"
+                | "hold"
+                | "alarm"
+                | "door";
+              store.setMachineState(rawState);
+              if (rawState === "alarm") {
+                store.addConsoleLine(
+                  "Machine is in ALARM state — Home ($H) or Unlock ($X) before starting a job.",
+                  "warning"
+                );
+              }
             }
           }
+        } catch {
+          // Non-fatal: pollStatus will correct the state within 250ms.
         }
-      } catch {
-        // Non-fatal: pollStatus will correct the state within 250ms.
-      }
 
-      if (settingsVerified) {
-        // $32 warning ONLY on a successful $$ parse: grblLaserMode defaults
-        // false, so warning off the default after a failed query would be a
-        // spurious alarm.
-        if (!useStore.getState().grblLaserMode) {
+        if (settingsVerified) {
+          // $32 warning ONLY on a successful $$ parse: grblLaserMode defaults
+          // false, so warning off the default after a failed query would be a
+          // spurious alarm.
+          if (!useStore.getState().grblLaserMode) {
+            store.addConsoleLine(
+              "GRBL laser mode ($32) is disabled. Laser will not auto-zero at speed changes. Run $32=1 in the console to enable.",
+              "warning"
+            );
+          }
+        } else {
           store.addConsoleLine(
-            "GRBL laser mode ($32) is disabled. Laser will not auto-zero at speed changes. Run $32=1 in the console to enable.",
-            "warning",
+            "Machine settings unverified -- using defaults. Run $$ in the console to retry.",
+            "warning"
           );
         }
-      } else {
-        store.addConsoleLine(
-          "Machine settings unverified -- using defaults. Run $$ in the console to retry.",
-          "warning",
-        );
-      }
 
-      return response;
-    } catch (e) {
-      const msg = String(e);
-      store.addConsoleLine(`Connection failed: ${msg}`, "error");
-      throw categorizeConnectionError(msg);
-    }
+        return response;
+      } catch (e) {
+        const msg = String(e);
+        store.addConsoleLine(`Connection failed: ${msg}`, "error");
+        throw categorizeConnectionError(msg);
+      }
     }; // end doConnect
 
     // A7: set the coalescing promise; clear on settle (success or failure).
-    connectingPromise = doConnect().finally(() => { connectingPromise = null; });
+    connectingPromise = doConnect().finally(() => {
+      connectingPromise = null;
+    });
     return connectingPromise;
   },
 
@@ -215,9 +221,7 @@ export const machineConnection = {
     // de-energized. setJobRunning(false) first so the streaming loop exits
     // on its next iteration and skips its own safety volley (we handle it).
     const needsEstop =
-      store.jobRunning ||
-      store.machineState === "run" ||
-      store.machineState === "hold";
+      store.jobRunning || store.machineState === "run" || store.machineState === "hold";
     if (needsEstop) {
       store.setJobRunning(false);
       try {
@@ -262,9 +266,10 @@ export const machineConnection = {
           continue;
         }
         // F17 Fix 2.2: ALARM lines are protocol errors, not "received" chatter.
-        const type = r.startsWith("error:") || r.startsWith("ALARM")
-          ? "error" as const
-          : "received" as const;
+        const type =
+          r.startsWith("error:") || r.startsWith("ALARM")
+            ? ("error" as const)
+            : ("received" as const);
         store.addConsoleLine(r, type);
       }
       // In-pump reports refresh POSITION ONLY — never machineState: a stale
@@ -428,7 +433,7 @@ export const machineConnection = {
     if (workCoordOffset.x !== 0 || workCoordOffset.y !== 0) {
       store.addConsoleLine(
         `Work origin set. Previous offset was X${workCoordOffset.x.toFixed(3)} Y${workCoordOffset.y.toFixed(3)}. Run G92.1 to clear offset.`,
-        "info",
+        "info"
       );
     }
     // Reset the known offset to 0 since we just set origin — next poll will update if needed
@@ -495,21 +500,31 @@ export const machineConnection = {
 
     // 1. Feed hold -- bring motion to a controlled stop first (resetting during
     //    active motion makes ALARM:3 + lost position the routine outcome).
-    try { await invoke("serial_send_byte", { byte: 0x21 }); feedHoldSent = true; } catch { /* continue regardless */ }
+    try {
+      await invoke("serial_send_byte", { byte: 0x21 });
+      feedHoldSent = true;
+    } catch {
+      /* continue regardless */
+    }
 
     // 2. Deceleration settle.
     await new Promise((r) => setTimeout(r, 100));
 
     // 3. Soft reset -- de-energizes the laser at firmware level and aborts any
     //    in-flight pump (banner terminal frees the command lock).
-    try { await invoke("serial_send_byte", { byte: 0x18 }); resetSent = true; } catch { /* continue regardless */ }
+    try {
+      await invoke("serial_send_byte", { byte: 0x18 });
+      resetSent = true;
+    } catch {
+      /* continue regardless */
+    }
 
     // F16: if neither byte was delivered, the port is gone — go to alarm state.
     if (!feedHoldSent && !resetSent) {
       store.setMachineState("alarm");
       store.addConsoleLine(
         "E-stop send failed — port may be disconnected. Machine state unknown — treat as unsafe.",
-        "error",
+        "error"
       );
       return;
     }
@@ -526,7 +541,7 @@ export const machineConnection = {
         store.setMachineState("alarm");
         store.addConsoleLine(
           "E-stop incomplete — feed hold sent but soft reset failed after retry. Beam may still be on — treat as unsafe.",
-          "error",
+          "error"
         );
         return;
       }
@@ -536,7 +551,11 @@ export const machineConnection = {
     //    then re-poll. Bounded in Rust -- can never hang mid-emergency.
     await new Promise((r) => setTimeout(r, 200));
     let report = "";
-    try { report = await this.getStatusReport(); } catch { /* port may be gone */ }
+    try {
+      report = await this.getStatusReport();
+    } catch {
+      /* port may be gone */
+    }
 
     // Refresh DRO/state from the fresh post-reset report, if any.
     // F19: accept both MPos and WPos to support $10=0 machines.
@@ -557,18 +576,22 @@ export const machineConnection = {
     // line commands queue but don't execute in Hold/Door).
     const reportedState = report.match(/^<(\w+)/)?.[1]?.toLowerCase();
     if (reportedState === "idle" || reportedState === "run") {
-      try { await this.send("M5"); } catch { /* port may be gone */ }
+      try {
+        await this.send("M5");
+      } catch {
+        /* port may be gone */
+      }
       store.addConsoleLine("Emergency stop complete", "warning");
     } else if (reportedState === "alarm") {
       // Expected aftermath of a mid-motion reset; the alarm panel takes over.
       store.addConsoleLine(
         "Machine in alarm after stop -- laser off, unlock to continue",
-        "warning",
+        "warning"
       );
     } else {
       store.addConsoleLine(
         "Emergency stop complete -- machine reset, laser de-energized",
-        "warning",
+        "warning"
       );
     }
   },
@@ -589,7 +612,7 @@ export const machineConnection = {
       } else {
         store.addConsoleLine(
           `$32=1 may not have been accepted. Re-check with $$ in the console. Response: ${outcome.responses.join(", ")}`,
-          "warning",
+          "warning"
         );
       }
       return accepted;
@@ -611,9 +634,12 @@ export const machineConnection = {
       const outcome = await invoke<SendOutcome>("serial_send", { command: "$$" });
       for (const d of outcome.drained) surfaceUnsolicited(d);
       let parsedAny = false;
-      let accelX = 0, accelY = 0;
-      let maxFeedRateX = 0, maxFeedRateY = 0;
-      let maxTravelX = 0, maxTravelY = 0;
+      let accelX = 0,
+        accelY = 0;
+      let maxFeedRateX = 0,
+        maxFeedRateY = 0;
+      let maxTravelX = 0,
+        maxTravelY = 0;
       for (const line of outcome.responses) {
         const match = line.match(/^\$(\d+)=([\d.]+)/);
         if (match) {
@@ -622,13 +648,22 @@ export const machineConnection = {
           const value = parseFloat(match[2]);
           if (key === 20) {
             store.setGrblSoftLimits(value === 1);
-            store.addConsoleLine(`$20=${value} (soft limits ${value === 1 ? "enabled" : "disabled"})`, "info");
+            store.addConsoleLine(
+              `$20=${value} (soft limits ${value === 1 ? "enabled" : "disabled"})`,
+              "info"
+            );
           } else if (key === 21) {
             store.setGrblHardLimits(value === 1);
-            store.addConsoleLine(`$21=${value} (hard limits ${value === 1 ? "enabled" : "disabled"})`, "info");
+            store.addConsoleLine(
+              `$21=${value} (hard limits ${value === 1 ? "enabled" : "disabled"})`,
+              "info"
+            );
           } else if (key === 22) {
             store.setGrblHoming(value === 1);
-            store.addConsoleLine(`$22=${value} (homing cycle ${value === 1 ? "enabled" : "disabled"})`, "info");
+            store.addConsoleLine(
+              `$22=${value} (homing cycle ${value === 1 ? "enabled" : "disabled"})`,
+              "info"
+            );
           } else if (key === 30) {
             // C2: firmware always wins (safety); log when it differs from the persisted value
             const prev = store.grblSValueMax;
@@ -639,7 +674,10 @@ export const machineConnection = {
             store.addConsoleLine(`$30=${value} (S-value max)`, "info");
           } else if (key === 32) {
             store.setGrblLaserMode(value === 1);
-            store.addConsoleLine(`$32=${value} (laser mode ${value === 1 ? "enabled" : "disabled"})`, "info");
+            store.addConsoleLine(
+              `$32=${value} (laser mode ${value === 1 ? "enabled" : "disabled"})`,
+              "info"
+            );
           } else if (key === 110) {
             maxFeedRateX = value;
           } else if (key === 111) {
@@ -666,7 +704,10 @@ export const machineConnection = {
       if (maxTravelX > 0 && maxTravelY > 0) {
         store.setWorkspaceSize(maxTravelX, maxTravelY);
         store.setWorkspaceVerified(true);
-        store.addConsoleLine(`Workspace set to ${maxTravelX}×${maxTravelY}mm from machine settings`, "info");
+        store.addConsoleLine(
+          `Workspace set to ${maxTravelX}×${maxTravelY}mm from machine settings`,
+          "info"
+        );
       }
       return parsedAny;
     } catch (e) {
@@ -695,7 +736,11 @@ function categorizeConnectionError(raw: string): ConnectionError {
     };
   }
 
-  if (lower.includes("not found") || lower.includes("no such file") || lower.includes("does not exist")) {
+  if (
+    lower.includes("not found") ||
+    lower.includes("no such file") ||
+    lower.includes("does not exist")
+  ) {
     return {
       message: "Serial port not found",
       suggestions: [

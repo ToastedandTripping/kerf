@@ -17,7 +17,11 @@ function collectPathLeaves(objs: DesignObject[], wx = 0, wy = 0): PathLeaf[] {
   for (const obj of objs) {
     if (obj.type === "group" && obj.children) {
       // Group children's points are local to the group's origin. Accumulate.
-      for (const leaf of collectPathLeaves(obj.children, wx + obj.transform.x, wy + obj.transform.y)) {
+      for (const leaf of collectPathLeaves(
+        obj.children,
+        wx + obj.transform.x,
+        wy + obj.transform.y
+      )) {
         leaves.push(leaf);
       }
     } else if (obj.type === "path" && obj.points && obj.points.length >= 2) {
@@ -53,7 +57,7 @@ export async function textToGcode(
   fontSize: number,
   sValue: number,
   feedRate: number,
-  powerMode: string,
+  powerMode: string
 ): Promise<string[]> {
   // Build a synthetic DesignObject for textObjectToPaths.
   // ID is a throwaway — this object never enters the store.

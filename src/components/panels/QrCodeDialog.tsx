@@ -26,9 +26,12 @@ export function QrCodeDialog({ open, onClose }: Props) {
   useEscapeClose(open, onClose);
   useFocusTrap(dialogRef, open);
 
-  const content = mode === "text" ? text
-    : mode === "url" ? url
-    : `WIFI:T:${wifiEncryption};S:${wifiSsid};P:${wifiPass};;`;
+  const content =
+    mode === "text"
+      ? text
+      : mode === "url"
+        ? url
+        : `WIFI:T:${wifiEncryption};S:${wifiSsid};P:${wifiPass};;`;
 
   useEffect(() => {
     if (!open || !previewRef.current || !content) return;
@@ -73,12 +76,17 @@ export function QrCodeDialog({ open, onClose }: Props) {
               type: "rectangle",
               name: `QR module`,
               transform: {
-                x: 10 + x, y: 10 + y,
-                width: w, height: h,
-                rotation: 0, scaleX: 1, scaleY: 1,
+                x: 10 + x,
+                y: 10 + y,
+                width: w,
+                height: h,
+                rotation: 0,
+                scaleX: 1,
+                scaleY: 1,
               },
               layerIndex: store.activeLayerIndex,
-              visible: true, locked: false,
+              visible: true,
+              locked: false,
               fill: null,
               stroke: store.layers[store.activeLayerIndex].color,
               strokeWidth: 0.1,
@@ -115,34 +123,57 @@ export function QrCodeDialog({ open, onClose }: Props) {
 
   return (
     <>
-      <div onClick={onClose} style={{
-        position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999,
-      }} />
+      <div
+        onClick={onClose}
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(0,0,0,0.5)",
+          zIndex: 9999,
+        }}
+      />
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="qr-code-dialog-title"
         style={{
-        position: "fixed", top: "50%", left: "50%",
-        transform: "translate(-50%, -50%)",
-        width: "420px",
-        background: "var(--bg-panel)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-lg)",
-        boxShadow: "var(--shadow-modal)",
-        zIndex: 10000,
-        padding: "20px",
-      }}>
-        <div id="qr-code-dialog-title" style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "16px" }}>
+          position: "fixed",
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%, -50%)",
+          width: "420px",
+          background: "var(--bg-panel)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-lg)",
+          boxShadow: "var(--shadow-modal)",
+          zIndex: 10000,
+          padding: "20px",
+        }}
+      >
+        <div
+          id="qr-code-dialog-title"
+          style={{
+            fontSize: "14px",
+            fontWeight: 600,
+            color: "var(--text-primary)",
+            marginBottom: "16px",
+          }}
+        >
           Generate QR Code
         </div>
 
         {/* Mode selector */}
         <div style={{ display: "flex", gap: "6px", marginBottom: "12px" }}>
-          <button style={chipStyle(mode === "text")} onClick={() => setMode("text")}>Text</button>
-          <button style={chipStyle(mode === "url")} onClick={() => setMode("url")}>URL</button>
-          <button style={chipStyle(mode === "wifi")} onClick={() => setMode("wifi")}>WiFi</button>
+          <button style={chipStyle(mode === "text")} onClick={() => setMode("text")}>
+            Text
+          </button>
+          <button style={chipStyle(mode === "url")} onClick={() => setMode("url")}>
+            URL
+          </button>
+          <button style={chipStyle(mode === "wifi")} onClick={() => setMode("wifi")}>
+            WiFi
+          </button>
         </div>
 
         {/* Content inputs */}
@@ -178,9 +209,24 @@ export function QrCodeDialog({ open, onClose }: Props) {
               style={inputStyle}
             />
             <div style={{ display: "flex", gap: "6px" }}>
-              <button style={chipStyle(wifiEncryption === "WPA")} onClick={() => setWifiEncryption("WPA")}>WPA</button>
-              <button style={chipStyle(wifiEncryption === "WEP")} onClick={() => setWifiEncryption("WEP")}>WEP</button>
-              <button style={chipStyle(wifiEncryption === "nopass")} onClick={() => setWifiEncryption("nopass")}>None</button>
+              <button
+                style={chipStyle(wifiEncryption === "WPA")}
+                onClick={() => setWifiEncryption("WPA")}
+              >
+                WPA
+              </button>
+              <button
+                style={chipStyle(wifiEncryption === "WEP")}
+                onClick={() => setWifiEncryption("WEP")}
+              >
+                WEP
+              </button>
+              <button
+                style={chipStyle(wifiEncryption === "nopass")}
+                onClick={() => setWifiEncryption("nopass")}
+              >
+                None
+              </button>
             </div>
           </div>
         )}
@@ -202,9 +248,12 @@ export function QrCodeDialog({ open, onClose }: Props) {
               value={errorLevel}
               onChange={(e) => setErrorLevel(e.target.value as "L" | "M" | "Q" | "H")}
               style={{
-                background: "var(--bg-input)", border: "1px solid var(--border)",
-                color: "var(--text-primary)", padding: "4px 8px",
-                borderRadius: "var(--radius-sm)", fontSize: "12px",
+                background: "var(--bg-input)",
+                border: "1px solid var(--border)",
+                color: "var(--text-primary)",
+                padding: "4px 8px",
+                borderRadius: "var(--radius-sm)",
+                fontSize: "12px",
               }}
             >
               <option value="L">Low (7%)</option>
@@ -225,9 +274,13 @@ export function QrCodeDialog({ open, onClose }: Props) {
           <button
             onClick={onClose}
             style={{
-              background: "none", border: "1px solid var(--border)",
-              color: "var(--text-secondary)", padding: "6px 16px",
-              borderRadius: "var(--radius-sm)", cursor: "pointer", fontSize: "13px",
+              background: "none",
+              border: "1px solid var(--border)",
+              color: "var(--text-secondary)",
+              padding: "6px 16px",
+              borderRadius: "var(--radius-sm)",
+              cursor: "pointer",
+              fontSize: "13px",
             }}
           >
             Cancel

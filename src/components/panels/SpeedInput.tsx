@@ -12,7 +12,13 @@
  */
 
 import { useStore } from "../../app/store";
-import { sliderPosToSpeed, speedToSliderPos, clampSpeed, effectiveMaxSpeed, rasterMaxSpeed } from "../../lib/speedScale";
+import {
+  sliderPosToSpeed,
+  speedToSliderPos,
+  clampSpeed,
+  effectiveMaxSpeed,
+  rasterMaxSpeed,
+} from "../../lib/speedScale";
 
 // Matches the existing inputStyle in LayerPanel.tsx for visual parity.
 const numInputStyle: React.CSSProperties = {

@@ -18,10 +18,12 @@ zooms toward cursor using the correct world-coordinate math. The issue
 is that it feels steppy -- discrete zoom factor `1.1/0.9` with no easing.
 
 **Files:**
+
 - `src/components/viewport/Viewport.tsx` (handleWheel, lines ~378-401)
 - `src/app/store.ts` (camera state, setCamera)
 
 **Implementation:**
+
 - [ ] Replace discrete zoom with animated zoom using `requestAnimationFrame`
   - On wheel event, compute target zoom and target camera position
   - Lerp from current camera to target over ~120ms (6-8 frames at 60fps)
@@ -29,7 +31,7 @@ is that it feels steppy -- discrete zoom factor `1.1/0.9` with no easing.
     update the target, so rapid scrolling stays responsive
   - Cancel animation on pan start or pointer down
 - [ ] Add trackpad pinch-zoom support (detect `e.ctrlKey` on wheel events,
-  which is how browsers report pinch gestures)
+      which is how browsers report pinch gestures)
   - Already works partially since wheel fires, but sensitivity needs
     adjustment -- pinch delta is much smaller than scroll delta
   - Multiply pinch zoom factor by ~3x compared to scroll
@@ -46,11 +48,13 @@ change the math, add animation on top.
 ### 4a.2 Minimap
 
 **Files:**
+
 - New: `src/components/viewport/Minimap.tsx`
 - `src/components/viewport/Viewport.tsx` (mount minimap as sibling)
 - `src/app/store.ts` (read camera, objects, workspace size)
 
 **Implementation:**
+
 - [ ] Create `Minimap.tsx` component
   - Position: bottom-right of viewport area, 160x120px, `position: absolute`
   - Background: `rgba(0,0,0,0.6)` with `backdrop-filter: blur(8px)`
@@ -63,12 +67,12 @@ change the math, add animation on top.
     4. Draw viewport frustum as a translucent blue rectangle showing
        what's currently visible
 - [ ] Click-to-navigate: clicking the minimap sets camera position to
-  center the viewport on that world coordinate
+      center the viewport on that world coordinate
 - [ ] Drag the frustum rectangle to pan the viewport
 - [ ] Toggle visibility with `M` key (add to `src/lib/shortcuts.ts`)
 - [ ] Store minimap visibility in Zustand as `minimapVisible: boolean`
 - [ ] Hide minimap when workspace is fully visible (frustum covers entire
-  minimap -- minimap adds no value)
+      minimap -- minimap adds no value)
 
 **Design notes:**
 Keep it unobtrusive. It should feel like a HUD element, not a panel.
@@ -77,32 +81,37 @@ Opacity 0.7 idle, 1.0 on hover. Fade in/out with CSS transition.
 ### 4a.3 Workspace Matches Machine Bed
 
 **Files:**
+
 - `src/app/store.ts` (workspaceWidth, workspaceHeight, GRBL settings)
 - `src/components/panels/SettingsDialog.tsx` (workspace size controls)
 - `src/lib/machine/connection.ts` (GRBL `$$` settings parser)
 - `src/components/panels/GrblSettingsDialog.tsx`
 
 **Implementation:**
+
 - [ ] When machine connects and `$$` settings are read, extract:
   - `$130` = X max travel (mm)
   - `$131` = Y max travel (mm)
   - Store as `machineBedWidth` / `machineBedHeight` in Zustand
 - [ ] In SettingsDialog, add a "Match Machine Bed" button that sets
-  workspace size to machine bed dimensions
+      workspace size to machine bed dimensions
   - Only visible when machine dimensions are known
   - Show current machine dimensions as hint text
 - [ ] Add machine profile concept to store:
+
   ```typescript
   interface MachineProfile {
     name: string;
-    bedWidth: number;   // mm
-    bedHeight: number;  // mm
-    maxSpeed: number;   // mm/min
+    bedWidth: number; // mm
+    bedHeight: number; // mm
+    maxSpeed: number; // mm/min
     sValueMax: number;
   }
   ```
+
   - For now, single profile derived from connected machine
   - Phase 5 adds multiple profiles
+
 - [ ] Pre-flight check: warn if any objects extend beyond workspace bounds
   - Already have pre-flight checks in the safety hardening
   - Add bounds check: compare object bounding boxes against workspace rect
@@ -113,13 +122,16 @@ Opacity 0.7 idle, 1.0 on hover. Fade in/out with CSS transition.
 snapping.
 
 **Files:**
+
 - `src/lib/tools/toolHandler.ts` (move/resize handlers)
 - `src/app/store.ts` (snap settings, guides)
 - `src/components/viewport/Viewport.tsx` (guide rendering, lines ~515-534)
 - New: `src/lib/snap.ts`
 
 **Implementation:**
+
 - [ ] Create `src/lib/snap.ts` with snap engine:
+
   ```typescript
   interface SnapResult {
     x: number;
@@ -133,11 +145,12 @@ snapping.
     workspaceSize: { w: number; h: number },
     gridSize: number,
     options: { snapGrid: boolean; snapObjects: boolean; snapWorkspace: boolean },
-    threshold: number = 3, // mm
-  ): SnapResult
+    threshold: number = 3 // mm
+  ): SnapResult;
   ```
+
 - [ ] Snap points for each object: left, center, right, top, middle, bottom
-  (6 snap points per bounding box)
+      (6 snap points per bounding box)
 - [ ] Snap targets:
   - Grid lines (existing, refactor into snap engine)
   - Other objects' edges and centers
@@ -151,9 +164,9 @@ snapping.
   - Add distance labels on guides when snapping to show gap value
 - [ ] Add snap settings to store:
   ```typescript
-  snapToObjects: boolean;    // default true
-  snapToWorkspace: boolean;  // default true
-  snapThreshold: number;     // mm, default 3
+  snapToObjects: boolean; // default true
+  snapToWorkspace: boolean; // default true
+  snapThreshold: number; // mm, default 3
   ```
 - [ ] Toggle shortcuts: keep existing `snapToGrid` toggle on `S` key
   - Add Ctrl+Shift+; or similar for "snap to objects" toggle
@@ -171,6 +184,7 @@ box with corner handles, edge midpoint handles, and rotation handle.
 `getSelectionBBox()` from `toolHandler.ts` computes the group bbox.
 
 **What needs improvement:**
+
 - [ ] Resize handles should be interactive (currently decorative)
   - In `toolHandler.ts`, detect pointer-down on handle positions
   - Handle positions are in screen space: compute from bbox + camera
@@ -195,6 +209,7 @@ box with corner handles, edge midpoint handles, and rotation handle.
   - Detect in `handlePointerMove` by checking distance to handle positions
 
 **Files:**
+
 - `src/lib/tools/toolHandler.ts` (primary -- all handle interaction logic)
 - `src/components/viewport/Viewport.tsx` (cursor changes, handle rendering)
 - `src/app/store.ts` (update transforms)
@@ -205,6 +220,7 @@ box with corner handles, edge midpoint handles, and rotation handle.
 Already in CommandPalette and keyboard shortcuts (Ctrl+Shift+Arrow).
 
 **What needs improvement:**
+
 - [ ] Add align/distribute toolbar that appears when 2+ objects are selected
   - Position: floating above selection, or in a top context bar
   - Preferred: horizontal strip below MenuBar, only visible during
@@ -220,7 +236,7 @@ Already in CommandPalette and keyboard shortcuts (Ctrl+Shift+Arrow).
   - New store methods: `alignToWorkspace(alignment)` -- positions
     object(s) relative to workspace rect `(0, 0, w, h)`
 - [ ] Add spacing input for distribute:
-  - "Distribute with gap: ___mm" input field
+  - "Distribute with gap: \_\_\_mm" input field
   - Currently distributes evenly within bounding box
   - Add `distributeWithGap(direction, gap)` to store
 
@@ -230,6 +246,7 @@ Already in CommandPalette and keyboard shortcuts (Ctrl+Shift+Arrow).
 Ctrl+G / Ctrl+U shortcuts work. Groups render correctly with child offset.
 
 **What needs improvement:**
+
 - [ ] Double-click to enter group editing mode
   - Currently double-click triggers `handleViewportDoubleClick` in
     toolHandler (enters node editing for paths)
@@ -252,6 +269,7 @@ exists and shows transform fields. Already has X, Y, Width, Height,
 Rotation inputs.
 
 **What needs improvement:**
+
 - [ ] Support math expressions in input fields:
   - e.g., typing `100/2` in the width field should set it to 50
   - Parse with simple eval: support `+`, `-`, `*`, `/`, parentheses
@@ -280,10 +298,12 @@ Rotation inputs.
 (`var(--bg-app)`, `var(--text-primary)`, etc.).
 
 **Files:**
+
 - CSS/styling: likely in `src/index.css` or a global stylesheet
 - All component files use `var(--*)` properties
 
 **Implementation:**
+
 - [ ] Audit all hardcoded colors in components
   - `Viewport.tsx`: `0x1a1a1a` (background), `0x222222` (workspace),
     `0x4a90e2` (selection blue) -- these are Pixi hex values, can't
@@ -299,11 +319,12 @@ Rotation inputs.
   - Replace hardcoded hex values in Viewport.tsx with theme constants
 - [ ] Ensure all text is readable at all sizes (check contrast ratios)
 - [ ] Add subtle texture/grain to canvas background to differentiate
-  from panels (not flat black -- slightly warm dark gray)
+      from panels (not flat black -- slightly warm dark gray)
 
 ### 4c.2 Minimal Chrome
 
 **Implementation:**
+
 - [ ] Reduce toolbar width from current `var(--toolbar-width)` to 40px
   - Tool buttons already 36x36, so 40px gives 2px breathing room
 - [ ] Collapsible right panel
@@ -325,18 +346,20 @@ Rotation inputs.
 ### 4c.3 Keyboard Shortcut Overlay
 
 **Files:**
+
 - New: `src/components/panels/ShortcutOverlay.tsx`
 - `src/lib/shortcuts.ts` (shortcut definitions)
 - `src/app/App.tsx` (mount overlay)
 
 **Implementation:**
+
 - [ ] Press `?` (Shift+/) to show shortcut reference overlay
   - Full-screen overlay with `backdrop-filter: blur(12px)` background
   - Organized by category: Tools, File, Edit, View, Arrange, Machine
   - Two-column layout showing key combos and descriptions
   - Press any key or click backdrop to dismiss
 - [ ] Data source: derive from the same shortcut definitions used by
-  `useKeyboardShortcuts()` and `CommandPalette`
+      `useKeyboardShortcuts()` and `CommandPalette`
   - Create a shared shortcut registry: `src/lib/shortcutRegistry.ts`
     ```typescript
     interface ShortcutDef {
@@ -357,10 +380,12 @@ Rotation inputs.
 ### 4c.4 First-Launch Onboarding
 
 **Files:**
+
 - New: `src/components/panels/OnboardingOverlay.tsx`
 - `src/app/App.tsx` (conditional mount)
 
 **Implementation:**
+
 - [ ] Detect first launch: check `localStorage.getItem("kerf-onboarding-done")`
 - [ ] Multi-step overlay (not a modal wizard -- highlight actual UI elements):
   1. **Welcome** -- "Kerf is a laser cutter tool. Import a design to get started."
@@ -371,13 +396,13 @@ Rotation inputs.
      Highlight the Machine panel
   4. **Done** -- "Press Ctrl+K for the command palette. Press ? for shortcuts."
 - [ ] Each step: spotlight the relevant UI area (darken everything else),
-  show tooltip with text and "Next" / "Skip" buttons
+      show tooltip with text and "Next" / "Skip" buttons
 - [ ] Set `localStorage.setItem("kerf-onboarding-done", "1")` on completion
-  or skip
+      or skip
 - [ ] Re-trigger from Help menu or CommandPalette: "Show Onboarding"
 - [ ] Keep it brief. Three screens max. Users who need a laser cutter
-  tool already know what they're doing -- they just need to know
-  where things are in this particular app.
+      tool already know what they're doing -- they just need to know
+      where things are in this particular app.
 
 ---
 
@@ -386,12 +411,15 @@ Rotation inputs.
 ### 4d.1 Recent Files List
 
 **Files:**
+
 - `src/lib/fileOps.ts` (file open/save operations)
 - `src/components/topbar/MenuBar.tsx` (File menu)
 - New state or localStorage for recent files list
 
 **Implementation:**
+
 - [ ] Track recent files in `localStorage`:
+
   ```typescript
   interface RecentFile {
     path: string;
@@ -399,8 +427,10 @@ Rotation inputs.
     lastOpened: number; // timestamp
   }
   ```
+
   - Key: `"kerf-recent-files"`
   - Max 10 entries, FIFO
+
 - [ ] Update recent list on:
   - `openProject()` -- after successful load
   - `saveProject()` / `saveProjectAs()` -- after successful save
@@ -414,16 +444,18 @@ Rotation inputs.
   - File: new `src/components/viewport/WelcomeScreen.tsx`
   - Render over the viewport when `objects.length === 0 && projectPath === null`
 - [ ] Wire into Tauri's `recent_document` API if available for OS-level
-  recent files integration (macOS Dock, Windows Jump List)
+      recent files integration (macOS Dock, Windows Jump List)
 
 ### 4d.2 Auto-Save Recovery
 
 **Files:**
+
 - `src/lib/fileOps.ts` (save mechanism)
 - `src/app/store.ts` (isDirty flag, project serialization)
 - New: `src/lib/autoSave.ts`
 
 **Implementation:**
+
 - [ ] Auto-save to a recovery file every 60 seconds when `isDirty === true`
   - Recovery file path: Tauri `appDataDir` + `/recovery/autosave.kerf`
   - Use Tauri's `@tauri-apps/plugin-fs` to write
@@ -449,6 +481,7 @@ Rotation inputs.
 `.gcode`, `.gc`, `.nc` extensions.
 
 **What needs improvement:**
+
 - [ ] Add export confirmation with summary:
   - Before save dialog, show a summary: line count, estimated time,
     cut distance, travel distance
@@ -497,10 +530,10 @@ Each sub-item should be verified with these scenarios:
 - [ ] Single object: select, move, resize, rotate, snap
 - [ ] Multi-select (2-3 objects): align, distribute, group, resize
 - [ ] Large project (50+ objects): performance check on snap engine,
-  minimap rendering, selection overlay
+      minimap rendering, selection overlay
 - [ ] Keyboard-only workflow: can a user import, assign layers, and
-  send without touching the mouse? (Ctrl+K command palette is the
-  escape hatch)
+      send without touching the mouse? (Ctrl+K command palette is the
+      escape hatch)
 - [ ] Empty project: welcome screen appears, recent files work
 - [ ] Crash recovery: force-quit during edit, relaunch, verify recovery
 - [ ] Machine connected: workspace auto-size, pre-flight bounds check

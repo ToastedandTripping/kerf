@@ -6,7 +6,13 @@
  * (the old design→machine `workspaceHeight - y` flip is deleted, not ported).
  */
 import { describe, it, expect } from "vitest";
-import { canStartJob, movesExtents, frameTargets, gcodeExtents, type JobGateState } from "../canStartJob";
+import {
+  canStartJob,
+  movesExtents,
+  frameTargets,
+  gcodeExtents,
+  type JobGateState,
+} from "../canStartJob";
 
 const MOVES = [
   { x: 10, y: 20 },
@@ -87,20 +93,35 @@ describe("canStartJob", () => {
   it("blocks when moves extend outside the workspace", () => {
     const below = canStartJob({
       ...okState(),
-      gcodeResult: { moves: [{ x: -1, y: 10 }, { x: 50, y: 80 }] },
+      gcodeResult: {
+        moves: [
+          { x: -1, y: 10 },
+          { x: 50, y: 80 },
+        ],
+      },
     });
     expect(below.ok).toBe(false);
     expect(below.reason).toContain("outside workspace bounds");
 
     const beyond = canStartJob({
       ...okState(),
-      gcodeResult: { moves: [{ x: 10, y: 10 }, { x: 501, y: 80 }] },
+      gcodeResult: {
+        moves: [
+          { x: 10, y: 10 },
+          { x: 501, y: 80 },
+        ],
+      },
     });
     expect(beyond.ok).toBe(false);
 
     const tall = canStartJob({
       ...okState(),
-      gcodeResult: { moves: [{ x: 10, y: 10 }, { x: 50, y: 301 }] },
+      gcodeResult: {
+        moves: [
+          { x: 10, y: 10 },
+          { x: 50, y: 301 },
+        ],
+      },
     });
     expect(tall.ok).toBe(false);
   });
@@ -108,7 +129,12 @@ describe("canStartJob", () => {
   it("accepts moves exactly on the workspace boundary", () => {
     const gate = canStartJob({
       ...okState(),
-      gcodeResult: { moves: [{ x: 0, y: 0 }, { x: 500, y: 300 }] },
+      gcodeResult: {
+        moves: [
+          { x: 0, y: 0 },
+          { x: 500, y: 300 },
+        ],
+      },
     });
     expect(gate.ok).toBe(true);
   });

@@ -14,14 +14,14 @@ export type VariableDataSource =
 
 export interface VariableTextConfig {
   dataSource: VariableDataSource;
-  templateObjectIds: string[];  // empty = all objects with {placeholders}
+  templateObjectIds: string[]; // empty = all objects with {placeholders}
 }
 
 // Auto-Nesting
 export type NestRotation = "none" | "90" | "bestFit";
 
 export interface NestConfig {
-  spacing: number;        // mm gap, default 2
+  spacing: number; // mm gap, default 2
   rotation: NestRotation;
   useSelection: boolean;
 }
@@ -29,7 +29,7 @@ export interface NestConfig {
 export interface NestResult {
   placed: Array<{ objectId: string; x: number; y: number; rotation: number }>;
   unplaced: string[];
-  efficiency: number;     // 0-1
+  efficiency: number; // 0-1
 }
 
 export type ToolType =
@@ -64,12 +64,12 @@ export interface PathPoint {
 }
 
 export interface ImageAdjustments {
-  brightness: number;  // -100 to 100, default 0
-  contrast: number;    // -100 to 100, default 0
-  gamma: number;       // 0.1 to 5.0, default 1.0
-  invert: boolean;     // default false
-  removeBackground?: boolean;  // default false
-  bgTolerance?: number;        // 0-50, default 20
+  brightness: number; // -100 to 100, default 0
+  contrast: number; // -100 to 100, default 0
+  gamma: number; // 0.1 to 5.0, default 1.0
+  invert: boolean; // default false
+  removeBackground?: boolean; // default false
+  bgTolerance?: number; // 0-50, default 20
 }
 
 export interface DesignObject {
@@ -115,9 +115,9 @@ export type PowerMode = "constant" | "variable"; // M3 vs M4
  *  interval is intentionally excluded: line mode ignores scan interval.
  *  Do not add interval here — it would create drift vs the fill-pass interval. */
 export interface LineOverlay {
-  power: number;     // 0-100
-  powerMin: number;  // 0-100
-  speed: number;     // mm/min
+  power: number; // 0-100
+  powerMin: number; // 0-100
+  speed: number; // mm/min
   passes: number;
   powerMode: PowerMode;
 }
@@ -141,12 +141,19 @@ export interface Layer {
   // Cut optimization
   cutInnerFirst: boolean;
   // Image engraving
-  dither: "threshold" | "ordered" | "floydSteinberg" | "jarvis" | "stucki" | "grayscale" | "newsprint";
+  dither:
+    | "threshold"
+    | "ordered"
+    | "floydSteinberg"
+    | "jarvis"
+    | "stucki"
+    | "grayscale"
+    | "newsprint";
   // Power curve: user-defined transfer function (input shade 0-255 → output power 0-100%)
   powerCurve?: Array<{ x: number; y: number }>;
   // Newsprint dithering parameters
   newsprintCellSize?: number; // pixels, default 6
-  newsprintAngle?: number;    // degrees, default 45
+  newsprintAngle?: number; // degrees, default 45
   // Fill ordering
   fillOrder?: "sequential" | "flood"; // default "sequential"
   // Scan direction
@@ -193,17 +200,34 @@ export interface CameraState {
 }
 
 const layerDefaults = {
-  visible: true, locked: false, output: true, powerMin: 0, powerMode: "constant" as PowerMode,
-  interval: 0.1, airAssist: true, cutInnerFirst: true, dither: "floydSteinberg" as const,
-  scanAngle: 0, angleIncrement: 0,
+  visible: true,
+  locked: false,
+  output: true,
+  powerMin: 0,
+  powerMode: "constant" as PowerMode,
+  interval: 0.1,
+  airAssist: true,
+  cutInnerFirst: true,
+  dither: "floydSteinberg" as const,
+  scanAngle: 0,
+  angleIncrement: 0,
   // B2: overscan raised from 2.5mm to 5mm — 2.5mm was ~10× short of the ~25mm
   // accel distance at 6000 mm/min (v²/2a, a=200 mm/s²). 5mm is a sane M3
   // fallback; M4 (variable power) is the primary fix for accel/decel unevenness.
   // Cap is enforced in LayerPanel at 30mm (enough for slow feeds; avoids
   // wasting bed on fast fills where M4 is already handling the accel zone).
-  overcut: 0, leadIn: 0, leadOut: 0, overscan: 5.0, bidirectional: true,
-  crossHatch: false, scanningOffset: 0, tabSpacing: 0, tabWidth: 2,
-  kerfOffset: 0, perforationCut: 0, perforationSkip: 0,
+  overcut: 0,
+  leadIn: 0,
+  leadOut: 0,
+  overscan: 5.0,
+  bidirectional: true,
+  crossHatch: false,
+  scanningOffset: 0,
+  tabSpacing: 0,
+  tabWidth: 2,
+  kerfOffset: 0,
+  perforationCut: 0,
+  perforationSkip: 0,
 };
 
 // Fix 4: Engrave-before-cut ordering (industry convention: engrave/score first
@@ -214,12 +238,68 @@ const layerDefaults = {
 // unevenness. Line layers keep "constant" (M3) for constant-speed through-cuts.
 // Saved projects carry their stored powerMode; this default only affects new layers.
 export const DEFAULT_LAYERS: Layer[] = [
-  { index: 0, name: "Engrave", color: "#e24a4a", mode: "fill", power: 50, speed: 6000, passes: 1, ...layerDefaults, airAssist: false, powerMode: "variable" as PowerMode },
-  { index: 1, name: "Score", color: "#4ae28a", mode: "line", power: 30, speed: 3000, passes: 1, ...layerDefaults },
-  { index: 2, name: "Cut", color: "#4a90e2", mode: "line", power: 100, speed: 1200, passes: 1, ...layerDefaults },
-  { index: 3, name: "Custom 4", color: "#ff8000", mode: "line", power: 100, speed: 1200, passes: 1, ...layerDefaults },
-  { index: 4, name: "Custom 5", color: "#e2e24a", mode: "line", power: 100, speed: 1200, passes: 1, ...layerDefaults },
-  { index: 5, name: "Custom 6", color: "#4ae2e2", mode: "line", power: 100, speed: 1200, passes: 1, ...layerDefaults },
+  {
+    index: 0,
+    name: "Engrave",
+    color: "#e24a4a",
+    mode: "fill",
+    power: 50,
+    speed: 6000,
+    passes: 1,
+    ...layerDefaults,
+    airAssist: false,
+    powerMode: "variable" as PowerMode,
+  },
+  {
+    index: 1,
+    name: "Score",
+    color: "#4ae28a",
+    mode: "line",
+    power: 30,
+    speed: 3000,
+    passes: 1,
+    ...layerDefaults,
+  },
+  {
+    index: 2,
+    name: "Cut",
+    color: "#4a90e2",
+    mode: "line",
+    power: 100,
+    speed: 1200,
+    passes: 1,
+    ...layerDefaults,
+  },
+  {
+    index: 3,
+    name: "Custom 4",
+    color: "#ff8000",
+    mode: "line",
+    power: 100,
+    speed: 1200,
+    passes: 1,
+    ...layerDefaults,
+  },
+  {
+    index: 4,
+    name: "Custom 5",
+    color: "#e2e24a",
+    mode: "line",
+    power: 100,
+    speed: 1200,
+    passes: 1,
+    ...layerDefaults,
+  },
+  {
+    index: 5,
+    name: "Custom 6",
+    color: "#4ae2e2",
+    mode: "line",
+    power: 100,
+    speed: 1200,
+    passes: 1,
+    ...layerDefaults,
+  },
 ];
 
 export type StartCorner = "bottomLeft" | "bottomRight" | "topLeft" | "topRight" | "center";

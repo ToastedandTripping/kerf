@@ -104,7 +104,15 @@ describe("Store", () => {
     });
     expect(useStore.getState().undoStack).toHaveLength(1); // non-empty undo
     useStore.setState({
-      gcodeResult: { gcode: "G21", moves: [], totalDistance: 0, cutDistance: 0, travelDistance: 0, estimatedTimeSecs: 0, lineCount: 1 },
+      gcodeResult: {
+        gcode: "G21",
+        moves: [],
+        totalDistance: 0,
+        cutDistance: 0,
+        travelDistance: 0,
+        estimatedTimeSecs: 0,
+        lineCount: 1,
+      },
       gcodeStale: true,
       projectPath: "/path/to/projectA.kerf",
       nodeEditState: { pathId: "objA", selectedNodeIndex: 0 },

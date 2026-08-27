@@ -33,11 +33,20 @@ export function StatusBar() {
     >
       <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
         {/* Machine status — aria-live so screen readers announce state transitions */}
-        <span aria-live="polite" aria-atomic="true" style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-          <span style={{
-            width: "6px", height: "6px", borderRadius: "50%",
-            background: MACHINE_STATE_COLORS[machineState] ?? "var(--text-muted)",
-          }} aria-hidden="true" />
+        <span
+          aria-live="polite"
+          aria-atomic="true"
+          style={{ display: "flex", alignItems: "center", gap: "4px" }}
+        >
+          <span
+            style={{
+              width: "6px",
+              height: "6px",
+              borderRadius: "50%",
+              background: MACHINE_STATE_COLORS[machineState] ?? "var(--text-muted)",
+            }}
+            aria-hidden="true"
+          />
           <span style={{ color: MACHINE_STATE_COLORS[machineState] ?? "var(--text-muted)" }}>
             {MACHINE_STATE_LABELS[machineState] ?? machineState}
           </span>
@@ -72,14 +81,16 @@ export function StatusBar() {
 
         {/* Transient status message */}
         {statusMessage && (
-          <span style={{
-            color: "var(--accent)",
-            fontWeight: 500,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            maxWidth: "300px",
-          }}>
+          <span
+            style={{
+              color: "var(--accent)",
+              fontWeight: 500,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              maxWidth: "300px",
+            }}
+          >
             {statusMessage}
           </span>
         )}
@@ -87,7 +98,9 @@ export function StatusBar() {
       <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
         <ZoomButton label="Fit" onClick={() => useStore.getState().zoomToFitAll()} />
         <ZoomButton label="100%" onClick={() => useStore.getState().setCamera({ zoom: 1 })} />
-        <span style={{ minWidth: "44px", textAlign: "right" }}>{Math.round(camera.zoom * 100)}%</span>
+        <span style={{ minWidth: "44px", textAlign: "right" }}>
+          {Math.round(camera.zoom * 100)}%
+        </span>
         <span style={{ color: "var(--border)" }}>|</span>
         <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px" }}>
           X: {cursorPosition.x.toFixed(1)} &nbsp; Y: {cursorPosition.y.toFixed(1)} mm
@@ -104,9 +117,14 @@ function ZoomButton({ label, onClick }: { label: string; onClick: () => void }) 
     <button
       onClick={onClick}
       style={{
-        background: "none", border: "1px solid var(--border)",
-        borderRadius: "3px", color: "var(--text-muted)", fontSize: "9px",
-        fontWeight: 600, padding: "1px 6px", cursor: "pointer",
+        background: "none",
+        border: "1px solid var(--border)",
+        borderRadius: "3px",
+        color: "var(--text-muted)",
+        fontSize: "9px",
+        fontWeight: 600,
+        padding: "1px 6px",
+        cursor: "pointer",
       }}
     >
       {label}
@@ -117,10 +135,14 @@ function ZoomButton({ label, onClick }: { label: string; onClick: () => void }) 
 function Indicator({ label, active }: { label: string; active: boolean }) {
   return (
     <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-      <span style={{
-        width: "6px", height: "6px", borderRadius: "50%",
-        background: active ? "var(--success)" : "var(--text-muted)",
-      }} />
+      <span
+        style={{
+          width: "6px",
+          height: "6px",
+          borderRadius: "50%",
+          background: active ? "var(--success)" : "var(--text-muted)",
+        }}
+      />
       {label}
     </span>
   );

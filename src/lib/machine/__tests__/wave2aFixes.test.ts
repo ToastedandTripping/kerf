@@ -19,7 +19,10 @@ function makeLayer(overrides: Partial<Layer>, base = DEFAULT_LAYERS[0]): Layer {
   return { ...base, ...overrides };
 }
 
-function makeRect(id: string, opts: { x?: number; y?: number; w?: number; h?: number; layerIndex?: number } = {}): DesignObject {
+function makeRect(
+  id: string,
+  opts: { x?: number; y?: number; w?: number; h?: number; layerIndex?: number } = {}
+): DesignObject {
   const { x = 0, y = 0, w = 10, h = 10, layerIndex = 0 } = opts;
   return {
     id,
@@ -53,7 +56,10 @@ function makeEllipse(id: string, layerIndex = 0): DesignObject {
 }
 
 function makePath(id: string, points: PathPoint[], layerIndex = 0, closed = true): DesignObject {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
   for (const p of points) {
     if (p.x < minX) minX = p.x;
     if (p.y < minY) minY = p.y;
@@ -64,7 +70,15 @@ function makePath(id: string, points: PathPoint[], layerIndex = 0, closed = true
     id,
     type: "path",
     name: `Path ${id}`,
-    transform: { x: minX, y: minY, width: maxX - minX, height: maxY - minY, rotation: 0, scaleX: 1, scaleY: 1 },
+    transform: {
+      x: minX,
+      y: minY,
+      width: maxX - minX,
+      height: maxY - minY,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+    },
     layerIndex,
     visible: true,
     locked: false,
@@ -78,7 +92,10 @@ function makePath(id: string, points: PathPoint[], layerIndex = 0, closed = true
 }
 
 const squarePoints = (x: number, y: number, s: number): PathPoint[] => [
-  { x, y }, { x: x + s, y }, { x: x + s, y: y + s }, { x, y: y + s },
+  { x, y },
+  { x: x + s, y },
+  { x: x + s, y: y + s },
+  { x, y: y + s },
 ];
 
 // ─── F3 (updated): fill mode → maskFill for non-rectangular shapes ───────────
@@ -125,10 +142,18 @@ describe("F6: kerf offset direction and winding", () => {
   // Build a CCW square ring (positive signed area in screen-Y-down = CW in standard math)
   // We need the ring winding that previously caused outward expansion with positive kerf.
   const cwSquare: Array<[number, number]> = [
-    [0, 0], [10, 0], [10, 10], [0, 10], [0, 0],
+    [0, 0],
+    [10, 0],
+    [10, 10],
+    [0, 10],
+    [0, 0],
   ];
   const ccwSquare: Array<[number, number]> = [
-    [0, 0], [0, 10], [10, 10], [10, 0], [0, 0],
+    [0, 0],
+    [0, 10],
+    [10, 10],
+    [10, 0],
+    [0, 0],
   ];
 
   it("ring with positive signed area + positive kerf → expands outward", () => {
@@ -155,7 +180,13 @@ describe("F6: kerf offset direction and winding", () => {
 
   it("90° corner offset is within miter range (not the old ~71%)", () => {
     // A right-angle corner: prev=(0,1), curr=(0,0), next=(1,0)
-    const ring: Array<[number, number]> = [[0, 1], [0, 0], [1, 0], [1, 1], [0, 1]];
+    const ring: Array<[number, number]> = [
+      [0, 1],
+      [0, 0],
+      [1, 0],
+      [1, 1],
+      [0, 1],
+    ];
     const kerf = 1.0;
     const offset = offsetRingByDistance(ring, kerf);
     // The corner (0,0) offset point should be close to (-1,-1) = miter at 90°.
@@ -195,10 +226,7 @@ describe("F6: kerf offset direction and winding", () => {
 
 describe("F7: layerIndex propagated to CutObject for layer-order-respecting cuts", () => {
   it("layerIndex on emitted CutObject matches the source object's layerIndex", () => {
-    const layers = [
-      makeLayer({ mode: "line", index: 0 }),
-      makeLayer({ mode: "fill", index: 1 }),
-    ];
+    const layers = [makeLayer({ mode: "line", index: 0 }), makeLayer({ mode: "fill", index: 1 })];
     const r0 = makeRect("r0", { layerIndex: 0 });
     const r1 = makeRect("r1", { layerIndex: 1 });
     const { objects } = toCutObjectsForTest([r0, r1], layers);
@@ -213,7 +241,7 @@ describe("F7: layerIndex propagated to CutObject for layer-order-respecting cuts
     // Fix 4: DEFAULT_LAYERS is now [Engrave (index 0), Score (index 1), Cut (index 2), ...].
     // This test uses synthetic layer names but relies on layerIndex ordering:
     // an object with layerIndex=0 always emits before layerIndex=1.
-    const r0 = makeRect("first", { layerIndex: 0 });   // first layer (Engrave in new order)
+    const r0 = makeRect("first", { layerIndex: 0 }); // first layer (Engrave in new order)
     const r1 = makeRect("second", { layerIndex: 1 }); // second layer (Score in new order)
     const { objects } = toCutObjectsForTest([r1, r0], DEFAULT_LAYERS); // reversed input
     // Should be sorted by layerIndex: 0 first, 1 second

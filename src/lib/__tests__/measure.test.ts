@@ -12,7 +12,10 @@ import type { DesignObject } from "../../app/types";
 // --- Helper to build a minimal DesignObject for testing ---
 function makeObj(
   type: DesignObject["type"],
-  x: number, y: number, width: number, height: number,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
   rotation = 0,
   visible = true
 ): DesignObject {
@@ -84,8 +87,8 @@ describe("measureAngleDeg", () => {
   it("SCREEN-Y-DOWN SIGN TEST: up-and-right reads ~30°, NOT 330°/−30°", () => {
     // Vector: dx = sqrt(3), dy_screen = -1 (p2 is up and to the right)
     // Math-CCW: up-right is in Q1 → should read between 0° and 90°.
-    const p1 = { x: 0, y: 1 };                        // baseline (screen Y=1)
-    const p2 = { x: Math.sqrt(3), y: 0 };             // screen Y=0 → 1 unit above p1
+    const p1 = { x: 0, y: 1 }; // baseline (screen Y=1)
+    const p2 = { x: Math.sqrt(3), y: 0 }; // screen Y=0 → 1 unit above p1
     // dx = sqrt(3), negated_dy = -(0 - 1) = 1
     // math-CCW angle = atan2(1, sqrt(3)) = 30°
     const angle = measureAngleDeg(p1, p2);

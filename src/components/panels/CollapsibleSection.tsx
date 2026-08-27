@@ -24,8 +24,12 @@ export function CollapsibleSection({
       <button
         onClick={onToggle}
         aria-expanded={open}
-        onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = "var(--bg-hover)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = "none";
+        }}
         style={{
           width: "100%",
           padding: "8px 12px",
@@ -45,7 +49,9 @@ export function CollapsibleSection({
         }}
       >
         <span>{title}</span>
-        <span aria-hidden="true" style={{ fontSize: "10px", opacity: 0.6 }}>{open ? "▼" : "▶"}</span>
+        <span aria-hidden="true" style={{ fontSize: "10px", opacity: 0.6 }}>
+          {open ? "▼" : "▶"}
+        </span>
       </button>
       {open && children}
     </div>

@@ -95,7 +95,11 @@ function ToolIcon({ type }: { type: ToolType }) {
     case "select":
       return (
         <svg {...s} viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5">
-          <path d="M4 2L4 14L7.5 10.5L11 15L13 14L9.5 9.5L14 9L4 2Z" fill="currentColor" stroke="none" />
+          <path
+            d="M4 2L4 14L7.5 10.5L11 15L13 14L9.5 9.5L14 9L4 2Z"
+            fill="currentColor"
+            stroke="none"
+          />
         </svg>
       );
     case "rectangle":
@@ -129,7 +133,9 @@ function ToolIcon({ type }: { type: ToolType }) {
     case "text":
       return (
         <svg {...s} viewBox="0 0 18 18" fill="currentColor">
-          <text x="3" y="14" fontSize="14" fontWeight="bold" fontFamily="serif">T</text>
+          <text x="3" y="14" fontSize="14" fontWeight="bold" fontFamily="serif">
+            T
+          </text>
         </svg>
       );
     case "node":
@@ -164,7 +170,14 @@ function ToolIcon({ type }: { type: ToolType }) {
     case "pan":
       // Hand icon: an open hand (5 fingers)
       return (
-        <svg {...s} viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+        <svg
+          {...s}
+          viewBox="0 0 18 18"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+        >
           <path d="M9 14V7" />
           <path d="M6.5 13.5V6" />
           <path d="M11.5 13.5V6" />

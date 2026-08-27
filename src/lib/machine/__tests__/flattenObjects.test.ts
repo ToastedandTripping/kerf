@@ -39,7 +39,14 @@ function approx(a: number, b: number): boolean {
   return Math.abs(a - b) < EPS;
 }
 
-function makeRect(id: string, x: number, y: number, w: number, h: number, rotation = 0): DesignObject {
+function makeRect(
+  id: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  rotation = 0
+): DesignObject {
   return {
     id,
     type: "rectangle",
@@ -55,7 +62,15 @@ function makeRect(id: string, x: number, y: number, w: number, h: number, rotati
   };
 }
 
-function makeGroup(id: string, x: number, y: number, w: number, h: number, rotation: number, children: DesignObject[]): DesignObject {
+function makeGroup(
+  id: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  rotation: number,
+  children: DesignObject[]
+): DesignObject {
   return {
     id,
     type: "group",
@@ -83,7 +98,7 @@ function makePath(
   points: Array<{ x: number; y: number }>,
   transformX: number,
   transformY: number,
-  rotation = 0,
+  rotation = 0
 ): DesignObject {
   const xs = points.map((p) => p.x);
   const ys = points.map((p) => p.y);
@@ -95,7 +110,15 @@ function makePath(
     id,
     type: "path",
     name: `Path ${id}`,
-    transform: { x: transformX, y: transformY, width: w, height: h, rotation, scaleX: 1, scaleY: 1 },
+    transform: {
+      x: transformX,
+      y: transformY,
+      width: w,
+      height: h,
+      rotation,
+      scaleX: 1,
+      scaleY: 1,
+    },
     layerIndex: 0,
     visible: true,
     locked: false,
@@ -110,7 +133,7 @@ function makePath(
 
 /** Rotate point (px, py) around (cx, cy) by angle degrees */
 function rotatePoint(px: number, py: number, cx: number, cy: number, deg: number) {
-  const r = deg * Math.PI / 180;
+  const r = (deg * Math.PI) / 180;
   const cos = Math.cos(r);
   const sin = Math.sin(r);
   return {
@@ -190,7 +213,8 @@ describe("D2 — flattenObjects composes group rotation onto children", () => {
     const result = flattenObjectsForTest([group]);
     expect(result).toHaveLength(2);
 
-    const groupCx = 15, groupCy = 15;
+    const groupCx = 15,
+      groupCy = 15;
     // child1 center = (5, 5)
     const r1 = rotatePoint(5, 5, groupCx, groupCy, 90);
     // child2 center = (25, 5)
@@ -231,17 +255,27 @@ describe("D2 — flattenObjects composes group rotation onto PATH/LINE children 
    */
   it("(path-a) Razor case: path (0,0)-(10,10) in group rotated 90° — points physically rotated, rotation stays r_c", () => {
     // Group sits at the origin, so group-local == world for this fixture
-    const pathChild = makePath("p1", [{ x: 0, y: 0 }, { x: 10, y: 10 }], 0, 0, 0);
+    const pathChild = makePath(
+      "p1",
+      [
+        { x: 0, y: 0 },
+        { x: 10, y: 10 },
+      ],
+      0,
+      0,
+      0
+    );
     const group = makeGroup("g-path-a", 0, 0, 10, 10, 90, [pathChild]);
     const result = flattenObjectsForTest([group]);
     expect(result).toHaveLength(1);
     const flat = result[0];
 
     // Group center
-    const gcx = 5, gcy = 5;
+    const gcx = 5,
+      gcy = 5;
 
     // Rotated points
-    const p0 = rotatePoint(0, 0, gcx, gcy, 90);  // expect (10, 0)
+    const p0 = rotatePoint(0, 0, gcx, gcy, 90); // expect (10, 0)
     const p1 = rotatePoint(10, 10, gcx, gcy, 90); // expect (0, 10)
 
     expect(flat.points).toBeDefined();
@@ -263,14 +297,24 @@ describe("D2 — flattenObjects composes group rotation onto PATH/LINE children 
     // absolute fixture (15,15),(25,25): world = local + group origin (10,10).
     // (Fixture re-based for the W1b group-local convention — pre-authorized;
     // the world-frame assertions below are UNCHANGED.)
-    const pathChild = makePath("p2", [{ x: 5, y: 5 }, { x: 15, y: 15 }], 5, 5, 30);
+    const pathChild = makePath(
+      "p2",
+      [
+        { x: 5, y: 5 },
+        { x: 15, y: 15 },
+      ],
+      5,
+      5,
+      30
+    );
     const group = makeGroup("g-path-b", 10, 10, 20, 20, 45, [pathChild]);
     const result = flattenObjectsForTest([group]);
     expect(result).toHaveLength(1);
     const flat = result[0];
 
     // Group center
-    const gcx = 20, gcy = 20;
+    const gcx = 20,
+      gcy = 20;
 
     // Points after r_g=45 rotation
     const p0 = rotatePoint(15, 15, gcx, gcy, 45);
@@ -292,7 +336,16 @@ describe("D2 — flattenObjects composes group rotation onto PATH/LINE children 
     // world meaning identical to the original absolute fixture (100,200),(110,210).
     // (Fixture re-based for the W1b group-local convention — pre-authorized;
     // the world-frame assertions below are UNCHANGED.)
-    const pathChild = makePath("p3", [{ x: 0, y: 0 }, { x: 10, y: 10 }], 0, 0, 0);
+    const pathChild = makePath(
+      "p3",
+      [
+        { x: 0, y: 0 },
+        { x: 10, y: 10 },
+      ],
+      0,
+      0,
+      0
+    );
     const group = makeGroup("g-path-c", 100, 200, 10, 10, 0, [pathChild]);
     const result = flattenObjectsForTest([group]);
     expect(result).toHaveLength(1);
@@ -310,7 +363,16 @@ describe("D2 — flattenObjects composes group rotation onto PATH/LINE children 
 
 describe("W1b — group MOVE flows into the flatten output (the F1 group-move fix)", () => {
   it("moving a group moves path AND rect children equally in the flatten output", () => {
-    const pathChild = makePath("pm", [{ x: 0, y: 0 }, { x: 10, y: 10 }], 0, 0, 0);
+    const pathChild = makePath(
+      "pm",
+      [
+        { x: 0, y: 0 },
+        { x: 10, y: 10 },
+      ],
+      0,
+      0,
+      0
+    );
     const rectChild = makeRect("rm", 15, 0, 10, 10, 0);
     const group = makeGroup("g-move", 0, 0, 25, 10, 0, [pathChild, rectChild]);
 
@@ -336,7 +398,16 @@ describe("W1b — group MOVE flows into the flatten output (the F1 group-move fi
   });
 
   it("rotating a MOVED group rotates path children about the group's CURRENT world center", () => {
-    const pathChild = makePath("pr", [{ x: 0, y: 0 }, { x: 10, y: 10 }], 0, 0, 0);
+    const pathChild = makePath(
+      "pr",
+      [
+        { x: 0, y: 0 },
+        { x: 10, y: 10 },
+      ],
+      0,
+      0,
+      0
+    );
     // group moved to (20, 30), then rotated 90° — pivot must be the moved center (25, 35)
     const group = makeGroup("g-rot-moved", 20, 30, 10, 10, 90, [pathChild]);
     const result = flattenObjectsForTest([group]);
@@ -353,7 +424,16 @@ describe("W1b — group MOVE flows into the flatten output (the F1 group-move fi
 
   it("nested groups: grandchild path points translate by BOTH group origins", () => {
     // inner group local to outer at (5, 5); path local to inner at (0,0)-(10,10)
-    const grandchild = makePath("gc", [{ x: 0, y: 0 }, { x: 10, y: 10 }], 0, 0, 0);
+    const grandchild = makePath(
+      "gc",
+      [
+        { x: 0, y: 0 },
+        { x: 10, y: 10 },
+      ],
+      0,
+      0,
+      0
+    );
     const inner = makeGroup("g-inner", 5, 5, 10, 10, 0, [grandchild]);
     const outer = makeGroup("g-outer", 100, 200, 15, 15, 0, [inner]);
 
@@ -371,7 +451,16 @@ describe("W1b — group MOVE flows into the flatten output (the F1 group-move fi
 
   it("bezier handles travel with the group move", () => {
     const pathChild: DesignObject = {
-      ...makePath("ph", [{ x: 0, y: 0 }, { x: 10, y: 10 }], 0, 0, 0),
+      ...makePath(
+        "ph",
+        [
+          { x: 0, y: 0 },
+          { x: 10, y: 10 },
+        ],
+        0,
+        0,
+        0
+      ),
       points: [
         { x: 0, y: 0, handleOut: { x: 5, y: -2 } },
         { x: 10, y: 10, handleIn: { x: 5, y: 12 } },

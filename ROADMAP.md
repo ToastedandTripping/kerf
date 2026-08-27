@@ -139,6 +139,7 @@ dithering (6 algorithms + grayscale), image adjustments, node editing,
 Boolean ops, array tools.
 
 **Tier 1 gaps (workflow-blocking) — all closed, v0.4:**
+
 - ~~Animated cut preview~~ (v0.4 — can't verify order before burning material)
 - ~~Object snapping~~ (v0.4 — snap to edges/centers of other objects)
 - ~~Auto-read workspace from GRBL $130/$131~~ (v0.4)
@@ -146,6 +147,7 @@ Boolean ops, array tools.
 - ~~Layer reorder~~ (v0.4 — controls cut sequence, safety-critical)
 
 **Tier 2 gaps (productivity/quality):**
+
 - ~~Offset Fill mode~~ (v0.5)
 - ~~Scan angle + rotation between passes~~ (v0.7 — F10, LayerPanel scanAngle/angleIncrement)
 - ~~Cut planner: multi-criteria ordering, flood fill, choose corner~~ (v0.5)
@@ -158,6 +160,7 @@ Boolean ops, array tools.
   arcs shipped in F23; true SPLINE was never handled) — never shipped
 
 **Tier 3 gaps (advanced/pro — post-v0.5):**
+
 - Camera system (overlay + calibration + print-and-cut)
 - Variable text / serialization (CSV merge, serial numbers)
 - Rotary axis (chuck + roller, Y-axis substitution)
@@ -167,6 +170,7 @@ Boolean ops, array tools.
 - Network streaming
 
 **Quality/polish gap:**
+
 - Feedback density (state communication throughout UI)
 - Error recovery (guided resolution from GRBL alarms, USB disconnect)
 - Documentation (zero user-facing docs currently)
@@ -177,16 +181,16 @@ Boolean ops, array tools.
 
 Based on landscape research (May 2026):
 
-| Tool | Status | Stack | Laser-first? |
-|------|--------|-------|-------------|
-| LightBurn | Commercial ($104-$209) | Native C++ | Yes |
-| Rayforge | Active (201 stars) | Python/GTK4 | Yes |
-| LaserGRBL | Active | C#/.NET, Windows-only | Raster only |
-| MeerK40t | Maintenance mode | Python/wxPython | Yes, K40-focused |
-| LaserWeb4 | Dead since 2018 | JS/Electron | Was |
-| bCNC | Active (1.7k stars) | Python/Tkinter | No (CNC) |
-| Candle | Active (1.6k stars) | C++/Qt | No (CNC) |
-| **Kerf** | **Active** | **Rust/Tauri/React/Pixi.js** | **Yes** |
+| Tool      | Status                 | Stack                        | Laser-first?     |
+| --------- | ---------------------- | ---------------------------- | ---------------- |
+| LightBurn | Commercial ($104-$209) | Native C++                   | Yes              |
+| Rayforge  | Active (201 stars)     | Python/GTK4                  | Yes              |
+| LaserGRBL | Active                 | C#/.NET, Windows-only        | Raster only      |
+| MeerK40t  | Maintenance mode       | Python/wxPython              | Yes, K40-focused |
+| LaserWeb4 | Dead since 2018        | JS/Electron                  | Was              |
+| bCNC      | Active (1.7k stars)    | Python/Tkinter               | No (CNC)         |
+| Candle    | Active (1.6k stars)    | C++/Qt                       | No (CNC)         |
+| **Kerf**  | **Active**             | **Rust/Tauri/React/Pixi.js** | **Yes**          |
 
 Kerf's stack (Tauri + Pixi.js) is the only modern native-performance
 architecture in the OSS space. Rayforge is the nearest competitor but
@@ -215,13 +219,13 @@ noted, the checklists are retired in favor of a pointer:
 detail, the fix, and the review verdict (Razor/Jen PASS, test counts). If you
 want to know when object snapping landed or what the cut-order fix actually
 changed, that's where the real record is. This body only tracks what's
-*upcoming*.
+_upcoming_.
 
 ---
 
 ## v0.5 — Advanced Engraving (Shipped 2026-05-19)
 
-*Make photo/image engraving competitive with LightBurn output quality.*
+_Make photo/image engraving competitive with LightBurn output quality._
 
 - [x] Offset Fill mode (concentric paths following shape contour)
 - [x] Flood Fill (proximity-based non-sequential scanning)
@@ -236,8 +240,8 @@ changed, that's where the real record is. This body only tracks what's
 
 ## v0.6 — Production Features (Shipped 2026-06-01 as v0.6.0)
 
-*Shipped the first two milestone items. Camera, rotary, and the
-remaining items moved to v0.7 and v0.8.*
+_Shipped the first two milestone items. Camera, rotary, and the
+remaining items moved to v0.7 and v0.8._
 
 - [x] Variable text / serialization (serial numbers, CSV merge, template workflow)
 - [x] Auto-nesting (skyline bin-packing for material efficiency)
@@ -252,8 +256,8 @@ guided error recovery), plus a code-health refactor.
 
 ## v0.7 — Fortification (Current; v0.7.0 = Wave 1, released 2026-06-12)
 
-*Reliability over features: the 2026-06-09 cut-path audit found 31 defects between
-"design on screen" and "laser moves." Four waves, each critic-looped + Razor-gated.*
+_Reliability over features: the 2026-06-09 cut-path audit found 31 defects between
+"design on screen" and "laser moves." Four waves, each critic-looped + Razor-gated._
 
 - [x] Wave 1 — trust spine: streaming protocol, e-stop isolation, autoConnect settings,
       stale-G-code gate (W1a); path positioning + corrupt-file migration (W1b); curve
@@ -277,20 +281,20 @@ guided error recovery), plus a code-health refactor.
 
 ## v0.8 — Fortification (Released 2026-06-15)
 
-*Reliability over features: the 2026-06-09 cut-path audit found 31 defects between
+_Reliability over features: the 2026-06-09 cut-path audit found 31 defects between
 "design on screen" and "laser moves." Four waves, 9 relays, 36 total fixes.
-Final production audit PASSED with 0 blockers. Tests 127→369 JS, 25→56 Rust.*
+Final production audit PASSED with 0 blockers. Tests 127→369 JS, 25→56 Rust._
 
 ---
 
 ## Hardening & Efficiency Program (2026-07)
 
-*Full plan: `.claude/plans/kerf-hardening-program.md`. Seven phases, ~11-14
+_Full plan: `.claude/plans/kerf-hardening-program.md`. Seven phases, ~11-14
 relays, current tracked work. Thesis: the project's real bottleneck isn't
 code, it's hardware-gated verification — every release queues on Lee's laser
 time. The keystone is a GRBL simulator that makes the streaming stack
 CI-testable, so only TWO owner laser sessions are needed for the whole
-program.*
+program._
 
 - **Phase 0 — Deck clearing.** Goal: mechanical backlog + release hygiene —
   devtools out of release builds, tokio feature trim, dead npm deps removed,
@@ -324,7 +328,7 @@ program.*
   Phase C winding-hygiene carry-over and offsetFill's compound-shape
   correctness (decides whether Clipper2 becomes a dependency), plus the
   kerf-offset-on-fillLine-perimeter design. Risk: medium-high — this phase
-  *deliberately* changes cut output, so the safety net is a reviewed
+  _deliberately_ changes cut output, so the safety net is a reviewed
   golden-diff plus new fixtures pinning the corrected behavior, not
   byte-identical goldens. Laser time: **owner session #2** (~15 min) — scrap
   cuts of the fill/offset fixtures.
@@ -343,14 +347,14 @@ program.*
 
 **Decision gates:**
 
-| Gate | When | Question | Default |
-|---|---|---|---|
-| D1 | Phase 2A | Ship the sim as a hidden connectable demo port? | Yes (cheap; attacks the bottleneck) |
-| D1c | Phase 2 ship | Default streaming mode at release | `perLine` (unproven pump never ships as a laser's default); flip to `buffered` post-session-#1 |
-| D1b | End Phase 3 | Remove the `perLine` legacy path? | Yes, iff session #1 passed AND the A/B showed the buffered win; keep it if A/B showed no difference |
-| D2 | Phase 4 entry | Clipper2 dependency; kerfOffset-on-fillLine design | Lee + architect call |
-| D3 | Phase 6 entry | Public-adoption push? | Deferred until Lee says go |
-| D4 | Post-program | v0.9 Camera & Rotary | Deferred; hardware unconfirmed |
+| Gate | When          | Question                                           | Default                                                                                             |
+| ---- | ------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| D1   | Phase 2A      | Ship the sim as a hidden connectable demo port?    | Yes (cheap; attacks the bottleneck)                                                                 |
+| D1c  | Phase 2 ship  | Default streaming mode at release                  | `perLine` (unproven pump never ships as a laser's default); flip to `buffered` post-session-#1      |
+| D1b  | End Phase 3   | Remove the `perLine` legacy path?                  | Yes, iff session #1 passed AND the A/B showed the buffered win; keep it if A/B showed no difference |
+| D2   | Phase 4 entry | Clipper2 dependency; kerfOffset-on-fillLine design | Lee + architect call                                                                                |
+| D3   | Phase 6 entry | Public-adoption push?                              | Deferred until Lee says go                                                                          |
+| D4   | Post-program  | v0.9 Camera & Rotary                               | Deferred; hardware unconfirmed                                                                      |
 
 ---
 

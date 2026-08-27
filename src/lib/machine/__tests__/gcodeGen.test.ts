@@ -13,7 +13,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../../app/store";
 import type { DesignObject } from "../../../app/types";
 import { DEFAULT_LAYERS } from "../../../app/types";
-import { generateGcode, toCutObjectsForTest, stripFramingForTest, assembleGcodeForTest, type GcodeResult } from "../gcodeGen";
+import {
+  generateGcode,
+  toCutObjectsForTest,
+  stripFramingForTest,
+  assembleGcodeForTest,
+  type GcodeResult,
+} from "../gcodeGen";
 import type { Layer } from "../../../app/types";
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>;
@@ -84,7 +90,11 @@ describe("G-code generation (Rust contract + hard-fail)", () => {
   // CutObject with its transform geometry and layer settings, and the engine's
   // result is returned unchanged.
   it("serializes a simple rectangle into the generate_gcode invoke args", async () => {
-    const vector = rustResult({ gcode: "G21\nG90\nG1 X30 Y25\nM5\nM2", cutDistance: 70, lineCount: 5 });
+    const vector = rustResult({
+      gcode: "G21\nG90\nG1 X30 Y25\nM5\nM2",
+      cutDistance: 70,
+      lineCount: 5,
+    });
     mockRustEngine(vector);
     useStore.getState().addObject(makeRect("r1", 10, 10, 20, 15));
 
@@ -95,7 +105,10 @@ describe("G-code generation (Rust contract + hard-fail)", () => {
     expect(objects[0]).toMatchObject({
       id: "r1",
       objType: "rectangle",
-      x: 10, y: 10, width: 20, height: 15,
+      x: 10,
+      y: 10,
+      width: 20,
+      height: 15,
       rotation: 0,
     });
     expect((objects[0].layer as Record<string, unknown>).mode).toBe(DEFAULT_LAYERS[0].mode);
@@ -267,7 +280,10 @@ function makeOpenPath(id: string, layerIndex = 0): DesignObject {
     stroke: "#4a90e2",
     strokeWidth: 1,
     opacity: 1,
-    points: [{ x: 0, y: 0 }, { x: 20, y: 20 }],
+    points: [
+      { x: 0, y: 0 },
+      { x: 20, y: 20 },
+    ],
     closed: false,
   };
 }
@@ -401,7 +417,7 @@ describe("B1 — M4 default and $32=0 warning at job generation", () => {
     const warnings = useStore.getState().consoleLines.map((l) => l.text);
     // New wider warning: fires for any fill/raster layer; checks $32 + dynamic power mention
     const has32Warning = warnings.some(
-      (t) => t.includes("$32") && t.includes("M4") && t.includes("dynamic power"),
+      (t) => t.includes("$32") && t.includes("M4") && t.includes("dynamic power")
     );
     expect(has32Warning).toBe(true);
   });
@@ -414,7 +430,7 @@ describe("B1 — M4 default and $32=0 warning at job generation", () => {
 
     const warnings = useStore.getState().consoleLines.map((l) => l.text);
     const has32Warning = warnings.some(
-      (t) => t.includes("$32") && t.includes("M4") && t.includes("dynamic power"),
+      (t) => t.includes("$32") && t.includes("M4") && t.includes("dynamic power")
     );
     expect(has32Warning).toBe(false);
   });
@@ -432,7 +448,7 @@ describe("B1 — M4 default and $32=0 warning at job generation", () => {
 
     const warnings = useStore.getState().consoleLines.map((l) => l.text);
     const has32Warning = warnings.some(
-      (t) => t.includes("$32") && t.includes("M4") && t.includes("dynamic power"),
+      (t) => t.includes("$32") && t.includes("M4") && t.includes("dynamic power")
     );
     expect(has32Warning).toBe(true);
   });
@@ -717,7 +733,7 @@ describe("WS2 — generateGcode layer ordering", () => {
     const layers = DEFAULT_LAYERS;
     setupStore(layers);
 
-    useStore.getState().addObject(makeImage("img-low", 0));  // pos 0 (Engrave)
+    useStore.getState().addObject(makeImage("img-low", 0)); // pos 0 (Engrave)
     useStore.getState().addObject(makeRect("rect-cut", 0, 0, 10, 10)); // will be on Cut (index 2)
     // Override rect to be on Cut layer (index 2)
     useStore.getState().updateObject("rect-cut", { layerIndex: 2 });
@@ -755,7 +771,7 @@ describe("WS2 — generateGcode layer ordering", () => {
     ];
     setupStore(layers);
 
-    useStore.getState().addObject(makeImage("img-high", 0));  // Engrave layer (index 0) → pos 2
+    useStore.getState().addObject(makeImage("img-high", 0)); // Engrave layer (index 0) → pos 2
     useStore.getState().addObject(makeRect("rect-cut", 0, 0, 10, 10)); // Cut layer (index 2) → pos 0
     useStore.getState().updateObject("rect-cut", { layerIndex: 2 });
 
@@ -779,7 +795,7 @@ describe("WS2 — generateGcode layer ordering", () => {
     // Image and rect both on Engrave layer (pos 0)
     setupStore(DEFAULT_LAYERS);
 
-    useStore.getState().addObject(makeImage("img-same", 0));   // Engrave (pos 0)
+    useStore.getState().addObject(makeImage("img-same", 0)); // Engrave (pos 0)
     useStore.getState().addObject(makeRect("rect-same", 0, 0, 10, 10)); // Engrave (pos 0 via default)
 
     mockInvoke.mockImplementation(async (cmd: string) => {
@@ -836,12 +852,16 @@ describe("WS2 — generateGcode layer ordering", () => {
     expect(cutIdx).toBeLessThan(fillIdx);
 
     // Risky-order warning fires (line-mode layer pos 0 < fill-mode layer pos 2)
-    const warnings = useStore.getState().consoleLines
-      .filter((l) => l.type === "warning")
+    const warnings = useStore
+      .getState()
+      .consoleLines.filter((l) => l.type === "warning")
       .map((l) => l.text);
     const hasRiskyWarn = warnings.some(
-      (t) => t.toLowerCase().includes("cut") || t.toLowerCase().includes("freed") ||
-              t.toLowerCase().includes("engrave") || t.toLowerCase().includes("line"),
+      (t) =>
+        t.toLowerCase().includes("cut") ||
+        t.toLowerCase().includes("freed") ||
+        t.toLowerCase().includes("engrave") ||
+        t.toLowerCase().includes("line")
     );
     expect(hasRiskyWarn).toBe(true);
   });
@@ -861,13 +881,16 @@ describe("WS2 — generateGcode layer ordering", () => {
 
     await generateGcode();
 
-    const warnings = useStore.getState().consoleLines
-      .filter((l) => l.type === "warning")
+    const warnings = useStore
+      .getState()
+      .consoleLines.filter((l) => l.type === "warning")
       .map((l) => l.text);
     // Should not fire risky-order warning (no line-mode layer before fill-mode)
     const hasRiskyWarn = warnings.some(
-      (t) => t.includes("freed") || t.includes("line fires before") ||
-              (t.includes("Cut") && t.includes("Engrave")),
+      (t) =>
+        t.includes("freed") ||
+        t.includes("line fires before") ||
+        (t.includes("Cut") && t.includes("Engrave"))
     );
     expect(hasRiskyWarn).toBe(false);
   });
@@ -943,7 +966,7 @@ describe("WS2 — generateGcode layer ordering", () => {
     // Orphan warning in console
     const consoleMsgs = useStore.getState().consoleLines.map((l) => l.text);
     const hasOrphanWarn = consoleMsgs.some(
-      (t) => t.includes("unknown layer") || t.includes("emitted last"),
+      (t) => t.includes("unknown layer") || t.includes("emitted last")
     );
     expect(hasOrphanWarn).toBe(true);
   });
@@ -982,18 +1005,20 @@ describe("WS2 — generateGcode layer ordering", () => {
     ];
     setupStore(layers);
 
-    useStore.getState().addObject(makeRect("engrave-obj", 0, 0, 10, 10));    // index 0 (pos 0)
-    useStore.getState().addObject(makeRect("cut-obj", 20, 0, 10, 10));       // default index 0
-    useStore.getState().updateObject("cut-obj", { layerIndex: 2 });           // index 2 (pos 1)
+    useStore.getState().addObject(makeRect("engrave-obj", 0, 0, 10, 10)); // index 0 (pos 0)
+    useStore.getState().addObject(makeRect("cut-obj", 20, 0, 10, 10)); // default index 0
+    useStore.getState().updateObject("cut-obj", { layerIndex: 2 }); // index 2 (pos 1)
 
     const invokesWithObjs: string[][] = [];
-    mockInvoke.mockImplementation(async (cmd: string, args?: { objects?: Array<{ id: string }> }) => {
-      if (cmd === "generate_gcode") {
-        invokesWithObjs.push((args?.objects ?? []).map((o) => o.id));
-        return vectorFragment(`layer-call-${invokesWithObjs.length}`);
+    mockInvoke.mockImplementation(
+      async (cmd: string, args?: { objects?: Array<{ id: string }> }) => {
+        if (cmd === "generate_gcode") {
+          invokesWithObjs.push((args?.objects ?? []).map((o) => o.id));
+          return vectorFragment(`layer-call-${invokesWithObjs.length}`);
+        }
+        return undefined;
       }
-      return undefined;
-    });
+    );
 
     await generateGcode();
 

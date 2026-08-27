@@ -94,9 +94,7 @@ function sentBytes(): number[] {
 }
 
 /** Default mock: list_serial_ports + get_status handled; per-command send hook. */
-function mockSerial(
-  onSend: (command: string) => { responses: string[]; drained: string[] },
-) {
+function mockSerial(onSend: (command: string) => { responses: string[]; drained: string[] }) {
   mockInvoke.mockImplementation(async (cmd: string, args?: { command?: string; byte?: number }) => {
     if (cmd === "list_serial_ports") return [];
     if (cmd === "serial_get_status")
@@ -127,13 +125,13 @@ describe("MachinePanel job loop (F13/F17)", () => {
 
   it("aborts on an EMPTY response (protocol failure, never an ack)", async () => {
     mockSerial((cmd) =>
-      cmd.startsWith("G1") ? { responses: [], drained: [] } : { responses: ["ok"], drained: [] },
+      cmd.startsWith("G1") ? { responses: [], drained: [] } : { responses: ["ok"], drained: [] }
     );
     const { getByText } = render(<JobActionBar />);
 
     fireEvent.click(getByText("START"));
     await waitFor(() =>
-      expect(consoleTexts()).toContain("Job aborted -- machine was reset mid-line"),
+      expect(consoleTexts()).toContain("Job aborted -- machine was reset mid-line")
     );
     // Only the first line was sent — the loop never advanced past the failure…
     expect(sentCommands().filter((c) => c.startsWith("G1"))).toEqual(["G1 X10 Y20"]);
@@ -146,28 +144,30 @@ describe("MachinePanel job loop (F13/F17)", () => {
     mockSerial((cmd) =>
       cmd.startsWith("G1")
         ? { responses: ["Grbl 1.1h ['$' for help]"], drained: [] }
-        : { responses: ["ok"], drained: [] },
+        : { responses: ["ok"], drained: [] }
     );
     const { getByText } = render(<JobActionBar />);
 
     fireEvent.click(getByText("START"));
     await waitFor(() =>
-      expect(consoleTexts()).toContain("Job aborted -- machine was reset mid-line"),
+      expect(consoleTexts()).toContain("Job aborted -- machine was reset mid-line")
     );
     expect(sentCommands().filter((c) => c.startsWith("G1"))).toEqual(["G1 X10 Y20"]);
   });
 
   it("stops on ALARM WITHOUT the M5+reset volley", async () => {
     mockSerial((cmd) =>
-      cmd.startsWith("G1") ? { responses: ["ALARM:1"], drained: [] } : { responses: ["ok"], drained: [] },
+      cmd.startsWith("G1")
+        ? { responses: ["ALARM:1"], drained: [] }
+        : { responses: ["ok"], drained: [] }
     );
     const { getByText } = render(<JobActionBar />);
 
     fireEvent.click(getByText("START"));
     await waitFor(() =>
       expect(consoleTexts()).toContain(
-        "Job stopped -- machine alarm (laser already off; unlock to continue)",
-      ),
+        "Job stopped -- machine alarm (laser already off; unlock to continue)"
+      )
     );
     // GRBL is locked: M5 would earn error:9, 0x18 would re-reset. Neither fires.
     expect(sentCommands()).not.toContain("M5");
@@ -240,7 +240,9 @@ describe("MachinePanel job loop (F13/F17)", () => {
 
   it("stops on error:N through the existing abort path (volley fires)", async () => {
     mockSerial((cmd) =>
-      cmd.startsWith("G1") ? { responses: ["error:9"], drained: [] } : { responses: ["ok"], drained: [] },
+      cmd.startsWith("G1")
+        ? { responses: ["error:9"], drained: [] }
+        : { responses: ["ok"], drained: [] }
     );
     const { getByText } = render(<JobActionBar />);
 
@@ -297,7 +299,7 @@ describe("MachinePanel START/FRAME gating (F15)", () => {
         "G0 X10.000 Y80.000",
         "G0 X10.000 Y20.000",
         "M5",
-      ]),
+      ])
     );
   });
 
@@ -308,7 +310,7 @@ describe("MachinePanel START/FRAME gating (F15)", () => {
 
     fireEvent.click(getByText("FRAME"));
     await waitFor(() =>
-      expect(consoleTexts()).toContain("Nothing to cut -- no moves in the generated G-code"),
+      expect(consoleTexts()).toContain("Nothing to cut -- no moves in the generated G-code")
     );
     expect(sentCommands()).toEqual([]);
   });
@@ -347,9 +349,7 @@ describe("MachinePanel Fire button (F17 Fix 2.3)", () => {
     const { getByText } = render(<MachinePanel />);
 
     fireEvent.click(getByText("Fire"));
-    await waitFor(() =>
-      expect(sentCommands()).toEqual(["M3 S5", "G4 P0.5", "M5"]),
-    );
+    await waitFor(() => expect(sentCommands()).toEqual(["M3 S5", "G4 P0.5", "M5"]));
     // No multi-line blob whose pump would stop at the FIRST ok.
     expect(sentCommands().some((c) => c.includes("\n"))).toBe(false);
   });
@@ -376,9 +376,7 @@ describe("streamJob FRAME abort protocol (P1-A)", () => {
 
   it("aborts FRAME on empty response (protocol failure)", async () => {
     mockSerial((cmd) =>
-      cmd.startsWith("G0")
-        ? { responses: [], drained: [] }
-        : { responses: ["ok"], drained: [] },
+      cmd.startsWith("G0") ? { responses: [], drained: [] } : { responses: ["ok"], drained: [] }
     );
 
     const result = await streamJob(frameGcode, { label: "Frame" });
@@ -394,7 +392,7 @@ describe("streamJob FRAME abort protocol (P1-A)", () => {
     mockSerial((cmd) =>
       cmd.startsWith("G0")
         ? { responses: ["Grbl 1.1h ['$' for help]"], drained: [] }
-        : { responses: ["ok"], drained: [] },
+        : { responses: ["ok"], drained: [] }
     );
 
     const result = await streamJob(frameGcode, { label: "Frame" });
@@ -410,13 +408,13 @@ describe("streamJob FRAME abort protocol (P1-A)", () => {
     mockSerial((cmd) =>
       cmd.startsWith("G0")
         ? { responses: ["ALARM:1"], drained: [] }
-        : { responses: ["ok"], drained: [] },
+        : { responses: ["ok"], drained: [] }
     );
 
     const result = await streamJob(frameGcode, { label: "Frame" });
     expect(result.endState).toBe("alarm");
     expect(consoleTexts()).toContain(
-      "Frame stopped -- machine alarm (laser already off; unlock to continue)",
+      "Frame stopped -- machine alarm (laser already off; unlock to continue)"
     );
     expect(useStore.getState().jobRunning).toBe(false);
     // GRBL is locked: M5 would earn error:9, 0x18 would re-reset. Neither fires.
@@ -439,9 +437,7 @@ describe("streamJob material-test abort protocol (P1-A)", () => {
 
   it("aborts material test on empty response (protocol failure)", async () => {
     mockSerial((cmd) =>
-      cmd.startsWith("G1")
-        ? { responses: [], drained: [] }
-        : { responses: ["ok"], drained: [] },
+      cmd.startsWith("G1") ? { responses: [], drained: [] } : { responses: ["ok"], drained: [] }
     );
 
     const result = await streamJob(testGcode, { label: "Material test" });
@@ -457,7 +453,7 @@ describe("streamJob material-test abort protocol (P1-A)", () => {
     mockSerial((cmd) =>
       cmd.startsWith("G1")
         ? { responses: ["Grbl 1.1h ['$' for help]"], drained: [] }
-        : { responses: ["ok"], drained: [] },
+        : { responses: ["ok"], drained: [] }
     );
 
     const result = await streamJob(testGcode, { label: "Material test" });
@@ -473,13 +469,13 @@ describe("streamJob material-test abort protocol (P1-A)", () => {
     mockSerial((cmd) =>
       cmd.startsWith("G1")
         ? { responses: ["ALARM:1"], drained: [] }
-        : { responses: ["ok"], drained: [] },
+        : { responses: ["ok"], drained: [] }
     );
 
     const result = await streamJob(testGcode, { label: "Material test" });
     expect(result.endState).toBe("alarm");
     expect(consoleTexts()).toContain(
-      "Material test stopped -- machine alarm (laser already off; unlock to continue)",
+      "Material test stopped -- machine alarm (laser already off; unlock to continue)"
     );
     expect(useStore.getState().jobRunning).toBe(false);
     // GRBL is locked: no volley
@@ -511,7 +507,7 @@ describe("pauseJob / resumeJob volley contract (P1-B A1)", () => {
     await pausePromise;
 
     // Exact volley: feedHold byte (0x21) then spindle-stop-override (0x9E)
-    expect(sentBytes()).toEqual([0x21, 0x9E]);
+    expect(sentBytes()).toEqual([0x21, 0x9e]);
     // No line-based M5 — the F13 hazard this fix eliminates
     expect(sentCommands()).not.toContain("M5");
     // No line-based M3 either
@@ -524,7 +520,7 @@ describe("pauseJob / resumeJob volley contract (P1-B A1)", () => {
     await resumeJob();
 
     // Exact volley: cycle resume byte only
-    expect(sentBytes()).toEqual([0x7E]);
+    expect(sentBytes()).toEqual([0x7e]);
     // No line-based M3 — the F13 hazard
     expect(sentCommands()).not.toContain("M3");
     // No other line commands
@@ -569,12 +565,12 @@ describe("pauseJob / resumeJob volley contract (P1-B A1)", () => {
 
     // pauseJob has a real 100ms settle delay — wait for it
     await waitFor(() => {
-      expect(sentBytes()).toContain(0x9E); // spindle-stop-override arrived
+      expect(sentBytes()).toContain(0x9e); // spindle-stop-override arrived
     });
 
     // Must use the realtime pause volley, not the old line-based M5
     expect(sentBytes()).toContain(0x21); // feedHold
-    expect(sentBytes()).toContain(0x9E); // spindle-stop-override
+    expect(sentBytes()).toContain(0x9e); // spindle-stop-override
     expect(sentCommands()).not.toContain("M5");
     expect(sentCommands()).not.toContain("M3");
   });
@@ -585,10 +581,10 @@ describe("pauseJob / resumeJob volley contract (P1-B A1)", () => {
     const { getByText } = render(<JobActionBar />);
 
     fireEvent.click(getByText("RESUME"));
-    await waitFor(() => expect(sentBytes()).toContain(0x7E));
+    await waitFor(() => expect(sentBytes()).toContain(0x7e));
 
     // Must use the realtime resume, not the old line-based M3
-    expect(sentBytes()).toEqual([0x7E]); // cycleResume only
+    expect(sentBytes()).toEqual([0x7e]); // cycleResume only
     expect(sentCommands()).not.toContain("M3");
   });
 });
@@ -609,29 +605,31 @@ describe("emergencyStop edge cases (P1-B A6)", () => {
     vi.useFakeTimers();
     const calls: string[] = [];
     let resetAttempts = 0;
-    mockInvoke.mockImplementation(async (cmd: string, args?: { byte?: number; command?: string }) => {
-      if (cmd === "serial_send_byte") {
-        const byte = args?.byte ?? 0;
-        calls.push(`byte(${byte.toString(16)})`);
-        if (byte === 0x18) {
-          resetAttempts++;
-          if (resetAttempts === 1) {
-            throw new Error("first reset failed");
+    mockInvoke.mockImplementation(
+      async (cmd: string, args?: { byte?: number; command?: string }) => {
+        if (cmd === "serial_send_byte") {
+          const byte = args?.byte ?? 0;
+          calls.push(`byte(${byte.toString(16)})`);
+          if (byte === 0x18) {
+            resetAttempts++;
+            if (resetAttempts === 1) {
+              throw new Error("first reset failed");
+            }
+            // Second attempt succeeds
           }
-          // Second attempt succeeds
+          return undefined;
+        }
+        if (cmd === "serial_get_status") {
+          calls.push("status");
+          return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
+        }
+        if (cmd === "serial_send") {
+          calls.push(`send(${args?.command ?? "?"})`);
+          return { responses: ["ok"], drained: [] };
         }
         return undefined;
       }
-      if (cmd === "serial_get_status") {
-        calls.push("status");
-        return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
-      }
-      if (cmd === "serial_send") {
-        calls.push(`send(${args?.command ?? "?"})`);
-        return { responses: ["ok"], drained: [] };
-      }
-      return undefined;
-    });
+    );
 
     const stopPromise = machineConnection.emergencyStop();
     await vi.runAllTimersAsync();
@@ -663,7 +661,7 @@ describe("emergencyStop edge cases (P1-B A6)", () => {
 
     expect(useStore.getState().machineState).toBe("alarm");
     expect(consoleTexts()).toContain(
-      "E-stop incomplete — feed hold sent but soft reset failed after retry. Beam may still be on — treat as unsafe.",
+      "E-stop incomplete — feed hold sent but soft reset failed after retry. Beam may still be on — treat as unsafe."
     );
 
     vi.useRealTimers();
@@ -672,22 +670,24 @@ describe("emergencyStop edge cases (P1-B A6)", () => {
   it("skips M5 when re-poll reports Hold state (narrowed from !== alarm)", async () => {
     vi.useFakeTimers();
     const calls: string[] = [];
-    mockInvoke.mockImplementation(async (cmd: string, args?: { byte?: number; command?: string }) => {
-      if (cmd === "serial_send_byte") {
-        calls.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
+    mockInvoke.mockImplementation(
+      async (cmd: string, args?: { byte?: number; command?: string }) => {
+        if (cmd === "serial_send_byte") {
+          calls.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
+          return undefined;
+        }
+        if (cmd === "serial_get_status") {
+          calls.push("status");
+          // Machine stuck in Hold after reset (edge case)
+          return { status: "<Hold|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
+        }
+        if (cmd === "serial_send") {
+          calls.push(`send(${args?.command ?? "?"})`);
+          return { responses: ["ok"], drained: [] };
+        }
         return undefined;
       }
-      if (cmd === "serial_get_status") {
-        calls.push("status");
-        // Machine stuck in Hold after reset (edge case)
-        return { status: "<Hold|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
-      }
-      if (cmd === "serial_send") {
-        calls.push(`send(${args?.command ?? "?"})`);
-        return { responses: ["ok"], drained: [] };
-      }
-      return undefined;
-    });
+    );
 
     const stopPromise = machineConnection.emergencyStop();
     await vi.runAllTimersAsync();
@@ -704,21 +704,23 @@ describe("emergencyStop edge cases (P1-B A6)", () => {
   it("skips M5 when re-poll reports Door state (narrowed gate)", async () => {
     vi.useFakeTimers();
     const calls: string[] = [];
-    mockInvoke.mockImplementation(async (cmd: string, args?: { byte?: number; command?: string }) => {
-      if (cmd === "serial_send_byte") {
-        calls.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
+    mockInvoke.mockImplementation(
+      async (cmd: string, args?: { byte?: number; command?: string }) => {
+        if (cmd === "serial_send_byte") {
+          calls.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
+          return undefined;
+        }
+        if (cmd === "serial_get_status") {
+          calls.push("status");
+          return { status: "<Door|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
+        }
+        if (cmd === "serial_send") {
+          calls.push(`send(${args?.command ?? "?"})`);
+          return { responses: ["ok"], drained: [] };
+        }
         return undefined;
       }
-      if (cmd === "serial_get_status") {
-        calls.push("status");
-        return { status: "<Door|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
-      }
-      if (cmd === "serial_send") {
-        calls.push(`send(${args?.command ?? "?"})`);
-        return { responses: ["ok"], drained: [] };
-      }
-      return undefined;
-    });
+    );
 
     const stopPromise = machineConnection.emergencyStop();
     await vi.runAllTimersAsync();

@@ -62,7 +62,8 @@ beforeEach(() => {
 
 // ---- isWithinBounds (extracted pure function, Workstream C) ----
 describe("isWithinBounds", () => {
-  const w = 500, h = 300;
+  const w = 500,
+    h = 300;
 
   it("returns true when extents fit exactly on boundary", () => {
     expect(isWithinBounds({ minX: 0, minY: 0, maxX: 500, maxY: 300 }, w, h)).toBe(true);
@@ -92,8 +93,14 @@ describe("isWithinBounds", () => {
 
 // ---- FRAME uses same bounds as START (Workstream C) ----
 describe("FRAME + canStartJob share isWithinBounds", () => {
-  const movesInBounds = [{ x: 10, y: 10 }, { x: 100, y: 100 }];
-  const movesOutOfBounds = [{ x: -5, y: 10 }, { x: 100, y: 100 }];
+  const movesInBounds = [
+    { x: 10, y: 10 },
+    { x: 100, y: 100 },
+  ];
+  const movesOutOfBounds = [
+    { x: -5, y: 10 },
+    { x: 100, y: 100 },
+  ];
 
   it("frameTargets returns non-null for in-bounds moves", () => {
     expect(frameTargets(movesInBounds)).not.toBeNull();
@@ -103,9 +110,13 @@ describe("FRAME + canStartJob share isWithinBounds", () => {
     const ext = movesExtents(movesOutOfBounds)!;
     expect(isWithinBounds(ext, 500, 300)).toBe(false);
     const gate = canStartJob({
-      machineConnected: true, jobRunning: false,
-      gcodeResult: { moves: movesOutOfBounds }, gcodeStale: false,
-      workspaceWidth: 500, workspaceHeight: 300, workspaceVerified: true,
+      machineConnected: true,
+      jobRunning: false,
+      gcodeResult: { moves: movesOutOfBounds },
+      gcodeStale: false,
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+      workspaceVerified: true,
     });
     expect(gate.ok).toBe(false);
     expect(gate.reason).toContain("outside workspace bounds");
@@ -249,7 +260,12 @@ describe("canStartJob — unverified bed blocks START", () => {
       machineConnected: true,
       machineState: "idle",
       jobRunning: false,
-      gcodeResult: { moves: [{ x: 10, y: 10 }, { x: 100, y: 100 }] },
+      gcodeResult: {
+        moves: [
+          { x: 10, y: 10 },
+          { x: 100, y: 100 },
+        ],
+      },
       gcodeStale: false,
       workspaceWidth: 500,
       workspaceHeight: 300,
@@ -351,7 +367,12 @@ describe("canStartJob — ALARM gate (BUG 3)", () => {
       machineConnected: true,
       machineState: "idle",
       jobRunning: false,
-      gcodeResult: { moves: [{ x: 10, y: 10 }, { x: 100, y: 100 }] },
+      gcodeResult: {
+        moves: [
+          { x: 10, y: 10 },
+          { x: 100, y: 100 },
+        ],
+      },
       gcodeStale: false,
       workspaceWidth: 500,
       workspaceHeight: 300,
@@ -413,10 +434,17 @@ describe("canStartJob — ALARM gate (BUG 3)", () => {
 describe("canStartJob — NOTE-1 fail-closed on missing workspaceVerified", () => {
   it("blocks when workspaceVerified is false", () => {
     const gate = canStartJob({
-      machineConnected: true, jobRunning: false,
-      gcodeResult: { moves: [{ x: 10, y: 10 }, { x: 100, y: 100 }] },
+      machineConnected: true,
+      jobRunning: false,
+      gcodeResult: {
+        moves: [
+          { x: 10, y: 10 },
+          { x: 100, y: 100 },
+        ],
+      },
       gcodeStale: false,
-      workspaceWidth: 500, workspaceHeight: 300,
+      workspaceWidth: 500,
+      workspaceHeight: 300,
       workspaceVerified: false,
     });
     expect(gate.ok).toBe(false);
@@ -427,10 +455,17 @@ describe("canStartJob — NOTE-1 fail-closed on missing workspaceVerified", () =
     // Mutation check: if canStartJob used === false instead of !value,
     // this would return ok:true and the test would fail.
     const gate = canStartJob({
-      machineConnected: true, jobRunning: false,
-      gcodeResult: { moves: [{ x: 10, y: 10 }, { x: 100, y: 100 }] },
+      machineConnected: true,
+      jobRunning: false,
+      gcodeResult: {
+        moves: [
+          { x: 10, y: 10 },
+          { x: 100, y: 100 },
+        ],
+      },
       gcodeStale: false,
-      workspaceWidth: 500, workspaceHeight: 300,
+      workspaceWidth: 500,
+      workspaceHeight: 300,
       workspaceVerified: undefined as unknown as boolean,
     });
     expect(gate.ok).toBe(false);
@@ -439,10 +474,17 @@ describe("canStartJob — NOTE-1 fail-closed on missing workspaceVerified", () =
 
   it("passes when workspaceVerified is explicitly true", () => {
     const gate = canStartJob({
-      machineConnected: true, jobRunning: false,
-      gcodeResult: { moves: [{ x: 10, y: 10 }, { x: 100, y: 100 }] },
+      machineConnected: true,
+      jobRunning: false,
+      gcodeResult: {
+        moves: [
+          { x: 10, y: 10 },
+          { x: 100, y: 100 },
+        ],
+      },
       gcodeStale: false,
-      workspaceWidth: 500, workspaceHeight: 300,
+      workspaceWidth: 500,
+      workspaceHeight: 300,
       workspaceVerified: true,
     });
     expect(gate.ok).toBe(true);
@@ -463,11 +505,22 @@ describe("WARNING-2 regression — FRAME blocked on unverified workspace", () =>
     const machineConnected = true;
     const machineState = "idle";
     const jobRunning = false;
-    const gcodeResult = { moves: [{ x: 10, y: 10 }], gcode: "", lineCount: 1, cutDistance: 10, travelDistance: 0, estimatedTimeSecs: 5 };
+    const gcodeResult = {
+      moves: [{ x: 10, y: 10 }],
+      gcode: "",
+      lineCount: 1,
+      cutDistance: 10,
+      travelDistance: 0,
+      estimatedTimeSecs: 5,
+    };
     const gcodeStale = false;
     const frameDisabled =
-      !machineConnected || machineState !== "idle" || jobRunning ||
-      !gcodeResult || gcodeStale || !workspaceVerified;
+      !machineConnected ||
+      machineState !== "idle" ||
+      jobRunning ||
+      !gcodeResult ||
+      gcodeStale ||
+      !workspaceVerified;
     // Mutation check: if !workspaceVerified were removed, frameDisabled would be false
     expect(frameDisabled).toBe(true);
   });
@@ -477,11 +530,22 @@ describe("WARNING-2 regression — FRAME blocked on unverified workspace", () =>
     const machineConnected = true;
     const machineState = "idle";
     const jobRunning = false;
-    const gcodeResult = { moves: [{ x: 10, y: 10 }], gcode: "", lineCount: 1, cutDistance: 10, travelDistance: 0, estimatedTimeSecs: 5 };
+    const gcodeResult = {
+      moves: [{ x: 10, y: 10 }],
+      gcode: "",
+      lineCount: 1,
+      cutDistance: 10,
+      travelDistance: 0,
+      estimatedTimeSecs: 5,
+    };
     const gcodeStale = false;
     const frameDisabled =
-      !machineConnected || machineState !== "idle" || jobRunning ||
-      !gcodeResult || gcodeStale || !workspaceVerified;
+      !machineConnected ||
+      machineState !== "idle" ||
+      jobRunning ||
+      !gcodeResult ||
+      gcodeStale ||
+      !workspaceVerified;
     expect(frameDisabled).toBe(false);
   });
 });

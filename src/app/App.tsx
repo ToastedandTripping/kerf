@@ -36,18 +36,52 @@ import { OnboardingOverlay, shouldShowOnboarding } from "../components/panels/On
 import { useStore } from "./store";
 import { generateId } from "./store/storeTypes";
 
-
 class ViewportErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state: { error: Error | null } = { error: null };
-  static getDerivedStateFromError(error: Error) { return { error }; }
-  componentDidCatch(error: Error, info: ErrorInfo) { console.error("Viewport crashed:", error, info); }
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("Viewport crashed:", error, info);
+  }
   render() {
     if (this.state.error) {
       return (
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg-panel)", color: "var(--text-secondary)", flexDirection: "column", gap: "12px" }}>
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "var(--bg-panel)",
+            color: "var(--text-secondary)",
+            flexDirection: "column",
+            gap: "12px",
+          }}
+        >
           <div style={{ fontSize: "14px" }}>Canvas failed to render</div>
-          <div style={{ fontSize: "11px", color: "var(--text-tertiary)", maxWidth: "300px", textAlign: "center" }}>{this.state.error.message}</div>
-          <button onClick={() => this.setState({ error: null })} style={{ padding: "6px 16px", fontSize: "12px", background: "var(--accent, #4a90e2)", border: "none", borderRadius: "4px", color: "#fff", cursor: "pointer" }}>
+          <div
+            style={{
+              fontSize: "11px",
+              color: "var(--text-tertiary)",
+              maxWidth: "300px",
+              textAlign: "center",
+            }}
+          >
+            {this.state.error.message}
+          </div>
+          <button
+            onClick={() => this.setState({ error: null })}
+            style={{
+              padding: "6px 16px",
+              fontSize: "12px",
+              background: "var(--accent, #4a90e2)",
+              border: "none",
+              borderRadius: "4px",
+              color: "#fff",
+              cursor: "pointer",
+            }}
+          >
             Retry
           </button>
         </div>
@@ -58,20 +92,43 @@ class ViewportErrorBoundary extends Component<{ children: ReactNode }, { error: 
 }
 
 // Dialog helpers — open dialogs via Zustand store
-export function openGrblSettings() { useStore.getState().openDialog("grbl"); }
-export function openSettings() { useStore.getState().openDialog("settings"); }
-export function openProjectNotes() { useStore.getState().openDialog("notes"); }
-export function openQrCode() { useStore.getState().openDialog("qr"); }
-export function openImageTrace() { useStore.getState().openDialog("trace"); }
-export function openMaterialTest() { useStore.getState().openDialog("materialTest"); }
-export function openVariableText() { useStore.getState().openDialog("variableText"); }
-export function openNesting() { useStore.getState().openDialog("nesting"); }
+export function openGrblSettings() {
+  useStore.getState().openDialog("grbl");
+}
+export function openSettings() {
+  useStore.getState().openDialog("settings");
+}
+export function openProjectNotes() {
+  useStore.getState().openDialog("notes");
+}
+export function openQrCode() {
+  useStore.getState().openDialog("qr");
+}
+export function openImageTrace() {
+  useStore.getState().openDialog("trace");
+}
+export function openMaterialTest() {
+  useStore.getState().openDialog("materialTest");
+}
+export function openVariableText() {
+  useStore.getState().openDialog("variableText");
+}
+export function openNesting() {
+  useStore.getState().openDialog("nesting");
+}
 export function openSvgImport(svgContent: string) {
   const s = useStore.getState();
   s.setDialogData({ svgContent });
   s.openDialog("svgImport");
 }
-export function openImageImport(data: string, name: string, width: number, height: number, widthMm?: number, heightMm?: number) {
+export function openImageImport(
+  data: string,
+  name: string,
+  width: number,
+  height: number,
+  widthMm?: number,
+  heightMm?: number
+) {
   const s = useStore.getState();
   s.setDialogData({ pendingImage: { data, name, width, height, widthMm, heightMm } });
   s.openDialog("imageImport");
@@ -104,9 +161,11 @@ export default function App() {
 
   useEffect(() => {
     startAutoSave(60000);
-    checkRecoveryFile().then((result) => {
-      if (result) setRecoveryOffer({ timestamp: result.timestamp });
-    }).catch(console.error);
+    checkRecoveryFile()
+      .then((result) => {
+        if (result) setRecoveryOffer({ timestamp: result.timestamp });
+      })
+      .catch(console.error);
   }, []);
 
   const [dragOver, setDragOver] = useState(false);
@@ -154,18 +213,29 @@ export default function App() {
       }}
     >
       {dragOver && (
-        <div style={{
-          position: "absolute", inset: 0, zIndex: 99999,
-          background: "rgba(74, 144, 226, 0.08)",
-          border: "2px dashed rgba(74, 144, 226, 0.5)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          pointerEvents: "none",
-        }}>
-          <div style={{
-            padding: "16px 32px", borderRadius: "8px",
-            background: "rgba(0, 0, 0, 0.7)", color: "#fff",
-            fontSize: "14px", fontWeight: 500,
-          }}>
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 99999,
+            background: "rgba(74, 144, 226, 0.08)",
+            border: "2px dashed rgba(74, 144, 226, 0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            pointerEvents: "none",
+          }}
+        >
+          <div
+            style={{
+              padding: "16px 32px",
+              borderRadius: "8px",
+              background: "rgba(0, 0, 0, 0.7)",
+              color: "#fff",
+              fontSize: "14px",
+              fontWeight: 500,
+            }}
+          >
             Drop to import
           </div>
         </div>
@@ -173,7 +243,15 @@ export default function App() {
       <MenuBar />
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
         <Toolbar />
-        <div style={{ flex: 1, position: "relative", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <div
+          style={{
+            flex: 1,
+            position: "relative",
+            overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
           <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
             <ViewportErrorBoundary>
               <Viewport />
@@ -228,11 +306,17 @@ export default function App() {
       <ProjectNotesDialog open={openDialogs.has("notes")} onClose={() => closeDialog("notes")} />
       <QrCodeDialog open={openDialogs.has("qr")} onClose={() => closeDialog("qr")} />
       <ImageTraceDialog open={openDialogs.has("trace")} onClose={() => closeDialog("trace")} />
-      <MaterialTestDialog open={openDialogs.has("materialTest")} onClose={() => closeDialog("materialTest")} />
+      <MaterialTestDialog
+        open={openDialogs.has("materialTest")}
+        onClose={() => closeDialog("materialTest")}
+      />
       <SvgImportDialog
         open={openDialogs.has("svgImport")}
         svgContent={dialogData.svgContent}
-        onClose={() => { closeDialog("svgImport"); setDialogData({ svgContent: null }); }}
+        onClose={() => {
+          closeDialog("svgImport");
+          setDialogData({ svgContent: null });
+        }}
       />
       <ImageImportDialog
         open={openDialogs.has("imageImport")}
@@ -242,7 +326,10 @@ export default function App() {
         imageHeight={dialogData.pendingImage?.height ?? 0}
         widthMmOverride={dialogData.pendingImage?.widthMm}
         heightMmOverride={dialogData.pendingImage?.heightMm}
-        onClose={() => { closeDialog("imageImport"); setDialogData({ pendingImage: null }); }}
+        onClose={() => {
+          closeDialog("imageImport");
+          setDialogData({ pendingImage: null });
+        }}
         onImported={(autoTrace) => {
           if (dialogData.pendingImage && autoTrace) {
             setTimeout(() => openImageTrace(), 100);
@@ -252,17 +339,30 @@ export default function App() {
       <DitherPreviewDialog
         open={openDialogs.has("ditherPreview")}
         objectId={dialogData.ditherPreviewObjectId}
-        onClose={() => { closeDialog("ditherPreview"); setDialogData({ ditherPreviewObjectId: null }); }}
+        onClose={() => {
+          closeDialog("ditherPreview");
+          setDialogData({ ditherPreviewObjectId: null });
+        }}
       />
       <PdfImportDialog
         open={openDialogs.has("pdfImport")}
         pdfData={dialogData.pendingPdf?.data ?? null}
         fileName={dialogData.pendingPdf?.name ?? ""}
-        onClose={() => { closeDialog("pdfImport"); setDialogData({ pendingPdf: null }); }}
+        onClose={() => {
+          closeDialog("pdfImport");
+          setDialogData({ pendingPdf: null });
+        }}
         onImport={(imageData, widthMm, heightMm) => {
           closeDialog("pdfImport");
           // width/height here are mm (from PDF points); pass pixel dims as 0 (unused when mm provided)
-          openImageImport(imageData, dialogData.pendingPdf?.name ?? "pdf-page.png", 0, 0, widthMm, heightMm);
+          openImageImport(
+            imageData,
+            dialogData.pendingPdf?.name ?? "pdf-page.png",
+            0,
+            0,
+            widthMm,
+            heightMm
+          );
         }}
         onImportVector={(objects) => {
           closeDialog("pdfImport");
@@ -275,7 +375,10 @@ export default function App() {
         generateId={generateId}
         defaultLayerIndex={activeLayerIndex}
       />
-      <VariableTextDialog open={openDialogs.has("variableText")} onClose={() => closeDialog("variableText")} />
+      <VariableTextDialog
+        open={openDialogs.has("variableText")}
+        onClose={() => closeDialog("variableText")}
+      />
       <NestingDialog open={openDialogs.has("nesting")} onClose={() => closeDialog("nesting")} />
       <ShortcutOverlay />
 
@@ -284,19 +387,34 @@ export default function App() {
 
       {/* Recovery offer modal */}
       {recoveryOffer && (
-        <div style={{
-          position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
-          display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999,
-        }}>
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.6)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 9999,
+          }}
+        >
           <div
             role="dialog"
             aria-modal="true"
             aria-labelledby="recovery-dialog-title"
             style={{
-            background: "var(--bg-panel)", border: "1px solid var(--border)",
-            borderRadius: "8px", padding: "24px", maxWidth: "360px", width: "90%",
-          }}>
-            <h3 id="recovery-dialog-title" style={{ margin: "0 0 8px", fontSize: "14px", color: "var(--text-primary)" }}>
+              background: "var(--bg-panel)",
+              border: "1px solid var(--border)",
+              borderRadius: "8px",
+              padding: "24px",
+              maxWidth: "360px",
+              width: "90%",
+            }}
+          >
+            <h3
+              id="recovery-dialog-title"
+              style={{ margin: "0 0 8px", fontSize: "14px", color: "var(--text-primary)" }}
+            >
               Recover unsaved work?
             </h3>
             <p style={{ margin: "0 0 16px", fontSize: "12px", color: "var(--text-secondary)" }}>
@@ -304,8 +422,19 @@ export default function App() {
             </p>
             <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
               <button
-                onClick={() => { clearRecoveryFile(); setRecoveryOffer(null); }}
-                style={{ padding: "6px 12px", fontSize: "12px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "4px", color: "var(--text-primary)", cursor: "pointer" }}
+                onClick={() => {
+                  clearRecoveryFile();
+                  setRecoveryOffer(null);
+                }}
+                style={{
+                  padding: "6px 12px",
+                  fontSize: "12px",
+                  background: "var(--bg-input)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "4px",
+                  color: "var(--text-primary)",
+                  cursor: "pointer",
+                }}
               >
                 Discard
               </button>
@@ -320,13 +449,22 @@ export default function App() {
                     // P3-A: validate structure before loading (corrupt recovery
                     // files should surface an error, not crash the app).
                     const validated = parseAndValidateProject(
-                      JSON.stringify(result.project), "recovery.kerf"
+                      JSON.stringify(result.project),
+                      "recovery.kerf"
                     );
                     if (validated) loadProjectWithMigrations(validated);
                   }
                   setRecoveryOffer(null);
                 }}
-                style={{ padding: "6px 12px", fontSize: "12px", background: "var(--accent, #4a90e2)", border: "none", borderRadius: "4px", color: "#fff", cursor: "pointer" }}
+                style={{
+                  padding: "6px 12px",
+                  fontSize: "12px",
+                  background: "var(--accent, #4a90e2)",
+                  border: "none",
+                  borderRadius: "4px",
+                  color: "#fff",
+                  cursor: "pointer",
+                }}
               >
                 Restore
               </button>

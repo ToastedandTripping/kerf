@@ -142,11 +142,11 @@ describe("2 — updateObjects and updateObject can target a nested leaf directly
     const tgNode = findNode(objects, "tg")!;
     const sgNode = findNode(objects, "sg")!;
 
-    expect(l2Node.layerIndex).toBe(2);     // updated
-    expect(l1Node.layerIndex).toBe(0);     // unchanged sibling
-    expect(l3Node.layerIndex).toBe(0);     // unchanged sibling
-    expect(sgNode.layerIndex).toBe(0);     // unchanged parent group
-    expect(tgNode.layerIndex).toBe(0);     // unchanged top group
+    expect(l2Node.layerIndex).toBe(2); // updated
+    expect(l1Node.layerIndex).toBe(0); // unchanged sibling
+    expect(l3Node.layerIndex).toBe(0); // unchanged sibling
+    expect(sgNode.layerIndex).toBe(0); // unchanged parent group
+    expect(tgNode.layerIndex).toBe(0); // unchanged top group
   });
 
   it("updateObject with a nested leaf id updates that leaf, siblings/parent unchanged", () => {
@@ -159,11 +159,11 @@ describe("2 — updateObjects and updateObject can target a nested leaf directly
     const tgNode = findNode(objects, "tg")!;
     const sgNode = findNode(objects, "sg")!;
 
-    expect(l3Node.layerIndex).toBe(2);     // updated
-    expect(l1Node.layerIndex).toBe(0);     // unchanged sibling
-    expect(l2Node.layerIndex).toBe(0);     // unchanged sibling
-    expect(sgNode.layerIndex).toBe(0);     // unchanged parent group
-    expect(tgNode.layerIndex).toBe(0);     // unchanged top group
+    expect(l3Node.layerIndex).toBe(2); // updated
+    expect(l1Node.layerIndex).toBe(0); // unchanged sibling
+    expect(l2Node.layerIndex).toBe(0); // unchanged sibling
+    expect(sgNode.layerIndex).toBe(0); // unchanged parent group
+    expect(tgNode.layerIndex).toBe(0); // unchanged top group
   });
 });
 
@@ -184,8 +184,8 @@ describe("3 — top-level group update does NOT cascade layerIndex to children",
     const c1Node = findNode(objects, "c1")!;
     const c2Node = findNode(objects, "c2")!;
 
-    expect(gNode.layerIndex).toBe(2);   // group itself updated
-    expect(c1Node.layerIndex).toBe(0);  // children NOT cascaded
+    expect(gNode.layerIndex).toBe(2); // group itself updated
+    expect(c1Node.layerIndex).toBe(0); // children NOT cascaded
     expect(c2Node.layerIndex).toBe(0);
   });
 
@@ -197,8 +197,8 @@ describe("3 — top-level group update does NOT cascade layerIndex to children",
     const c1Node = findNode(objects, "c1")!;
     const c2Node = findNode(objects, "c2")!;
 
-    expect(gNode.layerIndex).toBe(2);   // group itself updated
-    expect(c1Node.layerIndex).toBe(0);  // children NOT cascaded
+    expect(gNode.layerIndex).toBe(2); // group itself updated
+    expect(c1Node.layerIndex).toBe(0); // children NOT cascaded
     expect(c2Node.layerIndex).toBe(0);
   });
 });

@@ -36,17 +36,16 @@ export async function pauseJob(): Promise<void> {
   // sending the spindle-stop override.
   await new Promise((r) => setTimeout(r, 100));
   try {
-    await machineConnection.sendByte(0x9E);
+    await machineConnection.sendByte(0x9e);
   } catch (e) {
     // Fallback MUST be detectable, not silent (A1 spec):
-    console.warn(
-      "Spindle stop override (0x9E) failed — beam may still be on during pause",
-      e,
-    );
-    useStore.getState().addConsoleLine(
-      "WARNING: Spindle stop override (0x9E) failed — beam may still be on during pause",
-      "error",
-    );
+    console.warn("Spindle stop override (0x9E) failed — beam may still be on during pause", e);
+    useStore
+      .getState()
+      .addConsoleLine(
+        "WARNING: Spindle stop override (0x9E) failed — beam may still be on during pause",
+        "error"
+      );
   }
 }
 
@@ -90,17 +89,12 @@ export interface StreamJobResult {
  *   still true -- STOP's emergencyStop path is not duplicated)
  * - Tear down the serial port on disconnect detection
  */
-export async function streamJob(
-  gcode: string,
-  opts: StreamJobOptions,
-): Promise<StreamJobResult> {
+export async function streamJob(gcode: string, opts: StreamJobOptions): Promise<StreamJobResult> {
   // Capture action creators (stable refs) at the start; read volatile state
   // fresh via useStore.getState() inside the loop.
   const store = useStore.getState();
 
-  const lines = gcode
-    .split("\n")
-    .filter((l) => l.trim() && !l.startsWith(";"));
+  const lines = gcode.split("\n").filter((l) => l.trim() && !l.startsWith(";"));
 
   let endState: StreamJobResult["endState"] = "complete";
   let portDisconnected = false;
@@ -112,10 +106,7 @@ export async function streamJob(
     // (STOP-while-PAUSED): emergencyStop's re-poll may write a fresh
     // non-hold state, or the state may stay "hold" if the re-poll got
     // nothing -- either way the loop must un-park.
-    while (
-      useStore.getState().machineState === "hold" &&
-      useStore.getState().jobRunning
-    ) {
+    while (useStore.getState().machineState === "hold" && useStore.getState().jobRunning) {
       await new Promise((r) => setTimeout(r, 100));
     }
 
@@ -133,10 +124,7 @@ export async function streamJob(
     // F13/F17: empty response or reset banner = the line was ABORTED, not
     // acked; advancing would desync ack attribution.
     if (responses.length === 0 || responses.some((r) => r.startsWith("Grbl "))) {
-      store.addConsoleLine(
-        `${opts.label} aborted -- machine was reset mid-line`,
-        "error",
-      );
+      store.addConsoleLine(`${opts.label} aborted -- machine was reset mid-line`, "error");
       endState = "aborted";
       break;
     }
@@ -180,12 +168,14 @@ export async function streamJob(
             reachedIdle = true;
             break;
           }
-        } catch { /* port may be gone; fall through to timeout */ }
+        } catch {
+          /* port may be gone; fall through to timeout */
+        }
       }
       if (!reachedIdle) {
         store.addConsoleLine(
           `${opts.label} complete (Idle timeout -- head may still be moving)`,
-          "warning",
+          "warning"
         );
       } else {
         store.addConsoleLine(`${opts.label} complete`, "info");
@@ -196,15 +186,23 @@ export async function streamJob(
   } else if (endState === "alarm") {
     store.addConsoleLine(
       `${opts.label} stopped -- machine alarm (laser already off; unlock to continue)`,
-      "error",
+      "error"
     );
   } else {
     // Safety volley: ensure laser is off. SKIPPED when jobRunning is already
     // false -- the user pressed STOP and emergencyStop ran its own sequence;
     // a second M5+0x18 would push another reset banner into the buffer.
     if (useStore.getState().jobRunning) {
-      try { await machineConnection.send("M5"); } catch { /* port may be gone */ }
-      try { await machineConnection.softReset(); } catch { /* port may be gone */ }
+      try {
+        await machineConnection.send("M5");
+      } catch {
+        /* port may be gone */
+      }
+      try {
+        await machineConnection.softReset();
+      } catch {
+        /* port may be gone */
+      }
     }
     store.addConsoleLine(`${opts.label} aborted`, "error");
   }
@@ -216,7 +214,11 @@ export async function streamJob(
   // (which now sends 0x18) doesn't fail with "port busy". Runs AFTER the
   // safety volley above so M5 has already been attempted before teardown.
   if (portDisconnected) {
-    try { await machineConnection.disconnect(); } catch { /* port already gone */ }
+    try {
+      await machineConnection.disconnect();
+    } catch {
+      /* port already gone */
+    }
   }
 
   return { endState, portDisconnected };

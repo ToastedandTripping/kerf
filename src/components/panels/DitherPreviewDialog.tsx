@@ -67,9 +67,7 @@ export function DitherPreviewDialog({
   };
 
   // Estimated time placeholder (would need data from the backend)
-  const estTime = result
-    ? formatTime(estimateEngraveTime(result.width, result.height))
-    : "--";
+  const estTime = result ? formatTime(estimateEngraveTime(result.width, result.height)) : "--";
 
   return (
     <>
@@ -106,10 +104,7 @@ export function DitherPreviewDialog({
         }}
       >
         {/* Title */}
-        <div
-          id={titleId}
-          style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}
-        >
+        <div id={titleId} style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>
           Engrave Preview
         </div>
 
@@ -131,9 +126,7 @@ export function DitherPreviewDialog({
           {loading && (
             <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Processing...</span>
           )}
-          {error && (
-            <span style={{ fontSize: 12, color: "var(--danger)" }}>{error}</span>
-          )}
+          {error && <span style={{ fontSize: 12, color: "var(--danger)" }}>{error}</span>}
           {result && !loading && (
             <img
               src={result.imageData}
@@ -339,8 +332,8 @@ export function DitherPreviewDialog({
  *  NOTE: `speed` here is an internal mm/s heuristic for time estimation only,
  *  intentionally NOT the stored layer speed (which is canonical mm/min). */
 function estimateEngraveTime(w: number, h: number): number {
-  const interval = 0.1;  // assumed line interval (mm)
-  const speed = 100;     // internal mm/s heuristic for estimate only (NOT stored speed)
+  const interval = 0.1; // assumed line interval (mm)
+  const speed = 100; // internal mm/s heuristic for estimate only (NOT stored speed)
   const widthMm = w * interval;
   const rows = h;
   return (rows * widthMm) / speed;

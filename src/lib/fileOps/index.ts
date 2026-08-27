@@ -1,5 +1,11 @@
 import { useStore } from "../../app/store";
-import type { DesignObject, KerfProject, Layer, MaterialPreset, LineOverlay } from "../../app/types";
+import type {
+  DesignObject,
+  KerfProject,
+  Layer,
+  MaterialPreset,
+  LineOverlay,
+} from "../../app/types";
 import { DEFAULT_LAYERS, KERF_FORMAT_VERSION } from "../../app/types";
 import { pointsBBox, rotatePathPoint, POINTS_EPSILON } from "../geometry";
 import { DEFAULT_MATERIALS } from "../materials";
@@ -24,7 +30,10 @@ export function parseAndValidateProject(content: string, filePath: string): Kerf
   } catch {
     const store = useStore.getState();
     store.setStatusMessage("Project file is corrupted and could not be loaded");
-    store.addConsoleLine(`Failed to load "${filePath}": file is corrupted or not a valid Kerf project`, "error");
+    store.addConsoleLine(
+      `Failed to load "${filePath}": file is corrupted or not a valid Kerf project`,
+      "error"
+    );
     return null;
   }
   const project = raw as KerfProject;
@@ -69,14 +78,11 @@ async function checkUnsavedChanges(): Promise<boolean> {
   const hasTauri = await ensureTauri();
   if (!hasTauri || !dialogModule) return true;
 
-  const result = await dialogModule.message(
-    `Save changes to "${store.projectName}"?`,
-    {
-      title: "Unsaved Changes",
-      kind: "warning",
-      buttons: { yes: "Save", no: "Don't Save", cancel: "Cancel" },
-    }
-  );
+  const result = await dialogModule.message(`Save changes to "${store.projectName}"?`, {
+    title: "Unsaved Changes",
+    kind: "warning",
+    buttons: { yes: "Save", no: "Don't Save", cancel: "Cancel" },
+  });
 
   if (result === "Cancel") return false;
 
@@ -114,14 +120,17 @@ async function checkUnsavedChanges(): Promise<boolean> {
  */
 export function loadProjectWithMigrations(project: KerfProject): void {
   const v = project.formatVersion; // undefined => legacy v0
-  if (v === undefined || v < 1) {  // geometry: ONLY legacy v0 files
+  if (v === undefined || v < 1) {
+    // geometry: ONLY legacy v0 files
     migrateFlipTransforms(project.objects);
     migratePointsTransformSync(project.objects, 0, 0);
   }
-  if (v === undefined || v < 2) {  // speed mm/s → mm/min
+  if (v === undefined || v < 2) {
+    // speed mm/s → mm/min
     migrateSpeedToMmMin(project);
   }
-  if (v === undefined || v < 3) {  // sub-layers → fillLine
+  if (v === undefined || v < 3) {
+    // sub-layers → fillLine
     migrateSubLayersToFillLine(project);
   }
   // Stamp AFTER migration completes successfully; a throw leaves version
@@ -486,7 +495,18 @@ export function migrateSubLayersToFillLine(project: KerfProject): void {
 
   for (const layer of project.layers) {
     try {
-      const l = layer as Layer & { subLayers?: Array<{ id?: string; mode?: string; power?: number; powerMin?: number; speed?: number; passes?: number; powerMode?: string; interval?: number }> };
+      const l = layer as Layer & {
+        subLayers?: Array<{
+          id?: string;
+          mode?: string;
+          power?: number;
+          powerMin?: number;
+          speed?: number;
+          passes?: number;
+          powerMode?: string;
+          interval?: number;
+        }>;
+      };
       if (!Array.isArray(l.subLayers) || l.subLayers.length === 0) continue;
 
       const subs = l.subLayers;
@@ -502,7 +522,8 @@ export function migrateSubLayersToFillLine(project: KerfProject): void {
         if (typeof sub.powerMin === "number") l.powerMin = sub.powerMin;
         if (typeof sub.speed === "number") l.speed = sub.speed;
         if (typeof sub.passes === "number") l.passes = sub.passes;
-        if (typeof sub.powerMode === "string") l.powerMode = sub.powerMode as import("../../app/types").PowerMode;
+        if (typeof sub.powerMode === "string")
+          l.powerMode = sub.powerMode as import("../../app/types").PowerMode;
         if (typeof sub.interval === "number") l.interval = sub.interval;
       } else if (fillSubs.length === 1 && lineSubs.length === 1) {
         // Clean fill+line: convert to fillLine
@@ -513,14 +534,17 @@ export function migrateSubLayersToFillLine(project: KerfProject): void {
         if (typeof fillSub.powerMin === "number") l.powerMin = fillSub.powerMin;
         if (typeof fillSub.speed === "number") l.speed = fillSub.speed;
         if (typeof fillSub.passes === "number") l.passes = fillSub.passes;
-        if (typeof fillSub.powerMode === "string") l.powerMode = fillSub.powerMode as import("../../app/types").PowerMode;
+        if (typeof fillSub.powerMode === "string")
+          l.powerMode = fillSub.powerMode as import("../../app/types").PowerMode;
         if (typeof fillSub.interval === "number") l.interval = fillSub.interval;
         const overlay: LineOverlay = {
           power: typeof lineSub.power === "number" ? lineSub.power : 100,
           powerMin: typeof lineSub.powerMin === "number" ? lineSub.powerMin : 0,
           speed: typeof lineSub.speed === "number" ? lineSub.speed : 1200,
           passes: typeof lineSub.passes === "number" ? lineSub.passes : 1,
-          powerMode: (typeof lineSub.powerMode === "string" ? lineSub.powerMode : "constant") as import("../../app/types").PowerMode,
+          powerMode: (typeof lineSub.powerMode === "string"
+            ? lineSub.powerMode
+            : "constant") as import("../../app/types").PowerMode,
         };
         l.lineOverlay = overlay;
       } else {
@@ -530,8 +554,8 @@ export function migrateSubLayersToFillLine(project: KerfProject): void {
         const lineSub = lineSubs[0];
         console.warn(
           `[Kerf migration v3] Layer "${l.name}" had ${subs.length} sub-layers (${subs.map((s) => s.mode).join(", ")}) — ` +
-          "collapsed to fillLine using first fill-ish + first line sub. Extra passes lost. " +
-          "A .bak backup was written before this save — restore it to recover.",
+            "collapsed to fillLine using first fill-ish + first line sub. Extra passes lost. " +
+            "A .bak backup was written before this save — restore it to recover."
         );
         l.mode = "fillLine";
         if (fillSub) {
@@ -539,7 +563,8 @@ export function migrateSubLayersToFillLine(project: KerfProject): void {
           if (typeof fillSub.powerMin === "number") l.powerMin = fillSub.powerMin;
           if (typeof fillSub.speed === "number") l.speed = fillSub.speed;
           if (typeof fillSub.passes === "number") l.passes = fillSub.passes;
-          if (typeof fillSub.powerMode === "string") l.powerMode = fillSub.powerMode as import("../../app/types").PowerMode;
+          if (typeof fillSub.powerMode === "string")
+            l.powerMode = fillSub.powerMode as import("../../app/types").PowerMode;
           if (typeof fillSub.interval === "number") l.interval = fillSub.interval;
         }
         const overlay: LineOverlay = {
@@ -547,14 +572,20 @@ export function migrateSubLayersToFillLine(project: KerfProject): void {
           powerMin: lineSub && typeof lineSub.powerMin === "number" ? lineSub.powerMin : 0,
           speed: lineSub && typeof lineSub.speed === "number" ? lineSub.speed : 1200,
           passes: lineSub && typeof lineSub.passes === "number" ? lineSub.passes : 1,
-          powerMode: (lineSub && typeof lineSub.powerMode === "string" ? lineSub.powerMode : "constant") as import("../../app/types").PowerMode,
+          powerMode: (lineSub && typeof lineSub.powerMode === "string"
+            ? lineSub.powerMode
+            : "constant") as import("../../app/types").PowerMode,
         };
         l.lineOverlay = overlay;
       }
 
       delete l.subLayers;
     } catch (e) {
-      console.error("Kerf migration v3: skipping malformed layer", (layer as { name?: string } | null)?.name, e);
+      console.error(
+        "Kerf migration v3: skipping malformed layer",
+        (layer as { name?: string } | null)?.name,
+        e
+      );
     }
   }
 }
@@ -617,7 +648,7 @@ async function writeBakIfMissing(originalPath: string, content: string): Promise
 function migratePointsTransformSync(
   objects: DesignObject[],
   parentWorldX: number,
-  parentWorldY: number,
+  parentWorldY: number
 ): void {
   for (const obj of objects) {
     try {
@@ -625,7 +656,7 @@ function migratePointsTransformSync(
         migratePointsTransformSync(
           obj.children,
           parentWorldX + obj.transform.x,
-          parentWorldY + obj.transform.y,
+          parentWorldY + obj.transform.y
         );
         continue;
       }
@@ -639,8 +670,14 @@ function migratePointsTransformSync(
         for (const p of obj.points) {
           p.x -= parentWorldX;
           p.y -= parentWorldY;
-          if (p.handleIn) { p.handleIn.x -= parentWorldX; p.handleIn.y -= parentWorldY; }
-          if (p.handleOut) { p.handleOut.x -= parentWorldX; p.handleOut.y -= parentWorldY; }
+          if (p.handleIn) {
+            p.handleIn.x -= parentWorldX;
+            p.handleIn.y -= parentWorldY;
+          }
+          if (p.handleOut) {
+            p.handleOut.x -= parentWorldX;
+            p.handleOut.y -= parentWorldY;
+          }
         }
       }
 
@@ -648,7 +685,10 @@ function migratePointsTransformSync(
       const bb = pointsBBox(obj.points);
       const rot = t.rotation || 0;
       if (rot === 0) {
-        t.x = bb.x; t.y = bb.y; t.width = bb.width; t.height = bb.height;
+        t.x = bb.x;
+        t.y = bb.y;
+        t.width = bb.width;
+        t.height = bb.height;
       } else {
         const desynced =
           Math.abs(t.x - bb.x) > POINTS_EPSILON ||
@@ -661,11 +701,18 @@ function migratePointsTransformSync(
           obj.points = obj.points.map((p) => rotatePathPoint(p, cx, cy, rot));
           t.rotation = 0;
           const nb = pointsBBox(obj.points);
-          t.x = nb.x; t.y = nb.y; t.width = nb.width; t.height = nb.height;
+          t.x = nb.x;
+          t.y = nb.y;
+          t.width = nb.width;
+          t.height = nb.height;
         }
       }
     } catch (e) {
-      console.error("Kerf migration: skipping malformed object", (obj as { id?: string } | null)?.id, e);
+      console.error(
+        "Kerf migration: skipping malformed object",
+        (obj as { id?: string } | null)?.id,
+        e
+      );
     }
   }
 }
@@ -677,7 +724,11 @@ function migrateFlipTransforms(objects: DesignObject[]) {
       if (obj.type === "group" && obj.children) {
         migrateFlipTransforms(obj.children);
       }
-      if ((obj.type === "path" || obj.type === "line") && obj.points && (t.scaleX < 0 || t.scaleY < 0)) {
+      if (
+        (obj.type === "path" || obj.type === "line") &&
+        obj.points &&
+        (t.scaleX < 0 || t.scaleY < 0)
+      ) {
         const centerX = t.x + t.width / 2;
         const centerY = t.y + t.height / 2;
         for (const p of obj.points) {
@@ -701,7 +752,11 @@ function migrateFlipTransforms(objects: DesignObject[]) {
     } catch (e) {
       // per-object robustness (W1b): a malformed legacy object must not abort
       // a load — log, skip, and let the rest of the file migrate normally.
-      console.error("Kerf migration: skipping malformed object", (obj as { id?: string } | null)?.id, e);
+      console.error(
+        "Kerf migration: skipping malformed object",
+        (obj as { id?: string } | null)?.id,
+        e
+      );
     }
   }
 }

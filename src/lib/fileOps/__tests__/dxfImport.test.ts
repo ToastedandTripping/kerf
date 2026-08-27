@@ -172,7 +172,9 @@ describe("DXF Import — F23 fixes", () => {
     expect(objects).toHaveLength(1);
     // Console should have a line mentioning the skipped entity
     const consoleLines = useStore.getState().consoleLines;
-    const hasWarning = consoleLines.some((l) => l.text.includes("SPLINE") || l.text.includes("skipped"));
+    const hasWarning = consoleLines.some(
+      (l) => l.text.includes("SPLINE") || l.text.includes("skipped")
+    );
     expect(hasWarning).toBe(true);
   });
 });

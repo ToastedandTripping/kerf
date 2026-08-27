@@ -34,9 +34,10 @@ export function exportSvgContent(): string {
     // Center = AABB center (x+w/2, y+h/2), consistent with D2 rotation-center convention.
     // P3-A: now applied to path/line as well (was previously missing).
     const rotation = t.rotation || 0;
-    const rotTransform = Math.abs(rotation) > 0.001
-      ? ` transform="rotate(${rotation}, ${t.x + t.width / 2}, ${t.y + t.height / 2})"`
-      : "";
+    const rotTransform =
+      Math.abs(rotation) > 0.001
+        ? ` transform="rotate(${rotation}, ${t.x + t.width / 2}, ${t.y + t.height / 2})"`
+        : "";
 
     switch (obj.type) {
       case "rectangle": {
@@ -90,7 +91,10 @@ export function exportSvgContent(): string {
           const ff = obj.fontFamily || "sans-serif";
           const textFill = obj.fill || obj.stroke || "#e8e8e8";
           const textY = t.y + fs;
-          const escaped = obj.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+          const escaped = obj.text
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;");
           elements += `  <text x="${t.x}" y="${textY}" font-size="${fs}" font-family="${ff}" fill="${textFill}"${opacity}${rotTransform}>${escaped}</text>\n`;
         }
         break;

@@ -15,7 +15,7 @@ function findPlacementY(
   skyline: SkylineSegment[],
   itemW: number,
   startX: number,
-  sheetW: number,
+  sheetW: number
 ): number | null {
   if (startX + itemW > sheetW + 0.001) return null;
 
@@ -46,7 +46,7 @@ function placeSkyline(
   x: number,
   y: number,
   w: number,
-  h: number,
+  h: number
 ): SkylineSegment[] {
   const newTop = y + h;
   const itemRight = x + w;
@@ -88,7 +88,10 @@ function placeSkyline(
   const merged: SkylineSegment[] = [result[0]];
   for (let i = 1; i < result.length; i++) {
     const last = merged[merged.length - 1];
-    if (Math.abs(last.x + last.width - result[i].x) < 0.001 && Math.abs(last.y - result[i].y) < 0.001) {
+    if (
+      Math.abs(last.x + last.width - result[i].x) < 0.001 &&
+      Math.abs(last.y - result[i].y) < 0.001
+    ) {
       last.width += result[i].width;
     } else {
       merged.push(result[i]);
@@ -114,7 +117,7 @@ export function nestItems(
   sheetW: number,
   sheetH: number,
   spacing: number,
-  rotation: NestRotation,
+  rotation: NestRotation
 ): NestResult {
   if (items.length === 0) {
     return { placed: [], unplaced: [], efficiency: 0 };
@@ -142,7 +145,12 @@ export function nestItems(
         break;
     }
 
-    let bestPlacement: { x: number; y: number; rot: number; dims: { w: number; h: number } } | null = null;
+    let bestPlacement: {
+      x: number;
+      y: number;
+      rot: number;
+      dims: { w: number; h: number };
+    } | null = null;
 
     for (const rot of rotations) {
       const dims = rotatedExtents(item.w, item.h, rot);
@@ -168,7 +176,11 @@ export function nestItems(
         if (y === null) continue;
         if (y + paddedH > sheetH + 0.001) continue;
 
-        if (!bestPlacement || y < bestPlacement.y || (y === bestPlacement.y && startX < bestPlacement.x)) {
+        if (
+          !bestPlacement ||
+          y < bestPlacement.y ||
+          (y === bestPlacement.y && startX < bestPlacement.x)
+        ) {
           bestPlacement = { x: startX, y, rot, dims };
         }
       }

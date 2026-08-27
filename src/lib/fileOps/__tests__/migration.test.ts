@@ -21,7 +21,12 @@ vi.mock("@tauri-apps/api/core", () => ({
 import { useStore } from "../../../app/store";
 import type { DesignObject, KerfProject, Layer, PathPoint, LineOverlay } from "../../../app/types";
 import { DEFAULT_LAYERS, KERF_FORMAT_VERSION } from "../../../app/types";
-import { loadProjectWithMigrations, migrateSpeedToMmMin, migrateSubLayersToFillLine, fileOperations } from "../index";
+import {
+  loadProjectWithMigrations,
+  migrateSpeedToMmMin,
+  migrateSubLayersToFillLine,
+  fileOperations,
+} from "../index";
 import { pointsBBox, rotatePathPoint } from "../../geometry";
 import { assertPointsInvariant } from "../../geometry/__tests__/pointsInvariant";
 import { flattenObjectsForTest } from "../../machine/gcodeGen";
@@ -29,7 +34,7 @@ import { flattenObjectsForTest } from "../../machine/gcodeGen";
 function legacyPath(
   id: string,
   points: PathPoint[],
-  transform: Partial<DesignObject["transform"]> = {},
+  transform: Partial<DesignObject["transform"]> = {}
 ): DesignObject {
   const bb = pointsBBox(points);
   return {
@@ -37,8 +42,13 @@ function legacyPath(
     type: "path",
     name: `Path ${id}`,
     transform: {
-      x: bb.x, y: bb.y, width: bb.width, height: bb.height,
-      rotation: 0, scaleX: 1, scaleY: 1,
+      x: bb.x,
+      y: bb.y,
+      width: bb.width,
+      height: bb.height,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
       ...transform,
     },
     layerIndex: 0,
@@ -53,7 +63,15 @@ function legacyPath(
   };
 }
 
-function legacyGroup(id: string, x: number, y: number, w: number, h: number, children: DesignObject[], rotation = 0): DesignObject {
+function legacyGroup(
+  id: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  children: DesignObject[],
+  rotation = 0
+): DesignObject {
   return {
     id,
     type: "group",
@@ -100,9 +118,17 @@ beforeEach(() => {
 
 describe("top-level repair", () => {
   it("(a) rot==0 desynced path: transform := pointsBBox, points UNTOUCHED (zero visual change)", () => {
-    const p = legacyPath("p1", [{ x: 10, y: 10, handleOut: { x: 15, y: 8 } }, { x: 30, y: 20 }], {
-      x: 75, y: 80, // failed moves corrupted the transform; points are the rendered truth
-    });
+    const p = legacyPath(
+      "p1",
+      [
+        { x: 10, y: 10, handleOut: { x: 15, y: 8 } },
+        { x: 30, y: 20 },
+      ],
+      {
+        x: 75,
+        y: 80, // failed moves corrupted the transform; points are the rendered truth
+      }
+    );
     loadProjectWithMigrations(legacyProject([p]));
     const m = get("p1");
     expect(m.points![0]).toMatchObject({ x: 10, y: 10 });
@@ -112,10 +138,14 @@ describe("top-level repair", () => {
   });
 
   it("(b) rot≠0 desynced path: rotation baked about the OLD transform center, appearance preserved", () => {
-    const points: PathPoint[] = [{ x: 10, y: 10, handleOut: { x: 15, y: 8 } }, { x: 30, y: 20 }];
+    const points: PathPoint[] = [
+      { x: 10, y: 10, handleOut: { x: 15, y: 8 } },
+      { x: 30, y: 20 },
+    ];
     // legacy old transform (desynced): center (50, 50); render/cut pivot rotation there
     const p = legacyPath("p1", points, { x: 40, y: 45, width: 20, height: 10, rotation: 90 });
-    const oldCx = 40 + 10, oldCy = 45 + 5;
+    const oldCx = 40 + 10,
+      oldCy = 45 + 5;
     loadProjectWithMigrations(legacyProject([p]));
     const m = get("p1");
     expect(m.transform.rotation).toBe(0); // field baked (lossy on the field, exact visually)
@@ -129,7 +159,10 @@ describe("top-level repair", () => {
   });
 
   it("(b2) rot≠0 COHERENT path: left untouched (rotation field survives)", () => {
-    const points: PathPoint[] = [{ x: 10, y: 10 }, { x: 30, y: 20 }];
+    const points: PathPoint[] = [
+      { x: 10, y: 10 },
+      { x: 30, y: 20 },
+    ];
     const p = legacyPath("p1", points, { rotation: 45 }); // transform == pointsBBox
     loadProjectWithMigrations(legacyProject([p]));
     const m = get("p1");
@@ -144,9 +177,17 @@ describe("legacy group children (world-absolute points → group-local)", () => 
     // Legacy: group moved to (50, 60) after creation; child points stayed
     // absolute at (10,10)-(30,20) and the legacy binary RENDERED them there
     // (group translation was dropped for paths — that's F1).
-    const child = legacyPath("c1", [{ x: 10, y: 10, handleOut: { x: 15, y: 8 } }, { x: 30, y: 20 }], {
-      x: 0, y: 0, // child transform group-local (grouping re-based transforms)
-    });
+    const child = legacyPath(
+      "c1",
+      [
+        { x: 10, y: 10, handleOut: { x: 15, y: 8 } },
+        { x: 30, y: 20 },
+      ],
+      {
+        x: 0,
+        y: 0, // child transform group-local (grouping re-based transforms)
+      }
+    );
     const group = legacyGroup("g1", 50, 60, 20, 10, [child]);
     loadProjectWithMigrations(legacyProject([group]));
 
@@ -167,7 +208,14 @@ describe("legacy group children (world-absolute points → group-local)", () => 
   it("(d) NESTED legacy group: grandchild re-bases by the COMPOSED world origin", () => {
     // outer at (100,200); inner transform OUTER-LOCAL at (5,5); grandchild
     // points WORLD-absolute at (105,205)-(115,215) (the legacy convention).
-    const grandchild = legacyPath("gc1", [{ x: 105, y: 205 }, { x: 115, y: 215 }], { x: 0, y: 0 });
+    const grandchild = legacyPath(
+      "gc1",
+      [
+        { x: 105, y: 205 },
+        { x: 115, y: 215 },
+      ],
+      { x: 0, y: 0 }
+    );
     const inner = legacyGroup("g-inner", 5, 5, 10, 10, [grandchild]);
     const outer = legacyGroup("g-outer", 100, 200, 15, 15, [inner]);
     loadProjectWithMigrations(legacyProject([outer]));
@@ -188,7 +236,14 @@ describe("legacy group children (world-absolute points → group-local)", () => 
   it("legacy ROTATED group: plain rebase preserves rendered truth (no extra bake)", () => {
     // Legacy D2 branch rotated ABSOLUTE points about the group's world center.
     // New flatten: R((p_abs − g) + g, center, r_g) — identical by algebra.
-    const child = legacyPath("c1", [{ x: 20, y: 30 }, { x: 30, y: 40 }], { x: 0, y: 0 });
+    const child = legacyPath(
+      "c1",
+      [
+        { x: 20, y: 30 },
+        { x: 30, y: 40 },
+      ],
+      { x: 0, y: 0 }
+    );
     const group = legacyGroup("g1", 20, 30, 10, 10, [child], 90);
     loadProjectWithMigrations(legacyProject([group]));
 
@@ -203,7 +258,10 @@ describe("flip migration ordering (flip FIRST, then transform-sync)", () => {
   it("(e) legacy flipped+desynced path: points mirror about the OLD transform center, then sync", () => {
     // If the sync ran first, the transform would be re-derived from the points
     // and the flip would mirror about the WRONG center — pin the order.
-    const points: PathPoint[] = [{ x: 10, y: 10 }, { x: 30, y: 20 }];
+    const points: PathPoint[] = [
+      { x: 10, y: 10 },
+      { x: 30, y: 20 },
+    ];
     const p = legacyPath("p1", points, { x: 40, y: 45, width: 20, height: 10, scaleX: -1 });
     const oldCx = 40 + 10; // flip mirrors x about 50 (what the current binary renders)
     loadProjectWithMigrations(legacyProject([p]));
@@ -219,7 +277,14 @@ describe("flip migration ordering (flip FIRST, then transform-sync)", () => {
 
 describe("versioning + idempotency", () => {
   it("stamps formatVersion on the project and skips migration when present", () => {
-    const child = legacyPath("c1", [{ x: 10, y: 10 }, { x: 30, y: 20 }], { x: 0, y: 0 });
+    const child = legacyPath(
+      "c1",
+      [
+        { x: 10, y: 10 },
+        { x: 30, y: 20 },
+      ],
+      { x: 0, y: 0 }
+    );
     const group = legacyGroup("g1", 50, 60, 20, 10, [child]);
     const project = legacyProject([group]);
     loadProjectWithMigrations(project);
@@ -236,7 +301,10 @@ describe("versioning + idempotency", () => {
   });
 
   it("migrating an already-coherent legacy file is a visual no-op", () => {
-    const p = legacyPath("p1", [{ x: 10, y: 10 }, { x: 30, y: 20 }]); // coherent
+    const p = legacyPath("p1", [
+      { x: 10, y: 10 },
+      { x: 30, y: 20 },
+    ]); // coherent
     loadProjectWithMigrations(legacyProject([p]));
     const m = get("p1");
     expect(m.points![0]).toMatchObject({ x: 10, y: 10 });
@@ -246,8 +314,20 @@ describe("versioning + idempotency", () => {
 
 describe("robustness + loader contract", () => {
   it("one malformed legacy object logs and passes through; the load still succeeds", () => {
-    const bad = { id: "bad", type: "path", points: [{ x: 1, y: 2 }], transform: null } as unknown as DesignObject;
-    const good = legacyPath("p1", [{ x: 10, y: 10 }, { x: 30, y: 20 }], { x: 99, y: 99 });
+    const bad = {
+      id: "bad",
+      type: "path",
+      points: [{ x: 1, y: 2 }],
+      transform: null,
+    } as unknown as DesignObject;
+    const good = legacyPath(
+      "p1",
+      [
+        { x: 10, y: 10 },
+        { x: 30, y: 20 },
+      ],
+      { x: 99, y: 99 }
+    );
     expect(() => loadProjectWithMigrations(legacyProject([bad, good]))).not.toThrow();
     const m = get("p1");
     expect(m.transform).toMatchObject({ x: 10, y: 10 }); // good object still repaired
@@ -257,10 +337,24 @@ describe("robustness + loader contract", () => {
   it("recovery-style load: wrapper migrates AND loadProject clears the undo stacks", () => {
     // recovery restore (App.tsx) hands the parsed recovery JSON to the wrapper —
     // simulate exactly that input shape (legacy recovery files lack formatVersion)
-    useStore.setState({ undoStack: [{ type: "x", undo: () => {}, redo: () => {} }], redoStack: [] });
-    const recovered = JSON.parse(JSON.stringify(
-      legacyProject([legacyPath("p1", [{ x: 10, y: 10 }, { x: 30, y: 20 }], { x: 75, y: 80 })]),
-    )) as KerfProject;
+    useStore.setState({
+      undoStack: [{ type: "x", undo: () => {}, redo: () => {} }],
+      redoStack: [],
+    });
+    const recovered = JSON.parse(
+      JSON.stringify(
+        legacyProject([
+          legacyPath(
+            "p1",
+            [
+              { x: 10, y: 10 },
+              { x: 30, y: 20 },
+            ],
+            { x: 75, y: 80 }
+          ),
+        ])
+      )
+    ) as KerfProject;
     loadProjectWithMigrations(recovered);
     expect(get("p1").transform).toMatchObject({ x: 10, y: 10 });
     expect(useStore.getState().undoStack).toHaveLength(0); // pre-migration undo never survives a load
@@ -332,7 +426,14 @@ describe("speed-unit migration (v1 → v2)", () => {
 
   it("legacy (undefined formatVersion) gets BOTH geometry + speed migrations", () => {
     // Verify the geometry migration ran (transform sync) AND speed migration
-    const p = legacyPath("p1", [{ x: 10, y: 10 }, { x: 30, y: 20 }], { x: 75, y: 80 });
+    const p = legacyPath(
+      "p1",
+      [
+        { x: 10, y: 10 },
+        { x: 30, y: 20 },
+      ],
+      { x: 75, y: 80 }
+    );
     const project: KerfProject = {
       ...legacyProject([p]),
       layers: [{ ...DEFAULT_LAYERS[2], speed: 20 }],
@@ -352,7 +453,10 @@ describe("speed-unit migration (v1 → v2)", () => {
     // would bake the 90° rotation into the points, visibly moving them away from (10,10)/(30,20).
     // A coherent path with rotation:0 would pass even with a broken gate — that was the
     // tautological flaw this test replaces.
-    const points = [{ x: 10, y: 10 }, { x: 30, y: 20 }];
+    const points = [
+      { x: 10, y: 10 },
+      { x: 30, y: 20 },
+    ];
     const p = legacyPath("p1", points, { x: 40, y: 45, width: 20, height: 10, rotation: 90 });
     const project: KerfProject = {
       version: "0.8.5",
@@ -399,10 +503,21 @@ describe("speed-unit migration (v1 → v2)", () => {
       camera: { x: 0, y: 0, zoom: 1 },
       workspaceWidth: 500,
       workspaceHeight: 300,
-      materials: [{
-        id: "test", name: "Test", material: "Plywood", thickness: "3mm",
-        mode: "line", power: 90, powerMin: 0, speed: 10, passes: 1, airAssist: true, interval: 0.1,
-      }],
+      materials: [
+        {
+          id: "test",
+          name: "Test",
+          material: "Plywood",
+          thickness: "3mm",
+          mode: "line",
+          power: 90,
+          powerMin: 0,
+          speed: 10,
+          passes: 1,
+          airAssist: true,
+          interval: 0.1,
+        },
+      ],
     };
     migrateSpeedToMmMin(project);
     expect(project.layers[0].speed).toBe(1200);
@@ -413,7 +528,17 @@ describe("speed-unit migration (v1 → v2)", () => {
 // ─── Sub-layer → fillLine migration (v2 → v3) ─────────────────────────────
 
 /** A v2 project with sub-layers attached to a layer. */
-function v2ProjectWithSubLayers(subLayers: Array<{ mode: string; power: number; powerMin: number; speed: number; passes: number; powerMode: string; interval: number }>): KerfProject {
+function v2ProjectWithSubLayers(
+  subLayers: Array<{
+    mode: string;
+    power: number;
+    powerMin: number;
+    speed: number;
+    passes: number;
+    powerMode: string;
+    interval: number;
+  }>
+): KerfProject {
   const layerWithSubs = {
     ...DEFAULT_LAYERS[0],
     subLayers: subLayers.map((s, i) => ({ id: `sub_${i}`, ...s })),
@@ -433,8 +558,24 @@ function v2ProjectWithSubLayers(subLayers: Array<{ mode: string; power: number; 
 describe("sub-layer → fillLine migration (v2 → v3)", () => {
   it("clean fill+line pair → mode=fillLine + correct lineOverlay", () => {
     const project = v2ProjectWithSubLayers([
-      { mode: "fill", power: 50, powerMin: 0, speed: 6000, passes: 1, powerMode: "constant", interval: 0.1 },
-      { mode: "line", power: 90, powerMin: 0, speed: 1200, passes: 2, powerMode: "variable", interval: 0.1 },
+      {
+        mode: "fill",
+        power: 50,
+        powerMin: 0,
+        speed: 6000,
+        passes: 1,
+        powerMode: "constant",
+        interval: 0.1,
+      },
+      {
+        mode: "line",
+        power: 90,
+        powerMin: 0,
+        speed: 1200,
+        passes: 2,
+        powerMode: "variable",
+        interval: 0.1,
+      },
     ]);
     loadProjectWithMigrations(project);
     const layer = useStore.getState().layers[0];
@@ -453,8 +594,24 @@ describe("sub-layer → fillLine migration (v2 → v3)", () => {
   it("clean line+fill pair (any order) → mode=fillLine", () => {
     // Same result regardless of sub-layer order
     const project = v2ProjectWithSubLayers([
-      { mode: "line", power: 90, powerMin: 0, speed: 1200, passes: 1, powerMode: "constant", interval: 0.1 },
-      { mode: "fill", power: 50, powerMin: 0, speed: 6000, passes: 1, powerMode: "constant", interval: 0.1 },
+      {
+        mode: "line",
+        power: 90,
+        powerMin: 0,
+        speed: 1200,
+        passes: 1,
+        powerMode: "constant",
+        interval: 0.1,
+      },
+      {
+        mode: "fill",
+        power: 50,
+        powerMin: 0,
+        speed: 6000,
+        passes: 1,
+        powerMode: "constant",
+        interval: 0.1,
+      },
     ]);
     loadProjectWithMigrations(project);
     const layer = useStore.getState().layers[0];
@@ -465,7 +622,15 @@ describe("sub-layer → fillLine migration (v2 → v3)", () => {
 
   it("single sub → flatten: mode and settings copied to layer", () => {
     const project = v2ProjectWithSubLayers([
-      { mode: "line", power: 80, powerMin: 5, speed: 800, passes: 3, powerMode: "variable", interval: 0.1 },
+      {
+        mode: "line",
+        power: 80,
+        powerMin: 5,
+        speed: 800,
+        passes: 3,
+        powerMode: "variable",
+        interval: 0.1,
+      },
     ]);
     loadProjectWithMigrations(project);
     const layer = useStore.getState().layers[0];
@@ -479,9 +644,33 @@ describe("sub-layer → fillLine migration (v2 → v3)", () => {
   it("pathological 3-sub stack → collapses to fillLine + console.warn", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const project = v2ProjectWithSubLayers([
-      { mode: "fill", power: 50, powerMin: 0, speed: 6000, passes: 1, powerMode: "constant", interval: 0.1 },
-      { mode: "line", power: 90, powerMin: 0, speed: 1200, passes: 1, powerMode: "constant", interval: 0.1 },
-      { mode: "line", power: 70, powerMin: 0, speed: 900, passes: 1, powerMode: "constant", interval: 0.1 },
+      {
+        mode: "fill",
+        power: 50,
+        powerMin: 0,
+        speed: 6000,
+        passes: 1,
+        powerMode: "constant",
+        interval: 0.1,
+      },
+      {
+        mode: "line",
+        power: 90,
+        powerMin: 0,
+        speed: 1200,
+        passes: 1,
+        powerMode: "constant",
+        interval: 0.1,
+      },
+      {
+        mode: "line",
+        power: 70,
+        powerMin: 0,
+        speed: 900,
+        passes: 1,
+        powerMode: "constant",
+        interval: 0.1,
+      },
     ]);
     loadProjectWithMigrations(project);
     const layer = useStore.getState().layers[0];
@@ -494,8 +683,24 @@ describe("sub-layer → fillLine migration (v2 → v3)", () => {
   it("pathological two-fills stack → collapses to fillLine + console.warn", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const project = v2ProjectWithSubLayers([
-      { mode: "fill", power: 60, powerMin: 0, speed: 5000, passes: 1, powerMode: "constant", interval: 0.1 },
-      { mode: "fill", power: 40, powerMin: 0, speed: 4000, passes: 1, powerMode: "constant", interval: 0.1 },
+      {
+        mode: "fill",
+        power: 60,
+        powerMin: 0,
+        speed: 5000,
+        passes: 1,
+        powerMode: "constant",
+        interval: 0.1,
+      },
+      {
+        mode: "fill",
+        power: 40,
+        powerMin: 0,
+        speed: 4000,
+        passes: 1,
+        powerMode: "constant",
+        interval: 0.1,
+      },
     ]);
     loadProjectWithMigrations(project);
     const layer = useStore.getState().layers[0];
@@ -508,8 +713,24 @@ describe("sub-layer → fillLine migration (v2 → v3)", () => {
 
   it("v2 file is idempotent: round-trip load → mode=fillLine preserved, no double-migrate", () => {
     const project = v2ProjectWithSubLayers([
-      { mode: "fill", power: 50, powerMin: 0, speed: 6000, passes: 1, powerMode: "constant", interval: 0.1 },
-      { mode: "line", power: 90, powerMin: 0, speed: 1200, passes: 1, powerMode: "constant", interval: 0.1 },
+      {
+        mode: "fill",
+        power: 50,
+        powerMin: 0,
+        speed: 6000,
+        passes: 1,
+        powerMode: "constant",
+        interval: 0.1,
+      },
+      {
+        mode: "line",
+        power: 90,
+        powerMin: 0,
+        speed: 1200,
+        passes: 1,
+        powerMode: "constant",
+        interval: 0.1,
+      },
     ]);
     loadProjectWithMigrations(project); // first load: migrates v2 → v3
     expect(project.formatVersion).toBe(KERF_FORMAT_VERSION);

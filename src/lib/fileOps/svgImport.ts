@@ -51,10 +51,13 @@ export function parsePathD(d: string): ParsedSubpath[] {
     closed = false;
   };
   const tokens = tokenizePath(d);
-  let cx = 0, cy = 0;
-  let sx = 0, sy = 0;
+  let cx = 0,
+    cy = 0;
+  let sx = 0,
+    sy = 0;
   let lastCmd = "";
-  let lastCx2 = 0, lastCy2 = 0;
+  let lastCx2 = 0,
+    lastCy2 = 0;
 
   let i = 0;
   while (i < tokens.length) {
@@ -74,7 +77,12 @@ export function parsePathD(d: string): ParsedSubpath[] {
 
     // Post-Z continuation: a drawing command (not M/m/Z/z) after Z starts a
     // new subpath anchored at the closed subpath's start point.
-    if (justClosed && points.length === 0 && cmd.length === 1 && "LlHhVvCcSsQqTtAa".indexOf(cmd) !== -1) {
+    if (
+      justClosed &&
+      points.length === 0 &&
+      cmd.length === 1 &&
+      "LlHhVvCcSsQqTtAa".indexOf(cmd) !== -1
+    ) {
       points.push({ x: sx, y: sy });
     }
 
@@ -82,9 +90,13 @@ export function parsePathD(d: string): ParsedSubpath[] {
       case "M": {
         flush();
         justClosed = false;
-        cx = numT(tokens, i); cy = numT(tokens, i + 1); i += 2;
-        sx = cx; sy = cy;
-        lastCx2 = cx; lastCy2 = cy; // SVG spec: S/T after non-curve reflects through current point
+        cx = numT(tokens, i);
+        cy = numT(tokens, i + 1);
+        i += 2;
+        sx = cx;
+        sy = cy;
+        lastCx2 = cx;
+        lastCy2 = cy; // SVG spec: S/T after non-curve reflects through current point
         points.push({ x: cx, y: cy });
         lastCmd = "M";
         break;
@@ -92,175 +104,238 @@ export function parsePathD(d: string): ParsedSubpath[] {
       case "m": {
         flush();
         justClosed = false;
-        cx += numT(tokens, i); cy += numT(tokens, i + 1); i += 2;
-        sx = cx; sy = cy;
-        lastCx2 = cx; lastCy2 = cy;
+        cx += numT(tokens, i);
+        cy += numT(tokens, i + 1);
+        i += 2;
+        sx = cx;
+        sy = cy;
+        lastCx2 = cx;
+        lastCy2 = cy;
         points.push({ x: cx, y: cy });
         lastCmd = "m";
         break;
       }
       case "L": {
-        cx = numT(tokens, i); cy = numT(tokens, i + 1); i += 2;
-        lastCx2 = cx; lastCy2 = cy;
+        cx = numT(tokens, i);
+        cy = numT(tokens, i + 1);
+        i += 2;
+        lastCx2 = cx;
+        lastCy2 = cy;
         points.push({ x: cx, y: cy });
         lastCmd = "L";
         break;
       }
       case "l": {
-        cx += numT(tokens, i); cy += numT(tokens, i + 1); i += 2;
-        lastCx2 = cx; lastCy2 = cy;
+        cx += numT(tokens, i);
+        cy += numT(tokens, i + 1);
+        i += 2;
+        lastCx2 = cx;
+        lastCy2 = cy;
         points.push({ x: cx, y: cy });
         lastCmd = "l";
         break;
       }
       case "H": {
-        cx = numT(tokens, i); i += 1;
-        lastCx2 = cx; lastCy2 = cy;
+        cx = numT(tokens, i);
+        i += 1;
+        lastCx2 = cx;
+        lastCy2 = cy;
         points.push({ x: cx, y: cy });
         lastCmd = "H";
         break;
       }
       case "h": {
-        cx += numT(tokens, i); i += 1;
-        lastCx2 = cx; lastCy2 = cy;
+        cx += numT(tokens, i);
+        i += 1;
+        lastCx2 = cx;
+        lastCy2 = cy;
         points.push({ x: cx, y: cy });
         lastCmd = "h";
         break;
       }
       case "V": {
-        cy = numT(tokens, i); i += 1;
-        lastCx2 = cx; lastCy2 = cy;
+        cy = numT(tokens, i);
+        i += 1;
+        lastCx2 = cx;
+        lastCy2 = cy;
         points.push({ x: cx, y: cy });
         lastCmd = "V";
         break;
       }
       case "v": {
-        cy += numT(tokens, i); i += 1;
-        lastCx2 = cx; lastCy2 = cy;
+        cy += numT(tokens, i);
+        i += 1;
+        lastCx2 = cx;
+        lastCy2 = cy;
         points.push({ x: cx, y: cy });
         lastCmd = "v";
         break;
       }
       case "C": {
-        const x1 = numT(tokens, i), y1 = numT(tokens, i + 1);
-        const x2 = numT(tokens, i + 2), y2 = numT(tokens, i + 3);
-        const x = numT(tokens, i + 4), y = numT(tokens, i + 5);
+        const x1 = numT(tokens, i),
+          y1 = numT(tokens, i + 1);
+        const x2 = numT(tokens, i + 2),
+          y2 = numT(tokens, i + 3);
+        const x = numT(tokens, i + 4),
+          y = numT(tokens, i + 5);
         i += 6;
         if (points.length > 0) {
           points[points.length - 1].handleOut = { x: x1, y: y1 };
         }
         points.push({ x, y, handleIn: { x: x2, y: y2 } });
-        lastCx2 = x2; lastCy2 = y2;
-        cx = x; cy = y;
+        lastCx2 = x2;
+        lastCy2 = y2;
+        cx = x;
+        cy = y;
         lastCmd = "C";
         break;
       }
       case "c": {
-        const x1 = cx + numT(tokens, i), y1 = cy + numT(tokens, i + 1);
-        const x2 = cx + numT(tokens, i + 2), y2 = cy + numT(tokens, i + 3);
-        const x = cx + numT(tokens, i + 4), y = cy + numT(tokens, i + 5);
+        const x1 = cx + numT(tokens, i),
+          y1 = cy + numT(tokens, i + 1);
+        const x2 = cx + numT(tokens, i + 2),
+          y2 = cy + numT(tokens, i + 3);
+        const x = cx + numT(tokens, i + 4),
+          y = cy + numT(tokens, i + 5);
         i += 6;
         if (points.length > 0) {
           points[points.length - 1].handleOut = { x: x1, y: y1 };
         }
         points.push({ x, y, handleIn: { x: x2, y: y2 } });
-        lastCx2 = x2; lastCy2 = y2;
-        cx = x; cy = y;
+        lastCx2 = x2;
+        lastCy2 = y2;
+        cx = x;
+        cy = y;
         lastCmd = "c";
         break;
       }
       case "S": {
-        const rx = 2 * cx - lastCx2, ry = 2 * cy - lastCy2;
-        const x2 = numT(tokens, i), y2 = numT(tokens, i + 1);
-        const x = numT(tokens, i + 2), y = numT(tokens, i + 3);
+        const rx = 2 * cx - lastCx2,
+          ry = 2 * cy - lastCy2;
+        const x2 = numT(tokens, i),
+          y2 = numT(tokens, i + 1);
+        const x = numT(tokens, i + 2),
+          y = numT(tokens, i + 3);
         i += 4;
         if (points.length > 0) {
           points[points.length - 1].handleOut = { x: rx, y: ry };
         }
         points.push({ x, y, handleIn: { x: x2, y: y2 } });
-        lastCx2 = x2; lastCy2 = y2;
-        cx = x; cy = y;
+        lastCx2 = x2;
+        lastCy2 = y2;
+        cx = x;
+        cy = y;
         lastCmd = "S";
         break;
       }
       case "s": {
-        const rx = 2 * cx - lastCx2, ry = 2 * cy - lastCy2;
-        const x2 = cx + numT(tokens, i), y2 = cy + numT(tokens, i + 1);
-        const x = cx + numT(tokens, i + 2), y = cy + numT(tokens, i + 3);
+        const rx = 2 * cx - lastCx2,
+          ry = 2 * cy - lastCy2;
+        const x2 = cx + numT(tokens, i),
+          y2 = cy + numT(tokens, i + 1);
+        const x = cx + numT(tokens, i + 2),
+          y = cy + numT(tokens, i + 3);
         i += 4;
         if (points.length > 0) {
           points[points.length - 1].handleOut = { x: rx, y: ry };
         }
         points.push({ x, y, handleIn: { x: x2, y: y2 } });
-        lastCx2 = x2; lastCy2 = y2;
-        cx = x; cy = y;
+        lastCx2 = x2;
+        lastCy2 = y2;
+        cx = x;
+        cy = y;
         lastCmd = "s";
         break;
       }
       case "Q": {
-        const qx = numT(tokens, i), qy = numT(tokens, i + 1);
-        const x = numT(tokens, i + 2), y = numT(tokens, i + 3);
+        const qx = numT(tokens, i),
+          qy = numT(tokens, i + 1);
+        const x = numT(tokens, i + 2),
+          y = numT(tokens, i + 3);
         i += 4;
-        const cp1x = cx + (2 / 3) * (qx - cx), cp1y = cy + (2 / 3) * (qy - cy);
-        const cp2x = x + (2 / 3) * (qx - x), cp2y = y + (2 / 3) * (qy - y);
+        const cp1x = cx + (2 / 3) * (qx - cx),
+          cp1y = cy + (2 / 3) * (qy - cy);
+        const cp2x = x + (2 / 3) * (qx - x),
+          cp2y = y + (2 / 3) * (qy - y);
         if (points.length > 0) {
           points[points.length - 1].handleOut = { x: cp1x, y: cp1y };
         }
         points.push({ x, y, handleIn: { x: cp2x, y: cp2y } });
-        lastCx2 = cp2x; lastCy2 = cp2y;
-        cx = x; cy = y;
+        lastCx2 = cp2x;
+        lastCy2 = cp2y;
+        cx = x;
+        cy = y;
         lastCmd = "Q";
         break;
       }
       case "q": {
-        const qx = cx + numT(tokens, i), qy = cy + numT(tokens, i + 1);
-        const x = cx + numT(tokens, i + 2), y = cy + numT(tokens, i + 3);
+        const qx = cx + numT(tokens, i),
+          qy = cy + numT(tokens, i + 1);
+        const x = cx + numT(tokens, i + 2),
+          y = cy + numT(tokens, i + 3);
         i += 4;
-        const cp1x = cx + (2 / 3) * (qx - cx), cp1y = cy + (2 / 3) * (qy - cy);
-        const cp2x = x + (2 / 3) * (qx - x), cp2y = y + (2 / 3) * (qy - y);
+        const cp1x = cx + (2 / 3) * (qx - cx),
+          cp1y = cy + (2 / 3) * (qy - cy);
+        const cp2x = x + (2 / 3) * (qx - x),
+          cp2y = y + (2 / 3) * (qy - y);
         if (points.length > 0) {
           points[points.length - 1].handleOut = { x: cp1x, y: cp1y };
         }
         points.push({ x, y, handleIn: { x: cp2x, y: cp2y } });
-        lastCx2 = cp2x; lastCy2 = cp2y;
-        cx = x; cy = y;
+        lastCx2 = cp2x;
+        lastCy2 = cp2y;
+        cx = x;
+        cy = y;
         lastCmd = "q";
         break;
       }
       case "T": {
-        const rx = 2 * cx - lastCx2, ry = 2 * cy - lastCy2;
-        const x = numT(tokens, i), y = numT(tokens, i + 1);
+        const rx = 2 * cx - lastCx2,
+          ry = 2 * cy - lastCy2;
+        const x = numT(tokens, i),
+          y = numT(tokens, i + 1);
         i += 2;
-        const cp1x = cx + (2 / 3) * (rx - cx), cp1y = cy + (2 / 3) * (ry - cy);
-        const cp2x = x + (2 / 3) * (rx - x), cp2y = y + (2 / 3) * (ry - y);
+        const cp1x = cx + (2 / 3) * (rx - cx),
+          cp1y = cy + (2 / 3) * (ry - cy);
+        const cp2x = x + (2 / 3) * (rx - x),
+          cp2y = y + (2 / 3) * (ry - y);
         if (points.length > 0) {
           points[points.length - 1].handleOut = { x: cp1x, y: cp1y };
         }
         points.push({ x, y, handleIn: { x: cp2x, y: cp2y } });
-        lastCx2 = cp2x; lastCy2 = cp2y;
-        cx = x; cy = y;
+        lastCx2 = cp2x;
+        lastCy2 = cp2y;
+        cx = x;
+        cy = y;
         lastCmd = "T";
         break;
       }
       case "t": {
-        const rx = 2 * cx - lastCx2, ry = 2 * cy - lastCy2;
-        const x = cx + numT(tokens, i), y = cy + numT(tokens, i + 1);
+        const rx = 2 * cx - lastCx2,
+          ry = 2 * cy - lastCy2;
+        const x = cx + numT(tokens, i),
+          y = cy + numT(tokens, i + 1);
         i += 2;
-        const cp1x = cx + (2 / 3) * (rx - cx), cp1y = cy + (2 / 3) * (ry - cy);
-        const cp2x = x + (2 / 3) * (rx - x), cp2y = y + (2 / 3) * (ry - y);
+        const cp1x = cx + (2 / 3) * (rx - cx),
+          cp1y = cy + (2 / 3) * (ry - cy);
+        const cp2x = x + (2 / 3) * (rx - x),
+          cp2y = y + (2 / 3) * (ry - y);
         if (points.length > 0) {
           points[points.length - 1].handleOut = { x: cp1x, y: cp1y };
         }
         points.push({ x, y, handleIn: { x: cp2x, y: cp2y } });
-        lastCx2 = cp2x; lastCy2 = cp2y;
-        cx = x; cy = y;
+        lastCx2 = cp2x;
+        lastCy2 = cp2y;
+        cx = x;
+        cy = y;
         lastCmd = "t";
         break;
       }
       case "A":
       case "a": {
         const isRel = cmd === "a";
-        const arx = numT(tokens, i), ary = numT(tokens, i + 1);
+        const arx = numT(tokens, i),
+          ary = numT(tokens, i + 1);
         const rotation = numT(tokens, i + 2);
         // SVGO arc-flag fix: SVGO omits separators between flags and the
         // following coordinate. e.g. "A30 30 0 0130 50" tokenizes as
@@ -283,7 +358,8 @@ export function parsePathD(d: string): ParsedSubpath[] {
           } else if (rem3.length === 1 && (rem3 === "0" || rem3 === "1")) {
             // rem3 is exactly the sweep flag, x/y are separate tokens
             sweep = parseInt(rem3);
-            ex = numT(tokens, i + 4); ey = numT(tokens, i + 5);
+            ex = numT(tokens, i + 4);
+            ey = numT(tokens, i + 5);
             i += 6;
           } else if (tok4.length > 1 && (tok4[0] === "0" || tok4[0] === "1")) {
             // rem3 was the x coord (no sweep in tok3), tok4 has sweep+y
@@ -294,29 +370,48 @@ export function parsePathD(d: string): ParsedSubpath[] {
           } else {
             // Fallback: treat rem3 as sweep flag, tok4/tok5 as x/y
             sweep = parseInt(rem3) || 0;
-            ex = numT(tokens, i + 4); ey = numT(tokens, i + 5);
+            ex = numT(tokens, i + 4);
+            ey = numT(tokens, i + 5);
             i += 6;
           }
         } else {
           largeArc = numT(tokens, i + 3);
           sweep = numT(tokens, i + 4);
-          ex = numT(tokens, i + 5); ey = numT(tokens, i + 6);
+          ex = numT(tokens, i + 5);
+          ey = numT(tokens, i + 6);
           i += 7;
         }
-        if (isRel) { ex += cx; ey += cy; }
-        const arcPoints = approximateArc(cx, cy, arx, ary, rotation, largeArc !== 0, sweep !== 0, ex, ey);
+        if (isRel) {
+          ex += cx;
+          ey += cy;
+        }
+        const arcPoints = approximateArc(
+          cx,
+          cy,
+          arx,
+          ary,
+          rotation,
+          largeArc !== 0,
+          sweep !== 0,
+          ex,
+          ey
+        );
         for (const p of arcPoints) {
           points.push({ x: p.x, y: p.y });
         }
-        cx = ex; cy = ey;
-        lastCx2 = cx; lastCy2 = cy; // non-curve: reset S/T reflection anchor
+        cx = ex;
+        cy = ey;
+        lastCx2 = cx;
+        lastCy2 = cy; // non-curve: reset S/T reflection anchor
         lastCmd = cmd;
         break;
       }
       case "Z":
       case "z": {
-        cx = sx; cy = sy;
-        lastCx2 = cx; lastCy2 = cy; // non-curve: reset S/T reflection anchor
+        cx = sx;
+        cy = sy;
+        lastCx2 = cx;
+        lastCy2 = cy; // non-curve: reset S/T reflection anchor
         closed = true;
         flush();
         justClosed = true;
@@ -347,12 +442,15 @@ function numT(tokens: string[], i: number): number {
 }
 
 function approximateArc(
-  x1: number, y1: number,
-  rx: number, ry: number,
+  x1: number,
+  y1: number,
+  rx: number,
+  ry: number,
   phi: number,
   largeArc: boolean,
   sweep: boolean,
-  x2: number, y2: number
+  x2: number,
+  y2: number
 ): Array<{ x: number; y: number }> {
   if (rx === 0 || ry === 0) return [{ x: x2, y: y2 }];
 
@@ -374,8 +472,10 @@ function approximateArc(
     ry *= sqrtL;
   }
 
-  const rxSq = rx * rx, rySq = ry * ry;
-  const x1pSq = x1p * x1p, y1pSq = y1p * y1p;
+  const rxSq = rx * rx,
+    rySq = ry * ry;
+  const x1pSq = x1p * x1p,
+    y1pSq = y1p * y1p;
   let num2 = rxSq * rySq - rxSq * y1pSq - rySq * x1pSq;
   const den = rxSq * y1pSq + rySq * x1pSq;
   if (den === 0) return [{ x: x2, y: y2 }];
@@ -383,8 +483,8 @@ function approximateArc(
   let sq = Math.sqrt(num2 / den);
   if (largeArc === sweep) sq = -sq;
 
-  const cxp = sq * (rx * y1p) / ry;
-  const cyp = sq * -(ry * x1p) / rx;
+  const cxp = (sq * (rx * y1p)) / ry;
+  const cyp = (sq * -(ry * x1p)) / rx;
 
   const cxo = cosPhi * cxp - sinPhi * cyp + (x1 + x2) / 2;
   const cyo = sinPhi * cxp + cosPhi * cyp + (y1 + y2) / 2;

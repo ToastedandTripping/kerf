@@ -27,7 +27,7 @@ function seedLayers() {
   // Use real DEFAULT_LAYERS so the store is in a consistent state
   useStore.setState({
     layers: DEFAULT_LAYERS,
-    activeLayerIndex: 0,  // first layer (Cut — index 0)
+    activeLayerIndex: 0, // first layer (Cut — index 0)
   });
 }
 
@@ -53,7 +53,9 @@ describe("ActiveLayerStrip", () => {
 
   it("power slider change calls updateLayer with correct index and clears activePreset", () => {
     const updateLayerSpy = vi.fn();
-    useStore.setState({ updateLayer: updateLayerSpy } as unknown as Parameters<typeof useStore.setState>[0]);
+    useStore.setState({ updateLayer: updateLayerSpy } as unknown as Parameters<
+      typeof useStore.setState
+    >[0]);
 
     const { getAllByRole } = render(<ActiveLayerStrip />);
     // The power range input is the first range slider
@@ -64,13 +66,15 @@ describe("ActiveLayerStrip", () => {
 
     expect(updateLayerSpy).toHaveBeenCalledWith(
       0, // activeLayerIndex 0
-      expect.objectContaining({ power: 75, activePreset: undefined }),
+      expect.objectContaining({ power: 75, activePreset: undefined })
     );
   });
 
   it("speed number field change calls updateLayer with correct index and clears activePreset", () => {
     const updateLayerSpy = vi.fn();
-    useStore.setState({ updateLayer: updateLayerSpy } as unknown as Parameters<typeof useStore.setState>[0]);
+    useStore.setState({ updateLayer: updateLayerSpy } as unknown as Parameters<
+      typeof useStore.setState
+    >[0]);
 
     const { getAllByRole } = render(<ActiveLayerStrip />);
     // Strip renders two number inputs (type="spinbutton" in ARIA):
@@ -84,7 +88,7 @@ describe("ActiveLayerStrip", () => {
     // clampSpeed(1500, effectiveMaxSpeed(0, 0)) = clampSpeed(1500, 30000) = 1500
     expect(updateLayerSpy).toHaveBeenCalledWith(
       0, // activeLayerIndex 0
-      expect.objectContaining({ speed: 1500, activePreset: undefined }),
+      expect.objectContaining({ speed: 1500, activePreset: undefined })
     );
   });
 

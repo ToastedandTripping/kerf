@@ -46,9 +46,7 @@ const SHORTCUT_GROUPS = [
   },
   {
     title: "Layers",
-    shortcuts: [
-      { keys: "1-6", action: "Assign selection to layer" },
-    ],
+    shortcuts: [{ keys: "1-6", action: "Assign selection to layer" }],
   },
   {
     title: "Transform",
@@ -63,9 +61,7 @@ const SHORTCUT_GROUPS = [
   },
   {
     title: "Align",
-    shortcuts: [
-      { keys: "Ctrl+Shift+Arrow", action: "Align left/right/top/bottom" },
-    ],
+    shortcuts: [{ keys: "Ctrl+Shift+Arrow", action: "Align left/right/top/bottom" }],
   },
   {
     title: "View",
@@ -88,7 +84,7 @@ export function ShortcutOverlay() {
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
       if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
         e.preventDefault();
-        setVisible(v => !v);
+        setVisible((v) => !v);
       }
       if (e.key === "Escape" && visible) {
         setVisible(false);
@@ -102,51 +98,100 @@ export function ShortcutOverlay() {
 
   return (
     <>
-      <div onClick={() => setVisible(false)} style={{
-        position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
-        zIndex: 99998, backdropFilter: "blur(2px)",
-      }} />
+      <div
+        onClick={() => setVisible(false)}
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(0,0,0,0.6)",
+          zIndex: 99998,
+          backdropFilter: "blur(2px)",
+        }}
+      />
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="shortcut-overlay-title"
         style={{
-        position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
-        background: "var(--bg-panel)", border: "1px solid var(--border)",
-        borderRadius: "var(--radius-lg)", boxShadow: "var(--shadow-modal)",
-        zIndex: 99999, padding: "24px 32px", maxHeight: "80vh", overflow: "auto",
-        maxWidth: "720px", width: "90vw",
-      }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
-          <h2 id="shortcut-overlay-title" style={{ margin: 0, fontSize: "16px", color: "var(--text-primary)", fontWeight: 600 }}>
+          position: "fixed",
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%, -50%)",
+          background: "var(--bg-panel)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-lg)",
+          boxShadow: "var(--shadow-modal)",
+          zIndex: 99999,
+          padding: "24px 32px",
+          maxHeight: "80vh",
+          overflow: "auto",
+          maxWidth: "720px",
+          width: "90vw",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: "20px",
+          }}
+        >
+          <h2
+            id="shortcut-overlay-title"
+            style={{ margin: 0, fontSize: "16px", color: "var(--text-primary)", fontWeight: 600 }}
+          >
             Keyboard Shortcuts
           </h2>
           <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Press ? to close</span>
         </div>
-        <div style={{
-          display: "grid", gridTemplateColumns: "1fr 1fr",
-          gap: "20px",
-        }}>
-          {SHORTCUT_GROUPS.map(group => (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: "20px",
+          }}
+        >
+          {SHORTCUT_GROUPS.map((group) => (
             <div key={group.title}>
-              <h3 style={{
-                margin: "0 0 8px 0", fontSize: "11px", fontWeight: 600,
-                color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.5px",
-              }}>
+              <h3
+                style={{
+                  margin: "0 0 8px 0",
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  color: "var(--text-secondary)",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.5px",
+                }}
+              >
                 {group.title}
               </h3>
               {group.shortcuts.map((s, i) => (
-                <div key={i} style={{
-                  display: "flex", justifyContent: "space-between", alignItems: "center",
-                  padding: "3px 0", fontSize: "12px",
-                }}>
+                <div
+                  key={i}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "3px 0",
+                    fontSize: "12px",
+                  }}
+                >
                   <span style={{ color: "var(--text-secondary)" }}>{s.action}</span>
-                  <kbd style={{
-                    background: "var(--bg-input)", border: "1px solid var(--border)",
-                    borderRadius: "3px", padding: "1px 6px", fontSize: "10px",
-                    fontFamily: "var(--font-mono)", color: "var(--text-primary)",
-                    whiteSpace: "nowrap",
-                  }}>{s.keys}</kbd>
+                  <kbd
+                    style={{
+                      background: "var(--bg-input)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "3px",
+                      padding: "1px 6px",
+                      fontSize: "10px",
+                      fontFamily: "var(--font-mono)",
+                      color: "var(--text-primary)",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {s.keys}
+                  </kbd>
                 </div>
               ))}
             </div>

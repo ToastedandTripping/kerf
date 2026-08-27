@@ -81,7 +81,7 @@ describe("F19 — poll cleanup: disconnected guard", () => {
       redoStack: [],
       consoleLines: [],
       layers: DEFAULT_LAYERS,
-      machineConnected: false,  // already disconnected
+      machineConnected: false, // already disconnected
       machineState: "disconnected",
       machinePosition: { x: 0, y: 0, z: 0 },
       grblLaserMode: false,
@@ -116,22 +116,28 @@ describe("F18 — store: serialBusy field", () => {
 // ---------------------------------------------------------------------------
 vi.mock("@tauri-apps/api/path", () => ({
   appDataDir: vi.fn().mockResolvedValue("/tmp/kerf-test/"),
-  join: vi.fn().mockImplementation((...parts: string[]) => Promise.resolve(parts.join("/").replace(/\/+/g, "/"))),
+  join: vi
+    .fn()
+    .mockImplementation((...parts: string[]) =>
+      Promise.resolve(parts.join("/").replace(/\/+/g, "/"))
+    ),
 }));
 
 vi.mock("@tauri-apps/plugin-fs", () => {
   const mtime = new Date(Date.now() - 36 * 60 * 60 * 1000); // 36 hours old
   return {
     stat: vi.fn().mockResolvedValue({ mtime }),
-    readTextFile: vi.fn().mockResolvedValue(JSON.stringify({
-      version: "0.1.0",
-      name: "OldRecovery",
-      objects: [],
-      layers: [],
-      camera: { x: 0, y: 0, zoom: 1 },
-      workspaceWidth: 500,
-      workspaceHeight: 300,
-    })),
+    readTextFile: vi.fn().mockResolvedValue(
+      JSON.stringify({
+        version: "0.1.0",
+        name: "OldRecovery",
+        objects: [],
+        layers: [],
+        camera: { x: 0, y: 0, zoom: 1 },
+        workspaceWidth: 500,
+        workspaceHeight: 300,
+      })
+    ),
     remove: vi.fn().mockResolvedValue(undefined),
     writeTextFile: vi.fn().mockResolvedValue(undefined),
     rename: vi.fn().mockResolvedValue(undefined),

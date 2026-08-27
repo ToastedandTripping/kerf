@@ -26,7 +26,12 @@ export function useKeyboardShortcuts() {
 
       // Don't handle shortcuts when typing in inputs
       const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable) {
+      if (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.tagName === "SELECT" ||
+        target.isContentEditable
+      ) {
         return;
       }
 
@@ -138,8 +143,12 @@ export function useKeyboardShortcuts() {
         e.preventDefault();
         const s = useStore.getState();
         for (const id of s.selectedIds) {
-          const obj = s.objects.find(o => o.id === id);
-          if (obj?.type === "text") { s.convertTextToPath(id); } else { s.convertToPath(id); }
+          const obj = s.objects.find((o) => o.id === id);
+          if (obj?.type === "text") {
+            s.convertTextToPath(id);
+          } else {
+            s.convertToPath(id);
+          }
         }
         return;
       }
@@ -255,7 +264,8 @@ export function useKeyboardShortcuts() {
         const s = useStore.getState();
         if (s.selectedIds.length === 0) return;
         const step = shift ? 10 : 1;
-        let dx = 0, dy = 0;
+        let dx = 0,
+          dy = 0;
         if (key === "arrowleft") dx = -step;
         if (key === "arrowright") dx = step;
         if (key === "arrowup") dy = -step;

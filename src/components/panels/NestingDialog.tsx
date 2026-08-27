@@ -74,19 +74,37 @@ export function NestingDialog({ open, onClose }: Props) {
 
   return (
     <>
-      <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999 }} />
+      <div
+        onClick={onClose}
+        style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999 }}
+      />
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="nesting-dialog-title"
         style={{
-          position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
-          width: "420px", background: "var(--bg-panel)", border: "1px solid var(--border)",
-          borderRadius: "var(--radius-lg)", boxShadow: "var(--shadow-modal)", zIndex: 10000,
+          position: "fixed",
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%, -50%)",
+          width: "420px",
+          background: "var(--bg-panel)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-lg)",
+          boxShadow: "var(--shadow-modal)",
+          zIndex: 10000,
           padding: "20px",
         }}
       >
-        <div id="nesting-dialog-title" style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", marginBottom: "16px" }}>
+        <div
+          id="nesting-dialog-title"
+          style={{
+            fontSize: "14px",
+            fontWeight: 600,
+            color: "var(--text-primary)",
+            marginBottom: "16px",
+          }}
+        >
           Auto-Nest
         </div>
 
@@ -97,7 +115,15 @@ export function NestingDialog({ open, onClose }: Props) {
 
         {/* Spacing control */}
         <div style={{ marginBottom: "16px" }}>
-          <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "6px" }}>
+          <div
+            style={{
+              fontSize: "11px",
+              fontWeight: 600,
+              color: "var(--text-secondary)",
+              textTransform: "uppercase",
+              marginBottom: "6px",
+            }}
+          >
             Spacing (mm)
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
@@ -118,9 +144,14 @@ export function NestingDialog({ open, onClose }: Props) {
               value={spacing}
               onChange={(e) => setSpacing(Math.max(0, Math.min(20, Number(e.target.value) || 0)))}
               style={{
-                width: "56px", background: "var(--bg-input)", border: "1px solid var(--border)",
-                borderRadius: "var(--radius-sm)", fontSize: "11px", padding: "3px 6px",
-                color: "var(--text-primary)", textAlign: "center",
+                width: "56px",
+                background: "var(--bg-input)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)",
+                fontSize: "11px",
+                padding: "3px 6px",
+                color: "var(--text-primary)",
+                textAlign: "center",
               }}
             />
           </div>
@@ -128,7 +159,15 @@ export function NestingDialog({ open, onClose }: Props) {
 
         {/* Rotation control */}
         <div style={{ marginBottom: "16px" }}>
-          <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: "6px" }}>
+          <div
+            style={{
+              fontSize: "11px",
+              fontWeight: 600,
+              color: "var(--text-secondary)",
+              textTransform: "uppercase",
+              marginBottom: "6px",
+            }}
+          >
             Rotation
           </div>
           <div style={{ display: "flex", gap: "4px" }}>
@@ -137,7 +176,9 @@ export function NestingDialog({ open, onClose }: Props) {
                 key={opt.value}
                 onClick={() => setRotation(opt.value)}
                 style={{
-                  padding: "5px 14px", fontSize: "11px", borderRadius: "var(--radius-sm)",
+                  padding: "5px 14px",
+                  fontSize: "11px",
+                  borderRadius: "var(--radius-sm)",
                   border: rotation === opt.value ? "none" : "1px solid var(--border)",
                   background: rotation === opt.value ? "var(--accent, #4a90e2)" : "transparent",
                   color: rotation === opt.value ? "#fff" : "var(--text-secondary)",
@@ -153,28 +194,36 @@ export function NestingDialog({ open, onClose }: Props) {
 
         {/* Error display */}
         {error && (
-          <div style={{
-            marginBottom: "16px", padding: "8px 12px",
-            background: "rgba(220, 60, 60, 0.1)",
-            border: "1px solid rgba(220, 60, 60, 0.3)",
-            borderRadius: "var(--radius-sm)",
-            fontSize: "12px",
-            color: "#dc3c3c",
-          }}>
+          <div
+            style={{
+              marginBottom: "16px",
+              padding: "8px 12px",
+              background: "rgba(220, 60, 60, 0.1)",
+              border: "1px solid rgba(220, 60, 60, 0.3)",
+              borderRadius: "var(--radius-sm)",
+              fontSize: "12px",
+              color: "#dc3c3c",
+            }}
+          >
             {error}
           </div>
         )}
 
         {/* Results bar */}
         {result && (
-          <div style={{
-            marginBottom: "16px", padding: "8px 12px",
-            background: result.unplaced.length > 0 ? "rgba(230, 150, 50, 0.1)" : "rgba(80, 180, 100, 0.1)",
-            border: `1px solid ${result.unplaced.length > 0 ? "rgba(230, 150, 50, 0.3)" : "rgba(80, 180, 100, 0.3)"}`,
-            borderRadius: "var(--radius-sm)",
-            fontSize: "12px",
-            color: result.unplaced.length > 0 ? "var(--accent-warm, #e69632)" : "var(--text-primary)",
-          }}>
+          <div
+            style={{
+              marginBottom: "16px",
+              padding: "8px 12px",
+              background:
+                result.unplaced.length > 0 ? "rgba(230, 150, 50, 0.1)" : "rgba(80, 180, 100, 0.1)",
+              border: `1px solid ${result.unplaced.length > 0 ? "rgba(230, 150, 50, 0.3)" : "rgba(80, 180, 100, 0.3)"}`,
+              borderRadius: "var(--radius-sm)",
+              fontSize: "12px",
+              color:
+                result.unplaced.length > 0 ? "var(--accent-warm, #e69632)" : "var(--text-primary)",
+            }}
+          >
             {result.unplaced.length > 0
               ? `Placed ${result.placed.length}/${result.placed.length + result.unplaced.length} (${result.unplaced.length} didn't fit) at ${Math.round(result.efficiency * 100)}% efficiency`
               : `Placed ${result.placed.length}/${result.placed.length} at ${Math.round(result.efficiency * 100)}% efficiency`}
@@ -183,11 +232,20 @@ export function NestingDialog({ open, onClose }: Props) {
 
         {/* Buttons */}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
-          <button onClick={onClose} style={{
-            background: "none", border: "1px solid var(--border)",
-            color: "var(--text-secondary)", padding: "6px 16px",
-            borderRadius: "var(--radius-sm)", cursor: "pointer", fontSize: "13px",
-          }}>Cancel</button>
+          <button
+            onClick={onClose}
+            style={{
+              background: "none",
+              border: "1px solid var(--border)",
+              color: "var(--text-secondary)",
+              padding: "6px 16px",
+              borderRadius: "var(--radius-sm)",
+              cursor: "pointer",
+              fontSize: "13px",
+            }}
+          >
+            Cancel
+          </button>
           <button
             onClick={handleNest}
             disabled={scope.count === 0 || nesting}
@@ -195,11 +253,15 @@ export function NestingDialog({ open, onClose }: Props) {
               background: scope.count > 0 ? "var(--accent, #4a90e2)" : "var(--bg-input)",
               border: "none",
               color: scope.count > 0 ? "#fff" : "var(--text-muted)",
-              padding: "6px 16px", borderRadius: "var(--radius-sm)",
+              padding: "6px 16px",
+              borderRadius: "var(--radius-sm)",
               cursor: scope.count > 0 ? "pointer" : "not-allowed",
-              fontSize: "13px", fontWeight: 600,
+              fontSize: "13px",
+              fontWeight: 600,
             }}
-          >{nesting ? "Nesting..." : "Nest"}</button>
+          >
+            {nesting ? "Nesting..." : "Nest"}
+          </button>
         </div>
       </div>
     </>

@@ -8,17 +8,24 @@ function isValidPreset(obj: unknown): obj is MaterialPreset {
   if (typeof obj !== "object" || obj === null) return false;
   const p = obj as Record<string, unknown>;
   return (
-    typeof p.id === "string" && p.id.length > 0 &&
-    typeof p.name === "string" && p.name.length > 0 &&
+    typeof p.id === "string" &&
+    p.id.length > 0 &&
+    typeof p.name === "string" &&
+    p.name.length > 0 &&
     typeof p.material === "string" &&
     typeof p.thickness === "string" &&
     typeof p.mode === "string" &&
-    typeof p.power === "number" && Number.isFinite(p.power) &&
-    typeof p.speed === "number" && Number.isFinite(p.speed) &&
-    typeof p.passes === "number" && Number.isFinite(p.passes) &&
-    typeof p.powerMin === "number" && Number.isFinite(p.powerMin) &&
+    typeof p.power === "number" &&
+    Number.isFinite(p.power) &&
+    typeof p.speed === "number" &&
+    Number.isFinite(p.speed) &&
+    typeof p.passes === "number" &&
+    Number.isFinite(p.passes) &&
+    typeof p.powerMin === "number" &&
+    Number.isFinite(p.powerMin) &&
     typeof p.airAssist === "boolean" &&
-    typeof p.interval === "number" && Number.isFinite(p.interval)
+    typeof p.interval === "number" &&
+    Number.isFinite(p.interval)
   );
 }
 
@@ -130,7 +137,9 @@ export function MaterialLibrary() {
       const content = await fs.readTextFile(typeof path === "string" ? path : String(path));
       const parsed = JSON.parse(content);
       if (!Array.isArray(parsed)) {
-        useStore.getState().addConsoleLine("Import failed: file is not a material preset array", "error");
+        useStore
+          .getState()
+          .addConsoleLine("Import failed: file is not a material preset array", "error");
         return;
       }
       // P3-B: Validate each entry before importing.
@@ -149,12 +158,16 @@ export function MaterialLibrary() {
         }
       }
       if (skipped > 0) {
-        useStore.getState().addConsoleLine(
-          `Imported ${imported} preset${imported !== 1 ? "s" : ""}, skipped ${skipped} invalid entr${skipped !== 1 ? "ies" : "y"}`,
-          skipped > 0 && imported === 0 ? "error" : "warning",
-        );
+        useStore
+          .getState()
+          .addConsoleLine(
+            `Imported ${imported} preset${imported !== 1 ? "s" : ""}, skipped ${skipped} invalid entr${skipped !== 1 ? "ies" : "y"}`,
+            skipped > 0 && imported === 0 ? "error" : "warning"
+          );
       } else if (imported > 0) {
-        useStore.getState().addConsoleLine(`Imported ${imported} preset${imported !== 1 ? "s" : ""}`, "info");
+        useStore
+          .getState()
+          .addConsoleLine(`Imported ${imported} preset${imported !== 1 ? "s" : ""}`, "info");
       }
     } catch (e) {
       useStore.getState().addConsoleLine(`Import materials failed: ${e}`, "error");
@@ -165,7 +178,12 @@ export function MaterialLibrary() {
     <div style={{ borderBottom: "1px solid var(--border)" }}>
       <div
         onClick={() => setExpanded(!expanded)}
-        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded(!expanded); } }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setExpanded(!expanded);
+          }
+        }}
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
@@ -183,9 +201,7 @@ export function MaterialLibrary() {
           gap: "6px",
         }}
       >
-        <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>
-          {expanded ? "▼" : "▶"}
-        </span>
+        <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>{expanded ? "▼" : "▶"}</span>
         Material Library
       </div>
 
@@ -256,21 +272,26 @@ export function MaterialLibrary() {
 
           {/* P3-B: Inline save preset form (replaces window.prompt) */}
           {showSaveForm && (
-            <div style={{
-              padding: "8px",
-              marginBottom: "6px",
-              background: "var(--bg-elevated)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-sm)",
-              display: "flex",
-              flexDirection: "column",
-              gap: "4px",
-            }}>
+            <div
+              style={{
+                padding: "8px",
+                marginBottom: "6px",
+                background: "var(--bg-elevated)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)",
+                display: "flex",
+                flexDirection: "column",
+                gap: "4px",
+              }}
+            >
               <input
                 placeholder="Preset name (e.g. Birch Plywood 3mm Cut)"
                 value={presetName}
                 onChange={(e) => setPresetName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") handleSavePreset(); if (e.key === "Escape") cancelSavePreset(); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSavePreset();
+                  if (e.key === "Escape") cancelSavePreset();
+                }}
                 autoFocus
                 style={fieldStyle}
               />
@@ -278,14 +299,20 @@ export function MaterialLibrary() {
                 placeholder="Material (e.g. Plywood)"
                 value={presetMaterial}
                 onChange={(e) => setPresetMaterial(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") handleSavePreset(); if (e.key === "Escape") cancelSavePreset(); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSavePreset();
+                  if (e.key === "Escape") cancelSavePreset();
+                }}
                 style={fieldStyle}
               />
               <input
                 placeholder="Thickness (e.g. 3mm)"
                 value={presetThickness}
                 onChange={(e) => setPresetThickness(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") handleSavePreset(); if (e.key === "Escape") cancelSavePreset(); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSavePreset();
+                  if (e.key === "Escape") cancelSavePreset();
+                }}
                 style={fieldStyle}
               />
               <div style={{ display: "flex", gap: "4px", justifyContent: "flex-end" }}>
@@ -326,11 +353,16 @@ export function MaterialLibrary() {
           <div style={{ maxHeight: "200px", overflow: "auto" }}>
             {filteredGroups.map(([group, presets]) => (
               <div key={group} style={{ marginBottom: "4px" }}>
-                <div style={{
-                  fontSize: "10px", color: "var(--text-muted)",
-                  padding: "3px 4px", fontWeight: 600,
-                  textTransform: "uppercase", letterSpacing: "0.3px",
-                }}>
+                <div
+                  style={{
+                    fontSize: "10px",
+                    color: "var(--text-muted)",
+                    padding: "3px 4px",
+                    fontWeight: 600,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.3px",
+                  }}
+                >
                   {group}
                 </div>
                 {presets.map((preset) => (
@@ -355,7 +387,13 @@ export function MaterialLibrary() {
                     onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
                   >
                     <span>{preset.mode === "fill" ? "Engrave" : "Cut"}</span>
-                    <span style={{ fontSize: "9px", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                    <span
+                      style={{
+                        fontSize: "9px",
+                        color: "var(--text-muted)",
+                        fontFamily: "var(--font-mono)",
+                      }}
+                    >
                       {preset.power}% {preset.speed}mm/min x{preset.passes}
                     </span>
                   </button>

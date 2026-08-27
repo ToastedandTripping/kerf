@@ -114,11 +114,17 @@ describe("parsePathD subpath split (F20)", () => {
     const subpaths = parsePathD("M0 0 H10 V10 H0 Z M2 2 H8 V8 H2 Z");
     expect(subpaths).toHaveLength(2);
     expect(subpaths[0].points).toEqual([
-      { x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 },
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
     ]);
     expect(subpaths[0].closed).toBe(true);
     expect(subpaths[1].points).toEqual([
-      { x: 2, y: 2 }, { x: 8, y: 2 }, { x: 8, y: 8 }, { x: 2, y: 8 },
+      { x: 2, y: 2 },
+      { x: 8, y: 2 },
+      { x: 8, y: 8 },
+      { x: 2, y: 8 },
     ]);
     expect(subpaths[1].closed).toBe(true);
     // Pre-fix this was ONE 8-point array whose consecutive pair
@@ -134,7 +140,10 @@ describe("parsePathD subpath split (F20)", () => {
     expect(subpaths[0].points[0]).toEqual({ x: 10, y: 10 });
     expect(subpaths[0].closed).toBe(true);
     expect(subpaths[1].points).toEqual([
-      { x: 12, y: 12 }, { x: 18, y: 12 }, { x: 18, y: 18 }, { x: 12, y: 18 },
+      { x: 12, y: 12 },
+      { x: 18, y: 12 },
+      { x: 18, y: 18 },
+      { x: 12, y: 18 },
     ]);
     expect(subpaths[1].closed).toBe(true);
   });
@@ -143,11 +152,16 @@ describe("parsePathD subpath split (F20)", () => {
     const subpaths = parsePathD("M0 0 L10 0 L10 10 Z L5 5");
     expect(subpaths).toHaveLength(2);
     expect(subpaths[0].points).toEqual([
-      { x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 },
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
     ]);
     expect(subpaths[0].closed).toBe(true); // stays closed
     // New subpath anchored at the just-closed subpath's start point
-    expect(subpaths[1].points).toEqual([{ x: 0, y: 0 }, { x: 5, y: 5 }]);
+    expect(subpaths[1].points).toEqual([
+      { x: 0, y: 0 },
+      { x: 5, y: 5 },
+    ]);
     expect(subpaths[1].closed).toBe(false);
   });
 
@@ -171,13 +185,19 @@ describe("parsePathD subpath split (F20)", () => {
     const subpaths = parsePathD("M5 5 M10 10 L20 20");
     expect(subpaths).toHaveLength(2);
     expect(subpaths[0].points).toEqual([{ x: 5, y: 5 }]);
-    expect(subpaths[1].points).toEqual([{ x: 10, y: 10 }, { x: 20, y: 20 }]);
+    expect(subpaths[1].points).toEqual([
+      { x: 10, y: 10 },
+      { x: 20, y: 20 },
+    ]);
   });
 
   it("leading non-M command still parses from (0,0) without pushing an origin point", () => {
     const subpaths = parsePathD("L10 0 L10 10");
     expect(subpaths).toHaveLength(1);
-    expect(subpaths[0].points).toEqual([{ x: 10, y: 0 }, { x: 10, y: 10 }]);
+    expect(subpaths[0].points).toEqual([
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+    ]);
   });
 });
 

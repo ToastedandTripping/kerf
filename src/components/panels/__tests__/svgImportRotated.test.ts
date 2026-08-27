@@ -47,8 +47,8 @@ describe("F22 — SVG rotated rect → path", () => {
     expect(objects[0].closed).toBe(true);
     // The corners must not all be axis-aligned (rotation must be reflected)
     const pts = objects[0].points!;
-    const allSameX = pts.every(p => Math.abs(p.x - pts[0].x) < 0.01);
-    const allSameY = pts.every(p => Math.abs(p.y - pts[0].y) < 0.01);
+    const allSameX = pts.every((p) => Math.abs(p.x - pts[0].x) < 0.01);
+    const allSameY = pts.every((p) => Math.abs(p.y - pts[0].y) < 0.01);
     expect(allSameX).toBe(false);
     expect(allSameY).toBe(false);
   });

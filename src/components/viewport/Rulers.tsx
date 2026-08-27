@@ -14,159 +14,167 @@ export function Rulers() {
   const camera = useStore((s) => s.camera);
   const gridVisible = useStore((s) => s.gridVisible);
 
-  const drawHorizontal = useCallback((canvas: HTMLCanvasElement) => {
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+  const drawHorizontal = useCallback(
+    (canvas: HTMLCanvasElement) => {
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const w = canvas.parentElement?.clientWidth || canvas.width;
-    canvas.width = w * dpr;
-    canvas.height = RULER_SIZE * dpr;
-    canvas.style.width = `${w}px`;
-    canvas.style.height = `${RULER_SIZE}px`;
-    ctx.scale(dpr, dpr);
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.parentElement?.clientWidth || canvas.width;
+      canvas.width = w * dpr;
+      canvas.height = RULER_SIZE * dpr;
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${RULER_SIZE}px`;
+      ctx.scale(dpr, dpr);
 
-    // Background
-    ctx.fillStyle = BG;
-    ctx.fillRect(0, 0, w, RULER_SIZE);
+      // Background
+      ctx.fillStyle = BG;
+      ctx.fillRect(0, 0, w, RULER_SIZE);
 
-    // Bottom border
-    ctx.strokeStyle = "rgba(255,255,255,0.08)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, RULER_SIZE - 0.5);
-    ctx.lineTo(w, RULER_SIZE - 0.5);
-    ctx.stroke();
+      // Bottom border
+      ctx.strokeStyle = "rgba(255,255,255,0.08)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, RULER_SIZE - 0.5);
+      ctx.lineTo(w, RULER_SIZE - 0.5);
+      ctx.stroke();
 
-    // Calculate tick spacing based on zoom
-    const scale = camera.zoom * PX_PER_MM; // px per mm at current zoom
-    const { interval, subdivisions } = getTickInterval(scale);
+      // Calculate tick spacing based on zoom
+      const scale = camera.zoom * PX_PER_MM; // px per mm at current zoom
+      const { interval, subdivisions } = getTickInterval(scale);
 
-    // World coordinates visible
-    const worldLeft = -camera.x / camera.zoom / PX_PER_MM;
-    const worldRight = (w - camera.x) / camera.zoom / PX_PER_MM;
+      // World coordinates visible
+      const worldLeft = -camera.x / camera.zoom / PX_PER_MM;
+      const worldRight = (w - camera.x) / camera.zoom / PX_PER_MM;
 
-    // Start from first tick before visible area
-    const startMm = Math.floor(worldLeft / interval) * interval;
+      // Start from first tick before visible area
+      const startMm = Math.floor(worldLeft / interval) * interval;
 
-    ctx.font = "9px -apple-system, BlinkMacSystemFont, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
+      ctx.font = "9px -apple-system, BlinkMacSystemFont, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
 
-    for (let mm = startMm; mm <= worldRight; mm += interval / subdivisions) {
-      const screenX = camera.x + mm * PX_PER_MM * camera.zoom;
-      if (screenX < RULER_SIZE || screenX > w) continue; // skip corner area
+      for (let mm = startMm; mm <= worldRight; mm += interval / subdivisions) {
+        const screenX = camera.x + mm * PX_PER_MM * camera.zoom;
+        if (screenX < RULER_SIZE || screenX > w) continue; // skip corner area
 
-      const isMajor = Math.abs(mm % interval) < 0.001;
-      const isMid = Math.abs(mm % (interval / 2)) < 0.001;
+        const isMajor = Math.abs(mm % interval) < 0.001;
+        const isMid = Math.abs(mm % (interval / 2)) < 0.001;
 
-      if (isMajor) {
-        ctx.strokeStyle = MAJOR_TICK_COLOR;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(screenX, RULER_SIZE);
-        ctx.lineTo(screenX, 4);
-        ctx.stroke();
+        if (isMajor) {
+          ctx.strokeStyle = MAJOR_TICK_COLOR;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(screenX, RULER_SIZE);
+          ctx.lineTo(screenX, 4);
+          ctx.stroke();
 
-        // Label
-        ctx.fillStyle = LABEL_COLOR;
-        const label = mm >= 1000 || mm <= -1000 ? `${(mm / 10).toFixed(0)}cm` : `${mm.toFixed(0)}`;
-        ctx.fillText(label, screenX, 2);
-      } else if (isMid) {
-        ctx.strokeStyle = TICK_COLOR;
-        ctx.lineWidth = 0.5;
-        ctx.beginPath();
-        ctx.moveTo(screenX, RULER_SIZE);
-        ctx.lineTo(screenX, RULER_SIZE - 8);
-        ctx.stroke();
-      } else {
-        ctx.strokeStyle = TICK_COLOR;
-        ctx.lineWidth = 0.5;
-        ctx.beginPath();
-        ctx.moveTo(screenX, RULER_SIZE);
-        ctx.lineTo(screenX, RULER_SIZE - 4);
-        ctx.stroke();
+          // Label
+          ctx.fillStyle = LABEL_COLOR;
+          const label =
+            mm >= 1000 || mm <= -1000 ? `${(mm / 10).toFixed(0)}cm` : `${mm.toFixed(0)}`;
+          ctx.fillText(label, screenX, 2);
+        } else if (isMid) {
+          ctx.strokeStyle = TICK_COLOR;
+          ctx.lineWidth = 0.5;
+          ctx.beginPath();
+          ctx.moveTo(screenX, RULER_SIZE);
+          ctx.lineTo(screenX, RULER_SIZE - 8);
+          ctx.stroke();
+        } else {
+          ctx.strokeStyle = TICK_COLOR;
+          ctx.lineWidth = 0.5;
+          ctx.beginPath();
+          ctx.moveTo(screenX, RULER_SIZE);
+          ctx.lineTo(screenX, RULER_SIZE - 4);
+          ctx.stroke();
+        }
       }
-    }
-  }, [camera]);
+    },
+    [camera]
+  );
 
-  const drawVertical = useCallback((canvas: HTMLCanvasElement) => {
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+  const drawVertical = useCallback(
+    (canvas: HTMLCanvasElement) => {
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const h = canvas.parentElement?.clientHeight || canvas.height;
-    canvas.width = RULER_SIZE * dpr;
-    canvas.height = h * dpr;
-    canvas.style.width = `${RULER_SIZE}px`;
-    canvas.style.height = `${h}px`;
-    ctx.scale(dpr, dpr);
+      const dpr = window.devicePixelRatio || 1;
+      const h = canvas.parentElement?.clientHeight || canvas.height;
+      canvas.width = RULER_SIZE * dpr;
+      canvas.height = h * dpr;
+      canvas.style.width = `${RULER_SIZE}px`;
+      canvas.style.height = `${h}px`;
+      ctx.scale(dpr, dpr);
 
-    // Background
-    ctx.fillStyle = BG;
-    ctx.fillRect(0, 0, RULER_SIZE, h);
+      // Background
+      ctx.fillStyle = BG;
+      ctx.fillRect(0, 0, RULER_SIZE, h);
 
-    // Right border
-    ctx.strokeStyle = "rgba(255,255,255,0.08)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(RULER_SIZE - 0.5, 0);
-    ctx.lineTo(RULER_SIZE - 0.5, h);
-    ctx.stroke();
+      // Right border
+      ctx.strokeStyle = "rgba(255,255,255,0.08)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(RULER_SIZE - 0.5, 0);
+      ctx.lineTo(RULER_SIZE - 0.5, h);
+      ctx.stroke();
 
-    // Calculate tick spacing
-    const scale = camera.zoom * PX_PER_MM;
-    const { interval, subdivisions } = getTickInterval(scale);
+      // Calculate tick spacing
+      const scale = camera.zoom * PX_PER_MM;
+      const { interval, subdivisions } = getTickInterval(scale);
 
-    const worldTop = -camera.y / camera.zoom / PX_PER_MM;
-    const worldBottom = (h - camera.y) / camera.zoom / PX_PER_MM;
+      const worldTop = -camera.y / camera.zoom / PX_PER_MM;
+      const worldBottom = (h - camera.y) / camera.zoom / PX_PER_MM;
 
-    const startMm = Math.floor(worldTop / interval) * interval;
+      const startMm = Math.floor(worldTop / interval) * interval;
 
-    ctx.font = "9px -apple-system, BlinkMacSystemFont, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
+      ctx.font = "9px -apple-system, BlinkMacSystemFont, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
 
-    for (let mm = startMm; mm <= worldBottom; mm += interval / subdivisions) {
-      const screenY = camera.y + mm * PX_PER_MM * camera.zoom;
-      if (screenY < RULER_SIZE || screenY > h) continue;
+      for (let mm = startMm; mm <= worldBottom; mm += interval / subdivisions) {
+        const screenY = camera.y + mm * PX_PER_MM * camera.zoom;
+        if (screenY < RULER_SIZE || screenY > h) continue;
 
-      const isMajor = Math.abs(mm % interval) < 0.001;
-      const isMid = Math.abs(mm % (interval / 2)) < 0.001;
+        const isMajor = Math.abs(mm % interval) < 0.001;
+        const isMid = Math.abs(mm % (interval / 2)) < 0.001;
 
-      if (isMajor) {
-        ctx.strokeStyle = MAJOR_TICK_COLOR;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(RULER_SIZE, screenY);
-        ctx.lineTo(4, screenY);
-        ctx.stroke();
+        if (isMajor) {
+          ctx.strokeStyle = MAJOR_TICK_COLOR;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(RULER_SIZE, screenY);
+          ctx.lineTo(4, screenY);
+          ctx.stroke();
 
-        // Label (rotated)
-        ctx.save();
-        ctx.translate(10, screenY);
-        ctx.rotate(-Math.PI / 2);
-        ctx.fillStyle = LABEL_COLOR;
-        const label = mm >= 1000 || mm <= -1000 ? `${(mm / 10).toFixed(0)}cm` : `${mm.toFixed(0)}`;
-        ctx.fillText(label, 0, 0);
-        ctx.restore();
-      } else if (isMid) {
-        ctx.strokeStyle = TICK_COLOR;
-        ctx.lineWidth = 0.5;
-        ctx.beginPath();
-        ctx.moveTo(RULER_SIZE, screenY);
-        ctx.lineTo(RULER_SIZE - 8, screenY);
-        ctx.stroke();
-      } else {
-        ctx.strokeStyle = TICK_COLOR;
-        ctx.lineWidth = 0.5;
-        ctx.beginPath();
-        ctx.moveTo(RULER_SIZE, screenY);
-        ctx.lineTo(RULER_SIZE - 4, screenY);
-        ctx.stroke();
+          // Label (rotated)
+          ctx.save();
+          ctx.translate(10, screenY);
+          ctx.rotate(-Math.PI / 2);
+          ctx.fillStyle = LABEL_COLOR;
+          const label =
+            mm >= 1000 || mm <= -1000 ? `${(mm / 10).toFixed(0)}cm` : `${mm.toFixed(0)}`;
+          ctx.fillText(label, 0, 0);
+          ctx.restore();
+        } else if (isMid) {
+          ctx.strokeStyle = TICK_COLOR;
+          ctx.lineWidth = 0.5;
+          ctx.beginPath();
+          ctx.moveTo(RULER_SIZE, screenY);
+          ctx.lineTo(RULER_SIZE - 8, screenY);
+          ctx.stroke();
+        } else {
+          ctx.strokeStyle = TICK_COLOR;
+          ctx.lineWidth = 0.5;
+          ctx.beginPath();
+          ctx.moveTo(RULER_SIZE, screenY);
+          ctx.lineTo(RULER_SIZE - 4, screenY);
+          ctx.stroke();
+        }
       }
-    }
-  }, [camera]);
+    },
+    [camera]
+  );
 
   // Redraw on camera change
   useEffect(() => {
@@ -200,46 +208,52 @@ export function Rulers() {
   return (
     <>
       {/* Corner square */}
-      <div style={{
-        position: "absolute",
-        top: 0,
-        left: 0,
-        width: RULER_SIZE,
-        height: RULER_SIZE,
-        background: BG,
-        zIndex: 12,
-        borderRight: "1px solid rgba(255,255,255,0.08)",
-        borderBottom: "1px solid rgba(255,255,255,0.08)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}>
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          width: RULER_SIZE,
+          height: RULER_SIZE,
+          background: BG,
+          zIndex: 12,
+          borderRight: "1px solid rgba(255,255,255,0.08)",
+          borderBottom: "1px solid rgba(255,255,255,0.08)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
         <span style={{ fontSize: "7px", color: "rgba(255,255,255,0.3)", fontWeight: 600 }}>mm</span>
       </div>
 
       {/* Horizontal ruler */}
-      <div style={{
-        position: "absolute",
-        top: 0,
-        left: RULER_SIZE,
-        right: 0,
-        height: RULER_SIZE,
-        zIndex: 11,
-        pointerEvents: "none",
-      }}>
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          left: RULER_SIZE,
+          right: 0,
+          height: RULER_SIZE,
+          zIndex: 11,
+          pointerEvents: "none",
+        }}
+      >
         <canvas ref={hCanvasRef} />
       </div>
 
       {/* Vertical ruler */}
-      <div style={{
-        position: "absolute",
-        top: RULER_SIZE,
-        left: 0,
-        bottom: 0,
-        width: RULER_SIZE,
-        zIndex: 11,
-        pointerEvents: "none",
-      }}>
+      <div
+        style={{
+          position: "absolute",
+          top: RULER_SIZE,
+          left: 0,
+          bottom: 0,
+          width: RULER_SIZE,
+          zIndex: 11,
+          pointerEvents: "none",
+        }}
+      >
         <canvas ref={vCanvasRef} />
       </div>
     </>
@@ -264,4 +278,3 @@ function getTickInterval(pxPerMm: number): { interval: number; subdivisions: num
 
   return { interval, subdivisions };
 }
-
