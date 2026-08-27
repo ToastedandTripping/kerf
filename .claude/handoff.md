@@ -28,11 +28,11 @@ in this project has already been ruled on, usually for a reason that is not obvi
 - **Confirm the owner's laser is back in service.** The standing hardware constraint in
   `DECISIONS.md` blocks both the item above and Phase 2's owner laser session #1.
 
-- **Phase 2 (character-counting streaming rework) not started.** Highest-risk
-  phase in the Hardening & Efficiency Program — first phase that touches real
-  machine behavior. Full design is locked (see Log, 2026-07-05 entry) and
-  ready for a plan-mode pass; blocked on the hardware test above landing
-  first, since it lands on that safety base.
+- **Phase 2A plan reviewed and ready for implementation.** Plan
+  (`~/.claude/plans/prancy-fluttering-wave.md`) critic-reviewed (Opus,
+  2026-08-26; Fable rate-limited, sanctioned fallback): 10 core PASS, X1/X5
+  gating PASS, X6/X8 advisory PASS, two advisory items folded. Implementation
+  via relay, blocked on the hardware test above + laser confirmation.
 
 ## Open questions awaiting Lee
 
@@ -47,6 +47,16 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-08-26
+Phase 2A plan gate cleared. The plan (`prancy-fluttering-wave.md`) had all four
+prior critic must-fixes already folded (Intent section, line-too-long pre-validation,
+worst-case physical outcome, STOP button sequence). Critic re-run on Opus (Fable
+rate-limited, sanctioned fallback per rubric): 14 active dimensions, all PASS. Two
+advisory items folded into the plan (channel.send failure policy, concurrent
+serial_send note). Charter committed at `3d6ecc0`. Plan is ready for implementation
+via relay, still blocked on the owner hardware test + laser confirmation.
+**Next:** implementation waits on Lee confirming the laser is back in service.
 
 ### 2026-08-21
 Hand-off restructured by lifetime, following the MARVIN convention and the Fern reference
