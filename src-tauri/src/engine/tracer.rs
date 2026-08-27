@@ -6,6 +6,8 @@ use imageproc::distance_transform::Norm;
 use serde::{Deserialize, Serialize};
 use visioncortex::PathSimplifyMode;
 
+use crate::engine::limits;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TraceParams {
@@ -52,6 +54,9 @@ pub fn trace_image(params: TraceParams) -> Result<TraceResult, String> {
 
     let (orig_w, orig_h) = img.dimensions();
 
+    limits::check_trace_pixels(orig_w as usize, orig_h as usize)
+        .map_err(|e| e.to_string())?;
+
     let img = if params.preview_scale < 1.0 {
         let new_w = ((orig_w as f32) * params.preview_scale).max(1.0) as u32;
         let new_h = ((orig_h as f32) * params.preview_scale).max(1.0) as u32;
@@ -88,7 +93,7 @@ pub fn trace_image(params: TraceParams) -> Result<TraceResult, String> {
     // threshold (128) and skip adaptive preprocessing, which introduces halos
     // on already-clean black-on-transparent PNGs.
     let is_near_binary = {
-        let total = (w * h) as usize;
+        let total = w as usize * h as usize;
         if total == 0 {
             false
         } else {
@@ -281,7 +286,7 @@ fn scale_ignore_area(ignore_area: u32, preview_scale: f32) -> u32 {
 /// Remove connected components smaller than min_area pixels
 fn remove_small_components(binary: &GrayImage, min_area: u32) -> GrayImage {
     let (w, h) = binary.dimensions();
-    let mut labels = vec![0u32; (w * h) as usize];
+    let mut labels = vec![0u32; w as usize * h as usize];
     let mut label_count = 0u32;
     let mut label_sizes: Vec<u32> = vec![0];
 
@@ -378,7 +383,7 @@ fn compound_outer_area(compound: &visioncortex::CompoundPath) -> f64 {
 /// The exterior background (connected to any border pixel) is never touched.
 fn fill_small_holes(binary: &GrayImage, hole_min_area: u64) -> GrayImage {
     let (w, h) = binary.dimensions();
-    let total = (w * h) as usize;
+    let total = w as usize * h as usize;
     let mut exterior = vec![false; total];
     let mut stack: Vec<(u32, u32)> = Vec::new();
 
@@ -1093,5 +1098,35 @@ mod tests {
         // Sketch mode uses Canny — just verify it produced valid SVG (not a blank crash)
         assert!(sketch_result.svg.starts_with("<?xml"),
             "Part C: sketch mode should return valid SVG");
+    }
+
+    /// D2: trace_image rejects images exceeding MAX_TRACE_PIXELS.
+    #[test]
+    fn d2_trace_image_rejects_oversized_input() {
+        // Create a 5000x5000 = 25M pixel image (exceeds 24M cap).
+        // Use GrayImage for speed — trace_image accepts any decodable PNG.
+        use image::ImageEncoder;
+        let w = 5000u32;
+        let h = 5000u32;
+        let gray = image::GrayImage::from_pixel(w, h, image::Luma([255u8]));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::codecs::png::PngEncoder::new(&mut buf)
+            .write_image(gray.as_raw(), w, h, image::ExtendedColorType::L8)
+            .unwrap();
+        let b64 = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(buf.into_inner())
+        );
+
+        let params = TraceParams {
+            preview_scale: 1.0, // no downscale — full 5000x5000 hits the cap
+            ..base_params(b64)
+        };
+
+        let result = trace_image(params);
+        assert!(result.is_err(), "trace_image should reject oversized input");
+        let err = result.unwrap_err();
+        assert!(err.contains("limit exceeded") || err.contains("trace size"),
+            "Error should mention trace limit, got: {}", err);
     }
 }

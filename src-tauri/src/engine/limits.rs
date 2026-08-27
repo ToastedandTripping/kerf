@@ -26,7 +26,6 @@ pub const MAX_RASTER_PIXELS: usize = 64_000_000;
 pub const MAX_GCODE_MOVES: usize = 5_000_000;
 
 /// Maximum trace pixels (width * height) for image tracing.
-#[allow(dead_code)]
 pub const MAX_TRACE_PIXELS: usize = 24_000_000;
 
 // ─── Error type ─────────────────────────────────────────────────────────────
@@ -121,7 +120,6 @@ pub fn check_move_count(count: usize) -> Result<(), EngineError> {
 }
 
 /// Check trace pixel count against the cap.
-#[allow(dead_code)]
 pub fn check_trace_pixels(w: usize, h: usize) -> Result<(), EngineError> {
     let count = w.saturating_mul(h);
     if count > MAX_TRACE_PIXELS {

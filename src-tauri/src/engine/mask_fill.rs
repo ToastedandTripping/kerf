@@ -110,9 +110,15 @@ pub fn scan_mask_to_gcode<'a>(
     h: usize,
     params: &MaskScanParams<'a>,
 ) -> Result<GcodeResult, String> {
-    // Validate grayscale_pixels length if provided.
+    // Validate pixel buffer lengths against stated dimensions.
+    let expected = w * h;
+    if pixels.len() < expected {
+        return Err(format!(
+            "pixels length {} is less than mask dimensions {}x{} = {}",
+            pixels.len(), w, h, expected
+        ));
+    }
     if let Some(gray) = params.grayscale_pixels {
-        let expected = w * h;
         if gray.len() != expected {
             return Err(format!(
                 "grayscale_pixels length {} does not match mask dimensions {}x{} = {}",
@@ -1871,5 +1877,38 @@ G1 X0.818 Y199.061 F6000 S0";
              Before fix: Y=90.0 (pixel edge). After fix: Y=89.0 (pixel center).\n\
              Full gcode:\n{}", result.gcode
         );
+    }
+
+    /// D3: scan_mask_to_gcode rejects pixels buffer shorter than w*h.
+    #[test]
+    fn d3_scan_mask_rejects_short_pixels_buffer() {
+        let w = 10;
+        let h = 10;
+        let pixels = vec![0u8; 50]; // 50 < 100 = w*h
+        let params = MaskScanParams {
+            origin_x: 0.0,
+            origin_y: 0.0,
+            width_mm: 10.0,
+            height_mm: 10.0,
+            interval: 1.0,
+            overscan: 0.0,
+            bidirectional: true,
+            scanning_offset: 0.0,
+            speed_mm_min: 1000.0,
+            s_max: 1000.0,
+            s_min: 0.0,
+            power_cmd: "M3".to_string(),
+            workspace_height: 100.0,
+            origin_top: false,
+            rotation_rad: 0.0,
+            passes: 1,
+            grayscale_pixels: None,
+        };
+
+        let result = scan_mask_to_gcode(&pixels, w, h, &params);
+        assert!(result.is_err(), "scan_mask_to_gcode should reject short pixels buffer");
+        let err = result.unwrap_err();
+        assert!(err.contains("pixels length"),
+            "Error should mention pixels length, got: {}", err);
     }
 }

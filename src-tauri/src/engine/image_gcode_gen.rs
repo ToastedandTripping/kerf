@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::dither::{DitherAlgorithm, dither_image};
 use crate::engine::gcode_gen::{GcodeResult, RAPID_SPEED_MM_MIN};
+use crate::engine::limits;
 use crate::engine::mask_fill::{MaskScanParams, scan_mask_to_gcode};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,9 +89,11 @@ pub fn preview_dither(req: &ImageEngraveRequest) -> Result<(Vec<u8>, u32, u32), 
     };
 
     // 3. Resize to target DPI
-    let interval = if req.interval > 0.0 { req.interval } else { 0.1 };
+    let interval = limits::validated_interval(if req.interval > 0.0 { req.interval } else { 0.1 });
     let target_w = (req.width / interval).round().max(1.0) as u32;
     let target_h = (req.height / interval).round().max(1.0) as u32;
+    limits::check_raster_pixels(target_w as usize, target_h as usize)
+        .map_err(|e| e.to_string())?;
     let resized = image::imageops::resize(&gray, target_w, target_h, FilterType::Lanczos3);
 
     // 4. Apply adjustments
@@ -347,7 +350,9 @@ fn generate_scan_gcode(
     height: u32,
     is_grayscale: bool,
 ) -> Result<GcodeResult, String> {
-    let interval = if req.interval > 0.0 { req.interval } else { 0.1 };
+    let interval = limits::validated_interval(if req.interval > 0.0 { req.interval } else { 0.1 });
+    limits::check_raster_pixels(width as usize, height as usize)
+        .map_err(|e| e.to_string())?;
     let s_max = (req.power / 100.0 * req.s_value_max).round();
     let s_min = (req.power_min / 100.0 * req.s_value_max).round();
     let power_cmd = if req.power_mode == "variable" || is_grayscale { "M4" } else { "M3" };
@@ -1004,5 +1009,50 @@ mod tests {
             "estimate_simple_time returned {}s — expected ~1s; likely 60× too small (mm/min bug)", t);
         assert!(t < 10.0,
             "estimate_simple_time returned {}s — unexpectedly large; check unit handling", t);
+    }
+
+    /// D1: preview_dither rejects requests that would produce oversized raster
+    /// dimensions via the limits::check_raster_pixels guard.
+    #[test]
+    fn d1_preview_dither_rejects_oversized_raster() {
+        // Create a valid 1x1 white PNG
+        let img = image::RgbImage::from_pixel(1, 1, image::Rgb([255, 255, 255]));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .unwrap();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(buf.into_inner());
+
+        // width=300mm, height=300mm, interval=0.001mm (below MIN_SCAN_INTERVAL_MM)
+        // validated_interval clamps to 0.01 → 300/0.01 = 30000 px per side
+        // 30000 * 30000 = 900M > 64M cap → must fail
+        let req = ImageEngraveRequest {
+            image_data: b64,
+            x: 0.0, y: 0.0,
+            width: 300.0, height: 300.0,
+            rotation: 0.0,
+            scale_x: 1.0, scale_y: 1.0,
+            power: 50.0, power_min: 0.0,
+            speed: 1000.0, passes: 1,
+            power_mode: "constant".to_string(),
+            interval: 0.001, // triggers clamping + oversized check
+            dither: "FloydSteinberg".to_string(),
+            overscan: 0.0, bidirectional: true, scanning_offset: 0.0,
+            brightness: 0.0, contrast: 0.0, gamma: 1.0, invert: false,
+            workspace_height: 400.0,
+            origin_top: false,
+            s_value_max: 1000.0,
+            power_curve: None,
+            newsprint_cell_size: None,
+            newsprint_angle: None,
+            remove_background: false,
+            bg_tolerance: 20.0,
+        };
+
+        let result = preview_dither(&req);
+        assert!(result.is_err(), "preview_dither should reject oversized raster");
+        let err = result.unwrap_err();
+        assert!(err.contains("limit exceeded") || err.contains("raster size"),
+            "Error should mention limit, got: {}", err);
     }
 }
