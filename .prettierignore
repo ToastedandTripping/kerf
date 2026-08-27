@@ -1,0 +1,4 @@
+# DECISIONS.md uses asterisk-italic date lines (*YYYY-MM-DD*) parsed by
+# update-decisions.mjs. Prettier converts them to underscore italics,
+# silently breaking the amendment script. Exclude from all repos.
+.claude/DECISIONS.md

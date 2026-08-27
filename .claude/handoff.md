@@ -48,6 +48,14 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 ## Log (newest first)
 
+### 2026-08-27
+
+v0.8.26 release prepared. Contents: the full v0.8.25 comprehensive remediation
+(which was tagged but never built — CI was red behind two P6-A breaks, now fixed),
+PLUS the limits.rs wiring relay (image_gcode_gen.rs + tracer.rs + mask_fill.rs
+allocator-abort guards, 4a33dec, 216 Rust tests). Laser confirmed back in service
+by Lee; DECISIONS.md hardware constraint reversed. CI must go green before tag.
+
 ### 2026-08-26
 
 Phase 2A plan gate cleared. The plan (`prancy-fluttering-wave.md`) had all four
