@@ -13,6 +13,7 @@
  * - jobRunning and jobProgress cleaned up on every exit path
  */
 
+import { invoke, Channel } from "@tauri-apps/api/core";
 import { useStore } from "../../app/store";
 import { machineConnection } from "./connection";
 
@@ -89,7 +90,174 @@ export interface StreamJobResult {
  *   still true -- STOP's emergencyStop path is not duplicated)
  * - Tear down the serial port on disconnect detection
  */
+/**
+ * Get the current streaming mode from localStorage. Defaults to "perLine"
+ * per DECISIONS.md pin: `streamingMode` defaults to `perLine`.
+ */
+export function getStreamingMode(): "perLine" | "buffered" {
+  try {
+    const mode = localStorage.getItem("streamingMode");
+    if (mode === "buffered") return "buffered";
+  } catch {
+    // localStorage unavailable — non-critical, use default
+  }
+  return "perLine";
+}
+
+/** Mirror of Rust `JobEvent` (serde-tagged). */
+interface JobEvent {
+  type: "progress" | "console" | "status" | "finished";
+  lineIndex?: number;
+  total?: number;
+  text?: string;
+  report?: string;
+  outcome?: string;
+}
+
+/**
+ * Stream a G-code job using the buffered (character-counting) pump.
+ *
+ * The Rust side handles the $32=1 gate, RX budget accounting, and the full
+ * send/read loop. This function creates a Tauri Channel to receive progress
+ * events and updates the store accordingly.
+ */
+async function streamJobBuffered(
+  gcode: string,
+  opts: StreamJobOptions
+): Promise<StreamJobResult> {
+  const store = useStore.getState();
+
+  const channel = new Channel<JobEvent>();
+
+  channel.onmessage = (event: JobEvent) => {
+    const s = useStore.getState();
+    switch (event.type) {
+      case "progress":
+        if (event.total && event.total > 0) {
+          s.setJobProgress((event.lineIndex! + 1) / event.total);
+        }
+        break;
+      case "console":
+        if (event.text) {
+          const type =
+            event.text.startsWith("error:") || event.text.startsWith("ALARM")
+              ? ("error" as const)
+              : ("info" as const);
+          s.addConsoleLine(event.text, type);
+        }
+        break;
+      case "status":
+        if (event.report) {
+          // Update DRO position from status report (same as connection.ts)
+          const m = event.report.match(/[MW]Pos:([-\d.]+),([-\d.]+),([-\d.]+)/);
+          if (m) {
+            s.setMachinePosition({
+              x: parseFloat(m[1]),
+              y: parseFloat(m[2]),
+              z: parseFloat(m[3]),
+            });
+          }
+        }
+        break;
+      case "finished":
+        // Handled via the invoke return value below
+        break;
+    }
+  };
+
+  let endState: StreamJobResult["endState"] = "complete";
+  let portDisconnected = false;
+
+  try {
+    const outcome = await invoke<string>("serial_stream_job", { gcode, channel });
+
+    if (outcome.startsWith("complete")) {
+      endState = "complete";
+      if (opts.waitForIdle) {
+        const IDLE_TIMEOUT_MS = 30000;
+        const IDLE_POLL_MS = 200;
+        const idleDeadline = Date.now() + IDLE_TIMEOUT_MS;
+        let reachedIdle = false;
+        while (Date.now() < idleDeadline) {
+          await new Promise((r) => setTimeout(r, IDLE_POLL_MS));
+          try {
+            const report = await machineConnection.getStatusReport();
+            if (report && report.match(/^<Idle/i)) {
+              reachedIdle = true;
+              break;
+            }
+          } catch {
+            break;
+          }
+        }
+        if (!reachedIdle) {
+          store.addConsoleLine(
+            `${opts.label} complete (Idle timeout -- head may still be moving)`,
+            "warning"
+          );
+        } else {
+          store.addConsoleLine(`${opts.label} complete`, "info");
+        }
+      } else {
+        store.addConsoleLine(`${opts.label} complete`, "info");
+      }
+    } else if (outcome.startsWith("cancelled")) {
+      endState = "cancelled";
+      store.addConsoleLine(`${opts.label} cancelled`, "info");
+    } else if (outcome.startsWith("aborted")) {
+      endState = "aborted";
+      store.addConsoleLine(`${opts.label} aborted -- machine was reset`, "error");
+    } else if (outcome.startsWith("alarm")) {
+      endState = "alarm";
+      store.addConsoleLine(
+        `${opts.label} stopped -- machine alarm (laser already off; unlock to continue)`,
+        "error"
+      );
+    } else if (outcome.startsWith("error")) {
+      endState = "error";
+      store.addConsoleLine(`${opts.label} stopped: ${outcome}`, "error");
+    } else if (outcome.startsWith("disconnected")) {
+      endState = "error";
+      portDisconnected = true;
+      store.addConsoleLine(`${opts.label} stopped: ${outcome}`, "error");
+      useStore.getState().setMachineConnected(false);
+      useStore.getState().setMachineState("disconnected");
+    }
+  } catch (e) {
+    endState = "error";
+    const msg = String(e);
+    store.addConsoleLine(`${opts.label} failed: ${msg}`, "error");
+    if (msg.includes("disconnected") || msg.includes("Not connected")) {
+      portDisconnected = true;
+      useStore.getState().setMachineConnected(false);
+      useStore.getState().setMachineState("disconnected");
+    }
+  }
+
+  store.setJobRunning(false);
+  store.setJobProgress(0);
+
+  if (portDisconnected) {
+    try {
+      await machineConnection.disconnect();
+    } catch {
+      /* port already gone */
+    }
+  }
+
+  return { endState, portDisconnected };
+}
+
 export async function streamJob(gcode: string, opts: StreamJobOptions): Promise<StreamJobResult> {
+  // Mode dispatch: "buffered" routes to the Rust character-counting pump;
+  // "perLine" (default) uses the existing TS per-line loop.
+  const mode = getStreamingMode();
+  if (mode === "buffered") {
+    return streamJobBuffered(gcode, opts);
+  }
+
+  // -- Per-line path (unchanged) --
+
   // Capture action creators (stable refs) at the start; read volatile state
   // fresh via useStore.getState() inside the loop.
   const store = useStore.getState();

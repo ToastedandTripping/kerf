@@ -26,10 +26,11 @@ use std::io::{BufRead, BufReader, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, TryLockError};
 use std::time::Duration;
-use tauri::State;
+use tauri::{ipc::Channel, State};
 
 use super::serial_pump::{
-    self, ProbeWriter, PumpFailure, PumpReader, DEFAULT_LIVENESS_TICKS, STATUS_MAX_TICKS,
+    self, BufferedPumpConfig, BufferedPumpEvent, BufferedPumpOutcome, ProbeWriter, PumpFailure,
+    PumpReader, DEFAULT_LIVENESS_TICKS, STATUS_MAX_TICKS,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +81,7 @@ pub struct SerialInner {
     realtime: Mutex<Option<Box<dyn SerialPort>>>,
     connected: AtomicBool,
     pump_in_flight: AtomicBool,
+    job_abort: AtomicBool,
 }
 
 impl Default for SerialInner {
@@ -89,6 +91,7 @@ impl Default for SerialInner {
             realtime: Mutex::new(None),
             connected: AtomicBool::new(false),
             pump_in_flight: AtomicBool::new(false),
+            job_abort: AtomicBool::new(false),
         }
     }
 }
@@ -484,6 +487,175 @@ pub async fn serial_is_connected(state: State<'_, SerialState>) -> Result<bool, 
 }
 
 // ---------------------------------------------------------------------------
+// Buffered streaming (Phase 2A)
+// ---------------------------------------------------------------------------
+
+/// Events streamed to the frontend during a buffered job via Tauri's Channel API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum JobEvent {
+    /// Job progress update.
+    Progress {
+        /// 0-based line index of the most recently sent line.
+        line_index: usize,
+        /// Total number of lines in the job.
+        total: usize,
+    },
+    /// A console-meaningful message from GRBL.
+    Console { text: String },
+    /// A `<…>` status report for DRO position updates.
+    Status { report: String },
+    /// The job has finished. `outcome` is a human-readable summary; the
+    /// invoke return value carries the structured result.
+    Finished { outcome: String },
+}
+
+/// Stream a G-code job using the buffered (character-counting) pump.
+///
+/// The command lock is held for the ENTIRE job (same as per-line `serial_send`
+/// holds it per line, but here it's one long hold). PumpFlight is also held
+/// for the full job so disconnect's `0x18` fires if the user disconnects
+/// mid-job.
+///
+/// `$32=1` is hard-gated: the first line sent is `$32=1`, and the pump waits
+/// for its `ok` before sending any G-code. This is a DECISIONS.md pin.
+#[tauri::command]
+pub async fn serial_stream_job(
+    state: State<'_, SerialState>,
+    gcode: String,
+    channel: Channel<JobEvent>,
+) -> Result<String, String> {
+    let inner = state.0.clone();
+    tokio::task::spawn_blocking(move || {
+        // Reset the abort flag at the start of every job.
+        inner.job_abort.store(false, Ordering::SeqCst);
+
+        let mut guard = inner
+            .command
+            .lock()
+            .map_err(|e| format!("Lock failed: {}", e))?;
+        let cmd_channel = guard.as_mut().ok_or("Not connected")?;
+        let _flight = PumpFlight::begin(&inner.pump_in_flight);
+
+        // $32=1 hard gate (DECISIONS.md pin). Send via the existing per-line
+        // pump so it gets a proper drain + terminal wait.
+        let drain = serial_pump::drain_classified(&mut cmd_channel.reader, &mut cmd_channel.pending);
+        for line in &drain.dropped {
+            eprintln!("[serial] stream job drained: {}", line);
+        }
+        for line in &drain.surfaced {
+            let _ = channel.send(JobEvent::Console { text: line.clone() });
+        }
+
+        // Write $32=1
+        cmd_channel
+            .writer
+            .write_all(b"$32=1\n")
+            .map_err(|e| format!("Write error: {}", e))?;
+        cmd_channel
+            .writer
+            .flush()
+            .map_err(|e| format!("Flush error: {}", e))?;
+
+        match serial_pump::run_pump(
+            &mut cmd_channel.reader,
+            &mut cmd_channel.writer,
+            &mut cmd_channel.pending,
+            DEFAULT_LIVENESS_TICKS,
+            serial_pump::DEFAULT_IDLE_STALL_TICKS,
+        ) {
+            Ok(out) => {
+                let has_ok = out.lines.iter().any(|l| l == "ok");
+                if !has_ok {
+                    return Err(format!(
+                        "$32=1 gate failed: {:?}",
+                        out.lines
+                    ));
+                }
+            }
+            Err(PumpFailure::Disconnected(msg)) => return Err(format!("disconnected: {}", msg)),
+            Err(PumpFailure::Io(msg)) => return Err(msg),
+        }
+
+        // Parse G-code lines (same filtering as the TS per-line path).
+        let lines: Vec<String> = gcode
+            .split('\n')
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty() && !l.starts_with(';'))
+            .collect();
+
+        if lines.is_empty() {
+            let _ = channel.send(JobEvent::Finished {
+                outcome: "complete".to_string(),
+            });
+            return Ok("complete".to_string());
+        }
+
+        // Drain again before the buffered pump starts.
+        let drain = serial_pump::drain_classified(&mut cmd_channel.reader, &mut cmd_channel.pending);
+        for line in &drain.surfaced {
+            let _ = channel.send(JobEvent::Console { text: line.clone() });
+        }
+
+        let config = BufferedPumpConfig::default();
+
+        let result = serial_pump::run_buffered_pump(
+            &lines,
+            &mut cmd_channel.reader,
+            &mut cmd_channel.writer,
+            &mut cmd_channel.pending,
+            &config,
+            &inner.job_abort,
+            &|event| {
+                let _ = match event {
+                    BufferedPumpEvent::LineSent { line_index, total } => {
+                        channel.send(JobEvent::Progress { line_index, total })
+                    }
+                    BufferedPumpEvent::ConsoleMessage(text) => {
+                        channel.send(JobEvent::Console { text })
+                    }
+                    BufferedPumpEvent::StatusReport(report) => {
+                        channel.send(JobEvent::Status { report })
+                    }
+                };
+            },
+        );
+
+        let outcome_str = match &result {
+            Ok(BufferedPumpOutcome::Complete) => "complete".to_string(),
+            Ok(BufferedPumpOutcome::Cancelled) => "cancelled".to_string(),
+            Ok(BufferedPumpOutcome::Error { error_text, .. }) => format!("error: {}", error_text),
+            Ok(BufferedPumpOutcome::Alarm { alarm_text }) => format!("alarm: {}", alarm_text),
+            Ok(BufferedPumpOutcome::Aborted) => "aborted".to_string(),
+            Ok(BufferedPumpOutcome::Disconnected(msg)) => format!("disconnected: {}", msg),
+            Err(PumpFailure::Disconnected(msg)) => format!("disconnected: {}", msg),
+            Err(PumpFailure::Io(msg)) => format!("io error: {}", msg),
+        };
+
+        let _ = channel.send(JobEvent::Finished {
+            outcome: outcome_str.clone(),
+        });
+
+        match result {
+            Ok(_) => Ok(outcome_str),
+            Err(PumpFailure::Disconnected(msg)) => Err(format!("disconnected: {}", msg)),
+            Err(PumpFailure::Io(msg)) => Err(msg),
+        }
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// Cooperative cancel for a buffered streaming job. Sets the abort flag which
+/// the pump checks on each iteration. This is NOT the e-stop path — that uses
+/// `serial_send_byte(0x18)` via the realtime lock.
+#[tauri::command]
+pub async fn serial_abort_job(state: State<'_, SerialState>) -> Result<(), String> {
+    state.0.job_abort.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
@@ -613,6 +785,7 @@ mod tests {
             realtime: Mutex::new(Some(Box::new(MockPort::new()) as Box<dyn SerialPort>)),
             connected: AtomicBool::new(true),
             pump_in_flight: AtomicBool::new(true),
+            job_abort: AtomicBool::new(false),
         });
 
         // Simulate an in-flight pump: hold the command lock for the whole test.
@@ -645,6 +818,7 @@ mod tests {
             )),
             connected: AtomicBool::new(true),
             pump_in_flight: AtomicBool::new(true),
+            job_abort: AtomicBool::new(false),
         });
 
         // Simulate an in-flight pump holding the command lock.
@@ -684,6 +858,7 @@ mod tests {
             )),
             connected: AtomicBool::new(true),
             pump_in_flight: AtomicBool::new(false),
+            job_abort: AtomicBool::new(false),
         };
 
         disconnect_inner(&inner).unwrap();
@@ -827,6 +1002,7 @@ mod tests {
             )),
             connected: AtomicBool::new(true),
             pump_in_flight: AtomicBool::new(false), // pump NOT in flight
+            job_abort: AtomicBool::new(false),
         };
 
         // job_active=true should still trigger the reset
@@ -851,6 +1027,7 @@ mod tests {
             )),
             connected: AtomicBool::new(true),
             pump_in_flight: AtomicBool::new(false),
+            job_abort: AtomicBool::new(false),
         };
 
         disconnect_inner_with_job(&inner, false).unwrap();
@@ -870,6 +1047,7 @@ mod tests {
             realtime: Mutex::new(Some(Box::new(MockPort::new()) as Box<dyn SerialPort>)),
             connected: AtomicBool::new(true),
             pump_in_flight: AtomicBool::new(false),
+            job_abort: AtomicBool::new(false),
         };
 
         // Simulate the guard: if connected, disconnect first
@@ -1167,6 +1345,7 @@ mod sim_integration {
             realtime: Mutex::new(Some(realtime_handle)),
             connected: AtomicBool::new(true),
             pump_in_flight: AtomicBool::new(true),
+            job_abort: AtomicBool::new(false),
         });
 
         // Simulate an in-flight pump: hold the command lock for the whole test.
@@ -1228,6 +1407,7 @@ mod sim_integration {
             realtime: Mutex::new(Some(realtime_handle)),
             connected: AtomicBool::new(true),
             pump_in_flight: AtomicBool::new(true),
+            job_abort: AtomicBool::new(false),
         });
 
         // Hold the command lock — standing in for the wedged pump.
@@ -1474,5 +1654,177 @@ mod sim_integration {
             }
             other => panic!("expected pump ceiling Disconnected, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Buffered pump sim integration tests (Phase 2A)
+    // -----------------------------------------------------------------------
+
+    // SI-BP1: Full job through sim — 20 lines → overflow_count == 0, Complete
+    #[test]
+    fn buffered_pump_full_job_20_lines_zero_overflow() {
+        let sim = SimPort::new(SimConfig { planner_depth: 15, line_ticks: 1, ..SimConfig::default() });
+        let mut writer = sim.try_clone().unwrap();
+        let mut reader = BufReader::new(sim.try_clone().unwrap());
+        let mut pending = Vec::new();
+        let _ = serial_pump::drain_classified(&mut reader, &mut pending); // drain banner
+
+        let lines: Vec<String> = (0..20)
+            .map(|i| format!("G1 X{} F500", i))
+            .collect();
+
+        let abort = std::sync::atomic::AtomicBool::new(false);
+        let config = serial_pump::BufferedPumpConfig::default();
+
+        let result = serial_pump::run_buffered_pump(
+            &lines,
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            &config,
+            &abort,
+            &|_| {},
+        );
+
+        assert_eq!(result.unwrap(), serial_pump::BufferedPumpOutcome::Complete);
+        assert_eq!(
+            sim.overflow_count(), 0,
+            "THE proof of correctness: zero RX overflows"
+        );
+    }
+
+    // SI-BP2: Dense short lines — 100 × "G1 X0.1 F500" → overflow_count == 0
+    #[test]
+    fn buffered_pump_dense_short_lines_zero_overflow() {
+        let sim = SimPort::new(SimConfig { planner_depth: 15, line_ticks: 1, ..SimConfig::default() });
+        let mut writer = sim.try_clone().unwrap();
+        let mut reader = BufReader::new(sim.try_clone().unwrap());
+        let mut pending = Vec::new();
+        let _ = serial_pump::drain_classified(&mut reader, &mut pending);
+
+        let lines: Vec<String> = (0..100)
+            .map(|_| "G1 X0.1 F500".to_string())
+            .collect();
+
+        let abort = std::sync::atomic::AtomicBool::new(false);
+        let config = serial_pump::BufferedPumpConfig::default();
+
+        let result = serial_pump::run_buffered_pump(
+            &lines,
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            &config,
+            &abort,
+            &|_| {},
+        );
+
+        assert_eq!(result.unwrap(), serial_pump::BufferedPumpOutcome::Complete);
+        assert_eq!(sim.overflow_count(), 0, "dense stream must never overflow");
+    }
+
+    // SI-BP3: Pause/resume through sim — `!` → Hold → no sends → `~` → resumes
+    #[test]
+    fn buffered_pump_pause_resume_through_sim() {
+        let sim = SimPort::new(SimConfig { planner_depth: 15, line_ticks: 2, ..SimConfig::default() });
+        let mut writer = sim.try_clone().unwrap();
+        let mut reader = BufReader::new(sim.try_clone().unwrap());
+        let mut pending = Vec::new();
+        let _ = serial_pump::drain_classified(&mut reader, &mut pending);
+
+        // Start spindle + send some lines, then pause mid-job
+        let lines: Vec<String> = (0..10)
+            .map(|i| format!("G1 X{} F500", i))
+            .collect();
+
+        let abort = std::sync::atomic::AtomicBool::new(false);
+        let config = serial_pump::BufferedPumpConfig {
+            idle_stall_ticks: 10, // relaxed for this test
+            ..serial_pump::BufferedPumpConfig::default()
+        };
+
+        // Use separate handles for realtime bytes and observation
+        let mut rt_writer = sim.try_clone().unwrap();
+
+        // Move sim into a scope where both threads can use it (via Arc-shared brain
+        // inside SimPort::try_clone handles).
+        let handle = thread::spawn(move || {
+            serial_pump::run_buffered_pump(
+                &lines,
+                &mut reader,
+                &mut writer,
+                &mut pending,
+                &config,
+                &abort,
+                &|_| {},
+            )
+        });
+
+        // Give the pump time to send some lines
+        thread::sleep(Duration::from_millis(50));
+
+        // Pause via realtime byte
+        rt_writer.write_all(b"!").unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        // Verify machine is in Hold
+        assert_eq!(sim.machine_state(), crate::sim::grbl::MachineState::Hold);
+
+        // Resume
+        rt_writer.write_all(b"~").unwrap();
+
+        let result = handle.join().unwrap();
+        assert_eq!(result.unwrap(), serial_pump::BufferedPumpOutcome::Complete);
+        assert!(
+            sim.hold_invariant_violations().is_empty(),
+            "zero hold-invariant violations during pause/resume"
+        );
+        assert_eq!(sim.overflow_count(), 0, "zero overflows");
+    }
+
+    // SI-BP4: Abort through sim — flag mid-job → Cancelled
+    // Uses a very large job with slow execution so the pump is guaranteed to
+    // still be in its send/read loop when the abort flag is set.
+    #[test]
+    fn buffered_pump_abort_through_sim() {
+        // planner_depth=1, line_ticks=1000: after the first line is accepted
+        // (filling the planner), the second blocks waiting for a slot that takes
+        // 1000 ticks (~1000 read timeouts) to free. The pump will sit in Phase B
+        // reading timeouts — plenty of time for the abort flag to fire.
+        let sim = SimPort::new(SimConfig { planner_depth: 1, line_ticks: 1000, ..SimConfig::default() });
+        let mut writer = sim.try_clone().unwrap();
+        let mut reader = BufReader::new(sim.try_clone().unwrap());
+        let mut pending = Vec::new();
+        let _ = serial_pump::drain_classified(&mut reader, &mut pending);
+
+        let lines: Vec<String> = (0..50)
+            .map(|i| format!("G1 X{} F500", i))
+            .collect();
+
+        let abort = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let abort_clone = abort.clone();
+        let config = serial_pump::BufferedPumpConfig {
+            liveness_ticks: 2000, // large so liveness doesn't fire before abort
+            ..serial_pump::BufferedPumpConfig::default()
+        };
+
+        let handle = thread::spawn(move || {
+            serial_pump::run_buffered_pump(
+                &lines,
+                &mut reader,
+                &mut writer,
+                &mut pending,
+                &config,
+                &abort_clone,
+                &|_| {},
+            )
+        });
+
+        // Let pump start and enter Phase B waiting for acks
+        thread::sleep(Duration::from_millis(50));
+        abort.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let result = handle.join().unwrap();
+        assert_eq!(result.unwrap(), serial_pump::BufferedPumpOutcome::Cancelled);
     }
 }

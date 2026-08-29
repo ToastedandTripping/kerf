@@ -24,6 +24,8 @@ pub fn run() {
             commands::serial::serial_send_byte,
             commands::serial::serial_get_status,
             commands::serial::serial_is_connected,
+            commands::serial::serial_stream_job,
+            commands::serial::serial_abort_job,
             commands::image_trace::trace_image_command,
             commands::power::keep_awake_acquire,
             commands::power::keep_awake_release,

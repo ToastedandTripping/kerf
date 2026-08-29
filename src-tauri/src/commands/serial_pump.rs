@@ -359,6 +359,301 @@ pub fn read_status_bounded<R: BufRead, P: ProbeWriter>(
 }
 
 // ---------------------------------------------------------------------------
+// Buffered pump — Phase 2A character-counting streaming.
+// ---------------------------------------------------------------------------
+
+use std::collections::VecDeque;
+use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
+
+/// One line accepted into the GRBL RX buffer but not yet acked.
+#[derive(Debug)]
+struct InFlightLine {
+    /// Bytes this line occupies in the RX buffer (content + newline).
+    rx_bytes: usize,
+}
+
+/// Tuning knobs for the buffered pump. Production defaults match GRBL 1.1
+/// stock values; tests inject smaller windows for speed.
+#[derive(Debug, Clone)]
+pub struct BufferedPumpConfig {
+    /// Maximum RX bytes to keep in flight. GRBL 1.1 stock = 128; we budget
+    /// 127 to leave 1 byte of headroom (the newline that completes a line
+    /// occupies a slot too — accounting must be exact, not optimistic).
+    pub rx_budget_max: usize,
+    /// Consecutive zero-byte timeout ticks before declaring the port dead.
+    pub liveness_ticks: u32,
+    /// Consecutive Idle-state status replies (with no `ok`) before declaring
+    /// the terminal was lost on the wire.
+    pub idle_stall_ticks: u32,
+    /// Minimum interval between `LineSent` progress events (ms). Prevents
+    /// flooding the frontend channel on dense short-line streams.
+    pub progress_throttle_ms: u64,
+}
+
+impl Default for BufferedPumpConfig {
+    fn default() -> Self {
+        Self {
+            rx_budget_max: 127,
+            liveness_ticks: DEFAULT_LIVENESS_TICKS,
+            idle_stall_ticks: DEFAULT_IDLE_STALL_TICKS,
+            progress_throttle_ms: 50,
+        }
+    }
+}
+
+/// Events fired during the buffered pump, delivered to the caller via the
+/// `on_event` callback.
+#[derive(Debug, Clone)]
+pub enum BufferedPumpEvent {
+    /// A line was written to the wire. `line_index` is 0-based, `total` is
+    /// the total number of lines in the job.
+    LineSent { line_index: usize, total: usize },
+    /// A console-meaningful line from GRBL (status report, [MSG:], etc.).
+    ConsoleMessage(String),
+    /// A `<…>` status report — the frontend uses the most recent one to
+    /// refresh the DRO position.
+    StatusReport(String),
+}
+
+/// Why the buffered pump stopped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BufferedPumpOutcome {
+    /// All lines sent and all acks received.
+    Complete,
+    /// The abort flag was set (cooperative cancel, NOT e-stop).
+    Cancelled,
+    /// A GRBL `error:N` response was received.
+    Error { line_index: usize, error_text: String },
+    /// A GRBL `ALARM:N` was received.
+    Alarm { alarm_text: String },
+    /// A reset banner was received (the job was aborted externally, e.g.
+    /// by e-stop's realtime `0x18`).
+    Aborted,
+    /// The port is dead (liveness expiry, EOF, or idle stall).
+    Disconnected(String),
+}
+
+/// A writer that also supports the `?` probe byte. In production this is
+/// `Box<dyn SerialPort>` (which already implements `ProbeWriter`). In unit
+/// tests it's the `ScriptWriter` stub.
+/// The buffered (character-counting) pump: sends as many lines as fit in
+/// the GRBL RX budget, then reads acks to free budget and send more.
+///
+/// This is the core of Phase 2A. The algorithm keeps the GRBL planner
+/// pipeline full by tracking how many bytes are in-flight in the RX buffer,
+/// rather than waiting for each line's `ok` before sending the next.
+///
+/// # Safety properties
+///
+/// 1. No G-code writes while `paused` (Phase A gated on `!paused`).
+/// 2. Write failures surface as `PumpFailure::Disconnected`.
+/// 3. Liveness probing continues during buffer-full waits.
+/// 4. `ok` attribution is strictly FIFO.
+/// 5. RX budget is never exceeded (each line's byte count is checked before
+///    sending).
+pub fn run_buffered_pump<R: BufRead, W: Write + ProbeWriter>(
+    lines: &[String],
+    reader: &mut R,
+    writer: &mut W,
+    pending: &mut Vec<u8>,
+    config: &BufferedPumpConfig,
+    abort: &AtomicBool,
+    on_event: &dyn Fn(BufferedPumpEvent),
+) -> Result<BufferedPumpOutcome, PumpFailure> {
+    // Pre-validation: reject any line that would exceed the RX budget.
+    for (i, line) in lines.iter().enumerate() {
+        let wire_bytes = line.len() + 1; // content + newline
+        if wire_bytes > config.rx_budget_max {
+            return Ok(BufferedPumpOutcome::Error {
+                line_index: i,
+                error_text: format!(
+                    "line exceeds RX budget ({}B > {}B max)",
+                    wire_bytes, config.rx_budget_max
+                ),
+            });
+        }
+    }
+
+    let mut send_cursor: usize = 0;
+    let mut rx_budget_used: usize = 0;
+    let mut in_flight: VecDeque<InFlightLine> = VecDeque::new();
+    let mut paused = false;
+    let mut silent_ticks: u32 = 0;
+    let mut consecutive_idle: u32 = 0;
+    let mut last_progress = Instant::now();
+
+    loop {
+        // Check abort flag
+        if abort.load(Ordering::SeqCst) {
+            return Ok(BufferedPumpOutcome::Cancelled);
+        }
+
+        // -- Phase A: SEND as many lines as fit in the RX budget --
+        while !paused && send_cursor < lines.len() {
+            if abort.load(Ordering::SeqCst) {
+                return Ok(BufferedPumpOutcome::Cancelled);
+            }
+
+            let line = &lines[send_cursor];
+            let wire_bytes = line.len() + 1;
+
+            // Check if this line fits in the remaining RX budget
+            if rx_budget_used + wire_bytes > config.rx_budget_max {
+                break; // buffer full, wait for acks
+            }
+
+            // Write line + newline
+            let mut cmd = line.clone();
+            cmd.push('\n');
+            writer
+                .write_all(cmd.as_bytes())
+                .map_err(|e| PumpFailure::Disconnected(format!("write failed: {}", e)))?;
+            writer
+                .flush()
+                .map_err(|e| PumpFailure::Disconnected(format!("flush failed: {}", e)))?;
+
+            rx_budget_used += wire_bytes;
+            in_flight.push_back(InFlightLine { rx_bytes: wire_bytes });
+
+            // Throttled progress event
+            let now = Instant::now();
+            if now.duration_since(last_progress).as_millis() as u64 >= config.progress_throttle_ms
+                || send_cursor == lines.len() - 1
+            {
+                on_event(BufferedPumpEvent::LineSent {
+                    line_index: send_cursor,
+                    total: lines.len(),
+                });
+                last_progress = now;
+            }
+
+            send_cursor += 1;
+        }
+
+        // -- Completion check -- MUTATED: disabled for mutation test
+        // if in_flight.is_empty() && send_cursor == lines.len() {
+        //     return Ok(BufferedPumpOutcome::Complete);
+        // }
+
+        // -- Phase B: READ responses --
+        let len_before = pending.len();
+        match reader.read_until(b'\n', pending) {
+            Ok(0) => {
+                return Ok(BufferedPumpOutcome::Disconnected(
+                    "port closed (EOF)".to_string(),
+                ));
+            }
+            Ok(_) => {
+                silent_ticks = 0;
+                let line = String::from_utf8_lossy(pending).trim().to_string();
+                pending.clear();
+                if line.is_empty() {
+                    continue;
+                }
+
+                let class = classify_line(&line);
+
+                match class {
+                    LineClass::Ok => {
+                        consecutive_idle = 0;
+                        if let Some(oldest) = in_flight.pop_front() {
+                            rx_budget_used = rx_budget_used.saturating_sub(oldest.rx_bytes);
+                        }
+                        // After freeing budget, loop back to Phase A
+                    }
+                    LineClass::Error => {
+                        let line_index = if in_flight.is_empty() {
+                            send_cursor.saturating_sub(1)
+                        } else {
+                            send_cursor - in_flight.len()
+                        };
+                        return Ok(BufferedPumpOutcome::Error {
+                            line_index,
+                            error_text: line,
+                        });
+                    }
+                    LineClass::Alarm => {
+                        return Ok(BufferedPumpOutcome::Alarm { alarm_text: line });
+                    }
+                    LineClass::Banner => {
+                        return Ok(BufferedPumpOutcome::Aborted);
+                    }
+                    LineClass::Status => {
+                        // Detect Hold → pause sending; detect Run/Idle → resume
+                        if let Some(state) = parse_machine_state_from_status(&line) {
+                            if state == "Hold" || state.starts_with("Hold:") {
+                                paused = true;
+                                consecutive_idle = 0;
+                            } else {
+                                if paused {
+                                    paused = false;
+                                }
+                                if state == "Idle" {
+                                    consecutive_idle += 1;
+                                    if !in_flight.is_empty()
+                                        && consecutive_idle >= config.idle_stall_ticks
+                                    {
+                                        return Ok(BufferedPumpOutcome::Disconnected(format!(
+                                            "terminal lost: GRBL reported Idle {} consecutive times with no ok",
+                                            consecutive_idle
+                                        )));
+                                    }
+                                } else {
+                                    consecutive_idle = 0;
+                                }
+                            }
+                        }
+                        on_event(BufferedPumpEvent::StatusReport(line));
+                    }
+                    LineClass::Msg => {
+                        consecutive_idle = 0;
+                        on_event(BufferedPumpEvent::ConsoleMessage(line));
+                    }
+                    LineClass::Other => {
+                        consecutive_idle = 0;
+                        on_event(BufferedPumpEvent::ConsoleMessage(line));
+                    }
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                // Check abort on every timeout tick — this is the pump's
+                // main opportunity to notice a cooperative cancel during
+                // buffer-full waits.
+                if abort.load(Ordering::SeqCst) {
+                    return Ok(BufferedPumpOutcome::Cancelled);
+                }
+                if pending.len() > len_before {
+                    silent_ticks = 0;
+                } else {
+                    silent_ticks += 1;
+                    if silent_ticks >= config.liveness_ticks {
+                        return Ok(BufferedPumpOutcome::Disconnected(format!(
+                            "no response from GRBL after {} probe ticks",
+                            silent_ticks
+                        )));
+                    }
+                }
+                writer
+                    .write_probe()
+                    .map_err(|e| PumpFailure::Disconnected(format!("probe write failed: {}", e)))?;
+            }
+            Err(e) => return Err(PumpFailure::Io(format!("read error: {}", e))),
+        }
+    }
+}
+
+/// Extract the machine state token from a `<State|...>` status line.
+/// Similar to `parse_machine_state` but accepts the full `<…>` format
+/// including optional substates like `Hold:0`.
+fn parse_machine_state_from_status(status_line: &str) -> Option<&str> {
+    let inner = status_line.strip_prefix('<')?.strip_suffix('>')?;
+    let state = inner.split('|').next()?;
+    Some(state)
+}
+
+// ---------------------------------------------------------------------------
 // Tests — scripted reader injects data chunks and TimedOut ticks explicitly.
 // ---------------------------------------------------------------------------
 #[cfg(test)]
@@ -812,5 +1107,353 @@ mod tests {
             5,
             "all Run status reports should be collected"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Buffered pump tests (Phase 2A)
+    // -----------------------------------------------------------------------
+
+    /// ScriptWriter: records all writes and supports ProbeWriter. Optionally
+    /// fails writes to test the Disconnected path.
+    struct ScriptWriter {
+        written: Vec<u8>,
+        fail: bool,
+    }
+
+    impl ScriptWriter {
+        fn new() -> Self {
+            Self { written: Vec::new(), fail: false }
+        }
+        fn new_failing() -> Self {
+            Self { written: Vec::new(), fail: true }
+        }
+    }
+
+    impl std::io::Write for ScriptWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.fail {
+                return Err(std::io::Error::other("sim: write_fail"));
+            }
+            self.written.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            if self.fail {
+                return Err(std::io::Error::other("sim: flush_fail"));
+            }
+            Ok(())
+        }
+    }
+
+    impl ProbeWriter for ScriptWriter {
+        fn write_probe(&mut self) -> std::io::Result<()> {
+            if self.fail {
+                return Err(std::io::Error::other("sim: probe_fail"));
+            }
+            self.written.push(b'?');
+            Ok(())
+        }
+    }
+
+    fn buffered_pump_helper(
+        lines: &[&str],
+        steps: Vec<Step>,
+        config: &BufferedPumpConfig,
+        abort: &AtomicBool,
+    ) -> (Result<BufferedPumpOutcome, PumpFailure>, Vec<BufferedPumpEvent>, ScriptWriter) {
+        let mut reader = ScriptReader::new(steps);
+        let mut writer = ScriptWriter::new();
+        let mut pending = Vec::new();
+        let events = std::sync::Mutex::new(Vec::new());
+        let string_lines: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
+
+        let result = run_buffered_pump(
+            &string_lines,
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            config,
+            abort,
+            &|e| events.lock().unwrap().push(e),
+        );
+        (result, events.into_inner().unwrap(), writer)
+    }
+
+    // BP1: Basic flow — 3 lines → 3 oks → Complete
+    #[test]
+    fn buffered_pump_basic_flow_3_lines() {
+        let abort = AtomicBool::new(false);
+        let config = BufferedPumpConfig {
+            rx_budget_max: 127,
+            liveness_ticks: 10,
+            idle_stall_ticks: 5,
+            progress_throttle_ms: 0,
+        };
+        let (result, events, _) = buffered_pump_helper(
+            &["G1 X10 F500", "G1 X20 F500", "G1 X30 F500"],
+            vec![
+                Step::Data(b"ok\n"),
+                Step::Data(b"ok\n"),
+                Step::Data(b"ok\n"),
+            ],
+            &config,
+            &abort,
+        );
+        assert_eq!(result.unwrap(), BufferedPumpOutcome::Complete);
+        let sent_count = events.iter().filter(|e| matches!(e, BufferedPumpEvent::LineSent { .. })).count();
+        assert!(sent_count >= 3, "expected at least 3 LineSent events, got {sent_count}");
+    }
+
+    // BP2: RX budget tracking — lines wait when budget full, resume after ok
+    #[test]
+    fn buffered_pump_rx_budget_tracking() {
+        let abort = AtomicBool::new(false);
+        // Tiny budget: only 20 bytes. "G1 X10 F500" = 11 chars + \n = 12B.
+        // Second line won't fit until first acks.
+        let config = BufferedPumpConfig {
+            rx_budget_max: 20,
+            liveness_ticks: 10,
+            idle_stall_ticks: 5,
+            progress_throttle_ms: 0,
+        };
+        let (result, _, writer) = buffered_pump_helper(
+            &["G1 X10 F500", "G1 X20 F500"],
+            vec![
+                // First ok frees budget for second line
+                Step::Data(b"ok\n"),
+                Step::Data(b"ok\n"),
+            ],
+            &config,
+            &abort,
+        );
+        assert_eq!(result.unwrap(), BufferedPumpOutcome::Complete);
+        // Verify both lines were actually written
+        let written = String::from_utf8_lossy(&writer.written);
+        assert!(written.contains("G1 X10 F500\n"), "first line written");
+        assert!(written.contains("G1 X20 F500\n"), "second line written");
+    }
+
+    // BP3: Pause detection — Hold → stops sending; Run → resumes
+    #[test]
+    fn buffered_pump_pause_detection() {
+        let abort = AtomicBool::new(false);
+        let config = BufferedPumpConfig {
+            rx_budget_max: 127,
+            liveness_ticks: 10,
+            idle_stall_ticks: 5,
+            progress_throttle_ms: 0,
+        };
+        let (result, events, _) = buffered_pump_helper(
+            &["G1 X10 F500", "G1 X20 F500"],
+            vec![
+                Step::Data(b"ok\n"),
+                // Hold during second line
+                Step::Data(b"<Hold|MPos:0.000,0.000,0.000|FS:0,0>\n"),
+                // Resume
+                Step::Data(b"<Run|MPos:0.000,0.000,0.000|FS:500,0>\n"),
+                Step::Data(b"ok\n"),
+            ],
+            &config,
+            &abort,
+        );
+        assert_eq!(result.unwrap(), BufferedPumpOutcome::Complete);
+        // Verify we got status reports
+        let status_count = events.iter().filter(|e| matches!(e, BufferedPumpEvent::StatusReport(_))).count();
+        assert!(status_count >= 2, "expected at least 2 status reports, got {status_count}");
+    }
+
+    // BP4: Abort — AtomicBool set → Cancelled
+    #[test]
+    fn buffered_pump_abort_flag() {
+        let abort = AtomicBool::new(true); // pre-set
+        let config = BufferedPumpConfig::default();
+        let (result, _, _) = buffered_pump_helper(
+            &["G1 X10 F500"],
+            vec![Step::Timeout],
+            &config,
+            &abort,
+        );
+        assert_eq!(result.unwrap(), BufferedPumpOutcome::Cancelled);
+    }
+
+    // BP5: Error terminal
+    #[test]
+    fn buffered_pump_error_terminal() {
+        let abort = AtomicBool::new(false);
+        let config = BufferedPumpConfig {
+            rx_budget_max: 127,
+            liveness_ticks: 10,
+            idle_stall_ticks: 5,
+            progress_throttle_ms: 0,
+        };
+        let (result, _, _) = buffered_pump_helper(
+            &["G1 X10 F500"],
+            vec![Step::Data(b"error:9\n")],
+            &config,
+            &abort,
+        );
+        match result.unwrap() {
+            BufferedPumpOutcome::Error { error_text, .. } => {
+                assert_eq!(error_text, "error:9");
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    // BP5b: ALARM terminal
+    #[test]
+    fn buffered_pump_alarm_terminal() {
+        let abort = AtomicBool::new(false);
+        let config = BufferedPumpConfig {
+            rx_budget_max: 127,
+            liveness_ticks: 10,
+            idle_stall_ticks: 5,
+            progress_throttle_ms: 0,
+        };
+        let (result, _, _) = buffered_pump_helper(
+            &["G1 X10 F500"],
+            vec![Step::Data(b"ALARM:1\n")],
+            &config,
+            &abort,
+        );
+        match result.unwrap() {
+            BufferedPumpOutcome::Alarm { alarm_text } => {
+                assert_eq!(alarm_text, "ALARM:1");
+            }
+            other => panic!("expected Alarm, got {other:?}"),
+        }
+    }
+
+    // BP5c: Banner terminal → Aborted
+    #[test]
+    fn buffered_pump_banner_terminal() {
+        let abort = AtomicBool::new(false);
+        let config = BufferedPumpConfig {
+            rx_budget_max: 127,
+            liveness_ticks: 10,
+            idle_stall_ticks: 5,
+            progress_throttle_ms: 0,
+        };
+        let (result, _, _) = buffered_pump_helper(
+            &["G1 X10 F500"],
+            vec![Step::Data(b"Grbl 1.1h ['$' for help]\n")],
+            &config,
+            &abort,
+        );
+        assert_eq!(result.unwrap(), BufferedPumpOutcome::Aborted);
+    }
+
+    // BP6: Liveness probing — silence → Disconnected
+    #[test]
+    fn buffered_pump_liveness_probing() {
+        let abort = AtomicBool::new(false);
+        let config = BufferedPumpConfig {
+            rx_budget_max: 127,
+            liveness_ticks: 3,
+            idle_stall_ticks: 5,
+            progress_throttle_ms: 0,
+        };
+        let (result, _, _) = buffered_pump_helper(
+            &["G1 X10 F500"],
+            vec![Step::Timeout, Step::Timeout, Step::Timeout, Step::Timeout],
+            &config,
+            &abort,
+        );
+        match result.unwrap() {
+            BufferedPumpOutcome::Disconnected(msg) => {
+                assert!(msg.contains("probe ticks"), "got: {msg}");
+            }
+            other => panic!("expected Disconnected, got {other:?}"),
+        }
+    }
+
+    // BP7: Write failure → Disconnected
+    #[test]
+    fn buffered_pump_write_failure() {
+        let abort = AtomicBool::new(false);
+        let config = BufferedPumpConfig {
+            rx_budget_max: 127,
+            liveness_ticks: 10,
+            idle_stall_ticks: 5,
+            progress_throttle_ms: 0,
+        };
+        let mut reader = ScriptReader::new(vec![Step::Timeout]);
+        let mut writer = ScriptWriter::new_failing();
+        let mut pending = Vec::new();
+        let lines = vec!["G1 X10 F500".to_string()];
+
+        let result = run_buffered_pump(
+            &lines,
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            &config,
+            &abort,
+            &|_| {},
+        );
+        match result {
+            Err(PumpFailure::Disconnected(msg)) => {
+                assert!(msg.contains("write failed") || msg.contains("flush"), "got: {msg}");
+            }
+            other => panic!("expected Disconnected from write failure, got {other:?}"),
+        }
+    }
+
+    // BP8: Planner backpressure — rx_budget never exceeded
+    #[test]
+    fn buffered_pump_rx_budget_never_exceeded() {
+        let abort = AtomicBool::new(false);
+        // Budget of 30. Lines are ~12B each. Only 2 can be in flight at once.
+        let config = BufferedPumpConfig {
+            rx_budget_max: 30,
+            liveness_ticks: 10,
+            idle_stall_ticks: 5,
+            progress_throttle_ms: 0,
+        };
+        // 5 lines, but only 2 fit at a time. Acks must interleave.
+        let (result, _, writer) = buffered_pump_helper(
+            &["G1 X1 F500", "G1 X2 F500", "G1 X3 F500", "G1 X4 F500", "G1 X5 F500"],
+            vec![
+                // After 2 lines sent, need acks before more
+                Step::Data(b"ok\n"),
+                Step::Data(b"ok\n"),
+                Step::Data(b"ok\n"),
+                Step::Data(b"ok\n"),
+                Step::Data(b"ok\n"),
+            ],
+            &config,
+            &abort,
+        );
+        assert_eq!(result.unwrap(), BufferedPumpOutcome::Complete);
+        // All 5 lines written
+        let written = String::from_utf8_lossy(&writer.written);
+        for i in 1..=5 {
+            assert!(written.contains(&format!("G1 X{i} F500\n")), "line {i} written");
+        }
+    }
+
+    // BP9: Pre-validation rejects oversized lines
+    #[test]
+    fn buffered_pump_rejects_oversized_line() {
+        let abort = AtomicBool::new(false);
+        let config = BufferedPumpConfig {
+            rx_budget_max: 10,
+            liveness_ticks: 10,
+            idle_stall_ticks: 5,
+            progress_throttle_ms: 0,
+        };
+        let (result, _, _) = buffered_pump_helper(
+            &["G1 X10000000 F500"], // 18 chars + \n = 19B > 10B budget
+            vec![],
+            &config,
+            &abort,
+        );
+        match result.unwrap() {
+            BufferedPumpOutcome::Error { line_index, error_text } => {
+                assert_eq!(line_index, 0);
+                assert!(error_text.contains("RX budget"), "got: {error_text}");
+            }
+            other => panic!("expected Error for oversized line, got {other:?}"),
+        }
     }
 }

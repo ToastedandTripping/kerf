@@ -417,6 +417,16 @@ export const machineConnection = {
     await this.send(`$J=G90 X${cx.toFixed(3)} Y${cy.toFixed(3)} F${feedRate}`);
   },
 
+  /** Cooperative cancel for a buffered streaming job. Sets the Rust-side abort
+   * flag which the pump checks on each iteration. This is NOT the e-stop path. */
+  async abortJob(): Promise<void> {
+    try {
+      await invoke("serial_abort_job");
+    } catch (e) {
+      console.error("Abort job error:", e);
+    }
+  },
+
   async home(): Promise<void> {
     const responses = await this.send("$H");
     // A successful homing cycle returns "ok"; ALARM/error responses leave machineHomed false.
