@@ -234,6 +234,15 @@ async function streamJobBuffered(
     }
   }
 
+  // Safety volley: ensure laser is off on non-complete, non-alarm outcomes.
+  // ALARM excluded: GRBL is already locked and the volley earns error:9.
+  // SKIPPED when jobRunning is already false -- the user pressed STOP and
+  // emergencyStop ran its own sequence; a second M5+0x18 would be redundant.
+  if (endState !== "complete" && endState !== "alarm" && useStore.getState().jobRunning) {
+    try { await machineConnection.send("M5"); } catch { /* port may be gone */ }
+    try { await machineConnection.softReset(); } catch { /* port may be gone */ }
+  }
+
   store.setJobRunning(false);
   store.setJobProgress(0);
 

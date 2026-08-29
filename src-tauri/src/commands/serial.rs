@@ -544,7 +544,9 @@ pub async fn serial_stream_job(
             eprintln!("[serial] stream job drained: {}", line);
         }
         for line in &drain.surfaced {
-            let _ = channel.send(JobEvent::Console { text: line.clone() });
+            if let Err(e) = channel.send(JobEvent::Console { text: line.clone() }) {
+                eprintln!("[serial] channel.send failed (drain console): {e}");
+            }
         }
 
         // Write $32=1
@@ -585,16 +587,18 @@ pub async fn serial_stream_job(
             .collect();
 
         if lines.is_empty() {
-            let _ = channel.send(JobEvent::Finished {
+            if let Err(e) = channel.send(JobEvent::Finished {
                 outcome: "complete".to_string(),
-            });
+            }) { eprintln!("[serial] channel.send failed (empty finish): {e}"); }
             return Ok("complete".to_string());
         }
 
         // Drain again before the buffered pump starts.
         let drain = serial_pump::drain_classified(&mut cmd_channel.reader, &mut cmd_channel.pending);
         for line in &drain.surfaced {
-            let _ = channel.send(JobEvent::Console { text: line.clone() });
+            if let Err(e) = channel.send(JobEvent::Console { text: line.clone() }) {
+                eprintln!("[serial] channel.send failed (pre-pump console): {e}");
+            }
         }
 
         let config = BufferedPumpConfig::default();
@@ -607,7 +611,7 @@ pub async fn serial_stream_job(
             &config,
             &inner.job_abort,
             &|event| {
-                let _ = match event {
+                let result = match event {
                     BufferedPumpEvent::LineSent { line_index, total } => {
                         channel.send(JobEvent::Progress { line_index, total })
                     }
@@ -618,6 +622,9 @@ pub async fn serial_stream_job(
                         channel.send(JobEvent::Status { report })
                     }
                 };
+                if let Err(e) = result {
+                    eprintln!("[serial] channel.send failed (pump event): {e}");
+                }
             },
         );
 
@@ -632,9 +639,9 @@ pub async fn serial_stream_job(
             Err(PumpFailure::Io(msg)) => format!("io error: {}", msg),
         };
 
-        let _ = channel.send(JobEvent::Finished {
+        if let Err(e) = channel.send(JobEvent::Finished {
             outcome: outcome_str.clone(),
-        });
+        }) { eprintln!("[serial] channel.send failed (finished): {e}"); }
 
         match result {
             Ok(_) => Ok(outcome_str),
