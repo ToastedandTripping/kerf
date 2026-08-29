@@ -532,10 +532,10 @@ pub fn run_buffered_pump<R: BufRead, W: Write + ProbeWriter>(
             send_cursor += 1;
         }
 
-        // -- Completion check -- MUTATED: disabled for mutation test
-        // if in_flight.is_empty() && send_cursor == lines.len() {
-        //     return Ok(BufferedPumpOutcome::Complete);
-        // }
+        // -- Completion check --
+        if in_flight.is_empty() && send_cursor == lines.len() {
+            return Ok(BufferedPumpOutcome::Complete);
+        }
 
         // -- Phase B: READ responses --
         let len_before = pending.len();
