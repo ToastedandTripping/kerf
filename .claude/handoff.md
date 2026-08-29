@@ -27,10 +27,15 @@ in this project has already been ruled on, usually for a reason that is not obvi
   binary against his laser. This is the verification gate for everything
   shipped in the comprehensive remediation AND the limits wiring.
 
-- **Phase 2A plan reviewed, blocked on hardware test.** Plan
-  (`~/.claude/plans/prancy-fluttering-wave.md`) critic-reviewed (Opus,
-  2026-08-26, all 14 dimensions PASS). Laser confirmed 2026-08-27.
-  Implementation via relay starts after the hardware test passes.
+- **Phase 2A implemented and reviewed (2026-08-29).** Relay
+  `kerf-phase-2a-streaming` complete: Ted+Razor PASS (1 WARNING fixed —
+  missing safety volley in buffered path). Character-counting pump, Tauri
+  Channel streaming, TS mode dispatch all landed on
+  `relay/kerf-phase-2a-streaming-r2`. Ships behind opt-in `streamingMode`
+  toggle (default `perLine`). **Next gate: owner hardware A/B test**
+  (session #1, ~30-45min: same dense-curve job in perLine vs buffered,
+  compare burn quality). Gate D1c decides whether buffered becomes the
+  default.
 
 - **Limits relay: Razor post-ship PASS.** The kerf-limits-wiring relay
   (4a33dec) shipped in v0.8.26 before Razor ran. Post-ship cold-eyes
@@ -50,6 +55,15 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-08-29
+
+Phase 2A relay complete (kerf-phase-2a-streaming, relay/kerf-phase-2a-streaming-r2).
+Stages 0-5 all done. Ted implemented the character-counting buffered pump (3 commits:
+batch 1 + completion-check fix + safety-volley fix). Razor initial review
+PASS_WITH_WARNINGS (1 WARNING: missing safety volley in buffered path); Ted fixed;
+Razor re-review PASS. All three DECISIONS.md pins verified. 231 Rust / 721 TS tests
+green. **Next:** owner hardware A/B test (gate D1c), then v0.8.27 tag.
 
 ### 2026-08-27
 
