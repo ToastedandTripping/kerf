@@ -94,12 +94,20 @@ function sentBytes(): number[] {
 }
 
 /** Default mock: list_serial_ports + get_status handled; per-command send hook. */
+let _mockHoldActive = false;
 function mockSerial(onSend: (command: string) => { responses: string[]; drained: string[] }) {
+  _mockHoldActive = false;
   mockInvoke.mockImplementation(async (cmd: string, args?: { command?: string; byte?: number }) => {
     if (cmd === "list_serial_ports") return [];
-    if (cmd === "serial_get_status")
+    if (cmd === "serial_get_status") {
+      if (_mockHoldActive) return { status: "<Hold:0|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
       return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
-    if (cmd === "serial_send_byte") return undefined;
+    }
+    if (cmd === "serial_send_byte") {
+      if (args?.byte === 0x21) _mockHoldActive = true;
+      if (args?.byte === 0x7e) _mockHoldActive = false;
+      return undefined;
+    }
     if (cmd === "serial_send") return onSend(args!.command!);
     return undefined;
   });
@@ -529,11 +537,13 @@ describe("pauseJob / resumeJob volley contract (P1-B A1)", () => {
 
   it("pauseJob surfaces a console warning when 0x9E write fails", async () => {
     vi.useFakeTimers();
-    let callCount = 0;
+    let sendByteCount = 0;
     mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "serial_get_status")
+        return { status: "<Hold:0|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
       if (cmd === "serial_send_byte") {
-        callCount++;
-        if (callCount === 2) {
+        sendByteCount++;
+        if (sendByteCount === 2) {
           // Second sendByte call (0x9E) fails
           throw new Error("port vanished");
         }
@@ -546,8 +556,8 @@ describe("pauseJob / resumeJob volley contract (P1-B A1)", () => {
     await vi.runAllTimersAsync();
     await pausePromise;
 
-    // The feedHold byte (0x21) succeeded
-    expect(callCount).toBe(2);
+    // The feedHold byte (0x21) succeeded, then 0x9E was attempted
+    expect(sendByteCount).toBe(2);
     // Console warning must surface — never degrade silently
     const warnings = consoleTexts().filter((t) => t.includes("Spindle stop override"));
     expect(warnings).toHaveLength(1);

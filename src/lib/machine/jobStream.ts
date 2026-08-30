@@ -25,21 +25,54 @@ import { machineConnection } from "./connection";
  * beam stays on (F13 ack-in-Hold hazard). This replacement uses only realtime
  * bytes:
  *   1. `!` (0x21) — feed hold, brings motion to a controlled stop
- *   2. ~100ms settle — let deceleration complete
- *   3. `0x9E` — spindle-stop-override (realtime, ack-less, Hold-only)
+ *   2. Poll until the machine reports Hold:0 (fully decelerated), max 3s
+ *   3. `0x9E` — spindle-stop-override (realtime, ack-less, Hold:0-only)
+ *
+ * The poll replaces the original fixed 100ms delay. GRBL ignores 0x9E
+ * during Hold:1 (still decelerating), so a fixed timer that's shorter
+ * than the actual deceleration time silently drops the spindle-stop and
+ * leaves the laser on. Hardware-confirmed 2026-08-29.
  *
  * If the 0x9E byte write throws, a loud console warning surfaces so the
  * operator knows the beam may still be on. Never degrades silently.
  */
 export async function pauseJob(): Promise<void> {
   await machineConnection.feedHold();
-  // Deceleration settle — let the machine reach full Hold before
-  // sending the spindle-stop override.
-  await new Promise((r) => setTimeout(r, 100));
+
+  const HOLD_POLL_MS = 50;
+  const HOLD_TIMEOUT_MS = 3000;
+  const deadline = Date.now() + HOLD_TIMEOUT_MS;
+  let reachedHold0 = false;
+
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, HOLD_POLL_MS));
+    try {
+      const report = await machineConnection.getStatusReport();
+      if (report && /^<Hold:0/i.test(report)) {
+        reachedHold0 = true;
+        break;
+      }
+      if (report && /^<Hold\|/i.test(report)) {
+        reachedHold0 = true;
+        break;
+      }
+    } catch {
+      break;
+    }
+  }
+
+  if (!reachedHold0) {
+    useStore
+      .getState()
+      .addConsoleLine(
+        "WARNING: Machine did not reach full Hold within 3s — spindle stop may not take effect",
+        "warning"
+      );
+  }
+
   try {
     await machineConnection.sendByte(0x9e);
   } catch (e) {
-    // Fallback MUST be detectable, not silent (A1 spec):
     console.warn("Spindle stop override (0x9E) failed — beam may still be on during pause", e);
     useStore
       .getState()
@@ -121,10 +154,7 @@ interface JobEvent {
  * send/read loop. This function creates a Tauri Channel to receive progress
  * events and updates the store accordingly.
  */
-async function streamJobBuffered(
-  gcode: string,
-  opts: StreamJobOptions
-): Promise<StreamJobResult> {
+async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise<StreamJobResult> {
   const store = useStore.getState();
 
   const channel = new Channel<JobEvent>();
@@ -239,8 +269,16 @@ async function streamJobBuffered(
   // SKIPPED when jobRunning is already false -- the user pressed STOP and
   // emergencyStop ran its own sequence; a second M5+0x18 would be redundant.
   if (endState !== "complete" && endState !== "alarm" && useStore.getState().jobRunning) {
-    try { await machineConnection.send("M5"); } catch { /* port may be gone */ }
-    try { await machineConnection.softReset(); } catch { /* port may be gone */ }
+    try {
+      await machineConnection.send("M5");
+    } catch {
+      /* port may be gone */
+    }
+    try {
+      await machineConnection.softReset();
+    } catch {
+      /* port may be gone */
+    }
   }
 
   store.setJobRunning(false);
