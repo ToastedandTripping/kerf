@@ -20,27 +20,7 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 ## Owed right now
 
-- **OWNER HARDWARE TEST on v0.8.26 — Lee's hands, next step.** Test card
-  (`docs/test-card.md`) covers pause/resume 0x9E, disconnect safety, rotated
-  compound fill, ellipse on Engrave, save round-trip, shortcuts. v0.8.26
-  Build workflow in progress; once published, Lee runs the card on the built
-  binary against his laser. This is the verification gate for everything
-  shipped in the comprehensive remediation AND the limits wiring.
-
-- **Phase 2A implemented and reviewed (2026-08-29).** Relay
-  `kerf-phase-2a-streaming` complete: Ted+Razor PASS (1 WARNING fixed —
-  missing safety volley in buffered path). Character-counting pump, Tauri
-  Channel streaming, TS mode dispatch all landed on
-  `relay/kerf-phase-2a-streaming-r2`. Ships behind opt-in `streamingMode`
-  toggle (default `perLine`). **Next gate: owner hardware A/B test**
-  (session #1, ~30-45min: same dense-curve job in perLine vs buffered,
-  compare burn quality). Gate D1c decides whether buffered becomes the
-  default.
-
-- **Limits relay: Razor post-ship PASS.** The kerf-limits-wiring relay
-  (4a33dec) shipped in v0.8.26 before Razor ran. Post-ship cold-eyes
-  review (Opus): PASS — 0 CRITICAL, 0 WARNING, 0 NOTE. All guards
-  correctly wired, no bypass paths, tests non-tautological. Gate closed.
+- OWNER HARDWARE TEST IN PROGRESS (v0.8.28). Pause bug (laser-on during pause) found and fixed in v0.8.28 (poll for Hold:0 before 0x9E). Lee is testing. Streaming A/B results still pending. Test card artifact: https://claude.ai/code/artifact/f1df614c-7007-4609-afb6-a898aab06de1
 
 ## Open questions awaiting Lee
 
@@ -55,6 +35,18 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-09-01
+
+v0.8.27 released (Phase 2A character-counting streaming pump + full relay). v0.8.28
+released same day (safety fix: pause 0x9E must poll for Hold:0, not use a fixed 100ms
+timer — hardware-confirmed that GRBL ignores 0x9E during Hold:1 deceleration, leaving
+the laser on). Both tags pushed, CI built .dmg/.AppImage/.deb. Interactive test card
+artifact created for the hardware test session. Lee began testing; pause bug was the
+first finding. Prettier formatting fixed across the relay's files.
+
+**Next:** Lee completes the hardware test card (baseline + remediation + streaming A/B).
+Gate D1c (flip default to buffered?) depends on the A/B results.
 
 ### 2026-08-29
 

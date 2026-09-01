@@ -50,6 +50,11 @@ never an ack-awaited write in between, that recreates the F13 deadlock).
 > Status — whether Phase 2 has started — is tracked in `ROADMAP.md`, not here. This entry
 > records only what was decided.
 
+### The pause spindle-stop override (0x9E) must poll for Hold:0, never use a fixed timer
+*2026-08-30, Lee (hardware-confirmed 2026-08-29)*
+
+GRBL silently ignores 0x9E during Hold:1 (still decelerating). A fixed 100ms delay was shorter than the actual deceleration time at high engrave speeds, so the 0x9E arrived during Hold:1, got dropped, and the laser stayed on during pause. The fix polls getStatusReport() every 50ms for Hold:0 (max 3s timeout) before sending 0x9E. This is the second F13-class finding (the first was line-based M5 in Hold, fixed in v0.8.25).
+
 ---
 
 ## Operating constraints
