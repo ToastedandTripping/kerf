@@ -429,6 +429,11 @@ verbatim and are not to be edited into summaries — this index points at them.
 - **SVG path-coordinate drift repro** — open since 2026-06-21, unreproduced; awaiting a sample
   Inkscape SVG. Import/transform code audited clean (`.claude/DECISIONS.md` → Evidence
   corrections).
+- **CRITICAL: Pause-then-stop double failure (2026-09-02, Lee hardware test)** — Pressing pause
+  stopped the laser initially, but after a 2-3 second delay the laser came back on. Pressing
+  stop then did NOT stop it. Forced to use the emergency stop (e-stop). Two independent safety
+  controls failed in sequence. Likely relevant to Phase 2A streaming/hold behavior (the 0x9E
+  spindle-stop override and hold state management). Must be investigated before any release.
 
 ## Reference
 
