@@ -1,7 +1,7 @@
 ---
 status: active
 current: "HARDENING & EFFICIENCY PROGRAM — Phase 1 (GRBL simulator + test spine) COMPLETE on master; Phase 0 shipped as v0.8.24 (2026-07-02..04). 7-phase critic-reviewed plan (.claude/plans/kerf-hardening-program.md). PHASE 1 (test-only, no release — merged to master 2026-07-04, Ted+Razor each relay): the keystone that makes the streaming stack CI-testable without the owner's laser, attacking the #1 bottleneck (hardware-gated verification). 1A — GRBL 1.1 simulator (src-tauri/src/sim/grbl.rs, implements serialport::SerialPort behind the existing CommandChannel seam; shared brain via Arc<Mutex> across try_clone'd handles; two-stage RX(128B)→planner(15) buffer with ok-on-planner-accept; strict-hold invariant records an M3/M4/M5-in-Hold as the F13 spindle-sync deadlock the Phase-2 abort volley must avoid; behind #[cfg(any(test, feature=sim))], excluded from release). 1B — fault injection (drop-ok, error:N, ALARM, silence, EOF, write-fail) + sim_integration tests driving the REAL serial bodies (drain_startup_banner/run_pump/disconnect_inner/send_byte_inner); headline: wedged_pump_estop_then_disconnect proves the e-stop guarantee (a wedged pump's realtime 0x18 still reaches the controller before disconnect blocks on the command lock — Razor: non-tautological, strictly stronger than the MockPort parallel). 1C — golden G-code corpus (8 fixtures through the real generate_gcode/generate_image_gcode command path; Razor mutation-proved the corpus goes RED on a changed generator) + 10 gcode_gen unit tests + optimizer property battery (no-panic on degenerate input + permutation-safety [no dropped/duplicated cut object] + inner-first rank monotonicity; no reachable OOB found in ~67 index sites). Rust 117→169 tests; zero production behavior changed. FINDINGS: (a) write failure never becomes PumpFailure::Io today (read-error-only) — folded into the Phase-2 plan so the new pump owns its write-failure handling; (b) image-engrave FRAGMENT has no M5/M2 footer, but VERIFIED SAFE — the assembled job (gcodeGen.ts assembleGcode) always terminates with explicit M5+M2 and every job incl. image-only runs through it; (c) fillLine crosses intra-row gaps with G1 S0 (laser-off but slow) not G0 rapid — Phase-4 efficiency item, safe. NEXT: Phase 2 streaming rework (first phase needing the laser)."
-next: Phase 2A implemented and reviewed (Razor PASS) — awaiting owner hardware A/B test (perLine vs buffered on a dense-curve job), then v0.8.27 tag. Phase 2B (recovery UX) follows.
+next: RELEASE BLOCKED — two hardware-confirmed safety defects, both diagnosed 2026-09-05 (see Parking Lot). (1) PAUSE RE-ARMS THE BEAM: the pause volley's `0x9E` is a TOGGLE and stock GRBL already stops the laser at hold-complete, so Kerf's byte undoes the firmware's own protection; the v0.8.28 Hold:0 poll can never succeed during a job (the status query try_locks the command lock the pump holds) so it always times out at 3s and fires anyway. Owner-confirmed on hardware: both `WARNING: Machine did not reach full Hold within 3s` and `[MSG:Restoring spindle]` observed. (2) LASER-SWITCH WEDGE: intermittently the controller stops acking ALL line commands after an `M3`/`M4` while still answering `?` with Idle, until `0x18` — surfaces as `terminal lost: GRBL reported Idle 3 consecutive times with no ok`. Reproducer written (`scripts/probe-grbl.py`); awaiting the owner's trace log. v0.8.27 and v0.8.28 shipped; the Phase 2A A/B test (gate D1c) is deferred behind both defects. Phase 2B (recovery UX) follows.
   • COMPREHENSIVE REMEDIATION — ✅ COMPLETE, v0.8.25 (2026-08-06). 6-phase, 10-relay program: P1 safety hardening (shared jobStream, pause 0x9E, e-stop, disconnect), P2 cut correctness (9 Rust + 7 TS fixes), P3 data integrity (atomic save, PDF import, isDirty), P4 UI correctness (shortcuts, dialogs, geometry), P5 engine robustness (limits, error propagation), P6 CI hardening. 922 tests (709 TS + 213 Rust). Plan: `.claude/plans/kerf-comprehensive-remediation.md`.
   • v0.8.26 RELEASE (pending tag) — ships the v0.8.25 remediation (never built due to CI breaks) + CI fixes (lint, prettier) + limits.rs wiring relay (image_gcode_gen + tracer allocator-abort guards, mask_fill twin check; 216 Rust tests). Laser confirmed back 2026-08-27.
   • OWNER HARDWARE TEST (v0.8.26) — pause/resume 0x9E check, disconnect safety, rotated compound fill, ellipse on Engrave, save round-trip, shortcuts Ctrl+Shift+C/A. USE docs/test-card.md.
@@ -429,6 +429,93 @@ verbatim and are not to be edited into summaries — this index points at them.
 - **SVG path-coordinate drift repro** — open since 2026-06-21, unreproduced; awaiting a sample
   Inkscape SVG. Import/transform code audited clean (`.claude/DECISIONS.md` → Evidence
   corrections).
+- **CRITICAL: Pause-then-stop double failure (2026-09-02, Lee hardware test)** — Pressing pause
+  stopped the laser initially, but after a 2-3 second delay the laser came back on. Pressing
+  stop then did NOT stop it. Forced to use the emergency stop (e-stop). Two independent safety
+  controls failed in sequence. Likely relevant to Phase 2A streaming/hold behavior (the 0x9E
+  spindle-stop override and hold state management). Must be investigated before any release.
+  **DIAGNOSED 2026-09-05 — see `### Deferred from the 2026-09-05 pause/stop investigation` below.**
+- **CRITICAL: Laser-switch wedge — controller stops acking after `M3`/`M4` (2026-09-05, Lee
+  hardware test)** — intermittent; mid-job the controller stops acking every line command while
+  still answering `?` with `Idle`, until a soft reset. Surfaces as `terminal lost: GRBL reported
+  Idle 3 consecutive times with no ok`. Reproducer committed (`scripts/probe-grbl.py`); blocked
+  on the owner's trace log. See `### Deferred from the 2026-09-05 pause/stop investigation` below.
+
+### Deferred from the 2026-09-05 pause/stop investigation
+
+Verbatim record of what the 2026-09-05 session established. Two defects, both owner-confirmed on
+hardware, both blocking release. Neither is fixed; no code changed beyond adding the reproducer.
+
+**Defect 1 — the pause volley re-arms the beam.** Root cause, traced to source (gnea/grbl
+`protocol.c`, `config.h`) and confirmed on the owner's machine:
+
+1. `DISABLE_LASER_DURING_HOLD` is **default-enabled** in stock GRBL 1.1. With `$32=1` the
+   firmware raises its OWN spindle-stop override the moment a feed hold completes — the laser
+   is already off before Kerf does anything.
+2. `0x9E` is `EXEC_SPINDLE_OVR_STOP`, a **toggle**, not an "off" command. Arriving while the
+   firmware's override is already active, it takes the `SPINDLE_STOP_OVR_RESTORE` branch,
+   emits `[MSG:Restoring spindle]`, and **re-energizes the beam**. Kerf sends exactly the byte
+   that undoes the protection the firmware just applied.
+3. The v0.8.28 fix (62c7c36) polls `getStatusReport()` for `Hold:0` before sending `0x9E`, max
+   3s. That poll **can never succeed during a job**: `serial_get_status` `try_lock`s the command
+   lock, which the buffered pump holds for the whole job and the per-line pump holds for the
+   whole pause (the in-flight line's `ok` never arrives in Hold). Every poll returns the
+   Ok-typed empty sentinel, the loop spins to the 3s cap, warns, and fires the toggle anyway.
+   That is the owner's observed 2-3 second delay, exactly.
+4. Its commit message's premise — "GRBL ignores 0x9E during Hold:1" — is **not what the source
+   says**. The only gate is `sys.state == STATE_HOLD`, true from the moment `!` lands.
+5. Why it was invisible in review: `src-tauri/src/sim/grbl.rs` models `0x9E` as unconditional
+   "clear spindle" and does not model the firmware's automatic laser-off at hold-complete. Every
+   green test certifies a protocol the real controller does not run. The TS test for the v0.8.28
+   fix mocks `getStatusReport`, so it never meets the lock.
+6. Owner-confirmed 2026-09-05: both `WARNING: Machine did not reach full Hold within 3s` and
+   `[MSG:Restoring spindle]` appear in the console on a real pause.
+7. Visibility depends on power mode: under `M4` the beam is dark whenever the head is stationary,
+   so the re-arm is invisible; under `M3` (the default for a fresh layer, and the mode of the
+   2026-09-02 test) the beam relights on the parked head. This is why a later `M4` pause test
+   "passed".
+
+Fix direction (designed, NOT implemented): stop sending `0x9E` blind — read the `A:` accessory
+field of the status report (`A:S` = spindle output energized) and send the byte only if the beam
+is still on after hold-complete; move the hold check off the command lock so it can observe the
+machine; correct the simulator to model the toggle and the automatic hold-off so the tests fail
+the way the hardware did; make `emergencyStop` verify via the same flag rather than assume.
+
+**Defect 2 — the laser-switch wedge.** Intermittent, hardware-confirmed, NOT diagnosed. The
+controller stops acking line commands after an `M3`/`M4` while still answering `?` with `Idle`;
+Kerf's idle-stall detector (`DEFAULT_IDLE_STALL_TICKS = 3`) correctly reports `terminal lost` and
+fires the safety volley, which is also unacked, until `0x18` recovers it. Observed console
+sequence: `G0 X33.840 Y-248.913` ok → `G1 X33.840 Y-248.913 F12000 S0` ok → `M4 S400` **no ok** →
+watchdog → `M5` no ok → soft reset → recovered. Ruled out by console probes on 2026-09-05: the
+failing coordinate itself (both `G0` and `G1` to it ack and move when sent standalone), and a
+laser command arriving mid-move with status polling active (a slow `G1` crawl with `M4 S20` sent
+in flight acked cleanly and did not fire the beam). Same-spot-twice then not-at-all across runs
+rules out both a cable fault and a deterministic bad line; the trigger is timing-dependent.
+Suspects remaining: the zero-length `G1 …F… S0` immediately preceding the laser switch, and a
+laser switch arriving while a **rapid** (`G0`, not `G1`) is still in flight. Kerf should also
+learn to recover from a lost ack (compare machine position against the last command's target and
+resend only if it never arrived) rather than aborting the job — designed, not implemented.
+
+**Controller identity (2026-09-05).** The owner's machine is a **vendor GRBL fork**, not stock:
+`[VER:1.1f.20220810:]`, vendor string "CV master-release 3.0.4", `[OPT:VHL,127,65536]` — a
+**127-block planner and a 65536-byte RX buffer**, versus stock GRBL's 15 and 128. Two
+consequences: (a) stock-GRBL source is evidence about intent, never proof about this machine's
+behaviour — the wedge is not a stock behaviour; (b) **Phase 2A's premise is questionable on this
+hardware** — a 127-block planner means per-line streaming already keeps this controller fed, so
+the stutter buffered mode was built to cure may not exist here. The Phase 2A A/B test (gate D1c)
+should record this before buffered is considered for default.
+
+**Tooling.** `scripts/probe-grbl.py` (committed 2026-09-05) drives the controller through eight
+laser-switch sequences at job speed with the laser capped at 1%, repeats each, and writes a
+timestamped wire trace. It reproduces Kerf's exact per-line protocol including the 1Hz `?` probe
+and the 3-strike idle-stall rule, records whether the controller still answers `?` while wedged,
+and recovers with `0x18` between variants. Smoke-tested against a pty fake in both healthy and
+wedging modes. **Awaiting the owner's trace log — that log is the input to the fix plan.**
+
+**Minor, unrelated, found in passing:** the Machine panel's "Laser mode ($32=1) — M4 dynamic
+power active" (`MachinePanel.tsx:617`) describes the *machine's capability*, while the G-code
+console warning describes the *layer's* power mode. Read together they look contradictory. Reword
+the sidebar to say the machine supports M4, not that M4 is in use.
 
 ## Reference
 

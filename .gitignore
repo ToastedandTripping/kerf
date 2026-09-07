@@ -34,3 +34,7 @@ state/
 
 # Code-refresh reports (audit detail, not project docs)
 .refresh/
+
+# Python bytecode (scripts/probe-grbl.py)
+__pycache__/
+*.pyc

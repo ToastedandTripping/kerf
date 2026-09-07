@@ -20,13 +20,6 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 ## Owed right now
 
-- **OWNER HARDWARE TEST on v0.8.26 — Lee's hands, next step.** Test card
-  (`docs/test-card.md`) covers pause/resume 0x9E, disconnect safety, rotated
-  compound fill, ellipse on Engrave, save round-trip, shortcuts. v0.8.26
-  Build workflow in progress; once published, Lee runs the card on the built
-  binary against his laser. This is the verification gate for everything
-  shipped in the comprehensive remediation AND the limits wiring.
-
 - **Phase 2A implemented and reviewed (2026-08-29).** Relay
   `kerf-phase-2a-streaming` complete: Ted+Razor PASS (1 WARNING fixed —
   missing safety volley in buffered path). Character-counting pump, Tauri
@@ -42,6 +35,14 @@ in this project has already been ruled on, usually for a reason that is not obvi
   review (Opus): PASS — 0 CRITICAL, 0 WARNING, 0 NOTE. All guards
   correctly wired, no bypass paths, tests non-tautological. Gate closed.
 
+- **RELEASE BLOCKED — two hardware-confirmed safety defects (2026-09-05).** (1) The pause volley re-arms the beam: `0x9E` is a toggle and stock GRBL already stops the laser at hold-complete, so Kerf's byte undoes the firmware's own protection; the v0.8.28 `Hold:0` poll can never succeed during a job (the status query `try_lock`s the command lock the pump holds), so it times out at 3s and fires anyway. Owner-confirmed: both the 3s warning and `[MSG:Restoring spindle]` appear on a real pause. (2) Laser-switch wedge: intermittently the controller stops acking every line command after an `M3`/`M4` while still answering `?` with `Idle`, until `0x18`. Full record, ruled-out hypotheses, and fix direction: `ROADMAP.md` → `### Deferred from the 2026-09-05 pause/stop investigation`. **Nothing is fixed; no production code changed.**
+
+- **OWED BY LEE: run `scripts/probe-grbl.py` and return the trace log.** Runs on the Mac with Kerf closed (`python3 -m pip install --user pyserial`, then `python3 probe-grbl.py --pause`). Drives the controller through eight laser-switch sequences at job speed, laser capped at 1%, inside a 60mm box next to home; ~4-6 min. That log is the input to the wedge fix plan — the defect is timing-dependent and cannot be diagnosed further from source.
+
+- **OWNER HARDWARE TEST — superseded card, Part 0 first.** The test card artifact (https://claude.ai/code/artifact/f1df614c-7007-4609-afb6-a898aab06de1) was revised 2026-09-05: the investigation sits at the top and a new Part 0 (7 probe steps) runs before everything else. Steps 6, 7 and 20 (pause/resume, stop) are marked superseded and excluded from the progress count. `docs/test-card.md` in-repo has NOT been updated to match — do that when the pause path is rebuilt.
+
+- **Phase 2A A/B test (gate D1c) is deferred behind both defects** and its premise is now in question: this controller reports a 127-block planner and 65536-byte RX buffer (`[OPT:VHL,127,65536]`), so per-line streaming may already keep it fed. Record that in the A/B result before buffered is considered for default.
+
 ## Open questions awaiting Lee
 
 | Question                                                                                            | Why it matters                                                                        | Raised     |
@@ -51,10 +52,23 @@ in this project has already been ruled on, usually for a reason that is not obvi
 | Clipper2 dependency decision for Phase 4 (offsetFill compound correctness, kerf-offset-on-fillLine) | Gate D2 — changes real cut geometry output, needs your sign-off before Phase 4 starts | 2026-07-05 |
 | v0.9 Camera & Rotary — do you have/plan to get the hardware?                                        | Gate D4 — the feature stays parked with no planning until confirmed                   | 2026-07-05 |
 | streamingMode default: flip `perLine`→`buffered` after session #1's A/B?                            | Gate D1c — the rule is recorded in `DECISIONS.md`; you may override                   | 2026-07-05 |
+| Given the controller's 127-block planner, is Phase 2A buffered streaming still worth shipping on this machine? | Phase 2A was built to cure stutter caused by stock GRBL's 15-block planner. This vendor fork has 127. The A/B test may show no difference, which would make gate D1c a decision to keep perLine permanently. | 2026-09-05 |
 
 ---
 
 ## Log (newest first)
+
+### 2026-09-05
+
+**Pause/stop investigation — both halves of the 2026-09-02 double failure traced; a second, unrelated defect found.** No production code changed. Full verbatim record in `ROADMAP.md` → `### Deferred from the 2026-09-05 pause/stop investigation`.
+
+**Defect 1, the pause re-arm — root-caused and owner-confirmed.** `DISABLE_LASER_DURING_HOLD` is default-enabled in stock GRBL 1.1, so with `$32=1` the firmware raises its own spindle-stop override at hold-complete and the laser is already off. `0x9E` is a toggle (`EXEC_SPINDLE_OVR_STOP`); arriving with the override already up it takes the RESTORE branch, emits `[MSG:Restoring spindle]`, and re-energizes the beam. The v0.8.28 fix (62c7c36) made it worse: its `Hold:0` poll `try_lock`s the command lock the pump holds for the whole job, so it always times out at the 3s cap and fires the toggle anyway — the owner's observed 2-3 second delay. That commit's stated premise ("GRBL ignores 0x9E during Hold:1") is not what the source says. It survived two reviews because `sim/grbl.rs` models `0x9E` as unconditional off and does not model the firmware's automatic hold-off, and the TS test mocks `getStatusReport` so it never meets the lock. Owner confirmed both the 3s warning and `[MSG:Restoring spindle]` on hardware.
+
+**Defect 2, the laser-switch wedge — found, not diagnosed.** Intermittently the controller stops acking all line commands after an `M3`/`M4` while still answering `?` with `Idle`, until `0x18`. Surfaces as `terminal lost: GRBL reported Idle 3 consecutive times with no ok`; the watchdog behaves correctly. Console probes ruled out the failing coordinate itself and a laser command arriving mid-`G1` with polling active. Timing-dependent: same spot twice, then a clean run. Suspects left: the zero-length `G1 …F… S0` before the switch, and a switch arriving during a `G0` rapid.
+
+**Controller identity.** Vendor GRBL fork, not stock: `[VER:1.1f.20220810:]`, "CV master-release 3.0.4", `[OPT:VHL,127,65536]` — 127-block planner, 65536-byte RX buffer (stock: 15 and 128). Stock source is evidence about intent, not proof about this machine.
+
+**Shipped this session:** `scripts/probe-grbl.py` — a reproducer that drives the controller through eight laser-switch sequences at job speed (laser capped at 1%), reproduces Kerf's per-line protocol including the 1Hz `?` probe and 3-strike idle-stall rule, records whether the controller still answers `?` while wedged, and recovers with `0x18` between variants. Smoke-tested against a pty fake in healthy and wedging modes. **Next: Lee runs it and returns the log.**
 
 ### 2026-08-29
 
