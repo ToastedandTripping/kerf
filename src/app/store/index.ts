@@ -1,6 +1,16 @@
 import { create } from "zustand";
 import type { DesignObject } from "../types";
-import { DEFAULT_LAYERS, KERF_FORMAT_VERSION } from "../types";
+import { DEFAULT_LAYERS, KERF_FORMAT_VERSION, LINE_OVERLAY_DEFAULTS } from "../types";
+import { clampPowerMin } from "../types";
+
+/** Returns `v` with powerMin clamped to power. Shared by the layer writer and
+ *  the line-overlay writer — the two doors through which every in-app edit to
+ *  either field passes. Returns the same object when nothing needs correcting,
+ *  so unrelated edits do not churn references. */
+function clampLayerPower<T extends { power: number; powerMin: number }>(v: T): T {
+  const clamped = clampPowerMin(v.power, v.powerMin);
+  return clamped === v.powerMin ? v : { ...v, powerMin: clamped };
+}
 import { DEFAULT_MATERIALS } from "../../lib/materials";
 import { createGeometryActions } from "./geometryActions";
 import type { AppState } from "./storeTypes";
@@ -274,9 +284,25 @@ export const useStore = create<AppState>((set, get) => ({
   // not worth a field carve-out.
   // P3-B: isDirty was missing — a session that only adjusts layer settings
   // (the most common workflow) would not trigger save prompts.
+  // W4 (second door): the clamp is applied to the MERGED layer, here, rather
+  // than at each control. Three call sites could write the invalid pair —
+  // LayerPanel's power inputs, its Power Mode <select>, and preset application
+  // in both LayerPanel and MaterialLibrary — and only the first was clamped.
+  // The <select> is the one that mattered: an old project holding
+  // power: 40 / powerMin: 60 (legal and inert while it was constant) flipped to
+  // Variable and SAVED with 60 intact. This build displays 40 and emits S400
+  // because the Rust clamp catches it at generation, but generation-side
+  // enforcement does not travel with the document — a shipped v0.8.28 reading
+  // that same file has no clamp and emits M4 S600.
+  //
+  // Clamping the merged result closes all three doors and every future one,
+  // which is why it is here and not at the controls. The Rust clamp remains the
+  // enforcement point for what the machine receives.
   updateLayer: (index, partial) =>
     set((state) => ({
-      layers: state.layers.map((l) => (l.index === index ? { ...l, ...partial } : l)),
+      layers: state.layers.map((l) =>
+        l.index === index ? clampLayerPower({ ...l, ...partial }) : l
+      ),
       isDirty: true,
       gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
     })),
@@ -316,14 +342,8 @@ export const useStore = create<AppState>((set, get) => ({
     set((state) => ({
       layers: state.layers.map((l) => {
         if (l.index !== layerIndex) return l;
-        const existing = l.lineOverlay ?? {
-          power: 100,
-          powerMin: 0,
-          speed: 1200,
-          passes: 1,
-          powerMode: "constant" as const,
-        };
-        return { ...l, lineOverlay: { ...existing, ...changes } };
+        const existing = l.lineOverlay ?? LINE_OVERLAY_DEFAULTS;
+        return { ...l, lineOverlay: clampLayerPower({ ...existing, ...changes }) };
       }),
       isDirty: true,
       gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
@@ -473,7 +493,23 @@ export const useStore = create<AppState>((set, get) => ({
       formatVersion: KERF_FORMAT_VERSION,
       name: state.projectName,
       objects: state.objects,
-      layers: state.layers,
+      // W5: a saved file must STATE its power mode, never leave it to be
+      // inferred from an absent key. `lineOverlay` was previously written only
+      // by the v<3 migration and by updateLineOverlay, so a Fill+Line layer
+      // whose overlay panel was never opened saved with no overlay at all —
+      // indistinguishable on disk from a pre-flip file, and therefore
+      // mis-stamped `constant` by the load-time materialiser. Persisting it
+      // explicitly here is what stops the class; the formatVersion 4 gate on
+      // the loader only handles the files that already exist.
+      //
+      // Uses the CURRENT defaults deliberately: this is a file being written
+      // now, by this build, and variable is what it is actually cutting with.
+      // Non-mutating — the store's own layers are untouched.
+      layers: state.layers.map((l) =>
+        l.mode === "fillLine" && !l.lineOverlay
+          ? { ...l, lineOverlay: { ...LINE_OVERLAY_DEFAULTS } }
+          : l
+      ),
       camera: state.camera,
       workspaceWidth: state.workspaceWidth,
       workspaceHeight: state.workspaceHeight,

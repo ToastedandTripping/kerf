@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../app/store";
 import type { DesignObject, Layer, InternalCutMode } from "../../app/types";
+import { LINE_OVERLAY_DEFAULTS } from "../../app/types";
 import { offsetRingByDistance, composeGroupChild, sampleBezierPath } from "../geometry";
 import { computeOverscan } from "./overscan";
 
@@ -110,13 +111,7 @@ function buildCutLayer(layer: Layer): CutObject["layer"] {
  *  Uses lineOverlay settings (power/speed/etc.) but inherits all geometry-affecting
  *  fields (kerfOffset, leadIn/Out, etc.) from the parent layer. */
 function buildLineOverlayCutLayer(layer: Layer): CutObject["layer"] {
-  const ov = layer.lineOverlay ?? {
-    power: 100,
-    powerMin: 0,
-    speed: 1200,
-    passes: 1,
-    powerMode: "constant" as const,
-  };
+  const ov = layer.lineOverlay ?? LINE_OVERLAY_DEFAULTS;
   return {
     mode: "line",
     power: ov.power,
@@ -885,6 +880,16 @@ export async function generateGcode(): Promise<GcodeResult> {
   // may fire the laser during rapids, and dynamic power scaling is completely
   // disabled — all three failures apply to any fill/raster job regardless of
   // power mode. Fires for any job that contains fill/raster layers.
+  //
+  // W1: the fill/raster gate alone is no longer sufficient. It was defensible
+  // while line layers emitted M3, but variable power is now the DEFAULT, so a
+  // pure vector-cut job emits M4 — and at $32=0 M4 is a silent no-op. The
+  // operator gets exactly the corner over-exposure the M4 default was meant to
+  // cure, with nothing in the console. A second, narrower branch covers that.
+  //
+  // A job of only constant-power line layers still warns about NOTHING here,
+  // and that is correct: M3 at $32=0 behaves as the operator asked, and the
+  // separate constant-power advisory above already speaks to that case.
   if (!store.grblLaserMode) {
     const hasFillLayer = cutObjects.some((obj) => {
       const m = obj.layer.mode;
@@ -893,10 +898,18 @@ export async function generateGcode(): Promise<GcodeResult> {
     const hasImageLayer = store.objects.some(
       (obj) => obj.type === "image" && obj.visible && obj.imageData
     );
+    const hasVariableLayer = cutObjects.some((obj) => obj.layer.powerMode === "variable");
     if (hasFillLayer || hasImageLayer) {
       store.addConsoleLine(
         "GRBL laser mode ($32) is disabled — M4 is a no-op, dynamic power scaling is off, " +
           "and the laser may fire during G0 travel on fill/raster jobs. " +
+          "Use the 'Enable Laser Mode' button in the Machine panel, or run $32=1 in the console.",
+        "warning"
+      );
+    } else if (hasVariableLayer) {
+      store.addConsoleLine(
+        "GRBL laser mode ($32) is disabled — M4 is a no-op, so dynamic power scaling is off " +
+          "and this job's variable-power layers will cut at constant power, over-exposing corners. " +
           "Use the 'Enable Laser Mode' button in the Machine panel, or run $32=1 in the console.",
         "warning"
       );

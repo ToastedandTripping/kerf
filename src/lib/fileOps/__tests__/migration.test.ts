@@ -804,4 +804,206 @@ describe("powerMode preservation: saved layers survive DEFAULT_LAYERS default fl
     const loaded = useStore.getState().layers[0];
     expect(loaded.powerMode).toBe("constant");
   });
+
+  // ─── W2/W5: the exclusion, and the ambiguity it must not create ─────────
+  //
+  // W2: through format version 3, `lineOverlay` was written in only two places
+  // — the v<3 sub-layer migration, and updateLineOverlay when the operator
+  // opens the overlay panel. A Fill+Line layer whose overlay was never touched
+  // saved with no lineOverlay key, and generation fell through to
+  // LINE_OVERLAY_DEFAULTS, which is now "variable", though it was cut as M3.
+  //
+  // W5: the first fix ran on EVERY file, which recreated the same class of
+  // defect pointing the other way. Below, the two cases are tested separately
+  // and BY VERSION, because that is the only thing that distinguishes them.
+  // The earlier version of the first test built its fixture at
+  // KERF_FORMAT_VERSION with the comment "this is what the current build
+  // actually saves" — the ambiguity written down as a requirement. It is
+  // pinned to the literal 3 now, which is what it always meant.
+
+  it("W2: a v3 fillLine layer with NO stored lineOverlay is materialised as constant on load", () => {
+    const project: KerfProject = {
+      version: "0.9.0",
+      // Literal 3, NOT KERF_FORMAT_VERSION: this fixture is specifically a file
+      // written before the M4 default flip. Tracking the constant would make
+      // the test silently stop testing v3 on the next bump.
+      formatVersion: 3,
+      name: "UntouchedOverlayV3",
+      objects: [],
+      layers: [
+        // No `lineOverlay` key — a pre-flip file whose overlay panel was never
+        // opened. It was physically cut as M3.
+        { ...DEFAULT_LAYERS[0], mode: "fillLine" as const },
+        ...DEFAULT_LAYERS.slice(1),
+      ],
+      camera: { x: 0, y: 0, zoom: 1 },
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+    };
+    loadProjectWithMigrations(project);
+    const loaded = useStore.getState().layers[0];
+    expect(loaded.lineOverlay).toBeDefined();
+    expect(loaded.lineOverlay?.powerMode).toBe("constant");
+  });
+
+  it("W5: a v4 fillLine layer with no stored lineOverlay is NOT stamped constant", () => {
+    // The other direction, and the one that was broken. A v4 file is
+    // unambiguous by construction — toProject always writes an explicit
+    // overlay — so an absence here is not evidence of a pre-flip file and the
+    // loader must not infer one. Stamping constant here is exactly the silent
+    // M4 -> M3 downgrade of a part the operator cut this morning at M4.
+    const project: KerfProject = {
+      version: "0.9.0",
+      formatVersion: 4,
+      name: "UntouchedOverlayV4",
+      objects: [],
+      layers: [
+        { ...DEFAULT_LAYERS[0], mode: "fillLine" as const },
+        ...DEFAULT_LAYERS.slice(1),
+      ],
+      camera: { x: 0, y: 0, zoom: 1 },
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+    };
+    loadProjectWithMigrations(project);
+    const loaded = useStore.getState().layers[0];
+    expect(loaded.lineOverlay?.powerMode).not.toBe("constant");
+  });
+
+  it("W5: saving a fillLine layer whose overlay was never opened persists an EXPLICIT overlay", () => {
+    // The half that stops the class rather than the instance: from now on the
+    // absence cannot arise, so nothing downstream has to infer anything from it.
+    useStore.setState({
+      layers: [
+        { ...DEFAULT_LAYERS[0], mode: "fillLine" as const, lineOverlay: undefined },
+        ...DEFAULT_LAYERS.slice(1),
+      ],
+    });
+    const saved = useStore.getState().toProject();
+    expect(saved.formatVersion).toBe(4);
+    expect(saved.layers[0].lineOverlay).toBeDefined();
+    // Current default, because this file is being written NOW by this build and
+    // variable is what it is actually cutting with.
+    expect(saved.layers[0].lineOverlay?.powerMode).toBe("variable");
+    // And the store itself must not have been mutated by taking a snapshot.
+    expect(useStore.getState().layers[0].lineOverlay).toBeUndefined();
+  });
+
+  it("W5: a saved-then-reloaded fillLine layer keeps variable across the round trip", () => {
+    // The end-to-end statement of the whole finding: cut at M4, save, reopen,
+    // still M4. This is the sequence Razor described, asserted.
+    useStore.setState({
+      layers: [
+        { ...DEFAULT_LAYERS[0], mode: "fillLine" as const, lineOverlay: undefined },
+        ...DEFAULT_LAYERS.slice(1),
+      ],
+    });
+    const saved = useStore.getState().toProject() as KerfProject;
+    const roundTripped = JSON.parse(JSON.stringify(saved)) as KerfProject;
+    loadProjectWithMigrations(roundTripped);
+    expect(useStore.getState().layers[0].lineOverlay?.powerMode).toBe("variable");
+  });
+
+  // ─── FIX PASS 3: forward-version guard ──────────────────────────────────
+
+  it("refuses a file stamped NEWER than this build, and does not load it", () => {
+    // Before this branch, every `v < n` migration gate evaluated false, the
+    // file loaded as-is, and the stamp was rewritten DOWN to this build's
+    // version — a silent downgrade the next save would cement.
+    useStore.setState({ projectName: "PreExisting" });
+    const project: KerfProject = {
+      version: "9.9.9",
+      formatVersion: KERF_FORMAT_VERSION + 1,
+      name: "FromTheFuture",
+      objects: [],
+      layers: [...DEFAULT_LAYERS],
+      camera: { x: 0, y: 0, zoom: 1 },
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+    };
+
+    const loaded = loadProjectWithMigrations(project);
+
+    expect(loaded).toBe(false);
+    // Not loaded: the current project is untouched.
+    expect(useStore.getState().projectName).toBe("PreExisting");
+    // And critically NOT stamped down — the file on disk keeps its own version.
+    expect(project.formatVersion).toBe(KERF_FORMAT_VERSION + 1);
+    // The refusal names both versions so the operator knows what to do.
+    const errors = useStore
+      .getState()
+      .consoleLines.filter((l) => l.type === "error")
+      .map((l) => l.text);
+    expect(
+      errors.some(
+        (t) => t.includes(String(KERF_FORMAT_VERSION + 1)) && t.includes(String(KERF_FORMAT_VERSION))
+      )
+    ).toBe(true);
+  });
+
+  it("loads a file stamped at exactly this build's version", () => {
+    // The boundary. `>` not `>=` — refusing the current version would refuse
+    // every file this build writes.
+    const project: KerfProject = {
+      version: "0.9.0",
+      formatVersion: KERF_FORMAT_VERSION,
+      name: "CurrentVersion",
+      objects: [],
+      layers: [...DEFAULT_LAYERS],
+      camera: { x: 0, y: 0, zoom: 1 },
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+    };
+    expect(loadProjectWithMigrations(project)).toBe(true);
+    expect(useStore.getState().projectName).toBe("CurrentVersion");
+  });
+
+  it("W2: a stored lineOverlay is never overwritten by the materialiser", () => {
+    const project: KerfProject = {
+      version: "0.9.0",
+      formatVersion: KERF_FORMAT_VERSION,
+      name: "StoredOverlay",
+      objects: [],
+      layers: [
+        {
+          ...DEFAULT_LAYERS[0],
+          mode: "fillLine" as const,
+          lineOverlay: {
+            power: 77,
+            powerMin: 0,
+            speed: 900,
+            passes: 2,
+            powerMode: "variable" as const,
+          },
+        },
+        ...DEFAULT_LAYERS.slice(1),
+      ],
+      camera: { x: 0, y: 0, zoom: 1 },
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+    };
+    loadProjectWithMigrations(project);
+    const loaded = useStore.getState().layers[0];
+    expect(loaded.lineOverlay?.powerMode).toBe("variable");
+    expect(loaded.lineOverlay?.power).toBe(77);
+    expect(loaded.lineOverlay?.passes).toBe(2);
+  });
+
+  it("W2: a NEW project is not touched by the legacy materialiser", () => {
+    // fromDisk:false. New work takes the current defaults; the constant-power
+    // materialisation is only for documents that were already cut. Asserted
+    // via the loader's own new-project shape so the flag cannot silently flip.
+    const project: KerfProject = {
+      version: "0.9.0",
+      formatVersion: KERF_FORMAT_VERSION,
+      name: "Fresh",
+      objects: [],
+      layers: [{ ...DEFAULT_LAYERS[0], mode: "fillLine" as const }, ...DEFAULT_LAYERS.slice(1)],
+      camera: { x: 0, y: 0, zoom: 1 },
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+    };
+    loadProjectWithMigrations(project, { fromDisk: false });
+    expect(useStore.getState().layers[0].lineOverlay).toBeUndefined();
+  });
 });

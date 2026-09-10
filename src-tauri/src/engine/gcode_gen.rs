@@ -21,6 +21,35 @@ pub struct PathSegment {
     pub closed: bool,
 }
 
+/// W4 — minimum power can never exceed commanded power.
+///
+/// `power` and `power_min` clamp independently to 0-100 and nothing has ever
+/// cross-clamped them. Under constant power that was inert: `power_min` was
+/// simply unused, while the Min Pwr field rendered unconditionally and was
+/// therefore editable. Under variable power it is NOT inert — the s_min floor
+/// raises the commanded S — so a layer left at `power: 40, power_min: 60`
+/// emitted S400 under M3 and would emit S600 under M4: 50% more power than the
+/// number in the operator's Power box, on a layer they did not knowingly change.
+/// Flipping the default to variable is what turns that latent field into live
+/// output, so the clamp lands with the flip.
+///
+/// This lives at generation, in Rust, because it is the one point every caller
+/// must pass through: the UI clamp added alongside it is an explanation for the
+/// operator, not the enforcement.
+///
+/// NOTE (Razor W3, owner's call): this does NOT choose a `power_min` default and
+/// does not touch one. It only bounds the value from above. A job at
+/// `power_min: 0` — today's default — is completely unaffected by this function,
+/// so whatever the owner decides about under-powered short segments composes
+/// with it cleanly: any new default below `power` passes through untouched.
+#[inline]
+pub fn clamp_power_min(power: f64, power_min: f64) -> f64 {
+    if power_min.is_nan() || power.is_nan() {
+        return 0.0;
+    }
+    power_min.min(power).max(0.0)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CutLayer {
@@ -346,7 +375,8 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
         let speed_mm_min = layer.speed; // canonical unit is mm/min
         let s_max = (layer.power / 100.0 * s_value_max).round();
         // Fix 6: compute s_min from power_min; used in M4 (variable) mode to floor S values.
-        let s_min = (layer.power_min / 100.0 * s_value_max).round();
+        // W4: power_min is clamped to power FIRST. See clamp_power_min.
+        let s_min = (clamp_power_min(layer.power, layer.power_min) / 100.0 * s_value_max).round();
 
         // Power mode command
         let power_cmd = if layer.power_mode == "variable" { "M4" } else { "M3" };
@@ -355,6 +385,12 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
         // In M4 (variable) mode, floor S values at s_min so the laser doesn't
         // drop below min power during GRBL's speed-compensation at corners/decel.
         // Previously this floor existed only in the "line" arm.
+        //
+        // W4: with s_min now clamped at or below s_max, this max() can never
+        // RAISE the commanded value — which is the whole point. It is kept
+        // rather than collapsed to `s_max` so the clamp has exactly one home
+        // (clamp_power_min) and this stays a belt over it, not a second rule
+        // that could drift from the first.
         let effective_s_max = if layer.power_mode == "variable" {
             s_max.max(s_min)
         } else {
@@ -1977,27 +2013,31 @@ mod tests {
         );
     }
 
-    // ─── P2-A Finding #5: s_min consistency across fill and offsetFill ────────
+    // ─── W4: power_min is clamped to power (supersedes P2-A Finding #5) ──────
+    //
+    // These two tests were `p2a_fill_uses_s_min_floor` and
+    // `p2a_offset_fill_uses_s_min_floor`. They asserted that with power=10 and
+    // power_min=50, the fill and offsetFill arms emit S>=500 — i.e. that the
+    // s_min floor RAISES the commanded value above the operator's Power box.
+    // That was the P2-A intent, and it is the W4 defect: 500 is five times the
+    // 100 the operator asked for. The expectation is inverted here rather than
+    // deleted, so the fill/offsetFill-vs-line consistency P2-A was protecting is
+    // still covered — all three arms must now agree that S never exceeds s_max.
 
-    /// M4 (variable) mode with power_min > 0: the effective S value must be
-    /// floored at s_min in fill and offsetFill arms, not just in the line arm.
-    ///
-    /// Setup: a fill object with power=10%, power_min=50%, s_value_max=1000.
-    /// s_max = 100, s_min = 500. effective_s_max should be max(100, 500) = 500.
-    /// Without the fix, fill emits S100 (below s_min = 500).
+    /// W4: fill arm, M4, power_min > power. Every emitted S must equal s_max
+    /// (100), never the unclamped s_min (500).
     #[test]
-    fn p2a_fill_uses_s_min_floor() {
+    fn w4_fill_clamps_power_min_to_power() {
         let mut layer = make_layer_line();
         layer.mode = "fill".to_string();
         layer.power = 10.0;       // s_max = 100
-        layer.power_min = 50.0;   // s_min = 500
+        layer.power_min = 50.0;   // unclamped s_min would be 500
         layer.power_mode = "variable".to_string();
         layer.interval = 1.0;
         let obj = make_rect_obj("fill_smin", 0.0, 0.0, 5.0, 5.0, layer);
 
         let result = generate_gcode(&[obj], 100.0, 1000.0, false).expect("generate_gcode");
 
-        // All engrave S values must be >= 500 (s_min)
         let engrave_s_values: Vec<f64> = result.gcode.lines()
             .filter(|l| l.starts_with("G1 ") && !l.contains("S0"))
             .filter_map(|l| {
@@ -2012,27 +2052,27 @@ mod tests {
 
         for &s in &engrave_s_values {
             assert!(
-                s >= 500.0,
-                "Fill mode: engrave S={s} < s_min=500. The s_min floor is not applied.\n\
+                s <= 100.0,
+                "Fill mode: engrave S={s} exceeds s_max=100 (power=10%). power_min \
+                 must be clamped to power, never raise commanded power.\n\
                  G-code:\n{}", result.gcode
             );
         }
     }
 
-    /// M4 offsetFill with power_min: same floor must apply.
+    /// W4: offsetFill arm, same clamp.
     #[test]
-    fn p2a_offset_fill_uses_s_min_floor() {
+    fn w4_offset_fill_clamps_power_min_to_power() {
         let mut layer = make_layer_line();
         layer.mode = "offsetFill".to_string();
         layer.power = 10.0;       // s_max = 100
-        layer.power_min = 50.0;   // s_min = 500
+        layer.power_min = 50.0;   // unclamped s_min would be 500
         layer.power_mode = "variable".to_string();
         layer.interval = 2.0;
         let obj = make_rect_obj("ofill_smin", 0.0, 0.0, 10.0, 10.0, layer);
 
         let result = generate_gcode(&[obj], 100.0, 1000.0, false).expect("generate_gcode");
 
-        // All G1 S values for cutting (not S0) must be >= 500
         let cut_s_values: Vec<f64> = result.gcode.lines()
             .filter(|l| l.starts_with("G1 ") && !l.contains("S0"))
             .filter_map(|l| {
@@ -2047,11 +2087,47 @@ mod tests {
 
         for &s in &cut_s_values {
             assert!(
-                s >= 500.0,
-                "OffsetFill mode: cut S={s} < s_min=500. The s_min floor is not applied.\n\
+                s <= 100.0,
+                "OffsetFill mode: cut S={s} exceeds s_max=100 (power=10%).\n\
                  G-code:\n{}", result.gcode
             );
         }
+    }
+
+    /// W4: the line arm — the one the M4 default just turned on for every new
+    /// vector cut. This is the exact scenario in the finding: power=40,
+    /// power_min=60. Yesterday (M3) it emitted S400; unclamped M4 emits S600.
+    #[test]
+    fn w4_line_clamps_power_min_to_power() {
+        let mut layer = make_layer_line();
+        layer.power = 40.0;       // s_max = 400
+        layer.power_min = 60.0;   // unclamped s_min would be 600
+        layer.power_mode = "variable".to_string();
+        let obj = make_rect_obj("line_clamp", 0.0, 0.0, 10.0, 10.0, layer);
+
+        let result = generate_gcode(&[obj], 100.0, 1000.0, false).expect("generate_gcode");
+
+        assert!(result.gcode.contains("M4 S400"),
+            "Expected M4 S400 (power=40% of 1000); gcode:\n{}", result.gcode);
+        assert!(!result.gcode.contains("S600"),
+            "power_min=60 must NOT raise commanded power above power=40.\n\
+             G-code:\n{}", result.gcode);
+    }
+
+    /// W4: the clamp helper itself, including the degenerate inputs. Pinned
+    /// directly so the rule has a home that does not depend on any arm.
+    #[test]
+    fn w4_clamp_power_min_helper() {
+        assert_eq!(clamp_power_min(40.0, 60.0), 40.0, "must clamp down to power");
+        assert_eq!(clamp_power_min(40.0, 10.0), 10.0, "must pass through when below power");
+        assert_eq!(clamp_power_min(40.0, 40.0), 40.0, "equal is allowed");
+        // W3 is the owner's call and this must not disturb it: the current
+        // default of 0 passes through untouched.
+        assert_eq!(clamp_power_min(40.0, 0.0), 0.0, "power_min=0 default unaffected");
+        assert_eq!(clamp_power_min(0.0, 50.0), 0.0, "power=0 floors everything to 0");
+        assert_eq!(clamp_power_min(40.0, -5.0), 0.0, "never negative");
+        assert_eq!(clamp_power_min(f64::NAN, 50.0), 0.0, "NaN is not a power level");
+        assert_eq!(clamp_power_min(40.0, f64::NAN), 0.0, "NaN is not a power level");
     }
 
     // ─── P5: Engine robustness (limits + error propagation) ─────────────

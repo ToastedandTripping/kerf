@@ -12,7 +12,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../../app/store";
 import type { DesignObject } from "../../../app/types";
-import { DEFAULT_LAYERS } from "../../../app/types";
+import { DEFAULT_LAYERS, LINE_OVERLAY_DEFAULTS } from "../../../app/types";
 import {
   generateGcode,
   toCutObjectsForTest,
@@ -400,11 +400,25 @@ describe("B1 — M4 default and $32=0 warning at job generation", () => {
     expect(engrave.powerMode).toBe("variable");
   });
 
-  it("B1a: DEFAULT_LAYERS line layers retain powerMode='constant' (M3)", () => {
+  // Updated from the B1a-era expectation that line layers retain "constant".
+  // The default flipped: constant power holds commanded watts through every
+  // deceleration, over-exposing corners. M4 scales power with feed rate.
+  it("M4 default: DEFAULT_LAYERS line layers default to powerMode='variable' (M4)", () => {
     const lineLayers = DEFAULT_LAYERS.filter((l) => l.mode === "line");
+    expect(lineLayers.length).toBeGreaterThan(0);
     for (const layer of lineLayers) {
-      expect(layer.powerMode).toBe("constant");
+      expect(layer.powerMode).toBe("variable");
     }
+  });
+
+  // Regression guard for the default itself. Goes RED if anyone edits
+  // `layerDefaults.powerMode` in src/app/types.ts back to "constant": every
+  // shipped layer except Engrave (which sets "variable" explicitly) inherits it,
+  // so the filter below would find them and the assertion would fail.
+  it("M4 default regression guard: no shipped layer and no new line overlay defaults to constant power", () => {
+    const constantLayers = DEFAULT_LAYERS.filter((l) => l.powerMode === "constant");
+    expect(constantLayers.map((l) => l.name)).toEqual([]);
+    expect(LINE_OVERLAY_DEFAULTS.powerMode).toBe("variable");
   });
 
   it("B1c: warns when a fill layer is in job but $32=0 (laser mode disabled)", async () => {
@@ -451,6 +465,39 @@ describe("B1 — M4 default and $32=0 warning at job generation", () => {
       (t) => t.includes("$32") && t.includes("M4") && t.includes("dynamic power")
     );
     expect(has32Warning).toBe(true);
+  });
+
+  // ─── W1: the $32=0 warning must cover pure vector jobs now that they emit M4 ──
+
+  it("W1: pure vector-cut job with a variable-power layer warns at $32=0", async () => {
+    // Layer 2 ("Cut") is mode 'line' and now inherits powerMode 'variable'.
+    // No fill layer and no image is in this job, so the old gate would have
+    // stayed silent while the machine received an M4 that does nothing.
+    useStore.setState({ grblLaserMode: false, layers: DEFAULT_LAYERS });
+    useStore.getState().addObject({ ...makeRect("r1", 0, 0, 10, 10), layerIndex: 2 });
+
+    await generateGcode();
+
+    const warnings = useStore.getState().consoleLines.map((l) => l.text);
+    expect(
+      warnings.some((t) => t.includes("$32") && t.includes("M4") && t.includes("over-exposing"))
+    ).toBe(true);
+  });
+
+  it("W1: pure vector-cut job of only constant-power layers does NOT get the $32 warning", async () => {
+    // The other half of the gate, asserted so the fix cannot be "warn always".
+    // M3 at $32=0 does what the operator asked; the separate constant-power
+    // advisory already speaks to that case.
+    useStore.setState({
+      grblLaserMode: false,
+      layers: DEFAULT_LAYERS.map((l) => ({ ...l, powerMode: "constant" as const })),
+    });
+    useStore.getState().addObject({ ...makeRect("r1", 0, 0, 10, 10), layerIndex: 2 });
+
+    await generateGcode();
+
+    const warnings = useStore.getState().consoleLines.map((l) => l.text);
+    expect(warnings.some((t) => t.includes("$32"))).toBe(false);
   });
 
   it("B1 regression: M3/constant layer emits unchanged layer settings (no silent M4 upgrade)", async () => {

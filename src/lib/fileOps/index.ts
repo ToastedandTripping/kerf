@@ -6,7 +6,7 @@ import type {
   MaterialPreset,
   LineOverlay,
 } from "../../app/types";
-import { DEFAULT_LAYERS, KERF_FORMAT_VERSION } from "../../app/types";
+import { DEFAULT_LAYERS, KERF_FORMAT_VERSION, LINE_OVERLAY_DEFAULTS } from "../../app/types";
 import { pointsBBox, rotatePathPoint, POINTS_EPSILON } from "../geometry";
 import { DEFAULT_MATERIALS } from "../materials";
 import { addRecentFile } from "../recentFiles";
@@ -118,8 +118,100 @@ async function checkUnsavedChanges(): Promise<boolean> {
  * the new convention, and the rot≠0 desync repair bakes the rotation FIELD to
  * 0 (a user's 45° reads 0° afterwards — visually exact, lossy on the field).
  */
-export function loadProjectWithMigrations(project: KerfProject): void {
+/**
+ * W2 — a loaded document must state its own power mode.
+ *
+ * `lineOverlay` is only ever WRITTEN in two places: the formatVersion<3
+ * sub-layer migration, and `updateLineOverlay` when the operator actually opens
+ * the overlay panel. So a project saved on a current build with a Fill+Line
+ * layer whose overlay was never touched is stamped v3 with NO `lineOverlay` key.
+ * On reopen the v3 migration does not run, and generation would fall through to
+ * LINE_OVERLAY_DEFAULTS — which is now "variable". That design's overlay pass
+ * was physically cut as M3; silently re-reading it as M4 is exactly what the
+ * deliberate constant-power exclusion exists to prevent.
+ *
+ * The fix belongs here, at load, not at generation: the document is given an
+ * EXPLICIT overlay so it carries its own mode from then on, rather than
+ * inheriting whatever today's default happens to be. Layers created in-session
+ * are untouched and keep the new variable default.
+ *
+ * Only `powerMode` is pinned to the legacy value. The other fields take the
+ * current defaults, because they never had a mode-dependent meaning and their
+ * values have not changed.
+ *
+ * W5 — THIS ONLY APPLIES TO FILES THAT PREDATE THE FLIP, and the caller's
+ * formatVersion gate is what establishes that.
+ *
+ * The first version of this function ran on every file, which reproduced the
+ * defect it was written to fix, in the opposite direction: through v3, a
+ * missing `lineOverlay` meant either "saved before the flip, cut as M3" or
+ * "saved after it, cut as M4, panel never opened", and this stamped `constant`
+ * on both. An operator could set a layer to Fill+Line, see Variable (M4), cut
+ * the part, save, reopen the next morning and find it reading Constant (M3) —
+ * silently, with no console line and no .bak, because that tracking was itself
+ * gated on `formatVersion < KERF_FORMAT_VERSION` and a v3 file never tripped it.
+ *
+ * Same shape as the P2-A defect: an inference drawn from the absence of a
+ * field, after absence had stopped meaning one thing. The real fix is that
+ * absence no longer occurs — `toProject` now always persists an explicit
+ * overlay (format version 4) — and this function handles only the files
+ * written before that was true.
+ */
+export function materialiseMissingLineOverlays(project: KerfProject): void {
+  if (!Array.isArray(project.layers)) return;
+  for (const layer of project.layers) {
+    if (!layer || layer.mode !== "fillLine") continue;
+    if (layer.lineOverlay) continue;
+    const legacy: LineOverlay = {
+      ...LINE_OVERLAY_DEFAULTS,
+      // Deliberate divergence from the current default: see the doc comment.
+      powerMode: "constant",
+    };
+    layer.lineOverlay = legacy;
+  }
+}
+
+export function loadProjectWithMigrations(
+  project: KerfProject,
+  opts: { fromDisk?: boolean } = {}
+): boolean {
+  const { fromDisk = true } = opts;
   const v = project.formatVersion; // undefined => legacy v0
+
+  // Forward-version guard.
+  //
+  // Until now no build refused a file stamped NEWER than itself.
+  // `parseAndValidateProject` never reads `formatVersion` at all, so a v5 file
+  // met an older build like this: every `v < n` gate below evaluated false, the
+  // file loaded as-is, and the stamp on line ~200 was then rewritten DOWN to the
+  // running build's version — a silent downgrade, and the file's next save
+  // cements it.
+  //
+  // THE PROPERTY THAT MAKES THAT SURVIVABLE TODAY, WHICH WAS RECORDED NOWHERE:
+  // it only holds because every format bump so far has ADDED a field that older
+  // code ignores, never changed the meaning of an existing one. v4 is exactly
+  // that — an explicit `lineOverlay` where there used to be an absence. Under
+  // that property, skipping every migration is arithmetic landing correctly
+  // rather than a decision anyone made, and the downgrade loses a key rather
+  // than corrupting a value.
+  //
+  // It is not a property to rely on. `migrateSpeedToMmMin` is already
+  // NON-IDEMPOTENT — it multiplies every speed by 60 — so the first bump that
+  // changes a meaning, met by a file an older build stamped down in between,
+  // is a silent 60x speed error on a 40W laser. Refuse instead, and refuse
+  // outright: no read-only load, no partial parse. A file this build cannot
+  // fully understand is one it must not rewrite.
+  if (v !== undefined && v > KERF_FORMAT_VERSION) {
+    const store = useStore.getState();
+    const msg =
+      `This project was saved by a newer version of Kerf (file format ${v}; ` +
+      `this build understands up to ${KERF_FORMAT_VERSION}). It was not opened, ` +
+      `because loading it would silently downgrade it. Update Kerf to open this file.`;
+    store.setStatusMessage("Project was saved by a newer version of Kerf");
+    store.addConsoleLine(msg, "error");
+    return false;
+  }
+
   if (v === undefined || v < 1) {
     // geometry: ONLY legacy v0 files
     migrateFlipTransforms(project.objects);
@@ -133,10 +225,24 @@ export function loadProjectWithMigrations(project: KerfProject): void {
     // sub-layers → fillLine
     migrateSubLayersToFillLine(project);
   }
+  // W2/W5: a document coming off disk must STATE its own power mode rather
+  // than inherit today's default.
+  //
+  // The `< 4` gate is load-bearing, not decorative. Below v4 an absent
+  // `lineOverlay` unambiguously means "written before the M4 default flip",
+  // and the layer was cut as M3 — stamp it constant. From v4 on, `toProject`
+  // always persists an explicit overlay, so an absence cannot arise from a
+  // file this build wrote, and a v4 file is left exactly as saved. Widening
+  // this to every version is the W5 defect; see materialiseMissingLineOverlays.
+  if (fromDisk && (v === undefined || v < 4)) {
+    materialiseMissingLineOverlays(project);
+  }
+
   // Stamp AFTER migration completes successfully; a throw leaves version
   // unstamped so the file re-migrates on next load (never seal over partial state).
   project.formatVersion = KERF_FORMAT_VERSION;
   useStore.getState().loadProject(project);
+  return true;
 }
 
 export const fileOperations = {
@@ -146,17 +252,23 @@ export const fileOperations = {
 
     // Fresh empty literal: the migrations are no-ops, but newProject routes
     // through the wrapper anyway — the no-exceptions rule is the point.
-    loadProjectWithMigrations({
-      version: "0.1.0",
-      name: "Untitled",
-      objects: [],
-      layers: DEFAULT_LAYERS,
-      camera: { x: 0, y: 0, zoom: 1 },
-      workspaceWidth: 500,
-      workspaceHeight: 300,
-      notes: "",
-      materials: DEFAULT_MATERIALS,
-    });
+    // fromDisk: false — a NEW project is new work and takes the current
+    // (variable-power) defaults. The legacy constant-power materialisation is
+    // for documents that were already cut, and must not touch this path.
+    loadProjectWithMigrations(
+      {
+        version: "0.1.0",
+        name: "Untitled",
+        objects: [],
+        layers: DEFAULT_LAYERS,
+        camera: { x: 0, y: 0, zoom: 1 },
+        workspaceWidth: 500,
+        workspaceHeight: 300,
+        notes: "",
+        materials: DEFAULT_MATERIALS,
+      },
+      { fromDisk: false }
+    );
     useStore.getState().setProjectPath(null);
   },
 
@@ -205,7 +317,9 @@ export const fileOperations = {
           _pendingBakContents.set(pathStr, content);
           _pendingBakPaths.add(pathStr);
         }
-        loadProjectWithMigrations(project);
+        // A refused file must not become the current project, and must not be
+        // added to Recent Files — the next click there would only refuse again.
+        if (!loadProjectWithMigrations(project)) return;
         useStore.getState().setProjectPath(pathStr);
         addRecentFile(pathStr);
       }
@@ -264,7 +378,7 @@ export const fileOperations = {
         _pendingBakContents.set(filePath, content);
         _pendingBakPaths.add(filePath);
       }
-      loadProjectWithMigrations(project);
+      if (!loadProjectWithMigrations(project)) return;
       useStore.getState().setProjectPath(filePath);
       addRecentFile(filePath);
     } catch (e) {
@@ -542,6 +656,11 @@ export function migrateSubLayersToFillLine(project: KerfProject): void {
           powerMin: typeof lineSub.powerMin === "number" ? lineSub.powerMin : 0,
           speed: typeof lineSub.speed === "number" ? lineSub.speed : 1200,
           passes: typeof lineSub.passes === "number" ? lineSub.passes : 1,
+          // DELIBERATE divergence from LINE_OVERLAY_DEFAULTS (which is now
+          // "variable"): a project file written before the variable-power default
+          // was physically cut as M3. Reinterpreting a stored-mode-less file as M4
+          // would silently change the output of an existing design nobody asked to
+          // change. New overlays get "variable"; migrated ones keep "constant".
           powerMode: (typeof lineSub.powerMode === "string"
             ? lineSub.powerMode
             : "constant") as import("../../app/types").PowerMode,
@@ -572,6 +691,11 @@ export function migrateSubLayersToFillLine(project: KerfProject): void {
           powerMin: lineSub && typeof lineSub.powerMin === "number" ? lineSub.powerMin : 0,
           speed: lineSub && typeof lineSub.speed === "number" ? lineSub.speed : 1200,
           passes: lineSub && typeof lineSub.passes === "number" ? lineSub.passes : 1,
+          // DELIBERATE divergence from LINE_OVERLAY_DEFAULTS (which is now
+          // "variable"): a project file written before the variable-power default
+          // was physically cut as M3. Reinterpreting a stored-mode-less file as M4
+          // would silently change the output of an existing design nobody asked to
+          // change. New overlays get "variable"; migrated ones keep "constant".
           powerMode: (lineSub && typeof lineSub.powerMode === "string"
             ? lineSub.powerMode
             : "constant") as import("../../app/types").PowerMode,
