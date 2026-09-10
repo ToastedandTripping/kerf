@@ -31,6 +31,26 @@ only as a pointer; the detail stays in the private register.
 Gate D1c — recommended default is "flip if buffered wins, keep perLine if no measurable
 difference"; you may override.
 
+### Variable power (M4) is the default for every new layer; constant power (M3) exists for the stationary beam, not for cutting.
+*2026-09-10, Lee*
+
+Constant power was the default for every shipped layer except Engrave, so nearly all cutting ran at M3 without anyone selecting it. M3 holds commanded power regardless of head velocity, so wherever the head decelerates the same energy lands on less travel and the material is overexposed; Lee independently reported the predicted symptom, corners burning harder than the rest of the cut. Fix B1 flipped fill and raster layers to M4 for exactly this reason in an earlier pass and left line layers behind with a comment asserting through-cuts did not need it. M4 also darkens a stationary head, which matters while the pause re-arm and the laser-switch wedge are open. Constant power remains selectable and is still correct where the beam must fire with the head stationary — framing, test fire, setting focus — because M4 at zero velocity emits nothing. Projects already on disk keep their stored mode. Shipped as c8400de.
+
+### The next release keeps the full feature set rather than visibly disabling the unqualified features.
+*2026-09-10, Lee*
+
+The remediation plan recommended a restricted envelope — constant-power and Fire, Offset Fill, non-zero kerf and the affected compound ordering shown as unavailable until qualified — on the grounds that explicit refusal removes exposure without putting a new geometry engine on the safety-critical path. Lee chose to preserve every feature instead, accepting a larger program and a longer road to clearing both blockers. The consequence is that the geometry corrections move from refused-at-the-boundary to must-be-fixed-before-release, and plan batch 2.3 must be re-specified from a gate into a set of corrections.
+
+### Pause is hold-only, and becomes stop wherever a dark hold has not been observed on hardware.
+*2026-09-10, Lee*
+
+Pause currently sends 0x9E after waiting for a full hold, including when that wait times out, and that byte is the one confirmed to re-arm the beam. The accessory-flag alternative was rejected as the primary because the flag may describe modal enable rather than emitted light, and a toggle sent on stale information restores output. Hold-only removes the known restoring action from the ordinary pause path immediately rather than gating it on a flag whose meaning is still unverified. Explicit fallback: where a resumable dark hold cannot be qualified, pause means stop. Combined with the status-only evidence ruling, that fallback is effectively permanent for now.
+
+### The geometry and topology program is deferred; the region-offset dependency decision stays open and unmade.
+*2026-09-10, Lee*
+
+Kerf compensation expands holes without accounting for which side is waste, and Offset Fill closes open paths and discards split regions. Patching the single-ring algorithm in place was rejected as high risk of the next hole, split or collapse defect. Approving a region-offset engine was deferred rather than refused: it is a program of its own, it changes cut dimensions, and it is entirely independent of the live stopping failures, so mixing them slows the part that matters. The standing Gate D2 architect call is unchanged by this and remains open.
+
 ---
 
 ## Engineering pins
@@ -42,13 +62,35 @@ safety-critical abort order (`!` → ~100ms settle → realtime `0x18` → condi
 never an ack-awaited write in between, that recreates the F13 deadlock).
 
 ### `$32=1` is hard-gated at job_start and `streamingMode` defaults to `perLine`
-*2026-07-05*
+*2026-07-05, amended 2026-09-10*
 
 `$32=1` hard-gated at job_start, JobEvents (Progress/Console/Status/Finished) coalesced
 50-100ms, `streamingMode` localStorage rollback flag defaulting `perLine`.
 
 > Status — whether Phase 2 has started — is tracked in `ROADMAP.md`, not here. This entry
 > records only what was decided.
+
+**Amended, Lee, 2026-09-10:** The `$32=1` half of this entry describes behaviour the code has never had. Verified against the tree 2026-09-10: `gcodeGen.ts:888` is a console warning, not a gate, and it fires only when the job contains a fill or raster layer — so a cut-only job, a Frame, or a material test can run with `$32=0` and no warning at all. The Rust buffered streaming path does gate on it (`serial.rs:552`), but `perLine` is the default and has no gate anywhere. This entry has been asserting a completeness that does not exist, and this session's first remediation plan trusted it and was failed by its critic for doing so. The `streamingMode` defaults to `perLine` half of the entry stands. Making the gate real is plan batches 2.1 and 2.2.
+
+### Every abort routes through one shared stop operation, whose feed hold is conditional on verified laser-off behaviour.
+*2026-09-10, Lee*
+
+A narrow reorder of the two job-abort sites was rejected: it would have fixed one path and left manual STOP, writer cancellation and completion inconsistent with it, duplicating the stop policy a third time. The plan critic also established that delegating blindly to emergencyStop is unsafe, because that function opens with a feed hold whose laser-off behaviour depends on $32=1, which nothing enforces. So the shared operation skips the hold wherever the darkening behaviour is unverified. The single strongest reason for one shared stop: every abort must remain able to request a reset when the line channel cannot answer, which is exactly the state the known wedge produces.
+
+### START refuses to run until laser mode and power scale are written and read back matching.
+*2026-09-10, Lee*
+
+Automatically enabling on START was rejected because it makes pressing start mutate persistent machine configuration, and can fail after the operator has committed to running. A warning with an override was rejected as insufficient for a release. The operator must know that the configuration the job was generated against is the configuration the machine is actually running: a controller that acknowledges a settings write is not a controller that accepted it, and a stale power scale silently multiplies output.
+
+### Minimum power can never exceed commanded power, and the rule is enforced both at generation and at the store's write doors.
+*2026-09-10, Razor W4, Lee*
+
+powerMin was editable and completely inert on constant-power layers, so a layer left at power 40 with powerMin 60 was legal on disk. Under variable power the floor at gcode_gen.rs computed s_max.max(s_min) and emitted S600 — fifty per cent above the number in the Power box, on a layer the operator did not knowingly change. The double enforcement looks redundant and is not: the Rust clamp is the authority for what the machine receives, but generation-side enforcement does not travel with a document that a different build may open, and a shipped v0.8.28 has no clamp at all. The store-side clamp stops the invalid pair from ever being written to the file. Do not remove either as duplication. The same defect existed in the grayscale ramp, where an inverted pair also reversed the ramp; both derivations share one helper.
+
+### A project file stamped newer than the running build is refused, never loaded and silently re-stamped downward.
+*2026-09-10, Razor W6, Lee*
+
+No build read formatVersion on the way in: every migration gate was false for a future version, which is arithmetic landing correctly rather than a decision, and the stamp was then unconditionally rewritten down to the running build's version. What has kept that survivable is a property nobody had written down — the downgrade is self-limiting because a build stamps to its own version and gates every migration strictly below it, so the only migrations that re-run on return are ones the older build never had. That fails the moment a non-idempotent migration meets a file an older build edited in between, and migrateSpeedToMmMin already multiplies by 60. Refuse outright: not loaded, not stamped, not added to Recent Files.
 
 ---
 
@@ -84,6 +126,16 @@ machine behaviour.
 
 Read from the machine 2026-09-05: `[VER:1.1f.20220810:]`, vendor string "CV master-release 3.0.4", `[OPT:VHL,127,65536]` — a 127-block planner and 65536-byte RX buffer against stock GRBL's 15 and 128. Two consequences. (a) Behaviours observed on this machine that stock source says are impossible are real and must be handled, not argued away: the intermittent laser-switch wedge (controller stops acking line commands after `M3`/`M4` while still answering `?` with `Idle`, until `0x18`) is one such, and a `0x18` that failed to stop the beam on 2026-09-02 is another. (b) Phase 2A's premise is questionable here — a 127-block planner means per-line streaming may already keep this controller fed, so the stutter buffered mode was built to cure may not exist on this hardware. Record the planner depth alongside any gate D1c A/B result.
 
+### Hardware evidence for this program is status-only; optical shutdown cannot be qualified, and powered release stays blocked on that basis.
+*2026-09-10, Lee*
+
+A time-correlated optical sensor was recommended and an enclosed camera with a synchronised marker offered as a weaker fallback with an explicitly limited acceptance criterion. Lee chose status-only. The consequence is stated rather than hidden: a status report says what the software commanded and never what the beam emitted, and that gap is precisely what let two reviews pass a defect that re-arms the laser. Most of the program is unaffected — the wedge trigger comes off a serial trace, and Phases 0 through 2 close on tests — but any claim that the beam went dark is unqualifiable, so hold-only pause cannot be qualified and powered release stays blocked. If measurement never becomes available, the honest cost is a release that stays blocked, not confidence that was invented.
+
+### The laser-switch wedge requires a captured trigger and a prevention before release; a quiet run is not closure.
+*2026-09-10, Lee*
+
+Accepting containment on a restricted workflow was available and was rejected; shipping after a short non-reproduction was rejected outright. The defect has already demonstrated it can hit the same spot twice and then vanish for a whole run, so a session that sees nothing cannot distinguish a fixed intermittent failure from one that did not occur that day. Containment remains a possible fallback but must never be reported as the wedge being fixed, and taking it would require expressly redefining the blocker and stating the limitation to the operator.
+
 ---
 
 ## Evidence corrections
@@ -104,3 +156,8 @@ Traced to gnea/grbl source and confirmed on the owner's hardware 2026-09-05. `DI
 *2026-09-05*
 
 `src-tauri/src/sim/grbl.rs` clears `spindle_on` when `0x9E` arrives in Hold, and never sets it in the first place at hold-complete. Both are wrong against stock GRBL 1.1. Consequently the whole green pause-volley suite (`pause_volley_hold_then_0x9e_clears_spindle_resume_keeps_it_off` and siblings) asserts a behaviour the real controller does not have, and it passed the beam-re-arm defect through two reviews. The TS side has the same hole from the other end: the v0.8.28 test mocks `getStatusReport`, so it never meets the command lock that makes the poll useless in production. Treat sim-green on any spindle/hold path as unproven until the simulator models the toggle and the firmware's own hold-off, and until the TS test exercises the real lock.
+
+### `powerMin` reaches no G-code on any vector path in either power mode; the real minimum-power control is `$31`, which Kerf never touches.
+*2026-09-10, Razor, traced*
+
+In gcode_gen.rs, s_min has exactly one consumer, s_max.max(s_min). ScanLineParams has no s_min field at all, and FillParams.s_min is hardcoded 0.0 at every non-test call site. With the W4 clamp in place effective_s_max equals s_max unconditionally, so powerMin affects nothing generated for line, fill, offsetFill or fillLine, under M3 or M4 — constant power already used bare s_max. It is live only for image raster, through the grayscale ramp. The UI nevertheless presents Min Pwr as a working setting with a live cap. GRBL's actual minimum-power control under dynamic scaling is $31, which appears nowhere in src/. This matters beyond tidiness: it removes the assumed remedy for M4 under-powering short segments, so a non-zero default is not a one-line change — it needs $31 or per-move S.
