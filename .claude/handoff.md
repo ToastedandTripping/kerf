@@ -43,13 +43,21 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - **Phase 2A A/B test (gate D1c) is deferred behind both defects** and its premise is now in question: this controller reports a 127-block planner and 65536-byte RX buffer (`[OPT:VHL,127,65536]`), so per-line streaming may already keep it fed. Record that in the A/B result before buffered is considered for default.
 
+- **OWED BY LEE: the scrap comparison cut (M4 default validation).** Cut a sharp-cornered square AND a perforated line on scrap at unchanged settings, then compare against a part cut on the previous build. Confirm `$32=1` first — at `$32=0` the controller treats M4 as M3 and the comparison is meaningless. This answers three questions at once: whether the corner over-burn was M3 (Lee reported the symptom independently), whether M4 under-powers short segments (Razor: a 1mm perforation dash reaches ~61% peak, ~40% mean at the app's 300 mm/s² fallback), and whether the new default is safe to keep. Nothing in the tree has ever emitted M4 for a vector line layer, so the first physical cut on the new default is unverified.
+
+- **Four astra audits + a 20-batch remediation plan exist and are unread by any later session.** Reports at `~/marvin/state/audits/kerf-astra-2026-09-08/` — A1 firmware contract (7 findings), A2 test validity (5), A3 concurrency (8), A4 gcode/geometry (9), reconciled into 22 ranked items in `PLAN.md` (6 phases, 20 relay-sized batches, each written to be liftable into its own spec file). Read `PLAN.md` before proposing any remediation: it explicitly rejects several tempting fixes, including the ROADMAP's parked compare-position-and-resend recovery.
+
+- **Batch 0.1 (native command-body trace harness) is the next relay and is unblocked.** No prerequisites, no pending decision, no hardware. It is first because A2 established the existing suite cannot distinguish a working stop from a mocked one, so fixing production code against it before 0.1 lands is theatre. 15 of the 20 batches need no laser; only 3.1, 3.2, 4.1, 4.2 and 4.3 do.
+
+- **Batch 2.3 must be re-specified before anyone implements it.** It was written to enforce a RESTRICTED release envelope; Lee chose the full feature set, so its refusals have to become actual corrections (R8, R13, R18, R19). It will likely split into three or four batches. The M4 default flip already pre-empts part of R8.
+
 ## Open questions awaiting Lee
 
 | Question                                                                                            | Why it matters                                                                        | Raised     |
 | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ---------- |
 | ~~Is the laser repaired and back in service?~~ **Confirmed 2026-08-27**                             | Constraint lifted. Hardware test and Phase 2 unblocked.                               | 2026-07-10 |
 | Can you provide a sample Inkscape SVG that reproduces the path-coordinate drift?                    | Bug can't be fixed without a repro; the import code has been audited clean otherwise  | 2026-06-21 |
-| Clipper2 dependency decision for Phase 4 (offsetFill compound correctness, kerf-offset-on-fillLine) | Gate D2 — changes real cut geometry output, needs your sign-off before Phase 4 starts | 2026-07-05 |
+| Clipper2 dependency decision for Phase 4 (offsetFill compound correctness, kerf-offset-on-fillLine) (resolved 2026-09-10) | Gate D2 — changes real cut geometry output, needs your sign-off before Phase 4 starts | 2026-07-05 |
 | v0.9 Camera & Rotary — do you have/plan to get the hardware?                                        | Gate D4 — the feature stays parked with no planning until confirmed                   | 2026-07-05 |
 | streamingMode default: flip `perLine`→`buffered` after session #1's A/B?                            | Gate D1c — the rule is recorded in `DECISIONS.md`; you may override                   | 2026-07-05 |
 | Given the controller's 127-block planner, is Phase 2A buffered streaming still worth shipping on this machine? | Phase 2A was built to cure stutter caused by stock GRBL's 15-block planner. This vendor fork has 127. The A/B test may show no difference, which would make gate D1c a decision to keep perLine permanently. | 2026-09-05 |
@@ -57,6 +65,24 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-09-10
+
+**Four independent astra audits of the codebase, a 20-batch remediation plan, seven owner decisions recorded, and one shipped fix.**
+
+**The audits.** Four `gpt-6-astra` runs against a pinned clone of `c4bf29f`, briefed with the machine reality up front (Creality Falcon 2 40W, ESP32-S3 board, closed-source vendor firmware speaking GRBL 1.1 — so gnea/grbl source is evidence of intent, never proof about this machine). 29 findings. Reports in `~/marvin/state/audits/kerf-astra-2026-09-08/`. A first attempt on 2026-09-08 lost four concurrent runs to the Codex usage limit — clean exits, no artifacts, ~491K tokens — and the salvage came from interim narration in the logs. Re-run serially with incremental-write briefs; every one landed. Measured cost: one high-effort run is ~36% of the 5-hour window, so two fit and four never could have.
+
+**Convergences, which is where the weight is.** The job-abort order appears in FOUR independent reports (A1 F1, A2 F1, A3 F1, A4 corroborating) — `jobStream.ts:273` and `:412` both `await send("M5")` before `softReset()`, violating the standing pin that the abort order must never contain an ack-awaited write. The `$32`/`$30` configuration-trust problem appears in THREE, from three different entry points. Neither was in any brief.
+
+**The plan.** `PLAN.md`, 114KB, 6 phases, 20 relay-sized batches, 29 findings reconciled into 22 ranked by reachability rather than by the severity label the auditor typed. Its headline: an abort-order patch alone clears neither blocker. It argued with its own inputs — rejected three of the plan critic's claims, read the `serialport` crate source itself to check A3's stranded-reset claim, and rejected the ROADMAP's parked compare-position-and-resend recovery on the grounds that position cannot establish whether an M-code, dwell or repeated cut executed.
+
+**Seven owner decisions**, recorded via an artifact docket (https://claude.ai/code/artifact/98faf585-7d7d-441f-a79d-7b37b375a2bb, choices stored in its db). Five as recommended, two overrides — full feature set rather than a restricted envelope, and status-only hardware evidence rather than an optical instrument.
+
+**Shipped: `c8400de` — M4 becomes the default power mode.** Constant power (M3) was the default for every layer except Engrave, so nearly all cutting ran at constant power without anyone choosing it; Lee independently reported the predicted symptom (corners burning harder than the rest of the cut). Ted + Razor, three fix passes. Five distinct defects surfaced from one default flip: the `$32=0` warning didn't cover vector jobs; the legacy-file exclusion had a hole; min power could exceed commanded power (a layer at power 40 / powerMin 60 emitted S400 and would have emitted S600); the fix for the third introduced a mirror-image regression; and no build refused a file stamped newer than itself. Clamp ended up at the store's write doors rather than on four separate controls. 738 TS / 234 Rust green, verified by the orchestrator rather than taken on report.
+
+**Four of those five defects were the same shape**: a correct fix applied to one instance and not its siblings. `emergencyStop` vs the two abort paths; `$32` gated on the buffered path but not the default one; M4 on engrave but not cuts; and the abort-order patch itself. The suite had encoded two of them as requirements. Lee named the pattern mid-session as general across all projects.
+
+Next: the scrap comparison cut, the `probe-grbl.py` trace, then batch 0.1.
 
 ### 2026-09-05
 

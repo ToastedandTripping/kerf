@@ -2,9 +2,32 @@ import { useState, useRef, useMemo } from "react";
 import { useShallow } from "zustand/shallow";
 import { useStore } from "../../app/store";
 import type { Layer, CutMode, LineOverlay, MaterialPreset } from "../../app/types";
+import { LINE_OVERLAY_DEFAULTS, clampPowerMin } from "../../app/types";
 import { PowerCurveEditor, PowerCurveThumbnail } from "./PowerCurveEditor";
 import type { CurvePoint } from "./PowerCurveEditor";
 import { SpeedInput } from "./SpeedInput";
+
+// W4 — minimum power can never exceed commanded power.
+//
+// The enforcement lives in Rust (`clamp_power_min` in
+// src-tauri/src/engine/gcode_gen.rs), because generation is the one point every
+// caller must pass through. These helpers are the OPERATOR-FACING half: they
+// stop the invalid state being entered at all, and make the reason visible,
+// rather than letting someone set Min Pwr above Power and then silently having
+// it ignored at the machine. Same rule, stated in the same direction, in both
+// places.
+/** Lowering Power drags Min Pwr down with it, so the pair can never invert.
+ *  The Min Pwr number visibly moves — that IS the feedback. */
+function withPowerClamp(
+  power: number,
+  currentPowerMin: number
+): { power: number; powerMin?: number } {
+  return currentPowerMin > power ? { power, powerMin: power } : { power };
+}
+
+function powerMinHint(power: number): string {
+  return `Minimum power is capped at Power (${power}%) — min power can never exceed commanded power.`;
+}
 
 const inputStyle: React.CSSProperties = {
   background: "var(--bg-input)",
@@ -461,7 +484,9 @@ function LayerRow({
                   min="0"
                   max="100"
                   value={layer.power}
-                  onChange={(e) => onManualUpdate({ power: Number(e.target.value) })}
+                  onChange={(e) =>
+                    onManualUpdate(withPowerClamp(Number(e.target.value), layer.powerMin))
+                  }
                   style={{ flex: 1, accentColor: "var(--accent-warm)" }}
                 />
                 <input
@@ -470,7 +495,12 @@ function LayerRow({
                   max="100"
                   value={layer.power}
                   onChange={(e) =>
-                    onManualUpdate({ power: Math.max(0, Math.min(100, Number(e.target.value))) })
+                    onManualUpdate(
+                      withPowerClamp(
+                        Math.max(0, Math.min(100, Number(e.target.value))),
+                        layer.powerMin
+                      )
+                    )
                   }
                   style={{ ...inputStyle, width: "42px", textAlign: "right" }}
                 />
@@ -480,22 +510,27 @@ function LayerRow({
 
             {/* Min Power */}
             <SettingRow label="Min Pwr">
-              <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
+              <div
+                style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}
+                title={powerMinHint(layer.power)}
+              >
                 <input
                   type="range"
                   min="0"
-                  max="100"
-                  value={layer.powerMin}
-                  onChange={(e) => onManualUpdate({ powerMin: Number(e.target.value) })}
+                  max={layer.power}
+                  value={Math.min(layer.powerMin, layer.power)}
+                  onChange={(e) =>
+                    onManualUpdate({ powerMin: clampPowerMin(layer.power, Number(e.target.value)) })
+                  }
                   style={{ flex: 1, accentColor: "var(--accent-warm)" }}
                 />
                 <input
                   type="number"
                   min="0"
-                  max="100"
-                  value={layer.powerMin}
+                  max={layer.power}
+                  value={Math.min(layer.powerMin, layer.power)}
                   onChange={(e) =>
-                    onManualUpdate({ powerMin: Math.max(0, Math.min(100, Number(e.target.value))) })
+                    onManualUpdate({ powerMin: clampPowerMin(layer.power, Number(e.target.value)) })
                   }
                   style={{ ...inputStyle, width: "42px", textAlign: "right" }}
                 />
@@ -819,13 +854,7 @@ function LineOverlaySettings({
   layerColor: string;
   onUpdate: (changes: Partial<LineOverlay>) => void;
 }) {
-  const ov = overlay ?? {
-    power: 100,
-    powerMin: 0,
-    speed: 1200,
-    passes: 1,
-    powerMode: "constant" as const,
-  };
+  const ov = overlay ?? LINE_OVERLAY_DEFAULTS;
   return (
     <div
       style={{
@@ -861,7 +890,7 @@ function LineOverlaySettings({
             min="0"
             max="100"
             value={ov.power}
-            onChange={(e) => onUpdate({ power: Number(e.target.value) })}
+            onChange={(e) => onUpdate(withPowerClamp(Number(e.target.value), ov.powerMin))}
             style={{ flex: 1, accentColor: "var(--accent-warm)" }}
           />
           <input
@@ -870,7 +899,9 @@ function LineOverlaySettings({
             max="100"
             value={ov.power}
             onChange={(e) =>
-              onUpdate({ power: Math.max(0, Math.min(100, Number(e.target.value))) })
+              onUpdate(
+                withPowerClamp(Math.max(0, Math.min(100, Number(e.target.value))), ov.powerMin)
+              )
             }
             style={{ ...inputStyle, width: "42px", textAlign: "right" }}
           />
@@ -880,22 +911,27 @@ function LineOverlaySettings({
 
       {/* Min Power */}
       <SettingRow label="Min Pwr">
-        <div style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}>
+        <div
+          style={{ display: "flex", alignItems: "center", gap: "4px", width: "100%" }}
+          title={powerMinHint(ov.power)}
+        >
           <input
             type="range"
             min="0"
-            max="100"
-            value={ov.powerMin}
-            onChange={(e) => onUpdate({ powerMin: Number(e.target.value) })}
+            max={ov.power}
+            value={Math.min(ov.powerMin, ov.power)}
+            onChange={(e) =>
+              onUpdate({ powerMin: clampPowerMin(ov.power, Number(e.target.value)) })
+            }
             style={{ flex: 1, accentColor: "var(--accent-warm)" }}
           />
           <input
             type="number"
             min="0"
-            max="100"
-            value={ov.powerMin}
+            max={ov.power}
+            value={Math.min(ov.powerMin, ov.power)}
             onChange={(e) =>
-              onUpdate({ powerMin: Math.max(0, Math.min(100, Number(e.target.value))) })
+              onUpdate({ powerMin: clampPowerMin(ov.power, Number(e.target.value)) })
             }
             style={{ ...inputStyle, width: "42px", textAlign: "right" }}
           />

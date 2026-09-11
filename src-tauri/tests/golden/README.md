@@ -35,6 +35,7 @@ This directory holds committed, byte-for-byte snapshots of the **exact
 | `12_lead_in_out.gcode`                             | 3mm lead-in approach and 2mm lead-out exit on a closed contour                                                                                        |
 | `13_overcut.gcode`                                 | 2.5mm overcut past the closed contour's start point                                                                                                   |
 | `14_cross_hatch.gcode`                             | Fill layer with `cross_hatch` — horizontal pass plus a vertical second pass                                                                           |
+| `15_line_variable_power_min.gcode`                 | Line layer with `power_mode: "variable"` (M4) and a non-zero `power_min` — the default path since the M4 flip, plus the W4 power_min-vs-power clamp    |
 
 Fixture-construction code (and the exact input parameters for each) lives in
 `src/commands/gcode.rs`, `#[cfg(test)] mod golden_tests`.

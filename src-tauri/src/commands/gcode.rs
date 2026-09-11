@@ -826,6 +826,47 @@ mod golden_tests {
         assert_golden("14_cross_hatch", &result.gcode);
     }
 
+    // ── (15) line layer, VARIABLE power, non-zero power_min ────────────────
+
+    /// The path that the M4 default just made the common case, and which had
+    /// ZERO golden coverage: every other fixture in this corpus hardcodes
+    /// `power_mode: "constant"`, so the M4 count across the whole committed
+    /// corpus was zero, and the `line` arm had no variable-power test anywhere.
+    ///
+    /// It also pins W4's arithmetic in the same fixture. `power: 40` with
+    /// `s_value_max: 1000` gives s_max = 400. `power_min: 60` would give an
+    /// unclamped s_min of 600, and the M4 branch's `s_max.max(s_min)` would
+    /// then command S600 — 50% more power than the operator's Power box.
+    /// Clamped, power_min becomes 40, s_min becomes 400, and the commanded
+    /// value stays S400.
+    ///
+    /// So the expected S value in the fixture is **S400**, on an **M4** line:
+    /// 40% of 1000. If this fixture ever reads S600, W4 has regressed; if it
+    /// reads M3, the variable default has regressed.
+    #[tokio::test]
+    async fn golden_15_line_variable_power_min() {
+        let mut layer = base_layer("line");
+        layer.power = 40.0;                            // s_max = 400
+        layer.power_min = 60.0;                        // clamped to 40 => s_min = 400
+        layer.power_mode = "variable".to_string();     // M4
+        let mut obj = rect_obj("var_sq", 0.0, 0.0, 30.0, 20.0, layer);
+        obj.obj_type = "path".to_string();
+        obj.paths = vec![rect_path(0.0, 0.0, 30.0, 20.0)];
+        let result = generate_gcode(vec![obj], 100.0, Some(1000.0), None, None, None)
+            .await
+            .expect("generate_gcode should succeed");
+
+        // Asserted inline as well as against the fixture: a golden proves the
+        // bytes did not move, but only a named assertion says WHY these bytes.
+        assert!(result.gcode.contains("M4 S400"),
+            "expected M4 S400 (power=40% of s_value_max=1000); gcode:\n{}", result.gcode);
+        assert!(!result.gcode.contains("S600"),
+            "power_min=60 must not raise commanded power above power=40; gcode:\n{}",
+            result.gcode);
+
+        assert_golden("15_line_variable_power_min", &result.gcode);
+    }
+
     // ── determinism guard ────────────────────────────────────────────────────
 
     /// The generator must be a pure function of its inputs: no HashMap iteration

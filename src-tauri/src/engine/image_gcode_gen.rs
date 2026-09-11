@@ -354,7 +354,13 @@ fn generate_scan_gcode(
     limits::check_raster_pixels(width as usize, height as usize)
         .map_err(|e| e.to_string())?;
     let s_max = (req.power / 100.0 * req.s_value_max).round();
-    let s_min = (req.power_min / 100.0 * req.s_value_max).round();
+    // W4: same cross-clamp as the vector path. Here the hazard is different but
+    // the same class: grayscale interpolates each pixel between s_min and s_max
+    // (mask_fill.rs:358), so s_min > s_max inverts the ramp AND pushes every
+    // emitted S above the commanded power. Fixed at the one shared helper.
+    let s_min =
+        (super::gcode_gen::clamp_power_min(req.power, req.power_min) / 100.0 * req.s_value_max)
+            .round();
     let power_cmd = if req.power_mode == "variable" || is_grayscale { "M4" } else { "M3" };
     let rotation_rad = req.rotation.to_radians();
 
