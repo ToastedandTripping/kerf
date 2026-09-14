@@ -45,6 +45,16 @@ except ImportError:
 class Wire:
     def __init__(self, port, baud, logf):
         self.ser = serial.Serial(port, baud, timeout=0.05)
+        # DTR toggle: Arduino/ESP32 boards reset the MCU on the DTR falling
+        # edge (100nF cap to RESET).  Deassert first so the assert always
+        # produces an edge, then wait for the bootloader to hand off to GRBL.
+        # Without this, boards that don't auto-reset on port-open (ESP32-S3,
+        # some CH340 adapters) never start their UART — verified on the
+        # Creality Falcon 2 (2026-09-14).
+        self.ser.dtr = False
+        time.sleep(0.05)
+        self.ser.dtr = True
+        time.sleep(1.5)
         self.logf = logf
         self.q = queue.Queue()
         self.t0 = time.monotonic()
