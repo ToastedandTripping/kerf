@@ -127,7 +127,9 @@ export function buildTracedPathObjects(
         visible: true,
         locked: false,
         fill: null,
-        stroke: pathFill || layerColor,
+        // W1 fix: only use SVG fill as stroke for color traces. Binary mode
+        // always emits #000000/#ffffff which would override the layer color.
+        stroke: (pathFill && pathFill !== "#000000" && pathFill !== "#ffffff") ? pathFill : layerColor,
         strokeWidth: 1,
         opacity: 1,
         points: scaledPoints,
@@ -516,10 +518,14 @@ export function ImageTraceDialog({ open, onClose }: Props) {
 
   async function handleFullRes() {
     if (!selectedImage?.imageData || fullResLoading) return;
+    // W2 fix: capture generation before the async invoke so a param change
+    // during the trace invalidates this result (mirrors preview useEffect pattern).
+    const gen = generationRef.current;
     setFullResLoading(true);
     setError(null);
     try {
       const result = await invoke<TraceResult>("trace_image_command", { params: buildParams(1.0) });
+      if (gen !== generationRef.current) return; // params changed while tracing — discard
       setFullResPreview(result);
       setPreview({
         svg: result.svg,
@@ -531,6 +537,7 @@ export function ImageTraceDialog({ open, onClose }: Props) {
         computeFitZoomIndex(PREVIEW_CONTAINER_W, PREVIEW_CONTAINER_H, result.widthPx, result.heightPx)
       );
     } catch (e) {
+      if (gen !== generationRef.current) return;
       setError(String(e));
     } finally {
       setFullResLoading(false);
@@ -784,7 +791,8 @@ export function ImageTraceDialog({ open, onClose }: Props) {
               Adaptive threshold
             </label>
           )}
-          <label
+          {/* N1 fix: trace transparency is ignored in color mode — hide it */}
+          {mode !== "color" && <label
             style={{
               display: "flex",
               alignItems: "center",
@@ -800,7 +808,7 @@ export function ImageTraceDialog({ open, onClose }: Props) {
               onChange={(e) => setTraceTransparency(e.target.checked)}
             />
             Trace transparency
-          </label>
+          </label>}
         </div>
 
         {/* Fix 4: Layer selector */}

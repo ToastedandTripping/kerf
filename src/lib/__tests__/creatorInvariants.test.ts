@@ -373,6 +373,22 @@ describe("image trace", () => {
     // CCW in screen Y-down coords = positive signedArea
     expect(area).toBeGreaterThanOrEqual(0);
   });
+
+  // N2: color trace fill-to-stroke mapping
+  it("color trace: non-black fill is used as stroke; black fill falls back to layerColor", () => {
+    const layerColor = "#4a90e2";
+    // Color trace SVG: path with a non-black fill
+    const colorSvg = `<svg><path d="M 0 0 L 10 0 L 10 10 Z" fill="#ff0000"/></svg>`;
+    const colorObjs = buildTracedPathObjects(colorSvg, imgT, 100, 80, 0, layerColor);
+    expect(colorObjs.length).toBe(1);
+    expect(colorObjs[0].stroke).toBe("#ff0000");
+
+    // Binary trace SVG: path with #000000 fill (default binary output)
+    const binarySvg = `<svg><path d="M 0 0 L 10 0 L 10 10 Z" fill="#000000"/></svg>`;
+    const binaryObjs = buildTracedPathObjects(binarySvg, imgT, 100, 80, 0, layerColor);
+    expect(binaryObjs.length).toBe(1);
+    expect(binaryObjs[0].stroke).toBe(layerColor);
+  });
 });
 
 describe("pen tool (pointer pipeline)", () => {
