@@ -244,13 +244,6 @@ export async function textObjectToPaths(obj: DesignObject): Promise<DesignObject
     }
   }
 
-  // Update transform height for multiline
-  if (lines.length > 1) {
-    const totalHeight = lines.length * lineSpacing;
-    // The prepared objects already have absolute positions — just return them.
-    // The caller (gcodeGen auto-convert) replaces the text object with these paths.
-    void totalHeight; // height is implicit in the positioned glyphs
-  }
 
   return prepared;
 }

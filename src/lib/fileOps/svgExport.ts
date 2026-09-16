@@ -109,8 +109,8 @@ export function exportSvgContent(): string {
                 .replace(/&/g, "&amp;")
                 .replace(/</g, "&lt;")
                 .replace(/>/g, "&gt;");
-              const dy = li === 0 ? "0" : `${fs * 1.3}`;
-              elements += `    <tspan x="${anchorX}" dy="${dy}">${escaped}</tspan>\n`;
+              const dyAttr = li === 0 ? "" : ` dy="${fs * 1.3}"`;
+              elements += `    <tspan x="${anchorX}"${dyAttr}>${escaped}</tspan>\n`;
             }
             elements += `  </text>\n`;
           }

@@ -1016,6 +1016,7 @@ export function Viewport() {
             <textarea
               key={textEditingObj.id}
               autoFocus
+              title="Shift+Enter to confirm, Escape to cancel"
               value={textEditingObj.text ?? ""}
               style={{
                 position: "absolute",

@@ -411,12 +411,19 @@ export function PropertiesPanel() {
           {obj.type === "text" && (
             <PropertyGroup label="Text">
               <PropertyRow label="Content">
-                <input
+                <textarea
                   value={obj.text ?? ""}
                   onChange={(e) => updateObject(obj.id, { text: e.target.value })}
                   onFocus={beginEdit}
                   onBlur={commitEdit}
-                  style={inputStyle}
+                  rows={Math.min(5, (obj.text ?? "").split("\n").length || 1)}
+                  style={{
+                    ...inputStyle,
+                    resize: "vertical",
+                    lineHeight: "1.3",
+                    minHeight: "24px",
+                    fontFamily: "inherit",
+                  }}
                 />
               </PropertyRow>
               <NumberField
