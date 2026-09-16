@@ -445,6 +445,16 @@ verbatim and are not to be edited into summaries — this index points at them.
   control under dynamic scaling is `$31`; `$31` appears nowhere in `src/`. This is the assumed remedy for M4
   under-powering short segments, so it is load-bearing for the perforation question — belongs with the
   `$30`/`$32` settings work in the plan's Phase 2, gated on reading what the controller actually reports.
+- **Centerline tracing** — requires a different algorithm (medial axis / skeleton), not achievable
+  through vtracer. Deferred from the Phase 3A color tracing relay (stateless-jingling-lark plan).
+- **Custom font upload / system font picker** — Phase 2A bundles 4 fonts; a full font picker is
+  out of scope. Deferred from the text tool relay (stateless-jingling-lark plan).
+- **Rich text formatting (bold, italic, mixed sizes)** — deferred; the text tool ships with
+  single-weight fonts and uniform styling. Deferred from the text tool relay.
+- **Laser-stops-firing root cause** — distinct from the laser-switch wedge. Head keeps moving but
+  laser goes dark mid-job. Reported twice 2026-09-14, once 2026-09-16. No console data captured
+  before 2026-09-16. Phase 1 of stateless-jingling-lark adds a spindle-drop diagnostic to catch
+  it automatically; root cause investigation blocked on that data.
 - **SVG path-coordinate drift repro** — open since 2026-06-21, unreproduced; awaiting a sample
   Inkscape SVG. Import/transform code audited clean (`.claude/DECISIONS.md` → Evidence
   corrections).
