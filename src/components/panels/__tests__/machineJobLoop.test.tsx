@@ -73,6 +73,8 @@ function seedReadyToStart() {
     originTop: false,
     // workspaceVerified must be true or canStartJob blocks START.
     workspaceVerified: true,
+    // $32=1 gate: canStartJob blocks START and FRAME without laser mode.
+    grblLaserMode: true,
   });
 }
 
@@ -506,7 +508,7 @@ describe("pauseJob / resumeJob volley contract (P1-B A1)", () => {
     seedReadyToStart();
   });
 
-  it("pauseJob emits [! (0x21), 0x9E] — feedHold + spindle-stop-override, no line M5", async () => {
+  it("pauseJob emits [! (0x21)] only — feed hold, no 0x9E toggle", async () => {
     vi.useFakeTimers();
     mockSerial(() => ({ responses: ["ok"], drained: [] }));
 
@@ -514,12 +516,14 @@ describe("pauseJob / resumeJob volley contract (P1-B A1)", () => {
     await vi.runAllTimersAsync();
     await pausePromise;
 
-    // Exact volley: feedHold byte (0x21) then spindle-stop-override (0x9E)
-    expect(sentBytes()).toEqual([0x21, 0x9e]);
-    // No line-based M5 — the F13 hazard this fix eliminates
+    // Feed hold only — no 0x9E (which is a toggle that RE-ARMS the beam)
+    expect(sentBytes()).toEqual([0x21]);
+    // No line-based M5 — the F13 hazard
     expect(sentCommands()).not.toContain("M5");
     // No line-based M3 either
     expect(sentCommands()).not.toContain("M3");
+
+    vi.useRealTimers();
   });
 
   it("resumeJob emits [~ (0x7E)] only — no line M3 re-enable", async () => {
@@ -535,52 +539,25 @@ describe("pauseJob / resumeJob volley contract (P1-B A1)", () => {
     expect(sentCommands()).toHaveLength(0);
   });
 
-  it("pauseJob surfaces a console warning when 0x9E write fails", async () => {
-    vi.useFakeTimers();
-    let sendByteCount = 0;
-    mockInvoke.mockImplementation(async (cmd: string) => {
-      if (cmd === "serial_get_status")
-        return { status: "<Hold:0|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
-      if (cmd === "serial_send_byte") {
-        sendByteCount++;
-        if (sendByteCount === 2) {
-          // Second sendByte call (0x9E) fails
-          throw new Error("port vanished");
-        }
-        return undefined;
-      }
-      return undefined;
-    });
+  // 0x9E write-fail test REMOVED: 0x9E is no longer sent during pause.
+  // The firmware auto-stops the spindle at hold-complete ($32=1, enforced
+  // by canStartJob gate). Sending 0x9E was the bug — it toggled the
+  // spindle back on.
 
-    const pausePromise = pauseJob();
-    await vi.runAllTimersAsync();
-    await pausePromise;
-
-    // The feedHold byte (0x21) succeeded, then 0x9E was attempted
-    expect(sendByteCount).toBe(2);
-    // Console warning must surface — never degrade silently
-    const warnings = consoleTexts().filter((t) => t.includes("Spindle stop override"));
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("beam may still be on");
-
-    vi.useRealTimers();
-  });
-
-  it("handlePauseResume uses pauseJob (no line M5) when pausing", async () => {
+  it("handlePauseResume uses pauseJob (feed hold only, no 0x9E) when pausing", async () => {
     mockSerial(() => ({ responses: ["ok"], drained: [] }));
     useStore.setState({ jobRunning: true, machineState: "run" });
     const { getByText } = render(<JobActionBar />);
 
     fireEvent.click(getByText("PAUSE"));
 
-    // pauseJob has a real 100ms settle delay — wait for it
+    // Wait for feed hold byte
     await waitFor(() => {
-      expect(sentBytes()).toContain(0x9e); // spindle-stop-override arrived
+      expect(sentBytes()).toContain(0x21); // feedHold
     });
 
-    // Must use the realtime pause volley, not the old line-based M5
-    expect(sentBytes()).toContain(0x21); // feedHold
-    expect(sentBytes()).toContain(0x9e); // spindle-stop-override
+    // Feed hold only — no 0x9E toggle, no line-based M5/M3
+    expect(sentBytes()).toEqual([0x21]);
     expect(sentCommands()).not.toContain("M5");
     expect(sentCommands()).not.toContain("M3");
   });

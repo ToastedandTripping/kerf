@@ -40,6 +40,7 @@ export function JobActionBar() {
   const workspaceHeight = useStore((s) => s.workspaceHeight);
   const originTop = useStore((s) => s.originTop);
   const workspaceVerified = useStore((s) => s.workspaceVerified);
+  const grblLaserMode = useStore((s) => s.grblLaserMode);
 
   // Elapsed-time timer (moved verbatim from MachinePanel)
   const jobStartTimeRef = useRef<number>(0);
@@ -163,6 +164,7 @@ export function JobActionBar() {
     workspaceHeight,
     originTop,
     workspaceVerified,
+    grblLaserMode,
   });
 
   // FRAME contract: framing traces the true G-code extents; fresh G-code +

@@ -117,6 +117,7 @@ describe("FRAME + canStartJob share isWithinBounds", () => {
       workspaceWidth: 500,
       workspaceHeight: 300,
       workspaceVerified: true,
+      grblLaserMode: true,
     });
     expect(gate.ok).toBe(false);
     expect(gate.reason).toContain("outside workspace bounds");
@@ -270,6 +271,7 @@ describe("canStartJob — unverified bed blocks START", () => {
       workspaceWidth: 500,
       workspaceHeight: 300,
       workspaceVerified: true,
+      grblLaserMode: true,
     };
   }
 
@@ -377,6 +379,7 @@ describe("canStartJob — ALARM gate (BUG 3)", () => {
       workspaceWidth: 500,
       workspaceHeight: 300,
       workspaceVerified: true,
+      grblLaserMode: true,
     };
   }
 
@@ -446,6 +449,7 @@ describe("canStartJob — NOTE-1 fail-closed on missing workspaceVerified", () =
       workspaceWidth: 500,
       workspaceHeight: 300,
       workspaceVerified: false,
+      grblLaserMode: true,
     });
     expect(gate.ok).toBe(false);
     expect(gate.reason).toContain("Confirm bed size");
@@ -467,6 +471,7 @@ describe("canStartJob — NOTE-1 fail-closed on missing workspaceVerified", () =
       workspaceWidth: 500,
       workspaceHeight: 300,
       workspaceVerified: undefined as unknown as boolean,
+      grblLaserMode: true,
     });
     expect(gate.ok).toBe(false);
     expect(gate.reason).toContain("Confirm bed size");
@@ -486,6 +491,7 @@ describe("canStartJob — NOTE-1 fail-closed on missing workspaceVerified", () =
       workspaceWidth: 500,
       workspaceHeight: 300,
       workspaceVerified: true,
+      grblLaserMode: true,
     });
     expect(gate.ok).toBe(true);
   });

@@ -30,6 +30,8 @@ function okState(): JobGateState {
     workspaceHeight: 300,
     // NOTE-1: workspaceVerified is now required and fail-closed (undefined blocks)
     workspaceVerified: true,
+    // $32=1 gate: fail-closed
+    grblLaserMode: true,
   };
 }
 

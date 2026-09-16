@@ -56,6 +56,12 @@ let jobPollingSuspended = false;
 let unsubscribeJobRunning: (() => void) | null = null;
 let consecutivePollFailures = 0;
 
+/** Track previous spindle speed for drop-to-zero diagnostic.
+ *  When state is Run and spindle drops from >0 to 0, something caused the
+ *  laser to stop firing mid-job. This is diagnostic data for the separate
+ *  "laser stops firing" symptom — not an interlock, just a console warning. */
+let prevSpindleSpeed: number | null = null;
+
 /** A7: in-flight connect promise for re-entrancy coalescing. If a connect()
  *  is already running (StrictMode double-mount, rapid clicks), subsequent
  *  callers get the same promise instead of racing a second connection. */
@@ -354,6 +360,31 @@ export const machineConnection = {
       const wcoMatch = status.match(/WCO:([-\d.]+),([-\d.]+)/);
       if (wcoMatch) {
         store.setWorkCoordOffset({ x: parseFloat(wcoMatch[1]), y: parseFloat(wcoMatch[2]) });
+      }
+      // Parse FS: field for spindle-drop diagnostic. FS:feed,spindle appears
+      // in GRBL 1.1 status reports. Track the spindle speed and warn when it
+      // drops to 0 during an active Run — diagnostic for the "laser stops
+      // firing" symptom (root cause TBD, this captures the data).
+      const fsMatch = status.match(/FS:([-\d.]+),([-\d.]+)/);
+      if (fsMatch) {
+        const currentSpindle = parseFloat(fsMatch[2]);
+        if (
+          match &&
+          match[1].toLowerCase().startsWith("run") &&
+          prevSpindleSpeed !== null &&
+          prevSpindleSpeed > 0 &&
+          currentSpindle === 0
+        ) {
+          console.warn(
+            `Spindle speed dropped to 0 during active job (was ${prevSpindleSpeed}). ` +
+            `Laser may have stopped firing.`
+          );
+          store.addConsoleLine(
+            "WARNING: Spindle speed dropped to 0 during active job — laser may have stopped firing",
+            "warning"
+          );
+        }
+        prevSpindleSpeed = currentSpindle;
       }
     } catch {
       consecutivePollFailures++;

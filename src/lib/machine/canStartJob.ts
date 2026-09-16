@@ -125,6 +125,10 @@ export interface JobGateState {
   originTop?: boolean;
   /** NOTE-1: fail-closed — undefined/missing is treated as unverified (not as verified). */
   workspaceVerified: boolean;
+  /** $32 laser mode — fail-closed: undefined/false blocks START and FRAME.
+   *  Without $32=1 the firmware does NOT auto-stop the spindle at hold-complete,
+   *  so a pause leaves a 40W beam stationary on the workpiece. */
+  grblLaserMode: boolean;
 }
 
 export interface JobGate {
@@ -139,6 +143,18 @@ export interface JobGate {
  *  a user queue a new job while a pause was in progress. */
 export function canStartJob(state: JobGateState): JobGate {
   if (!state.machineConnected) return { ok: false, reason: "Machine not connected" };
+  // $32=1 gate (DECISIONS.md: "$32=1 is hard-gated at job_start"). Without laser
+  // mode the firmware does NOT auto-stop the spindle at hold-complete — a pause
+  // would leave a 40W beam stationary on the workpiece. Fail-closed: any falsy
+  // value (false, undefined) blocks.
+  if (!state.grblLaserMode) {
+    return {
+      ok: false,
+      reason:
+        "Enable Laser Mode first — $32 must be 1. " +
+        "Use the 'Enable Laser Mode' button in the Machine panel, or run $32=1 in the console.",
+    };
+  }
   if (state.machineState === "alarm")
     return { ok: false, reason: "Machine locked (ALARM) — Home ($H) or Unlock ($X) first" };
   // Gate unification: require idle — hold/run/door all block.

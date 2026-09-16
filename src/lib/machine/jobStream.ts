@@ -18,23 +18,19 @@ import { useStore } from "../../app/store";
 import { machineConnection } from "./connection";
 
 /**
- * pauseJob — A1 fix: feed hold + spindle-stop-override (realtime, ack-less).
+ * pauseJob — feed hold only.
  *
- * The old handlePauseResume sent a line-based M5 on pause. During Hold state,
- * GRBL queues line commands but doesn't execute them — the M5 never fires, the
- * beam stays on (F13 ack-in-Hold hazard). This replacement uses only realtime
- * bytes:
- *   1. `!` (0x21) — feed hold, brings motion to a controlled stop
- *   2. Poll until the machine reports Hold:0 (fully decelerated), max 3s
- *   3. `0x9E` — spindle-stop-override (realtime, ack-less, Hold:0-only)
+ * With $32=1 enforced at job start (canStartJob gate), the firmware
+ * automatically stops the spindle at hold-complete. No 0x9E toggle needed.
  *
- * The poll replaces the original fixed 100ms delay. GRBL ignores 0x9E
- * during Hold:1 (still decelerating), so a fixed timer that's shorter
- * than the actual deceleration time silently drops the spindle-stop and
- * leaves the laser on. Hardware-confirmed 2026-08-29.
+ * History: the previous version sent 0x9E (spindle-stop-override) after hold.
+ * Probe 2026-09-14 proved 0x9E is a TOGGLE — the firmware already stops the
+ * spindle, so 0x9E RE-ARMED the beam. DECISIONS.md: "0x9E is a TOGGLE and
+ * GRBL already stops the laser itself at hold-complete — Kerf's pause volley
+ * re-arms the beam."
  *
- * If the 0x9E byte write throws, a loud console warning surfaces so the
- * operator knows the beam may still be on. Never degrades silently.
+ * The Hold:0 poll is retained as informational logging — it confirms the
+ * machine reached full hold, which is useful diagnostic data.
  */
 export async function pauseJob(): Promise<void> {
   await machineConnection.feedHold();
@@ -65,20 +61,8 @@ export async function pauseJob(): Promise<void> {
     useStore
       .getState()
       .addConsoleLine(
-        "WARNING: Machine did not reach full Hold within 3s — spindle stop may not take effect",
+        "WARNING: Machine did not reach full Hold within 3s",
         "warning"
-      );
-  }
-
-  try {
-    await machineConnection.sendByte(0x9e);
-  } catch (e) {
-    console.warn("Spindle stop override (0x9E) failed — beam may still be on during pause", e);
-    useStore
-      .getState()
-      .addConsoleLine(
-        "WARNING: Spindle stop override (0x9E) failed — beam may still be on during pause",
-        "error"
       );
   }
 }

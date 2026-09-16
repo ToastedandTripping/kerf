@@ -407,16 +407,19 @@ impl GrblBrain {
                     self.resume();
                 }
                 0x9E => {
-                    // GRBL 1.1's realtime Toggle Spindle-Stop override
-                    // (Phase 2A pause volley). Like every realtime byte it
-                    // bypasses the RX line buffer. Only effective during
-                    // Hold — latches at hold-complete, clears `spindle_on`.
+                    // GRBL 1.1's realtime Toggle Spindle-Stop override.
+                    // Like every realtime byte it bypasses the RX line buffer.
+                    // Only effective during Hold — TOGGLES `spindle_on`.
                     // Outside Hold the byte is silently ignored (matches
                     // real GRBL behavior: override toggles are no-ops
                     // unless the corresponding override state is active).
+                    //
+                    // Critical: this is a TOGGLE, not unconditional off.
+                    // Probe 2026-09-14 confirmed: firmware stops the spindle
+                    // at hold-complete ($32=1), so sending 0x9E RE-ARMS it.
                     self.realtime_log.push(b);
                     if self.state == MachineState::Hold {
-                        self.spindle_on = false;
+                        self.spindle_on = !self.spindle_on;
                     }
                 }
                 b'\n' => self.complete_line(),
@@ -572,6 +575,12 @@ impl GrblBrain {
     fn feed_hold(&mut self) {
         if self.state != MachineState::Alarm {
             self.state = MachineState::Hold;
+            // Model firmware automatic laser-off at hold-complete ($32=1).
+            // The sim always models a laser-mode machine ($32=1 in its $$
+            // dump), so auto-off is unconditional. This matches the hardware
+            // behavior confirmed by probe 2026-09-14: FS:0,0 appears after
+            // Hold:0, BEFORE any 0x9E is sent.
+            self.spindle_on = false;
         }
     }
 
@@ -1171,7 +1180,7 @@ mod tests {
     }
 
     #[test]
-    fn spindle_stop_override_0x9e_clears_spindle_during_hold() {
+    fn feed_hold_auto_stops_spindle_and_0x9e_toggles_it_back() {
         let mut port = SimPort::new(SimConfig::default());
         let _ = read_line_blocking(&mut port, 5); // banner
 
@@ -1181,10 +1190,16 @@ mod tests {
 
         port.write_all(b"!").unwrap(); // feed hold
         assert_eq!(port.machine_state(), MachineState::Hold);
-        assert!(port.spindle_energized(), "hold alone doesn't clear spindle");
+        // $32=1: firmware auto-stops spindle at hold-complete
+        assert!(!port.spindle_energized(), "hold auto-stops spindle ($32=1)");
 
-        port.write_all(&[0x9E]).unwrap(); // spindle-stop-override
-        assert!(!port.spindle_energized(), "0x9E in Hold clears spindle");
+        // 0x9E is a TOGGLE — after auto-off, it RE-ARMS the beam (the bug)
+        port.write_all(&[0x9E]).unwrap();
+        assert!(port.spindle_energized(), "0x9E toggles spindle back ON");
+
+        // Second 0x9E turns it off again
+        port.write_all(&[0x9E]).unwrap();
+        assert!(!port.spindle_energized(), "second 0x9E toggles it off");
     }
 
     #[test]
@@ -1202,10 +1217,9 @@ mod tests {
     }
 
     #[test]
-    fn pause_volley_hold_then_0x9e_clears_spindle_resume_keeps_it_off() {
-        // The exact Phase 2A pause volley: [!, 0x9E] should leave
-        // spindle_energized() == false. Resume with [~] should NOT
-        // re-energize the spindle.
+    fn feed_hold_alone_clears_spindle_resume_keeps_it_off() {
+        // Correct pause: [!] alone — no 0x9E. Feed hold auto-stops spindle
+        // ($32=1). Resume with [~] should NOT re-energize the spindle.
         let mut port = SimPort::new(SimConfig::default());
         let _ = read_line_blocking(&mut port, 5); // banner
 
@@ -1213,10 +1227,9 @@ mod tests {
         let _ = read_line_blocking(&mut port, 5); // ok
         assert!(port.spindle_energized());
 
-        // Pause volley
+        // Feed hold — spindle auto-off
         port.write_all(b"!").unwrap();
-        port.write_all(&[0x9E]).unwrap();
-        assert!(!port.spindle_energized(), "pause volley clears spindle");
+        assert!(!port.spindle_energized(), "hold auto-stops spindle");
         assert_eq!(port.machine_state(), MachineState::Hold);
 
         // Resume

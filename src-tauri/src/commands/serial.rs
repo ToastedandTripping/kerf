@@ -1459,11 +1459,10 @@ mod sim_integration {
     // GrblBrain, asserting zero strict-hold invariant violations and
     // correct spindle_energized() state.
 
-    // 10. Pause volley: [!, 0x9E] — feedHold + spindle-stop-override.
-    // After the volley, spindle_energized() must be false (beam off during
-    // pause). Zero hold-invariant violations (no line commands in Hold).
+    // 10. Pause volley: [!] only — feed hold auto-stops spindle ($32=1).
+    // 0x9E is NOT sent — it's a toggle that would RE-ARM the beam.
     #[test]
-    fn pause_volley_clears_spindle_and_zero_hold_violations() {
+    fn pause_feed_hold_alone_clears_spindle() {
         use crate::sim::grbl::MachineState;
 
         let sim = SimPort::new(SimConfig::default());
@@ -1486,24 +1485,60 @@ mod sim_integration {
             DEFAULT_LIVENESS_TICKS, serial_pump::DEFAULT_IDLE_STALL_TICKS,
         ).unwrap();
 
-        // Pause volley: [!, 0x9E]
+        // Pause: feed hold only — no 0x9E
         writer.write_all(b"!").unwrap();
         assert_eq!(sim.machine_state(), MachineState::Hold);
-        writer.write_all(&[0x9E]).unwrap();
 
         // Assertions
         assert!(
             sim.hold_invariant_violations().is_empty(),
-            "pause volley must cause zero hold-invariant violations"
+            "feed hold must cause zero hold-invariant violations"
         );
         assert!(
             !sim.spindle_energized(),
-            "spindle must be off after pause volley [!, 0x9E]"
+            "spindle must be off after feed hold ($32=1 auto-stop)"
         );
         assert_eq!(
             sim.realtime_bytes_received(),
-            vec![b'!', 0x9E],
-            "exact pause volley bytes on the wire"
+            vec![b'!'],
+            "exact pause bytes on the wire — no 0x9E"
+        );
+    }
+
+    // 10b. Regression: hold → 0x9E → spindle RE-ARMED (the bug scenario).
+    // Proves the sim now correctly models the toggle so it would catch this
+    // class of bug in future.
+    #[test]
+    fn hold_then_0x9e_rearms_spindle_regression() {
+        use crate::sim::grbl::MachineState;
+
+        let sim = SimPort::new(SimConfig::default());
+        let mut writer = sim.try_clone().unwrap();
+        let mut reader = BufReader::new(sim.try_clone().unwrap());
+        let mut pending = Vec::new();
+        let _ = serial_pump::drain_classified(&mut reader, &mut pending);
+
+        writer.write_all(b"M3 S1000\n").unwrap();
+        let _ = serial_pump::run_pump(
+            &mut reader, &mut writer, &mut pending,
+            DEFAULT_LIVENESS_TICKS, serial_pump::DEFAULT_IDLE_STALL_TICKS,
+        ).unwrap();
+
+        writer.write_all(b"G1 X50 F500\n").unwrap();
+        let _ = serial_pump::run_pump(
+            &mut reader, &mut writer, &mut pending,
+            DEFAULT_LIVENESS_TICKS, serial_pump::DEFAULT_IDLE_STALL_TICKS,
+        ).unwrap();
+
+        // Feed hold — spindle auto-off
+        writer.write_all(b"!").unwrap();
+        assert!(!sim.spindle_energized(), "hold auto-stops spindle");
+
+        // 0x9E toggles spindle back ON — this is the bug the old code had
+        writer.write_all(&[0x9E]).unwrap();
+        assert!(
+            sim.spindle_energized(),
+            "0x9E is a toggle — after hold auto-off, it RE-ARMS the beam"
         );
     }
 
@@ -1533,10 +1568,9 @@ mod sim_integration {
             DEFAULT_LIVENESS_TICKS, serial_pump::DEFAULT_IDLE_STALL_TICKS,
         ).unwrap();
 
-        // Pause volley
+        // Pause: feed hold only (no 0x9E — it's a toggle that re-arms)
         writer.write_all(b"!").unwrap();
-        writer.write_all(&[0x9E]).unwrap();
-        assert!(!sim.spindle_energized());
+        assert!(!sim.spindle_energized(), "hold auto-stops spindle");
 
         // Resume volley: [~]
         writer.write_all(b"~").unwrap();
