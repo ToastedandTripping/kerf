@@ -176,7 +176,8 @@ export function JobActionBar() {
     jobRunning ||
     !gcodeResult ||
     gcodeStale ||
-    !workspaceVerified;
+    !workspaceVerified ||
+    !grblLaserMode;
   const frameHint = !workspaceVerified
     ? "Confirm bed size before framing"
     : !gcodeResult

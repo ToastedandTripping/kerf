@@ -1510,8 +1510,6 @@ mod sim_integration {
     // class of bug in future.
     #[test]
     fn hold_then_0x9e_rearms_spindle_regression() {
-        use crate::sim::grbl::MachineState;
-
         let sim = SimPort::new(SimConfig::default());
         let mut writer = sim.try_clone().unwrap();
         let mut reader = BufReader::new(sim.try_clone().unwrap());

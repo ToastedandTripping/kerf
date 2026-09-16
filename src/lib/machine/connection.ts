@@ -116,6 +116,9 @@ export const machineConnection = {
           baudRate,
         });
         store.setMachineConnected(true);
+        // Reset spindle-drop diagnostic state so a stale value from a previous
+        // connection doesn't produce a spurious warning on the first poll.
+        prevSpindleSpeed = null;
         // NOTE: machineState is set below after a real status query (companion fix
         // for BUG 3). We set "idle" here as a safe initial value so the UI is never
         // left in "disconnected" while the status query is in-flight.
@@ -305,8 +308,8 @@ export const machineConnection = {
       await invoke("serial_send_byte", { byte });
     } catch (e) {
       console.error("Send byte error:", e);
-      // A1 fix: re-throw so callers (e.g. pauseJob's 0x9E) can detect
-      // failures and surface an honest warning instead of degrading silently.
+      // Re-throw so callers (e.g. feedHold, cycleResume) can detect failures
+      // and surface an honest warning instead of degrading silently.
       throw e;
     }
   },
