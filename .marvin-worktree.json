@@ -2,12 +2,12 @@
   "version": 3,
   "projectId": "kerf",
   "projectPath": "/home/leesalo/Projects/kerf",
-  "branch": "marvin/kerf-phase-2a",
-  "slug": "kerf-phase-2a",
-  "tmuxName": "marvin_kerf_kerf-phase-2a",
-  "startPoint": "bcae6b3c0f40976b117c07bd01d25476c36e39dd",
-  "createdAt": "2026-08-29T19:11:30.533Z",
+  "branch": "marvin/session-1b2844",
+  "slug": "session-1b2844",
+  "tmuxName": "marvin_kerf_session-1b2844",
+  "startPoint": "dd533878cc08d2b437bb9d719676cfc813bbd1c7",
+  "createdAt": "2026-09-14T21:12:03.595Z",
   "keep": false,
   "keptAt": null,
-  "briefPath": "/home/leesalo/.local/share/marvin/monitor-state/briefs/kerf__kerf-phase-2a.md"
+  "briefPath": null
 }
