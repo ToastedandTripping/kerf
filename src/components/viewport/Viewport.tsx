@@ -5,6 +5,15 @@ import { useStore } from "../../app/store";
 import { getDirtyObjectIds, clearDirtyObjectIds, setCursorPosition } from "../../app/store";
 import type { DesignObject } from "../../app/types";
 import { hasPlaceholders } from "../../lib/variableText";
+import { loadFont } from "../../app/store/geometryActions";
+
+/** Map internal font-family keys to CSS @font-face family names with generic fallbacks. */
+const CSS_FONT_FAMILY: Record<string, string> = {
+  "sans-serif": "'Open Sans', sans-serif",
+  serif: "'Libre Baskerville', serif",
+  monospace: "'IBM Plex Mono', monospace",
+  display: "'Pacifico', cursive",
+};
 import {
   handleViewportPointerDown,
   handleViewportPointerMove,
@@ -1015,7 +1024,7 @@ export function Viewport() {
                 left: screenX,
                 top: screenY,
                 fontSize: `${fontSize * camera.zoom}px`,
-                fontFamily: textEditingObj.fontFamily ?? "sans-serif",
+                fontFamily: CSS_FONT_FAMILY[textEditingObj.fontFamily ?? "sans-serif"] ?? "sans-serif",
                 color: textEditingObj.fill || "#e8e8e8",
                 background: "transparent",
                 border: "none",
@@ -1030,14 +1039,27 @@ export function Viewport() {
               onChange={(e) => {
                 const text = e.target.value;
                 const fs = textEditingObj.fontSize ?? 16;
+                const family = textEditingObj.fontFamily ?? "sans-serif";
+                // Crude estimate as immediate fallback
+                const crudeWidth = Math.max(fs * 2, text.length * fs * 0.6);
                 updateObject(textEditingObj.id, {
                   text,
                   transform: {
                     ...textEditingObj.transform,
-                    width: Math.max(fs * 2, text.length * fs * 0.6),
+                    width: crudeWidth,
                     height: fs * 1.3,
                   },
                 });
+                // Refine with actual font metrics when available
+                loadFont(family).then((font) => {
+                  const accurate = Math.max(fs * 2, font.getAdvanceWidth(text, fs));
+                  const current = useStore.getState().objectsById.get(textEditingObj.id);
+                  if (current && current.text === text) {
+                    updateObject(textEditingObj.id, {
+                      transform: { ...current.transform, width: accurate },
+                    });
+                  }
+                }).catch(() => { /* font unavailable — keep crude estimate */ });
               }}
               onKeyDown={(e) => {
                 e.stopPropagation();
@@ -1313,7 +1335,7 @@ function renderTextObject(obj: DesignObject): Container | null {
   const py = t.y * PX_PER_MM;
 
   const style = new TextStyle({
-    fontFamily: obj.fontFamily || "-apple-system, BlinkMacSystemFont, sans-serif",
+    fontFamily: CSS_FONT_FAMILY[obj.fontFamily ?? "sans-serif"] ?? "-apple-system, BlinkMacSystemFont, sans-serif",
     fontSize: (obj.fontSize || 16) * PX_PER_MM,
     fill: obj.fill || obj.stroke || "#e8e8e8",
     wordWrap: t.width > 0,

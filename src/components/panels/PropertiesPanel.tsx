@@ -6,6 +6,28 @@ import { movePartial, scalePartial } from "../../lib/geometry";
 import { MM_PER_INCH } from "../../lib/constants";
 const UNITS_KEY = "kerf-display-units";
 
+// Inject @font-face declarations once so canvas preview and the font selector
+// render text with the actual bundled fonts, not generic system fallbacks.
+const FONT_FACES = [
+  { family: "Open Sans", file: "/fonts/OpenSans-Regular.ttf" },
+  { family: "Libre Baskerville", file: "/fonts/LibreBaskerville-Regular.ttf" },
+  { family: "IBM Plex Mono", file: "/fonts/IBMPlexMono-Regular.ttf" },
+  { family: "Pacifico", file: "/fonts/Pacifico-Regular.ttf" },
+];
+let fontFacesInjected = false;
+function injectFontFaces() {
+  if (fontFacesInjected) return;
+  fontFacesInjected = true;
+  const css = FONT_FACES.map(
+    (f) =>
+      `@font-face { font-family: '${f.family}'; src: url('${f.file}') format('truetype'); font-weight: 400; font-style: normal; font-display: swap; }`
+  ).join("\n");
+  const style = document.createElement("style");
+  style.textContent = css;
+  document.head.appendChild(style);
+}
+injectFontFaces();
+
 export function PropertiesPanel() {
   const selectedIds = useStore((s) => s.selectedIds);
   const objects = useStore((s) => s.objects);
@@ -426,9 +448,10 @@ export function PropertiesPanel() {
                     cursor: "pointer",
                   }}
                 >
-                  <option value="sans-serif">Sans-serif</option>
-                  <option value="serif">Serif</option>
-                  <option value="monospace">Monospace</option>
+                  <option value="sans-serif">Sans-serif (Open Sans)</option>
+                  <option value="serif">Serif (Libre Baskerville)</option>
+                  <option value="monospace">Monospace (IBM Plex Mono)</option>
+                  <option value="display">Display (Pacifico)</option>
                 </select>
               </PropertyRow>
             </PropertyGroup>

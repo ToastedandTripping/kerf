@@ -4,6 +4,7 @@ import type { DesignObject, Layer, InternalCutMode } from "../../app/types";
 import { LINE_OVERLAY_DEFAULTS } from "../../app/types";
 import { offsetRingByDistance, composeGroupChild, sampleBezierPath } from "../geometry";
 import { computeOverscan } from "./overscan";
+import { textObjectToPaths } from "../../app/store/geometryActions";
 
 export interface GcodeMove {
   x: number;
@@ -844,7 +845,40 @@ export { stripFraming as stripFramingForTest, assembleGcode as assembleGcodeForT
  *  layer), images emit before the vector fragment. */
 export async function generateGcode(): Promise<GcodeResult> {
   const store = useStore.getState();
-  const { objects: cutObjects, warnings } = toCutObjects(store.objects, store.layers);
+
+  // Phase 2A: auto-convert text objects to paths before cut-object generation.
+  // textObjectToPaths bakes the text object's transform into the path points
+  // (world-space coordinates), so the resulting paths are added directly —
+  // no group wrapper needed. If a font fails to load, a warning is added and
+  // that text object is skipped — never silently dropped.
+  const textConvertWarnings: string[] = [];
+  const preprocessed: DesignObject[] = [];
+  for (const obj of store.objects) {
+    if (obj.type === "text" && obj.visible) {
+      try {
+        const paths = await textObjectToPaths(obj);
+        if (paths.length > 0) {
+          // Paths are world-space; inherit the text object's layer assignment.
+          for (const p of paths) {
+            preprocessed.push({ ...p, layerIndex: obj.layerIndex });
+          }
+        } else {
+          textConvertWarnings.push(
+            `Text object "${obj.name}" produced no paths — empty or whitespace-only text`
+          );
+        }
+      } catch (err) {
+        textConvertWarnings.push(
+          `Text object "${obj.name}" could not be converted — font failed to load`
+        );
+      }
+    } else {
+      preprocessed.push(obj);
+    }
+  }
+
+  const { objects: cutObjects, warnings } = toCutObjects(preprocessed, store.layers);
+  warnings.push(...textConvertWarnings);
   const layerOrder = new Map(store.layers.map((l, pos) => [l.index, pos]));
 
   // Lever 3: apply v²/(2·$120) overscan to all fill/engrave/maskFill CutObjects,

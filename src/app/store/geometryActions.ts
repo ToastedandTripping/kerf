@@ -20,24 +20,39 @@ import {
   computeAABB,
 } from "../../lib/geometry";
 
-// Module-level font cache to avoid reloading on every conversion
-let cachedFont: opentype.Font | null = null;
-let fontLoadPromise: Promise<opentype.Font> | null = null;
+// Module-level font cache keyed by family name to avoid reloading on every conversion.
+const fontCache = new Map<string, opentype.Font>();
+const fontLoadPromises = new Map<string, Promise<opentype.Font>>();
 
-async function loadFont(): Promise<opentype.Font> {
-  if (cachedFont) return cachedFont;
-  if (fontLoadPromise) return fontLoadPromise;
-  fontLoadPromise = opentype
-    .load("/fonts/OpenSans-Regular.ttf")
+/** Map CSS font-family values to bundled .ttf file paths. */
+const FONT_PATH_MAP: Record<string, string> = {
+  "sans-serif": "/fonts/OpenSans-Regular.ttf",
+  serif: "/fonts/LibreBaskerville-Regular.ttf",
+  monospace: "/fonts/IBMPlexMono-Regular.ttf",
+  display: "/fonts/Pacifico-Regular.ttf",
+};
+
+export async function loadFont(
+  fontFamily: string = "sans-serif"
+): Promise<opentype.Font> {
+  const key = fontFamily in FONT_PATH_MAP ? fontFamily : "sans-serif";
+  const cached = fontCache.get(key);
+  if (cached) return cached;
+  const pending = fontLoadPromises.get(key);
+  if (pending) return pending;
+  const path = FONT_PATH_MAP[key];
+  const promise = opentype
+    .load(path)
     .then((font) => {
-      cachedFont = font;
+      fontCache.set(key, font);
       return font;
     })
     .catch((err) => {
-      fontLoadPromise = null;
+      fontLoadPromises.delete(key);
       throw err;
     });
-  return fontLoadPromise;
+  fontLoadPromises.set(key, promise);
+  return promise;
 }
 
 /**
@@ -47,7 +62,7 @@ async function loadFont(): Promise<opentype.Font> {
 export async function textObjectToPaths(obj: DesignObject): Promise<DesignObject[]> {
   if (obj.type !== "text" || !obj.text) return [];
 
-  const font = await loadFont();
+  const font = await loadFont(obj.fontFamily ?? "sans-serif");
   const fontSize = obj.fontSize || 12;
   const scale = fontSize / font.unitsPerEm;
 
