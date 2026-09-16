@@ -45,6 +45,9 @@ export function buildTracedPathObjects(
     const d = pathEl.getAttribute("d");
     if (!d) continue;
 
+    // Read fill color from SVG path (vtracer color mode emits per-path fills)
+    const pathFill = pathEl.getAttribute("fill") || null;
+
     let offsetX = 0,
       offsetY = 0;
     const transformAttr = pathEl.getAttribute("transform");
@@ -124,7 +127,7 @@ export function buildTracedPathObjects(
         visible: true,
         locked: false,
         fill: null,
-        stroke: layerColor,
+        stroke: pathFill || layerColor,
         strokeWidth: 1,
         opacity: 1,
         points: scaledPoints,
@@ -181,8 +184,8 @@ export function computeFitZoomIndex(
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-type TraceMode = "standard" | "sketch";
-type Preset = "auto" | "logo" | "photo" | "detailed" | "custom";
+type TraceMode = "standard" | "sketch" | "color";
+type Preset = "auto" | "logo" | "photo" | "detailed" | "lineart" | "custom";
 
 interface TraceResult {
   svg: string;
@@ -205,6 +208,7 @@ const PRESETS: Record<
     useAdaptiveThreshold: boolean;
     adaptiveBlockSize: number;
     morphRadius: number;
+    colorCount?: number;
   }
 > = {
   auto: {
@@ -237,17 +241,31 @@ const PRESETS: Record<
     morphRadius: 0,
   },
   photo: {
-    mode: "sketch",
-    threshold: 100,
+    mode: "color",
+    threshold: 128,
     thresholdLow: 0,
     cornerThreshold: 80,
     filterSpeckle: 6,
-    blurRadius: 2.0,
+    blurRadius: 0.5,
     smoothness: 1.2,
     ignoreArea: 40,
     useAdaptiveThreshold: false,
     adaptiveBlockSize: 21,
-    morphRadius: 1,
+    morphRadius: 0,
+    colorCount: 6,
+  },
+  lineart: {
+    mode: "standard",
+    threshold: 100,
+    thresholdLow: 0,
+    cornerThreshold: 60,
+    filterSpeckle: 10,
+    blurRadius: 0.5,
+    smoothness: 1.2,
+    ignoreArea: 50,
+    useAdaptiveThreshold: false,
+    adaptiveBlockSize: 15,
+    morphRadius: 0,
   },
   detailed: {
     mode: "standard",
@@ -282,6 +300,7 @@ export function ImageTraceDialog({ open, onClose }: Props) {
   const [useAdaptiveThreshold, setUseAdaptiveThreshold] = useState(false);
   const [adaptiveBlockSize, setAdaptiveBlockSize] = useState(15);
   const [morphRadius, setMorphRadius] = useState(0);
+  const [colorCount, setColorCount] = useState(6);
   const [traceTransparency, setTraceTransparency] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -295,6 +314,8 @@ export function ImageTraceDialog({ open, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [committing, setCommitting] = useState(false);
   const [zoomIndex, setZoomIndex] = useState(2); // default: 100%
+  const [fullResPreview, setFullResPreview] = useState<TraceResult | null>(null);
+  const [fullResLoading, setFullResLoading] = useState(false);
 
   const generationRef = useRef(0);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -337,6 +358,7 @@ export function ImageTraceDialog({ open, onClose }: Props) {
     setUseAdaptiveThreshold(v.useAdaptiveThreshold);
     setAdaptiveBlockSize(v.adaptiveBlockSize);
     setMorphRadius(v.morphRadius);
+    setColorCount(v.colorCount ?? 6);
   }
 
   function buildParams(scale: number) {
@@ -356,6 +378,7 @@ export function ImageTraceDialog({ open, onClose }: Props) {
       adaptiveBlockSize,
       morphRadius,
       traceTransparency,
+      colorCount: mode === "color" ? colorCount : null,
     };
   }
 
@@ -369,6 +392,7 @@ export function ImageTraceDialog({ open, onClose }: Props) {
     const generation = ++generationRef.current;
     setLoading(true);
     setError(null);
+    setFullResPreview(null); // invalidate full-res cache on param change
 
     const prevDims = preview;
     const adaptiveScale = prevDims
@@ -424,6 +448,7 @@ export function ImageTraceDialog({ open, onClose }: Props) {
     adaptiveBlockSize,
     morphRadius,
     traceTransparency,
+    colorCount,
     selectedImage?.id,
   ]);
 
@@ -489,11 +514,35 @@ export function ImageTraceDialog({ open, onClose }: Props) {
     );
   }
 
+  async function handleFullRes() {
+    if (!selectedImage?.imageData || fullResLoading) return;
+    setFullResLoading(true);
+    setError(null);
+    try {
+      const result = await invoke<TraceResult>("trace_image_command", { params: buildParams(1.0) });
+      setFullResPreview(result);
+      setPreview({
+        svg: result.svg,
+        pathCount: result.pathCount,
+        widthPx: result.widthPx,
+        heightPx: result.heightPx,
+      });
+      setZoomIndex(
+        computeFitZoomIndex(PREVIEW_CONTAINER_W, PREVIEW_CONTAINER_H, result.widthPx, result.heightPx)
+      );
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setFullResLoading(false);
+    }
+  }
+
   async function handleCommit() {
     if (!selectedImage?.imageData || committing) return;
     setCommitting(true);
     try {
-      const result = await invoke<TraceResult>("trace_image_command", { params: buildParams(1.0) });
+      // Reuse cached full-res result if available, otherwise trace at full resolution
+      const result = fullResPreview ?? await invoke<TraceResult>("trace_image_command", { params: buildParams(1.0) });
       const store = useStore.getState();
       const layerColor = store.layers[effectiveLayerIndex]?.color || "#4a90e2";
       const imageName = selectedImage.name || selectedImage.id;
@@ -642,9 +691,9 @@ export function ImageTraceDialog({ open, onClose }: Props) {
 
         {/* Presets */}
         <div style={{ display: "flex", gap: "4px", marginBottom: "12px", flexWrap: "wrap" }}>
-          {(["auto", "logo", "photo", "detailed"] as const).map((p) => (
+          {(["auto", "logo", "photo", "lineart", "detailed"] as const).map((p) => (
             <button key={p} style={chipStyle(preset === p)} onClick={() => applyPreset(p)}>
-              {p.charAt(0).toUpperCase() + p.slice(1)}
+              {p === "lineart" ? "Line Art" : p.charAt(0).toUpperCase() + p.slice(1)}
             </button>
           ))}
           <button style={chipStyle(preset === "custom")} onClick={() => setPreset("custom")}>
@@ -672,7 +721,23 @@ export function ImageTraceDialog({ open, onClose }: Props) {
           >
             Sketch
           </button>
+          <button
+            style={chipStyle(mode === "color")}
+            onClick={() => {
+              setMode("color");
+              if (preset !== "custom") setPreset("custom");
+            }}
+          >
+            Color
+          </button>
         </div>
+
+        {/* Color count slider (only in color mode) */}
+        {mode === "color" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "12px" }}>
+            {sliderRow("Colors", colorCount, 2, 32, 1, setColorCount)}
+          </div>
+        )}
 
         {/* Core controls */}
         <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "12px" }}>
@@ -868,6 +933,22 @@ export function ImageTraceDialog({ open, onClose }: Props) {
             }}
           >
             Fit
+          </button>
+          <button
+            onClick={handleFullRes}
+            disabled={fullResLoading || !preview}
+            style={{
+              background: fullResPreview ? "var(--accent-warm)" : "var(--bg-input)",
+              border: "1px solid " + (fullResPreview ? "var(--accent-warm)" : "var(--border)"),
+              color: fullResPreview ? "#fff" : (!preview || fullResLoading ? "var(--text-muted)" : "var(--text-secondary)"),
+              padding: "4px 10px",
+              borderRadius: "var(--radius-sm)",
+              cursor: !preview || fullResLoading ? "default" : "pointer",
+              fontSize: "11px",
+              opacity: !preview ? 0.4 : 1,
+            }}
+          >
+            {fullResLoading ? "Processing..." : fullResPreview ? "Full res (cached)" : "Full res"}
           </button>
         </div>
 

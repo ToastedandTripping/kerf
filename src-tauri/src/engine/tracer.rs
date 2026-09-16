@@ -27,6 +27,10 @@ pub struct TraceParams {
     pub morph_radius: u8,
     #[serde(default)]
     pub trace_transparency: bool,
+    /// When Some(n), use vtracer ColorMode::Color instead of Binary.
+    /// n is color_precision (1-8): higher = more colors.
+    #[serde(default)]
+    pub color_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,138 +82,10 @@ pub fn trace_image(params: TraceParams) -> Result<TraceResult, String> {
     let ignore_area_scaled = scale_ignore_area(params.ignore_area, params.preview_scale);
     let hole_min_area: u64 = (filter_speckle_scaled as u64).pow(2).max(1);
 
-    // -- PREPROCESSING PIPELINE --
+    // -- COLOR MODE: skip grayscale/binarization, pass RGBA directly to vtracer --
+    let is_color_mode = params.color_count.is_some();
 
-    // Step 1: Convert to grayscale
-    let mut gray = img.to_luma8();
-
-    // Step 2: Gaussian blur for noise reduction
-    if params.blur_radius > 0.0 {
-        gray = imageproc::filter::gaussian_blur_f32(&gray, params.blur_radius);
-    }
-
-    // Fix 5: Binary auto-threshold — if >90% of pixels are near-black (<20) or
-    // near-white (>235), the image is already binary. Use a fixed midpoint
-    // threshold (128) and skip adaptive preprocessing, which introduces halos
-    // on already-clean black-on-transparent PNGs.
-    let is_near_binary = {
-        let total = w as usize * h as usize;
-        if total == 0 {
-            false
-        } else {
-            let binary_count = gray.pixels().filter(|p| p[0] < 20 || p[0] > 235).count();
-            binary_count * 10 >= total * 9  // >90%
-        }
-    };
-
-    // Step 3: Binarization (mode-dependent)
-    // Fix 6: Trace transparency — use alpha channel directly as binary mask when requested.
-    // Skips grayscale-based threshold; traces the alpha boundary instead.
-    let binary = if params.trace_transparency {
-        let rgba = img.to_rgba8();
-        // alpha > 128 → foreground (black=0), otherwise background (white=255)
-        GrayImage::from_fn(w, h, |x, y| {
-            let alpha = rgba.get_pixel(x, y)[3];
-            let is_fg = if params.invert { alpha <= 128 } else { alpha > 128 };
-            Luma([if is_fg { 0 } else { 255 }])
-        })
-    } else { match params.mode.as_str() {
-        "sketch" => {
-            let low = (params.threshold as f32 * 0.25).max(1.0);
-            let high = params.threshold as f32;
-            let edges = imageproc::edges::canny(&gray, low, high);
-            let mut bin = GrayImage::new(w, h);
-            for (x, y, pixel) in edges.enumerate_pixels() {
-                let val = if params.invert { 255 - pixel[0] } else { pixel[0] };
-                bin.put_pixel(x, y, Luma([if val > 0 { 0 } else { 255 }]));
-            }
-            bin
-        }
-        _ => {
-            if params.use_adaptive_threshold && !is_near_binary {
-                // Adaptive threshold: good for photos/gradients.
-                // Skipped for near-binary images — adaptive halos degrade clean edges.
-                let block = params.adaptive_block_size.max(3) | 1;
-                let adapted = adaptive_threshold(&gray, block);
-                let mut bin = GrayImage::new(w, h);
-                for (x, y, pixel) in adapted.enumerate_pixels() {
-                    let is_fg = if params.invert { pixel[0] > 0 } else { pixel[0] == 0 };
-                    bin.put_pixel(x, y, Luma([if is_fg { 0 } else { 255 }]));
-                }
-                bin
-            } else if is_near_binary {
-                // Fix 5: Binary image auto-threshold — use simple midpoint (128)
-                // for near-binary input regardless of use_adaptive_threshold setting.
-                // Avoids adaptive halos on clean black-on-transparent PNGs.
-                let mut bin = GrayImage::new(w, h);
-                for (x, y, pixel) in gray.enumerate_pixels() {
-                    let is_fg = if params.invert { pixel[0] >= 128 } else { pixel[0] < 128 };
-                    bin.put_pixel(x, y, Luma([if is_fg { 0 } else { 255 }]));
-                }
-                bin
-            } else {
-                // Dual-threshold brightness range
-                let lo = params.threshold_low;
-                let hi = params.threshold;
-                let mut bin = GrayImage::new(w, h);
-                for (x, y, pixel) in gray.enumerate_pixels() {
-                    let v = pixel[0];
-                    let in_range = v >= lo && v <= hi;
-                    let is_fg = if params.invert { !in_range } else { in_range };
-                    bin.put_pixel(x, y, Luma([if is_fg { 0 } else { 255 }]));
-                }
-                bin
-            }
-        }
-    } }; // closes else { match ... }
-
-    // Step 4: Morphological cleanup
-    let binary = if params.morph_radius > 0 {
-        let opened = open(&binary, Norm::LInf, params.morph_radius);
-        close(&opened, Norm::LInf, params.morph_radius)
-    } else {
-        binary
-    };
-
-    // Step 5: Small connected component removal (scale-normalized threshold)
-    let binary = if params.ignore_area > 1 {
-        remove_small_components(&binary, ignore_area_scaled)
-    } else {
-        binary
-    };
-
-    // Step 5b: Interior hole despeckle — fills small white pinholes within foreground to
-    // eliminate spurious laser cuts. Must NOT run in real Canny/sketch mode: in that mode the
-    // binary is an edge map where enclosed white regions are shape interiors, NOT holes to
-    // remove. Applying fill_small_holes there would incorrectly solidify outlined shapes
-    // (critic FAIL fix §A, locked by test sketch_mode_guard_no_fill_small_holes).
-    // Exception: when trace_transparency=true, binarization always takes the alpha-mask branch
-    // (not Canny) regardless of params.mode, so hole-fill is safe and should run.
-    let binary = if params.filter_speckle > 0 && (params.mode != "sketch" || params.trace_transparency) {
-        fill_small_holes(&binary, hole_min_area)
-    } else {
-        binary
-    };
-
-    // Step 6: Convert to RGBA for vtracer
-    let mut rgba = image::RgbaImage::new(w, h);
-    for (x, y, pixel) in binary.enumerate_pixels() {
-        let color = if pixel[0] == 0 {
-            [0, 0, 0, 255]
-        } else {
-            [255, 255, 255, 255]
-        };
-        rgba.put_pixel(x, y, image::Rgba(color));
-    }
-
-    let pixels: Vec<u8> = rgba.into_raw();
-    let color_image = vtracer::ColorImage {
-        pixels,
-        width: w as usize,
-        height: h as usize,
-    };
-
-    // Step 7: vtracer with smoothness-mapped config (use scale-normalized filter_speckle)
+    // Step 7 config values (shared between binary and color paths)
     let corner = if params.smoothness > 0.0 {
         (params.corner_threshold as f32 * (1.0 + params.smoothness)).min(180.0) as i32
     } else {
@@ -222,16 +98,175 @@ pub fn trace_image(params: TraceParams) -> Result<TraceResult, String> {
         PathSimplifyMode::Polygon
     };
 
-    let config = vtracer::Config {
-        color_mode: vtracer::ColorMode::Binary,
-        hierarchical: vtracer::Hierarchical::Stacked,
-        filter_speckle: filter_speckle_scaled,
-        corner_threshold: corner,
-        mode: simplify_mode,
-        ..Default::default()
-    };
+    let svg_file = if is_color_mode {
+        // Color tracing: pass the full-color image to vtracer with ColorMode::Color.
+        // color_count maps to color_precision (1-8): higher = more distinct colors.
+        let color_count = params.color_count.unwrap_or(6).clamp(2, 32);
+        let color_precision = ((color_count as f64).log2().ceil() as i32).clamp(1, 8);
 
-    let svg_file = vtracer::convert(color_image, config)?;
+        let rgba = img.to_rgba8();
+        let pixels: Vec<u8> = rgba.into_raw();
+        let color_image = vtracer::ColorImage {
+            pixels,
+            width: w as usize,
+            height: h as usize,
+        };
+
+        let config = vtracer::Config {
+            color_mode: vtracer::ColorMode::Color,
+            hierarchical: vtracer::Hierarchical::Stacked,
+            filter_speckle: filter_speckle_scaled,
+            color_precision,
+            corner_threshold: corner,
+            mode: simplify_mode,
+            ..Default::default()
+        };
+
+        vtracer::convert(color_image, config)?
+    } else {
+        // -- PREPROCESSING PIPELINE (binary mode) --
+
+        // Step 1: Convert to grayscale
+        let mut gray = img.to_luma8();
+
+        // Step 2: Gaussian blur for noise reduction
+        if params.blur_radius > 0.0 {
+            gray = imageproc::filter::gaussian_blur_f32(&gray, params.blur_radius);
+        }
+
+        // Fix 5: Binary auto-threshold — if >90% of pixels are near-black (<20) or
+        // near-white (>235), the image is already binary. Use a fixed midpoint
+        // threshold (128) and skip adaptive preprocessing, which introduces halos
+        // on already-clean black-on-transparent PNGs.
+        let is_near_binary = {
+            let total = w as usize * h as usize;
+            if total == 0 {
+                false
+            } else {
+                let binary_count = gray.pixels().filter(|p| p[0] < 20 || p[0] > 235).count();
+                binary_count * 10 >= total * 9  // >90%
+            }
+        };
+
+        // Step 3: Binarization (mode-dependent)
+        // Fix 6: Trace transparency — use alpha channel directly as binary mask when requested.
+        // Skips grayscale-based threshold; traces the alpha boundary instead.
+        let binary = if params.trace_transparency {
+            let rgba = img.to_rgba8();
+            // alpha > 128 → foreground (black=0), otherwise background (white=255)
+            GrayImage::from_fn(w, h, |x, y| {
+                let alpha = rgba.get_pixel(x, y)[3];
+                let is_fg = if params.invert { alpha <= 128 } else { alpha > 128 };
+                Luma([if is_fg { 0 } else { 255 }])
+            })
+        } else { match params.mode.as_str() {
+            "sketch" => {
+                let low = (params.threshold as f32 * 0.25).max(1.0);
+                let high = params.threshold as f32;
+                let edges = imageproc::edges::canny(&gray, low, high);
+                let mut bin = GrayImage::new(w, h);
+                for (x, y, pixel) in edges.enumerate_pixels() {
+                    let val = if params.invert { 255 - pixel[0] } else { pixel[0] };
+                    bin.put_pixel(x, y, Luma([if val > 0 { 0 } else { 255 }]));
+                }
+                bin
+            }
+            _ => {
+                if params.use_adaptive_threshold && !is_near_binary {
+                    // Adaptive threshold: good for photos/gradients.
+                    // Skipped for near-binary images — adaptive halos degrade clean edges.
+                    let block = params.adaptive_block_size.max(3) | 1;
+                    let adapted = adaptive_threshold(&gray, block);
+                    let mut bin = GrayImage::new(w, h);
+                    for (x, y, pixel) in adapted.enumerate_pixels() {
+                        let is_fg = if params.invert { pixel[0] > 0 } else { pixel[0] == 0 };
+                        bin.put_pixel(x, y, Luma([if is_fg { 0 } else { 255 }]));
+                    }
+                    bin
+                } else if is_near_binary {
+                    // Fix 5: Binary image auto-threshold — use simple midpoint (128)
+                    // for near-binary input regardless of use_adaptive_threshold setting.
+                    // Avoids adaptive halos on clean black-on-transparent PNGs.
+                    let mut bin = GrayImage::new(w, h);
+                    for (x, y, pixel) in gray.enumerate_pixels() {
+                        let is_fg = if params.invert { pixel[0] >= 128 } else { pixel[0] < 128 };
+                        bin.put_pixel(x, y, Luma([if is_fg { 0 } else { 255 }]));
+                    }
+                    bin
+                } else {
+                    // Dual-threshold brightness range
+                    let lo = params.threshold_low;
+                    let hi = params.threshold;
+                    let mut bin = GrayImage::new(w, h);
+                    for (x, y, pixel) in gray.enumerate_pixels() {
+                        let v = pixel[0];
+                        let in_range = v >= lo && v <= hi;
+                        let is_fg = if params.invert { !in_range } else { in_range };
+                        bin.put_pixel(x, y, Luma([if is_fg { 0 } else { 255 }]));
+                    }
+                    bin
+                }
+            }
+        } }; // closes else { match ... }
+
+        // Step 4: Morphological cleanup
+        let binary = if params.morph_radius > 0 {
+            let opened = open(&binary, Norm::LInf, params.morph_radius);
+            close(&opened, Norm::LInf, params.morph_radius)
+        } else {
+            binary
+        };
+
+        // Step 5: Small connected component removal (scale-normalized threshold)
+        let binary = if params.ignore_area > 1 {
+            remove_small_components(&binary, ignore_area_scaled)
+        } else {
+            binary
+        };
+
+        // Step 5b: Interior hole despeckle — fills small white pinholes within foreground to
+        // eliminate spurious laser cuts. Must NOT run in real Canny/sketch mode: in that mode the
+        // binary is an edge map where enclosed white regions are shape interiors, NOT holes to
+        // remove. Applying fill_small_holes there would incorrectly solidify outlined shapes
+        // (critic FAIL fix §A, locked by test sketch_mode_guard_no_fill_small_holes).
+        // Exception: when trace_transparency=true, binarization always takes the alpha-mask branch
+        // (not Canny) regardless of params.mode, so hole-fill is safe and should run.
+        let binary = if params.filter_speckle > 0 && (params.mode != "sketch" || params.trace_transparency) {
+            fill_small_holes(&binary, hole_min_area)
+        } else {
+            binary
+        };
+
+        // Step 6: Convert to RGBA for vtracer
+        let mut rgba = image::RgbaImage::new(w, h);
+        for (x, y, pixel) in binary.enumerate_pixels() {
+            let color = if pixel[0] == 0 {
+                [0, 0, 0, 255]
+            } else {
+                [255, 255, 255, 255]
+            };
+            rgba.put_pixel(x, y, image::Rgba(color));
+        }
+
+        let pixels: Vec<u8> = rgba.into_raw();
+        let color_image = vtracer::ColorImage {
+            pixels,
+            width: w as usize,
+            height: h as usize,
+        };
+
+        // Step 7: vtracer with smoothness-mapped config (use scale-normalized filter_speckle)
+        let config = vtracer::Config {
+            color_mode: vtracer::ColorMode::Binary,
+            hierarchical: vtracer::Hierarchical::Stacked,
+            filter_speckle: filter_speckle_scaled,
+            corner_threshold: corner,
+            mode: simplify_mode,
+            ..Default::default()
+        };
+
+        vtracer::convert(color_image, config)?
+    };
 
     // Step 8: Post-processing — filter paths by outer-contour area (Shoelace).
     // Replaces the broken SVG string-length heuristic. Uses scale-normalized
@@ -505,6 +540,7 @@ mod tests {
             adaptive_block_size: 15,
             morph_radius: 0,
             trace_transparency: false,
+            color_count: None,
         }
     }
 
@@ -1098,6 +1134,79 @@ mod tests {
         // Sketch mode uses Canny — just verify it produced valid SVG (not a blank crash)
         assert!(sketch_result.svg.starts_with("<?xml"),
             "Part C: sketch mode should return valid SVG");
+    }
+
+    // ─── Color tracing ───────────────────────────────────────────────────
+
+    #[test]
+    fn color_mode_produces_multi_color_paths() {
+        // 20x20 image: left half red, right half blue. Color tracing should
+        // produce paths with distinct fill colors (not just black/white).
+        let w = 20u32;
+        let h = 20u32;
+        let mut pixels = vec![(255u8, 255u8, 255u8, 255u8); (w * h) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                if x < 10 {
+                    pixels[(y * w + x) as usize] = (255, 0, 0, 255); // red
+                } else {
+                    pixels[(y * w + x) as usize] = (0, 0, 255, 255); // blue
+                }
+            }
+        }
+        let image_data = make_rgba_png_b64(w, h, &pixels);
+        let params = TraceParams {
+            image_data,
+            color_count: Some(6),
+            ..base_params(String::new())
+        };
+        let result = trace_image(params).expect("color trace should succeed");
+        assert!(result.path_count >= 1, "Color trace should produce paths");
+        // SVG should contain fill attributes with actual colors (not just #000000)
+        assert!(result.svg.contains("fill=\""),
+            "Color trace SVG should contain fill attributes");
+        // Should have at least 2 distinct fill colors for red/blue halves
+        let mut colors = std::collections::HashSet::new();
+        for segment in result.svg.split("fill=\"") {
+            if let Some(end) = segment.find('"') {
+                colors.insert(segment[..end].to_lowercase());
+            }
+        }
+        // Remove empty string from split artifact
+        colors.remove("");
+        assert!(colors.len() >= 2,
+            "Color trace should produce at least 2 distinct colors, got {:?}", colors);
+    }
+
+    #[test]
+    fn color_mode_none_uses_binary() {
+        // With color_count=None, should use Binary mode (black/white only)
+        let w = 20u32;
+        let h = 20u32;
+        let mut pixels = vec![(255u8, 255u8, 255u8, 255u8); (w * h) as usize];
+        for y in 4..16u32 {
+            for x in 4..16u32 {
+                pixels[(y * w + x) as usize] = (0, 0, 0, 255);
+            }
+        }
+        let image_data = make_rgba_png_b64(w, h, &pixels);
+        let params = TraceParams {
+            image_data,
+            color_count: None,
+            ..base_params(String::new())
+        };
+        let result = trace_image(params).expect("binary trace should succeed");
+        assert!(result.path_count >= 1, "Binary trace should produce paths");
+        // All fills should be black (#000000) in binary mode
+        let mut colors = std::collections::HashSet::new();
+        for segment in result.svg.split("fill=\"") {
+            if let Some(end) = segment.find('"') {
+                let c = segment[..end].to_lowercase();
+                if !c.is_empty() { colors.insert(c); }
+            }
+        }
+        assert!(colors.len() <= 2,
+            "Binary trace should produce at most 2 colors, got {:?}", colors);
     }
 
     /// D2: trace_image rejects images exceeding MAX_TRACE_PIXELS.
