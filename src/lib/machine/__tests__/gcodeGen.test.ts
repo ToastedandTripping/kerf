@@ -1167,6 +1167,62 @@ describe("Text auto-conversion at G-code generation", () => {
     expect(skippedWarnings).toHaveLength(0);
   });
 
+  it("converted text paths inherit the text object's layer assignment", async () => {
+    const textObj: DesignObject = {
+      id: "txt-layer",
+      type: "text",
+      name: "Layer Test",
+      transform: { x: 0, y: 0, width: 50, height: 12, rotation: 0, scaleX: 1, scaleY: 1 },
+      layerIndex: 1, // non-default layer
+      visible: true,
+      locked: false,
+      fill: null,
+      stroke: "#ffffff",
+      strokeWidth: 0,
+      opacity: 1,
+      text: "X",
+      fontSize: 10,
+      fontFamily: "sans-serif",
+    };
+
+    const pathResult = {
+      id: "path-layer-test",
+      type: "path" as const,
+      name: "X",
+      transform: { x: 0, y: 0, width: 8, height: 10, rotation: 0, scaleX: 1, scaleY: 1 },
+      layerIndex: 0, // deliberately wrong — should be overwritten to 1
+      visible: true,
+      locked: false,
+      fill: null,
+      stroke: "#ffffff",
+      strokeWidth: 0,
+      opacity: 1,
+      points: [
+        { x: 0, y: 0 },
+        { x: 5, y: 10 },
+        { x: 10, y: 0 },
+      ],
+      closed: false,
+    };
+
+    mockTextObjectToPaths.mockResolvedValueOnce([pathResult]);
+    mockRustEngine();
+
+    useStore.getState().addObject(textObj);
+    await generateGcode();
+
+    // The path should have been sent to the engine with layer 1 settings (mode: "line"),
+    // not layer 0 (mode: "fill")
+    const calls = mockInvoke.mock.calls.filter(([cmd]) => cmd === "generate_gcode");
+    expect(calls.length).toBeGreaterThan(0);
+    const args = calls[0][1] as { objects: Array<Record<string, unknown>> };
+    expect(args.objects.length).toBeGreaterThan(0);
+    for (const obj of args.objects) {
+      const layer = obj.layer as Record<string, unknown>;
+      expect(layer.mode).toBe("line"); // layer 1 = Score = line mode
+    }
+  });
+
   it("adds a warning and skips when font fails to load", async () => {
     const textObj: DesignObject = {
       id: "txt-fail",
