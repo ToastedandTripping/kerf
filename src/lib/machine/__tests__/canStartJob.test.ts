@@ -140,6 +140,21 @@ describe("canStartJob", () => {
     });
     expect(gate.ok).toBe(true);
   });
+
+  it("blocks when grblLaserMode is false ($32=1 gate)", () => {
+    const gate = canStartJob({ ...okState(), grblLaserMode: false });
+    expect(gate.ok).toBe(false);
+    expect(gate.reason).toContain("$32 must be 1");
+  });
+
+  it("blocks when grblLaserMode is undefined (fail-closed)", () => {
+    const gate = canStartJob({
+      ...okState(),
+      grblLaserMode: undefined as unknown as boolean,
+    });
+    expect(gate.ok).toBe(false);
+    expect(gate.reason).toContain("$32 must be 1");
+  });
 });
 
 describe("movesExtents", () => {
