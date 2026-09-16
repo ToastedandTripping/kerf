@@ -61,6 +61,7 @@ vi.mock("pdfjs-dist", () => ({
 vi.mock("opentype.js", () => {
   const makeFont = () => ({
     unitsPerEm: 1000,
+    getAdvanceWidth: (text: string, fontSize: number) => text.length * 500 * (fontSize / 1000),
     stringToGlyphs: (text: string) =>
       text.split("").map(() => ({
         advanceWidth: 500,
@@ -427,6 +428,61 @@ describe("text to path", () => {
     const objects = await textObjectToPaths(makeText("t2", "AB"));
     expect(objects.length).toBe(2);
     for (const o of objects) assertPointsInvariant(o);
+  });
+
+  it("multiline text produces glyphs for each line with vertical offset", async () => {
+    const obj = { ...makeText("ml1", "A\nB"), fontSize: 20 };
+    const paths = await textObjectToPaths(obj);
+    // 2 glyphs — one per line
+    expect(paths.length).toBe(2);
+    for (const o of paths) assertPointsInvariant(o);
+    // Second glyph should be vertically offset by approximately fontSize * 1.3
+    const firstY = paths[0].transform.y;
+    const secondY = paths[1].transform.y;
+    expect(secondY).toBeGreaterThan(firstY + 20); // at least fontSize offset
+  });
+
+  it("center-aligned text shifts glyphs rightward for shorter lines", async () => {
+    const obj = { ...makeText("ca1", "AB\nA"), fontSize: 10, textAlign: "center" as const };
+    const paths = await textObjectToPaths(obj);
+    // Line 1 "AB" = 2 glyphs, line 2 "A" = 1 glyph
+    expect(paths.length).toBe(3);
+    // The single glyph on line 2 should have a larger x than the first glyph on line 1
+    // because center alignment offsets shorter lines rightward
+    const line1FirstX = paths[0].transform.x;
+    const line2FirstX = paths[2].transform.x;
+    expect(line2FirstX).toBeGreaterThan(line1FirstX);
+  });
+
+  it("right-aligned text shifts glyphs rightward for shorter lines", async () => {
+    const obj = { ...makeText("ra1", "AB\nA"), fontSize: 10, textAlign: "right" as const };
+    const paths = await textObjectToPaths(obj);
+    expect(paths.length).toBe(3);
+    // Right-aligned: single glyph on line 2 should be further right than center
+    const line2FirstX = paths[2].transform.x;
+    const line1FirstX = paths[0].transform.x;
+    expect(line2FirstX).toBeGreaterThan(line1FirstX);
+  });
+
+  it("left-aligned multiline text starts all lines at the same x", async () => {
+    const obj = { ...makeText("la1", "AB\nCD"), fontSize: 10, textAlign: "left" as const };
+    const paths = await textObjectToPaths(obj);
+    expect(paths.length).toBe(4);
+    // Line 1 first glyph and line 2 first glyph should start at same x
+    const line1FirstX = paths[0].transform.x;
+    const line2FirstX = paths[2].transform.x;
+    expect(line2FirstX).toBeCloseTo(line1FirstX, 1);
+  });
+
+  it("empty lines produce no glyphs but advance vertical position", async () => {
+    const obj = { ...makeText("el1", "A\n\nB"), fontSize: 10 };
+    const paths = await textObjectToPaths(obj);
+    // Only 2 glyphs (A and B), empty line skipped
+    expect(paths.length).toBe(2);
+    // B is on line index 2, so yOffset = 2 * 10 * 1.3 = 26
+    const firstY = paths[0].transform.y;
+    const secondY = paths[1].transform.y;
+    expect(secondY - firstY).toBeGreaterThan(20); // more than one line spacing
   });
 });
 

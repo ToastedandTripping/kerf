@@ -1010,10 +1010,11 @@ export function Viewport() {
             setActiveTool("select");
           };
 
+          const align = textEditingObj.textAlign ?? "left";
+
           return (
-            <input
+            <textarea
               key={textEditingObj.id}
-              type="text"
               autoFocus
               value={textEditingObj.text ?? ""}
               style={{
@@ -1023,52 +1024,71 @@ export function Viewport() {
                 fontSize: `${fontSize * camera.zoom}px`,
                 fontFamily: CSS_FONT_FAMILY[textEditingObj.fontFamily ?? "sans-serif"] ?? "sans-serif",
                 color: textEditingObj.fill || "#e8e8e8",
-                background: "transparent",
-                border: "none",
+                background: "rgba(255, 255, 255, 0.04)",
+                border: "1px solid rgba(74, 144, 226, 0.4)",
+                borderRadius: "2px",
                 outline: "none",
                 minWidth: "80px",
+                minHeight: `${fontSize * camera.zoom * 1.3}px`,
                 zIndex: 20,
                 pointerEvents: "all",
-                padding: 0,
+                padding: "2px 4px",
                 margin: 0,
-                lineHeight: 1,
+                lineHeight: "1.3",
+                resize: "none",
+                overflow: "hidden",
+                textAlign: align,
+                whiteSpace: "pre",
               }}
               onChange={(e) => {
                 const text = e.target.value;
                 const fs = textEditingObj.fontSize ?? 16;
                 const family = textEditingObj.fontFamily ?? "sans-serif";
+                const lines = text.split("\n");
                 // Crude estimate as immediate fallback
-                const crudeWidth = Math.max(fs * 2, text.length * fs * 0.6);
+                const longestLine = lines.reduce((a, l) => Math.max(a, l.length), 0);
+                const crudeWidth = Math.max(fs * 2, longestLine * fs * 0.6);
+                const crudeHeight = Math.max(fs * 1.3, lines.length * fs * 1.3);
                 updateObject(textEditingObj.id, {
                   text,
                   transform: {
                     ...textEditingObj.transform,
                     width: crudeWidth,
-                    height: fs * 1.3,
+                    height: crudeHeight,
                   },
                 });
                 // Refine with actual font metrics when available
                 loadFont(family).then((font) => {
-                  const accurate = Math.max(fs * 2, font.getAdvanceWidth(text, fs));
+                  const maxLineWidth = lines.reduce(
+                    (max, line) => Math.max(max, font.getAdvanceWidth(line, fs)),
+                    0
+                  );
+                  const accurate = Math.max(fs * 2, maxLineWidth);
                   const current = useStore.getState().objectsById.get(textEditingObj.id);
                   if (current && current.text === text) {
                     updateObject(textEditingObj.id, {
-                      transform: { ...current.transform, width: accurate },
+                      transform: {
+                        ...current.transform,
+                        width: accurate,
+                        height: crudeHeight,
+                      },
                     });
                   }
                 }).catch(() => { /* font unavailable — keep crude estimate */ });
               }}
               onKeyDown={(e) => {
                 e.stopPropagation();
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  textEditCommittingRef.current = true;
-                  handleCommit();
-                } else if (e.key === "Escape") {
+                if (e.key === "Escape") {
                   e.preventDefault();
                   textEditCommittingRef.current = true;
                   handleCancel();
+                } else if (e.key === "Enter" && e.shiftKey) {
+                  // Shift+Enter commits
+                  e.preventDefault();
+                  textEditCommittingRef.current = true;
+                  handleCommit();
                 }
+                // Plain Enter inserts a newline (default textarea behavior)
               }}
               onBlur={() => {
                 if (textEditCommittingRef.current) {
@@ -1087,7 +1107,7 @@ export function Viewport() {
 /** P8: Content hash for text/image objects -- skip GPU texture rebuild when only transform changed */
 function contentHash(obj: DesignObject): string {
   if (obj.type === "text")
-    return `${obj.text}|${obj.fontSize}|${obj.fontFamily}|${obj.fill}|${obj.stroke}|${obj.opacity}|${obj.transform.width}`;
+    return `${obj.text}|${obj.fontSize}|${obj.fontFamily}|${obj.textAlign}|${obj.fill}|${obj.stroke}|${obj.opacity}|${obj.transform.width}`;
   if (obj.type === "image")
     return `${obj.imageData?.slice(0, 50)}|${obj.opacity}|${JSON.stringify(obj.imageAdjustments)}`;
   return "";
@@ -1335,6 +1355,7 @@ function renderTextObject(obj: DesignObject): Container | null {
     fontFamily: CSS_FONT_FAMILY[obj.fontFamily ?? "sans-serif"] ?? "-apple-system, BlinkMacSystemFont, sans-serif",
     fontSize: (obj.fontSize || 16) * PX_PER_MM,
     fill: obj.fill || obj.stroke || "#e8e8e8",
+    align: obj.textAlign ?? "left",
     wordWrap: t.width > 0,
     wordWrapWidth: t.width > 0 ? t.width * PX_PER_MM : undefined,
   });

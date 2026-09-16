@@ -77,146 +77,179 @@ export async function textObjectToPaths(obj: DesignObject): Promise<DesignObject
   const font = await loadFont(obj.fontFamily ?? "sans-serif");
   const fontSize = obj.fontSize || 12;
   const scale = fontSize / font.unitsPerEm;
+  const textAlign = obj.textAlign ?? "left";
+  const lineSpacing = fontSize * 1.3;
 
-  const glyphs = font.stringToGlyphs(obj.text);
-  let xOffset = 0;
+  const lines = obj.text.split("\n");
+
+  // Pre-compute line widths for alignment
+  const lineWidths = lines.map((line) => font.getAdvanceWidth(line, fontSize));
+  const maxLineWidth = Math.max(...lineWidths, fontSize * 2);
+
   const prepared: DesignObject[] = [];
 
-  for (const glyph of glyphs) {
-    const path = glyph.getPath(0, 0, font.unitsPerEm);
-    const commands = path.commands;
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
+    if (!line) continue; // skip empty lines (they contribute vertical spacing only)
 
-    if (commands.length === 0) {
-      xOffset += (glyph.advanceWidth || 0) * scale;
-      continue;
+    const yOffset = lineIndex * lineSpacing;
+
+    // Per-line xOffset adjustment for alignment
+    let alignOffset = 0;
+    if (textAlign === "center") {
+      alignOffset = (maxLineWidth - lineWidths[lineIndex]) / 2;
+    } else if (textAlign === "right") {
+      alignOffset = maxLineWidth - lineWidths[lineIndex];
     }
 
-    // W1c (F20): split glyph CONTOURS at M commands — pre-fix they were
-    // concatenated into one points array, so a glyph "O" bridged its hole
-    // to its outline and the bridge was CUT through the workpiece.
-    const contours: Array<
-      Array<{
+    const glyphs = font.stringToGlyphs(line);
+    let xOffset = alignOffset;
+
+    for (const glyph of glyphs) {
+      const path = glyph.getPath(0, 0, font.unitsPerEm);
+      const commands = path.commands;
+
+      if (commands.length === 0) {
+        xOffset += (glyph.advanceWidth || 0) * scale;
+        continue;
+      }
+
+      // W1c (F20): split glyph CONTOURS at M commands — pre-fix they were
+      // concatenated into one points array, so a glyph "O" bridged its hole
+      // to its outline and the bridge was CUT through the workpiece.
+      const contours: Array<
+        Array<{
+          x: number;
+          y: number;
+          handleIn?: { x: number; y: number };
+          handleOut?: { x: number; y: number };
+        }>
+      > = [];
+      let pathPoints: Array<{
         x: number;
         y: number;
         handleIn?: { x: number; y: number };
         handleOut?: { x: number; y: number };
-      }>
-    > = [];
-    let pathPoints: Array<{
-      x: number;
-      y: number;
-      handleIn?: { x: number; y: number };
-      handleOut?: { x: number; y: number };
-    }> = [];
-    let currentX: number, currentY: number;
+      }> = [];
+      let currentX: number, currentY: number;
 
-    for (const cmd of commands) {
-      switch (cmd.type) {
-        case "M":
-          if (pathPoints.length > 0) contours.push(pathPoints);
-          pathPoints = [];
-          currentX = cmd.x! * scale;
-          currentY = cmd.y! * scale;
-          pathPoints.push({
-            x: obj.transform.x + xOffset + currentX,
-            y: obj.transform.y + fontSize + currentY,
-          });
-          break;
-        case "L":
-          currentX = cmd.x! * scale;
-          currentY = cmd.y! * scale;
-          pathPoints.push({
-            x: obj.transform.x + xOffset + currentX,
-            y: obj.transform.y + fontSize + currentY,
-          });
-          break;
-        case "C": {
-          const prevPt = pathPoints[pathPoints.length - 1];
-          if (prevPt) {
-            prevPt.handleOut = {
-              x: obj.transform.x + xOffset + cmd.x1! * scale,
-              y: obj.transform.y + fontSize + cmd.y1! * scale,
-            };
+      for (const cmd of commands) {
+        switch (cmd.type) {
+          case "M":
+            if (pathPoints.length > 0) contours.push(pathPoints);
+            pathPoints = [];
+            currentX = cmd.x! * scale;
+            currentY = cmd.y! * scale;
+            pathPoints.push({
+              x: obj.transform.x + xOffset + currentX,
+              y: obj.transform.y + yOffset + fontSize + currentY,
+            });
+            break;
+          case "L":
+            currentX = cmd.x! * scale;
+            currentY = cmd.y! * scale;
+            pathPoints.push({
+              x: obj.transform.x + xOffset + currentX,
+              y: obj.transform.y + yOffset + fontSize + currentY,
+            });
+            break;
+          case "C": {
+            const prevPt = pathPoints[pathPoints.length - 1];
+            if (prevPt) {
+              prevPt.handleOut = {
+                x: obj.transform.x + xOffset + cmd.x1! * scale,
+                y: obj.transform.y + yOffset + fontSize + cmd.y1! * scale,
+              };
+            }
+            currentX = cmd.x! * scale;
+            currentY = cmd.y! * scale;
+            pathPoints.push({
+              x: obj.transform.x + xOffset + currentX,
+              y: obj.transform.y + yOffset + fontSize + currentY,
+              handleIn: {
+                x: obj.transform.x + xOffset + cmd.x2! * scale,
+                y: obj.transform.y + yOffset + fontSize + cmd.y2! * scale,
+              },
+            });
+            break;
           }
-          currentX = cmd.x! * scale;
-          currentY = cmd.y! * scale;
-          pathPoints.push({
-            x: obj.transform.x + xOffset + currentX,
-            y: obj.transform.y + fontSize + currentY,
-            handleIn: {
-              x: obj.transform.x + xOffset + cmd.x2! * scale,
-              y: obj.transform.y + fontSize + cmd.y2! * scale,
-            },
-          });
-          break;
-        }
-        case "Q": {
-          const qPrev = pathPoints[pathPoints.length - 1];
-          const qpx = qPrev ? qPrev.x : 0;
-          const qpy = qPrev ? qPrev.y : 0;
-          const cpx = cmd.x1! * scale;
-          const cpy = cmd.y1! * scale;
-          if (qPrev) {
-            qPrev.handleOut = {
-              x: qpx + (2 / 3) * (obj.transform.x + xOffset + cpx - qpx),
-              y: qpy + (2 / 3) * (obj.transform.y + fontSize + cpy - qpy),
-            };
+          case "Q": {
+            const qPrev = pathPoints[pathPoints.length - 1];
+            const qpx = qPrev ? qPrev.x : 0;
+            const qpy = qPrev ? qPrev.y : 0;
+            const cpx = cmd.x1! * scale;
+            const cpy = cmd.y1! * scale;
+            if (qPrev) {
+              qPrev.handleOut = {
+                x: qpx + (2 / 3) * (obj.transform.x + xOffset + cpx - qpx),
+                y: qpy + (2 / 3) * (obj.transform.y + yOffset + fontSize + cpy - qpy),
+              };
+            }
+            currentX = cmd.x! * scale;
+            currentY = cmd.y! * scale;
+            const endX = obj.transform.x + xOffset + currentX;
+            const endY = obj.transform.y + yOffset + fontSize + currentY;
+            pathPoints.push({
+              x: endX,
+              y: endY,
+              handleIn: {
+                x: endX + (2 / 3) * (obj.transform.x + xOffset + cpx - endX),
+                y: endY + (2 / 3) * (obj.transform.y + yOffset + fontSize + cpy - endY),
+              },
+            });
+            break;
           }
-          currentX = cmd.x! * scale;
-          currentY = cmd.y! * scale;
-          const endX = obj.transform.x + xOffset + currentX;
-          const endY = obj.transform.y + fontSize + currentY;
-          pathPoints.push({
-            x: endX,
-            y: endY,
-            handleIn: {
-              x: endX + (2 / 3) * (obj.transform.x + xOffset + cpx - endX),
-              y: endY + (2 / 3) * (obj.transform.y + fontSize + cpy - endY),
-            },
-          });
-          break;
+          case "Z":
+            break;
         }
-        case "Z":
-          break;
       }
+
+      if (pathPoints.length > 0) contours.push(pathPoints);
+
+      // Surviving (≥2-point) contours become path objects; a multi-contour
+      // glyph (O, A, B) groups per glyph so flatten cuts the hole as its own
+      // ring (no bridge); single-contour glyphs stay FLAT — no behavior change.
+      const contourObjects: DesignObject[] = contours
+        .filter((pts) => pts.length > 1)
+        .map((pts) => {
+          const bb = pointsBBox(pts);
+          return {
+            ...obj,
+            id: generateId(),
+            type: "path" as const,
+            text: undefined,
+            fontSize: undefined,
+            fontFamily: undefined,
+            textAlign: undefined,
+            isTemplate: undefined,
+            points: pts,
+            closed: true,
+            transform: {
+              ...obj.transform,
+              x: bb.x,
+              y: bb.y,
+              width: bb.width,
+              height: bb.height,
+            },
+          };
+        });
+
+      if (contourObjects.length === 1) {
+        prepared.push(contourObjects[0]);
+      } else if (contourObjects.length > 1) {
+        prepared.push(buildGroupObject(contourObjects, generateId(), obj.name, obj.layerIndex));
+      }
+
+      xOffset += (glyph.advanceWidth || 0) * scale;
     }
+  }
 
-    if (pathPoints.length > 0) contours.push(pathPoints);
-
-    // Surviving (≥2-point) contours become path objects; a multi-contour
-    // glyph (O, A, B) groups per glyph so flatten cuts the hole as its own
-    // ring (no bridge); single-contour glyphs stay FLAT — no behavior change.
-    const contourObjects: DesignObject[] = contours
-      .filter((pts) => pts.length > 1)
-      .map((pts) => {
-        const bb = pointsBBox(pts);
-        return {
-          ...obj,
-          id: generateId(),
-          type: "path" as const,
-          text: undefined,
-          fontSize: undefined,
-          fontFamily: undefined,
-          isTemplate: undefined,
-          points: pts,
-          closed: true,
-          transform: {
-            ...obj.transform,
-            x: bb.x,
-            y: bb.y,
-            width: bb.width,
-            height: bb.height,
-          },
-        };
-      });
-
-    if (contourObjects.length === 1) {
-      prepared.push(contourObjects[0]);
-    } else if (contourObjects.length > 1) {
-      prepared.push(buildGroupObject(contourObjects, generateId(), obj.name, obj.layerIndex));
-    }
-
-    xOffset += (glyph.advanceWidth || 0) * scale;
+  // Update transform height for multiline
+  if (lines.length > 1) {
+    const totalHeight = lines.length * lineSpacing;
+    // The prepared objects already have absolute positions — just return them.
+    // The caller (gcodeGen auto-convert) replaces the text object with these paths.
+    void totalHeight; // height is implicit in the positioned glyphs
   }
 
   return prepared;

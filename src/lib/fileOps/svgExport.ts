@@ -90,12 +90,30 @@ export function exportSvgContent(): string {
           const fs = obj.fontSize || 16;
           const ff = obj.fontFamily || "sans-serif";
           const textFill = obj.fill || obj.stroke || "#e8e8e8";
-          const textY = t.y + fs;
-          const escaped = obj.text
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;");
-          elements += `  <text x="${t.x}" y="${textY}" font-size="${fs}" font-family="${ff}" fill="${textFill}"${opacity}${rotTransform}>${escaped}</text>\n`;
+          const align = obj.textAlign ?? "left";
+          const anchor = align === "center" ? "middle" : align === "right" ? "end" : "start";
+          const lines = obj.text.split("\n");
+          if (lines.length === 1) {
+            const textY = t.y + fs;
+            const escaped = obj.text
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;");
+            const anchorX = align === "center" ? t.x + t.width / 2 : align === "right" ? t.x + t.width : t.x;
+            elements += `  <text x="${anchorX}" y="${textY}" font-size="${fs}" font-family="${ff}" fill="${textFill}" text-anchor="${anchor}"${opacity}${rotTransform}>${escaped}</text>\n`;
+          } else {
+            const anchorX = align === "center" ? t.x + t.width / 2 : align === "right" ? t.x + t.width : t.x;
+            elements += `  <text x="${anchorX}" y="${t.y + fs}" font-size="${fs}" font-family="${ff}" fill="${textFill}" text-anchor="${anchor}"${opacity}${rotTransform}>\n`;
+            for (let li = 0; li < lines.length; li++) {
+              const escaped = lines[li]
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;");
+              const dy = li === 0 ? "0" : `${fs * 1.3}`;
+              elements += `    <tspan x="${anchorX}" dy="${dy}">${escaped}</tspan>\n`;
+            }
+            elements += `  </text>\n`;
+          }
         }
         break;
       }

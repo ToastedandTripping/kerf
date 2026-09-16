@@ -92,6 +92,7 @@ export interface DesignObject {
   text?: string; // text
   fontSize?: number; // text
   fontFamily?: string; // text
+  textAlign?: "left" | "center" | "right"; // text
   // Image
   imageData?: string; // base64
   imageAdjustments?: ImageAdjustments; // image

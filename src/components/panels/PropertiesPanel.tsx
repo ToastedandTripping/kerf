@@ -428,6 +428,35 @@ export function PropertiesPanel() {
                 onFocus={beginEdit}
                 onBlur={commitEdit}
               />
+              <PropertyRow label="Align">
+                <div style={{ display: "flex", gap: "2px" }}>
+                  {(["left", "center", "right"] as const).map((a) => (
+                    <button
+                      key={a}
+                      onClick={() => {
+                        beginEdit();
+                        updateObject(obj.id, { textAlign: a });
+                        commitEdit();
+                      }}
+                      style={{
+                        ...inputStyle,
+                        flex: 1,
+                        cursor: "pointer",
+                        fontWeight: (obj.textAlign ?? "left") === a ? 700 : 400,
+                        background: (obj.textAlign ?? "left") === a ? "rgba(74, 144, 226, 0.2)" : inputStyle.background,
+                        border: (obj.textAlign ?? "left") === a ? "1px solid rgba(74, 144, 226, 0.5)" : "1px solid transparent",
+                        textAlign: "center",
+                        padding: "2px 4px",
+                        fontSize: "11px",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.5px",
+                      }}
+                    >
+                      {a === "left" ? "L" : a === "center" ? "C" : "R"}
+                    </button>
+                  ))}
+                </div>
+              </PropertyRow>
               <PropertyRow label="Font">
                 <select
                   value={obj.fontFamily ?? "sans-serif"}

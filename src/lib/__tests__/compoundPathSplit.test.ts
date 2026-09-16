@@ -43,6 +43,7 @@ vi.mock("opentype.js", () => {
   ];
   const makeFont = () => ({
     unitsPerEm: 1000,
+    getAdvanceWidth: (text: string, fontSize: number) => text.length * 500 * (fontSize / 1000),
     stringToGlyphs: (text: string) =>
       text.split("").map((ch) => ({
         advanceWidth: 500,
