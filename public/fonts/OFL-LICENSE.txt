@@ -1,0 +1,18 @@
+The fonts in this directory are licensed under the SIL Open Font License,
+Version 1.1.
+
+- OpenSans-Regular.ttf: Copyright 2020 The Open Sans Project Authors
+  https://github.com/googlefonts/opensans
+- LibreBaskerville-Regular.ttf: Copyright 2012 The Libre Baskerville Project Authors
+  https://github.com/impallari/Libre-Baskerville
+- IBMPlexMono-Regular.ttf: Copyright 2017 IBM Corp.
+  https://github.com/IBM/plex
+- Pacifico-Regular.ttf: Copyright 2018 The Pacifico Project Authors
+  https://github.com/googlefonts/Pacifico
+
+Full license text: https://scripts.sil.org/OFL
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of the font software, to use, study, copy, merge, embed, modify, redistribute,
+and sell modified and unmodified copies of the font software, subject to the
+conditions in the SIL Open Font License, Version 1.1.

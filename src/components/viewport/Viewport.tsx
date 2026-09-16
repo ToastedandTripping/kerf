@@ -5,15 +5,12 @@ import { useStore } from "../../app/store";
 import { getDirtyObjectIds, clearDirtyObjectIds, setCursorPosition } from "../../app/store";
 import type { DesignObject } from "../../app/types";
 import { hasPlaceholders } from "../../lib/variableText";
-import { loadFont } from "../../app/store/geometryActions";
+import { loadFont, BUNDLED_FONTS } from "../../app/store/geometryActions";
 
-/** Map internal font-family keys to CSS @font-face family names with generic fallbacks. */
-const CSS_FONT_FAMILY: Record<string, string> = {
-  "sans-serif": "'Open Sans', sans-serif",
-  serif: "'Libre Baskerville', serif",
-  monospace: "'IBM Plex Mono', monospace",
-  display: "'Pacifico', cursive",
-};
+/** N1: Derived lookup from BUNDLED_FONTS — font key → CSS family string. */
+const CSS_FONT_FAMILY: Record<string, string> = Object.fromEntries(
+  BUNDLED_FONTS.map((f) => [f.key, f.cssFamily])
+);
 import {
   handleViewportPointerDown,
   handleViewportPointerMove,

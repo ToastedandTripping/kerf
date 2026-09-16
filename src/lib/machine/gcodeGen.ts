@@ -847,35 +847,47 @@ export async function generateGcode(): Promise<GcodeResult> {
   const store = useStore.getState();
 
   // Phase 2A: auto-convert text objects to paths before cut-object generation.
-  // textObjectToPaths bakes the text object's transform into the path points
-  // (world-space coordinates), so the resulting paths are added directly —
-  // no group wrapper needed. If a font fails to load, a warning is added and
-  // that text object is skipped — never silently dropped.
+  // Walks the full object tree (including group children) so nested text is
+  // found and converted — W1 fix: the original loop only walked top-level
+  // objects, so grouped text fell through to toCutObjects and was skipped.
+  // textObjectToPaths bakes obj.transform into the path points (group-local
+  // for grouped text), so converted paths slot into the same position the
+  // text occupied and flattenObjects composes group transforms normally.
   const textConvertWarnings: string[] = [];
-  const preprocessed: DesignObject[] = [];
-  for (const obj of store.objects) {
-    if (obj.type === "text" && obj.visible) {
-      try {
-        const paths = await textObjectToPaths(obj);
-        if (paths.length > 0) {
-          // Paths are world-space; inherit the text object's layer assignment.
-          for (const p of paths) {
-            preprocessed.push({ ...p, layerIndex: obj.layerIndex });
+  async function convertTextInTree(objects: DesignObject[]): Promise<DesignObject[]> {
+    const result: DesignObject[] = [];
+    for (const obj of objects) {
+      if (obj.type === "text" && obj.visible) {
+        try {
+          const paths = await textObjectToPaths(obj);
+          if (paths.length > 0) {
+            for (const p of paths) {
+              result.push({ ...p, layerIndex: obj.layerIndex });
+            }
+          } else {
+            textConvertWarnings.push(
+              `Text object "${obj.name}" produced no paths — empty or whitespace-only text`
+            );
           }
-        } else {
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : String(err);
           textConvertWarnings.push(
-            `Text object "${obj.name}" produced no paths — empty or whitespace-only text`
+            `Text object "${obj.name}" could not be converted — font failed to load: ${detail}`
           );
         }
-      } catch (err) {
-        textConvertWarnings.push(
-          `Text object "${obj.name}" could not be converted — font failed to load`
-        );
+      } else if (obj.type === "group" && obj.children) {
+        // Recurse into children, replacing text with paths in-place.
+        // The group structure is preserved so flattenObjects still handles
+        // groupId stamping and transform composition for non-text children.
+        const convertedChildren = await convertTextInTree(obj.children);
+        result.push({ ...obj, children: convertedChildren });
+      } else {
+        result.push(obj);
       }
-    } else {
-      preprocessed.push(obj);
     }
+    return result;
   }
+  const preprocessed = await convertTextInTree(store.objects);
 
   const { objects: cutObjects, warnings } = toCutObjects(preprocessed, store.layers);
   warnings.push(...textConvertWarnings);

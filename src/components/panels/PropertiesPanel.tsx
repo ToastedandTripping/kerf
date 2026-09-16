@@ -4,23 +4,20 @@ import type { ImageAdjustments } from "../../app/types";
 import { openDitherPreview } from "../../app/App";
 import { movePartial, scalePartial } from "../../lib/geometry";
 import { MM_PER_INCH } from "../../lib/constants";
+import { BUNDLED_FONTS } from "../../app/store/geometryActions";
 const UNITS_KEY = "kerf-display-units";
 
-// Inject @font-face declarations once so canvas preview and the font selector
-// render text with the actual bundled fonts, not generic system fallbacks.
-const FONT_FACES = [
-  { family: "Open Sans", file: "/fonts/OpenSans-Regular.ttf" },
-  { family: "Libre Baskerville", file: "/fonts/LibreBaskerville-Regular.ttf" },
-  { family: "IBM Plex Mono", file: "/fonts/IBMPlexMono-Regular.ttf" },
-  { family: "Pacifico", file: "/fonts/Pacifico-Regular.ttf" },
-];
+// N1: @font-face declarations derived from BUNDLED_FONTS (single source of truth).
 let fontFacesInjected = false;
 function injectFontFaces() {
   if (fontFacesInjected) return;
   fontFacesInjected = true;
-  const css = FONT_FACES.map(
-    (f) =>
-      `@font-face { font-family: '${f.family}'; src: url('${f.file}') format('truetype'); font-weight: 400; font-style: normal; font-display: swap; }`
+  const css = BUNDLED_FONTS.map(
+    (f) => {
+      // Extract the primary family name from the cssFamily string (e.g. "'Open Sans', sans-serif" → "Open Sans")
+      const familyName = f.cssFamily.split(",")[0].trim().replace(/'/g, "");
+      return `@font-face { font-family: '${familyName}'; src: url('${f.file}') format('truetype'); font-weight: 400; font-style: normal; font-display: swap; }`;
+    }
   ).join("\n");
   const style = document.createElement("style");
   style.textContent = css;
@@ -448,10 +445,9 @@ export function PropertiesPanel() {
                     cursor: "pointer",
                   }}
                 >
-                  <option value="sans-serif">Sans-serif (Open Sans)</option>
-                  <option value="serif">Serif (Libre Baskerville)</option>
-                  <option value="monospace">Monospace (IBM Plex Mono)</option>
-                  <option value="display">Display (Pacifico)</option>
+                  {BUNDLED_FONTS.map((f) => (
+                    <option key={f.key} value={f.key}>{f.label}</option>
+                  ))}
                 </select>
               </PropertyRow>
             </PropertyGroup>

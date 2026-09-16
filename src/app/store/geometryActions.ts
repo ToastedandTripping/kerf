@@ -24,13 +24,25 @@ import {
 const fontCache = new Map<string, opentype.Font>();
 const fontLoadPromises = new Map<string, Promise<opentype.Font>>();
 
-/** Map CSS font-family values to bundled .ttf file paths. */
-const FONT_PATH_MAP: Record<string, string> = {
-  "sans-serif": "/fonts/OpenSans-Regular.ttf",
-  serif: "/fonts/LibreBaskerville-Regular.ttf",
-  monospace: "/fonts/IBMPlexMono-Regular.ttf",
-  display: "/fonts/Pacifico-Regular.ttf",
-};
+/** Bundled font registry — single source of truth for font key, file path,
+ *  CSS @font-face family name, and display label. N1: keeps PropertiesPanel,
+ *  Viewport, and loadFont in sync without manual duplication. */
+export const BUNDLED_FONTS: ReadonlyArray<{
+  key: string;
+  file: string;
+  cssFamily: string;
+  label: string;
+}> = [
+  { key: "sans-serif", file: "/fonts/OpenSans-Regular.ttf", cssFamily: "'Open Sans', sans-serif", label: "Sans-serif (Open Sans)" },
+  { key: "serif", file: "/fonts/LibreBaskerville-Regular.ttf", cssFamily: "'Libre Baskerville', serif", label: "Serif (Libre Baskerville)" },
+  { key: "monospace", file: "/fonts/IBMPlexMono-Regular.ttf", cssFamily: "'IBM Plex Mono', monospace", label: "Monospace (IBM Plex Mono)" },
+  { key: "display", file: "/fonts/Pacifico-Regular.ttf", cssFamily: "'Pacifico', cursive", label: "Display (Pacifico)" },
+];
+
+/** Derived lookup: font key → .ttf path. */
+const FONT_PATH_MAP: Record<string, string> = Object.fromEntries(
+  BUNDLED_FONTS.map((f) => [f.key, f.file])
+);
 
 export async function loadFont(
   fontFamily: string = "sans-serif"
