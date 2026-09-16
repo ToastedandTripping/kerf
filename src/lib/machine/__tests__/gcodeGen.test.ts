@@ -9,6 +9,14 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
 
+// Mock textObjectToPaths — the real one loads fonts via HTTP which doesn't
+// resolve under jsdom. We use vi.spyOn after import to avoid breaking the
+// Zustand store init which calls createGeometryActions from the same module.
+import * as geometryActions from "../../../app/store/geometryActions";
+const mockTextObjectToPaths = vi
+  .spyOn(geometryActions, "textObjectToPaths")
+  .mockResolvedValue([]);
+
 import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../../app/store";
 import type { DesignObject } from "../../../app/types";
@@ -73,6 +81,7 @@ function makeRect(id: string, x: number, y: number, w: number, h: number): Desig
 describe("G-code generation (Rust contract + hard-fail)", () => {
   beforeEach(() => {
     mockInvoke.mockReset();
+    mockTextObjectToPaths.mockReset();
     useStore.setState({
       objects: [],
       objectsById: new Map(),
@@ -132,11 +141,11 @@ describe("G-code generation (Rust contract + hard-fail)", () => {
     expect(calls).toHaveLength(0);
   });
 
-  // Re-homed from "skips text objects and adds a warning" (fallback): the
-  // text-skip + console warning are emitted before the invoke and the text
-  // object must not reach the engine.
-  it("skips text objects with a console warning (nothing sent to the engine)", async () => {
+  // Phase 2A: text objects are now auto-converted to paths at G-code time.
+  // When conversion returns no paths (empty text), a warning is surfaced.
+  it("warns when text conversion produces no paths (empty/whitespace text)", async () => {
     mockRustEngine();
+    mockTextObjectToPaths.mockResolvedValueOnce([]); // empty result
     useStore.getState().addObject({
       id: "t1",
       type: "text",
@@ -149,16 +158,16 @@ describe("G-code generation (Rust contract + hard-fail)", () => {
       stroke: "#4a90e2",
       strokeWidth: 1,
       opacity: 1,
-      text: "Hello",
+      text: " ",
       fontSize: 12,
     });
 
     await generateGcode();
-    // Text object is filtered by toCutObjects — no bucket formed → no generate_gcode call.
+    // No paths produced → no generate_gcode call.
     const calls = mockInvoke.mock.calls.filter(([cmd]) => cmd === "generate_gcode");
     expect(calls).toHaveLength(0);
     const warningTexts = useStore.getState().consoleLines.map((l) => l.text);
-    expect(warningTexts.some((t) => t.includes("Test Text") && t.includes("skipped"))).toBe(true);
+    expect(warningTexts.some((t) => t.includes("Test Text") && t.includes("no paths"))).toBe(true);
   });
 
   // Re-homed from "returns zero distances when no objects exist" (fallback):
@@ -1077,5 +1086,116 @@ describe("WS2 — generateGcode layer ordering", () => {
     // Second invoke (pos 1, Cut) has only the cut object
     expect(invokesWithObjs[1]).toContain("cut-obj");
     expect(invokesWithObjs[1]).not.toContain("engrave-obj");
+  });
+});
+
+describe("Text auto-conversion at G-code generation", () => {
+  beforeEach(() => {
+    mockInvoke.mockReset();
+    mockTextObjectToPaths.mockReset();
+    useStore.setState({
+      objects: [],
+      objectsById: new Map(),
+      selectedIds: [],
+      selectedSet: new Set(),
+      undoStack: [],
+      redoStack: [],
+      consoleLines: [],
+      layers: DEFAULT_LAYERS,
+    });
+  });
+
+  it("converts text objects to paths and sends them to the Rust engine", async () => {
+    const textObj: DesignObject = {
+      id: "txt1",
+      type: "text",
+      name: "Test Label",
+      transform: { x: 10, y: 20, width: 50, height: 12, rotation: 0, scaleX: 1, scaleY: 1 },
+      layerIndex: 0,
+      visible: true,
+      locked: false,
+      fill: null,
+      stroke: "#ffffff",
+      strokeWidth: 0,
+      opacity: 1,
+      text: "AB",
+      fontSize: 10,
+      fontFamily: "sans-serif",
+    };
+
+    // Mock returns a path object at the text's position
+    mockTextObjectToPaths.mockResolvedValue([
+      {
+        id: "path-from-text",
+        type: "path",
+        name: "A",
+        transform: { x: 10, y: 20, width: 8, height: 10, rotation: 0, scaleX: 1, scaleY: 1 },
+        layerIndex: 0,
+        visible: true,
+        locked: false,
+        fill: null,
+        stroke: "#ffffff",
+        strokeWidth: 0,
+        opacity: 1,
+        points: [
+          { x: 10, y: 20 },
+          { x: 15, y: 20 },
+          { x: 12.5, y: 30 },
+        ],
+        closed: true,
+      },
+    ]);
+
+    mockRustEngine();
+
+    useStore.getState().addObject(textObj);
+    await generateGcode();
+
+    // textObjectToPaths was called with the text object
+    expect(mockTextObjectToPaths).toHaveBeenCalledTimes(1);
+    expect(mockTextObjectToPaths.mock.calls[0][0].text).toBe("AB");
+
+    // The path reached the Rust engine (not skipped as text)
+    const objs = sentCutObjects();
+    expect(objs.length).toBeGreaterThan(0);
+
+    // No "skipped" warning for this text object
+    const store = useStore.getState();
+    const skippedWarnings = store.consoleLines.filter(
+      (l) => typeof l === "object" && "text" in l && l.text.includes("skipped")
+    );
+    expect(skippedWarnings).toHaveLength(0);
+  });
+
+  it("adds a warning and skips when font fails to load", async () => {
+    const textObj: DesignObject = {
+      id: "txt-fail",
+      type: "text",
+      name: "Bad Font",
+      transform: { x: 0, y: 0, width: 50, height: 12, rotation: 0, scaleX: 1, scaleY: 1 },
+      layerIndex: 0,
+      visible: true,
+      locked: false,
+      fill: null,
+      stroke: "#ffffff",
+      strokeWidth: 0,
+      opacity: 1,
+      text: "X",
+      fontSize: 10,
+      fontFamily: "sans-serif",
+    };
+
+    mockTextObjectToPaths.mockRejectedValue(new Error("Font load failed"));
+    mockRustEngine();
+
+    useStore.getState().addObject(textObj);
+    await generateGcode();
+
+    // Warning was surfaced in console
+    const store = useStore.getState();
+    const fontWarnings = store.consoleLines.filter(
+      (l) => typeof l === "object" && "text" in l && l.text.includes("font failed to load")
+    );
+    expect(fontWarnings).toHaveLength(1);
   });
 });
