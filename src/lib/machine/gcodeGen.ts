@@ -67,6 +67,7 @@ interface CutObject {
     fillOrder?: string;
     newsprintCellSize?: number;
     newsprintAngle?: number;
+    scanMotion?: { accelerationMmS2: number; rapidMmMin: number };
   };
   cornerRadius: number | null;
   rotation: number;
@@ -76,7 +77,10 @@ interface CutObject {
 }
 
 /** Build layer settings for a CutObject from a Layer */
-function buildCutLayer(layer: Layer): CutObject["layer"] {
+function buildCutLayer(
+  layer: Layer,
+  scanMotion?: { accelerationMmS2: number; rapidMmMin: number } | null,
+): CutObject["layer"] {
   return {
     mode: layer.mode,
     power: layer.power,
@@ -105,6 +109,7 @@ function buildCutLayer(layer: Layer): CutObject["layer"] {
     fillOrder: layer.fillOrder || "sequential",
     newsprintCellSize: layer.newsprintCellSize,
     newsprintAngle: layer.newsprintAngle,
+    ...(scanMotion && { scanMotion }),
   };
 }
 
@@ -219,7 +224,8 @@ export { flattenObjects as flattenObjectsForTest };
 /** Convert store objects to CutObjects for the Rust engine, sorted by layer order */
 function toCutObjects(
   objects: DesignObject[],
-  layers: Layer[]
+  layers: Layer[],
+  scanMotion?: { accelerationMmS2: number; rapidMmMin: number } | null,
 ): { objects: CutObject[]; warnings: string[] } {
   const flat = flattenObjects(objects);
   // Sort by layer array position (cut sequence order).
@@ -494,7 +500,7 @@ function toCutObjects(
     const scale = obj.powerScale ?? 1.0;
 
     // Emit fill CutObject (or maskFill/line as determined by effectiveMode)
-    const cl = buildCutLayer(layer);
+    const cl = buildCutLayer(layer, scanMotion);
     cl.power *= scale;
     cl.powerMin *= scale;
     if (effectiveMode !== layer.mode) cl.mode = effectiveMode;
@@ -524,7 +530,7 @@ function toCutObjects(
   for (const [, entry] of groupBuf) {
     const { firstObj, layer, paths: coalescedPaths, minX, minY, maxX, maxY } = entry;
     const scale = firstObj.powerScale ?? 1.0;
-    const cl = buildCutLayer(layer);
+    const cl = buildCutLayer(layer, scanMotion);
     cl.power *= scale;
     cl.powerMin *= scale;
     // maskFill is internal-only; never persisted to disk (Layer.mode stays "fill"/"fillLine")
@@ -894,27 +900,23 @@ export async function generateGcode(): Promise<GcodeResult> {
   }
   const preprocessed = await convertTextInTree(store.objects);
 
-  const { objects: cutObjects, warnings } = toCutObjects(preprocessed, store.layers);
-  warnings.push(...textConvertWarnings);
-  const layerOrder = new Map(store.layers.map((l, pos) => [l.index, pos]));
-
-  // Lever 3: apply max(user, kinematic minimum) overscan to all fill/engrave/maskFill
-  // CutObjects. Preserves saved layer settings — the user value is a floor, and the
-  // kinematic rule raises it when necessary. Line-mode objects keep their own overscan
-  // unchanged (overscan is not meaningful for line cutting).
-  // Use the smaller of X/Y accelerations conservatively for arbitrary scan rotations.
-  // Both-bad → Infinity; computeOverscan treats non-finite as 0 → 300 fallback.
+  // Compute machine acceleration and rapid rate before building CutObjects, so scanMotion
+  // can flow through toCutObjects → buildCutLayer → CutLayer.scanMotion on the IPC wire.
   const scanAccel = Math.min(
     Number.isFinite(store.grblAccelX) && store.grblAccelX > 0 ? store.grblAccelX : Infinity,
     Number.isFinite(store.grblAccelY) && store.grblAccelY > 0 ? store.grblAccelY : Infinity,
   );
-
-  // Compute scanRapid: conservative min of X/Y max feed rates for rapid gap optimization.
-  // Use min($110, $111) for arbitrary scan rotations. Non-positive defaults → omit metadata.
   const scanRapid = Math.min(
     Number.isFinite(store.grblMaxFeedRateX) && store.grblMaxFeedRateX > 0 ? store.grblMaxFeedRateX : Infinity,
     Number.isFinite(store.grblMaxFeedRateY) && store.grblMaxFeedRateY > 0 ? store.grblMaxFeedRateY : Infinity,
   );
+  const scanMotion = Number.isFinite(scanAccel) && scanAccel > 0 && Number.isFinite(scanRapid) && scanRapid > 0
+    ? { accelerationMmS2: scanAccel, rapidMmMin: scanRapid }
+    : null;
+
+  const { objects: cutObjects, warnings } = toCutObjects(preprocessed, store.layers, scanMotion);
+  warnings.push(...textConvertWarnings);
+  const layerOrder = new Map(store.layers.map((l, pos) => [l.index, pos]));
 
   for (const obj of cutObjects) {
     const m = obj.layer.mode;
@@ -1041,12 +1043,6 @@ export async function generateGcode(): Promise<GcodeResult> {
 
   const sValueMax = store.grblSValueMax;
 
-  // Build scanMotion metadata for rapid gap optimization if both acceleration and rapid rate are valid.
-  // Populate ONLY with finite positive values. If either is invalid/unknown, omit the field entirely.
-  const scanMotion = Number.isFinite(scanAccel) && scanAccel > 0 && Number.isFinite(scanRapid) && scanRapid > 0
-    ? { accelerationMmS2: scanAccel, rapidMmMin: scanRapid }
-    : null;
-
   // Step 1: Generate image fragments keyed by layer position
   const { byLayer: imageByLayer, lockedCount: lockedImageCount } = await generateImageGcodeByLayer(
     store.layers,
@@ -1139,7 +1135,6 @@ export async function generateGcode(): Promise<GcodeResult> {
         startCorner: store.startCorner || "bottomLeft",
         workspaceWidth: store.workspaceWidth,
         originTop: store.originTop,
-        ...(scanMotion && { scanMotion }),
       });
       fragments.push(vectorResult);
     }

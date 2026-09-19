@@ -140,21 +140,19 @@ fn is_rapid_gap_eligible(
     // Old: gap_dist / (speed_mm_min / 60)
     // Candidate: decel + accel ramps + rapid over (gap_dist - 2*d)
     let old_time = gap_dist / v_mm_s;
-    let L = (gap_dist - 2.0 * d).max(0.0);
+    let rapid_center_dist = (gap_dist - 2.0 * d).max(0.0);
     let r_mm_s = sm.rapid_mm_min / 60.0;
 
     // Ramp time: each ramp (decel or accel) is d/v + v/(2*a)
     let ramp_time = 2.0 * (d / v_mm_s + v_mm_s / (2.0 * sm.acceleration_mm_s2));
 
-    // Rapid center: use trapezoidal when L >= r²/a, else triangular
-    let rapid_time = if L > 0.0 {
+    // Rapid center: use trapezoidal when rapid_center_dist >= r²/a, else triangular
+    let rapid_time = if rapid_center_dist > 0.0 {
         let r_sq_over_a = r_mm_s * r_mm_s / sm.acceleration_mm_s2;
-        if L >= r_sq_over_a {
-            // Trapezoidal: L/r + r/a
-            L / r_mm_s + r_mm_s / sm.acceleration_mm_s2
+        if rapid_center_dist >= r_sq_over_a {
+            rapid_center_dist / r_mm_s + r_mm_s / sm.acceleration_mm_s2
         } else {
-            // Triangular: 2*sqrt(L/a)
-            2.0 * (L / sm.acceleration_mm_s2).sqrt()
+            2.0 * (rapid_center_dist / sm.acceleration_mm_s2).sqrt()
         }
     } else {
         0.0

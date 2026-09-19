@@ -1471,13 +1471,15 @@ describe("Text auto-conversion at G-code generation", () => {
 
     await generateGcode();
 
-    // Check that generate_gcode was invoked with scanMotion
+    // Check that generate_gcode was invoked with scanMotion on CutObject.layer
     const calls = mockInvoke.mock.calls.filter((c: any[]) => c[0] === "generate_gcode");
     expect(calls.length).toBeGreaterThan(0);
     if (calls.length > 0) {
       const lastCall = calls[calls.length - 1];
-      // scanMotion should be populated: min(accelX, accelY) = 200, min(rapidX, rapidY) = 6000
-      expect(lastCall[1].scanMotion).toEqual({
+      const objects = lastCall[1].objects;
+      expect(objects.length).toBeGreaterThan(0);
+      // scanMotion should be on each CutObject's layer: min(accelX, accelY) = 200, min(rapidX, rapidY) = 6000
+      expect(objects[0].layer.scanMotion).toEqual({
         accelerationMmS2: 200,
         rapidMmMin: 6000,
       });
@@ -1496,13 +1498,14 @@ describe("Text auto-conversion at G-code generation", () => {
 
     await generateGcode();
 
-    // Check that generate_gcode was invoked without scanMotion (or with undefined)
+    // Check that CutObject.layer has no scanMotion when rates are unknown
     const calls = mockInvoke.mock.calls.filter((c: any[]) => c[0] === "generate_gcode");
     expect(calls.length).toBeGreaterThan(0);
     if (calls.length > 0) {
       const lastCall = calls[calls.length - 1];
-      // scanMotion should not be present or should be undefined
-      expect(lastCall[1].scanMotion).toBeUndefined();
+      const objects = lastCall[1].objects;
+      expect(objects.length).toBeGreaterThan(0);
+      expect(objects[0].layer.scanMotion).toBeUndefined();
     }
   });
 });
