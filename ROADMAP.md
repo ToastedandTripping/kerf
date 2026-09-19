@@ -9,6 +9,7 @@ next: REMEDIATION PLAN EXISTS — four independent astra audits (2026-09-08/09) 
   • SVG PATH-COORDINATE DRIFT — OPEN, awaiting a sample Inkscape SVG from the owner to reproduce.
   • WS5 ENGRAVE-EVENNESS — ✅ OWNER-CONFIRMED (2026-06-25): M4 engrave came out much cleaner.
   • WS6 INTERRUPT-RECOVERY — Core idle-stall detection DONE. Remainder (stall-recovery UI, clean-abort/drain UX, threshold setting) is scheduled as program Phase 2B.
+  • ENGRAVE EFFICIENCY RELAY B — ✅ COMPLETE (2026-09-19, relay engrave-efficiency-b, Ted+Razor PASS_WITH_WARNINGS, W1 fixed). Acceleration-safe rapid gap traversal: eligible blank gaps between engraved runs split into three segments (G1 S0 decel ramp, G0 S0 rapid center, G1 S0 accel ramp) instead of continuous G1 S0 at engraving speed. Gated on 10% modeled time savings and conservative kinematics (d = max(overscan, 1.2v²/2a, 0.5mm)). ScanMotion metadata (min($120,$121) acceleration, min($110,$111) rapid rate) flows through both IPC paths (vector CutLayer + image ImageEngraveRequest). Backward compatible: absent/invalid metadata produces identical G-code. 251 Rust (5 new) + 764 JS (2 new) tests. Plan: `.claude/plans/engrave-efficiency.md`. Relay A (compression, modal hoist, overscan floor, layer warning) merged in prior session.
   • CARRY-OVERS — Fill Phase C winding hygiene + offsetFill/Clipper2 decision → program Phase 4; v0.9 Camera & Rotary parked behind gate D4 (hardware unconfirmed).
 testing: null
 pinned: true

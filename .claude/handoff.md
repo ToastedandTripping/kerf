@@ -49,7 +49,7 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - **Batch 2.3 must be re-specified before anyone implements it.** It was written to enforce a RESTRICTED release envelope; Lee chose the full feature set, so its refusals have to become actual corrections (R8, R13, R18, R19). It will likely split into three or four batches. The M4 default flip already pre-empts part of R8.
 
-- **Relay B (rapid gap traversal) is planned, critic-reviewed, and unblocked.** Depends on Relay A (merged). Plan at `.claude/plans/engrave-efficiency.md`. Seven files, Standard tier. The dominant optimization for text sign burn time.
+- **Relay B (rapid gap traversal) COMPLETE (2026-09-19).** Relay `engrave-efficiency-b`: Ted+Razor PASS_WITH_WARNINGS (W1 fixed — vector path wiring gap). Acceleration-safe three-segment rapid gaps in the scanner, gated on 10% modeled savings. 251 Rust / 764 JS tests. On `relay-b-rapid-gaps` branch, not yet merged. Owner hardware coupon test recommended before calling production-validated.
 
 - **Charter amendment needed.** The text tool (4 bundled fonts, auto-convert at G-code time) ships in v0.8.29 and contradicts the charter's explicit exclusion of built-in font rendering. Lee requested it directly. Neither CHARTER.md nor ROADMAP's 'What We're NOT Building' has been amended. A one-line amendment approved by Lee closes the contradiction.
 
@@ -83,11 +83,11 @@ Relay A of engrave efficiency merged post-v0.8.29: grayscale pixel compression (
 
 Fable charter gap analysis completed (`.claude/plans/charter-gap-analysis.md`): none of the charter's three 'done' conditions met. Top gaps: unfixed wedge + abort order pin violation, laser-stops-firing (3 reports), incomplete $32 gate (material test bypasses), unqualifiable pause, silent Fill+Line rectangle drop. Text tool contradiction flagged. Process: v0.8.29 tagged while DECISIONS says RELEASE BLOCKED.
 
-Relay B (rapid gap traversal) planned and critic-reviewed, unblocked. Engrave efficiency plan at `.claude/plans/engrave-efficiency.md`.
+Relay B (rapid gap traversal) COMPLETE: Ted+Razor PASS_WITH_WARNINGS (W1 vector wiring gap fixed, N1 variable name fixed). ScanMotion metadata wired through both IPC paths, three-segment gap emission implemented with rotation fix (image-space ramp computation), 5 new Rust + 2 new TS tests. 251 Rust / 764 JS total.
 
 New symptom: 'laser stops firing' mid-job (head keeps moving, laser dark). Reported 3 times (Sep 14 twice, Sep 16). Phase 1 spindle-drop diagnostic deployed in v0.8.29 — will capture FS: field data on next occurrence.
 
-Next: Relay B (rapid gaps), then remediation batch 0.1 (native command-body trace harness), then charter amendment decision.
+Next: remediation batch 0.1 (native command-body trace harness), then charter amendment decision.
 
 ### 2026-09-10
 
