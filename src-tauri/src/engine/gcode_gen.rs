@@ -9,6 +9,18 @@ use super::optimizer;
 /// $110-$112 rapid rate — changing this cannot change emitted G-code.
 pub(crate) const RAPID_SPEED_MM_MIN: f64 = 3000.0;
 
+/// Machine acceleration and rapid feed rate for rapid-gap optimization.
+///
+/// Optional metadata passed from the frontend to enable gap acceleration profiles.
+/// When present, the scanner may replace G1 S0 gap transits with a three-segment
+/// rapid model (decel ramp, rapid center, accel ramp) if the time savings exceed 10%.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanMotion {
+    pub acceleration_mm_s2: f64,
+    pub rapid_mm_min: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Point {
     pub x: f64,
@@ -86,6 +98,8 @@ pub struct CutLayer {
     pub newsprint_cell_size: Option<u32>,  // Newsprint dither cell size (default 6)
     #[serde(default)]
     pub newsprint_angle: Option<f64>,      // Newsprint dither angle (default 45)
+    #[serde(default)]
+    pub scan_motion: Option<ScanMotion>,   // Optional acceleration + rapid rate for gap optimization
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -942,6 +956,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                     rotation_rad,
                                     passes: 1, // outer pass loop already handles multi-pass
                                     grayscale_pixels: None, // maskFill uses binary fill
+                                    scan_motion: layer.scan_motion.clone(),
                                 };
 
                                 match super::mask_fill::scan_mask_to_gcode(
@@ -1194,6 +1209,7 @@ mod tests {
             fill_order: None,
             newsprint_cell_size: None,
             newsprint_angle: None,
+            scan_motion: None,
         }
     }
 
@@ -1522,6 +1538,7 @@ mod tests {
                 fill_order: None,
                 newsprint_cell_size: None,
                 newsprint_angle: None,
+                scan_motion: None,
             },
             corner_radius: None,
             rotation: 0.0,

@@ -284,6 +284,7 @@ mod tests {
             fill_order: None,
             newsprint_cell_size: None,
             newsprint_angle: None,
+            scan_motion: None,
         }
     }
 
@@ -479,6 +480,7 @@ mod golden_tests {
             fill_order: None,
             newsprint_cell_size: None,
             newsprint_angle: None,
+            scan_motion: None,
         }
     }
 
@@ -658,6 +660,7 @@ mod golden_tests {
             newsprint_angle: None,
             remove_background: false,
             bg_tolerance: 20.0,
+            scan_motion: None,
         };
         let result = generate_image_gcode(request)
             .await

@@ -16,7 +16,7 @@
 
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Transform};
 
-use crate::engine::gcode_gen::{CutObject, GcodeMove, GcodeResult, PathSegment, RAPID_SPEED_MM_MIN};
+use crate::engine::gcode_gen::{CutObject, GcodeMove, GcodeResult, PathSegment, ScanMotion, RAPID_SPEED_MM_MIN};
 use crate::engine::image_gcode_gen::{estimate_simple_time, find_binary_runs, find_grayscale_runs};
 use crate::engine::limits;
 
@@ -85,6 +85,80 @@ pub struct MaskScanParams<'a> {
     ///
     /// When `None`, the scanner emits one G1 per run at constant `s_max` (binary).
     pub grayscale_pixels: Option<&'a [u8]>,
+    /// Optional machine acceleration and rapid rate for rapid-gap optimization.
+    pub scan_motion: Option<ScanMotion>,
+}
+
+/// Decide whether a rapid-gap optimization is applicable for a given gap.
+///
+/// Returns (is_eligible, estimated_savings_percent) where is_eligible means:
+/// - metadata is valid (non-None, finite positive values)
+/// - rapid rate > engraving speed (otherwise rapid offers no advantage)
+/// - gap distance exceeds the minimum required for a beneficial motion profile
+///
+/// Conservative mode: validate defensively and return false on any doubt.
+fn is_rapid_gap_eligible(
+    gap_dist: f64,
+    speed_mm_min: f64,
+    scan_motion: &Option<ScanMotion>,
+) -> (bool, f64) {
+    // Metadata absent or invalid → retain G1 S0
+    let Some(sm) = scan_motion else {
+        return (false, 0.0);
+    };
+
+    // Validate finite positive values
+    if !speed_mm_min.is_finite() || speed_mm_min <= 0.0 {
+        return (false, 0.0);
+    }
+    if !sm.acceleration_mm_s2.is_finite() || sm.acceleration_mm_s2 <= 0.0 {
+        return (false, 0.0);
+    }
+    if !sm.rapid_mm_min.is_finite() || sm.rapid_mm_min <= 0.0 {
+        return (false, 0.0);
+    }
+
+    // Rapid slower than or equal to engraving speed → no advantage
+    if sm.rapid_mm_min <= speed_mm_min {
+        return (false, 0.0);
+    }
+
+    // Conservative gap threshold: d = max(1.2 * v² / (2*a), 0.5)
+    // where v = speed_mm_min / 60 (convert to mm/s)
+    let v_mm_s = speed_mm_min / 60.0;
+    let accel_distance = 1.2 * v_mm_s * v_mm_s / (2.0 * sm.acceleration_mm_s2);
+    let d = accel_distance.max(0.5);
+
+    // Gap must exceed 2*d plus serialize distance (use 2*d conservatively)
+    let min_gap = 2.0 * d;
+    if gap_dist < min_gap {
+        return (false, 0.0);
+    }
+
+    // Estimate time savings (conservative stop-at-transition model).
+    // Old: gap_dist / (speed_mm_min / 60)
+    // Candidate: decel + accel ramps (each ~d/v) + rapid over (gap_dist - 2*d)
+    let old_time = gap_dist / v_mm_s;
+    let L = (gap_dist - 2.0 * d).max(0.0);
+
+    // Conservative: assume triangular profile (accel then decel)
+    // Time ≈ 2 * sqrt(L / a) for rapid, plus 2 * (d/v + v/(2*a)) for ramps
+    let ramp_time = 2.0 * (d / v_mm_s + v_mm_s / (2.0 * sm.acceleration_mm_s2));
+    let rapid_time = if L > 0.0 {
+        2.0 * (L / sm.acceleration_mm_s2).sqrt()
+    } else {
+        0.0
+    };
+    let candidate_time = ramp_time + rapid_time;
+
+    let savings_pct = if old_time > 0.0 {
+        ((old_time - candidate_time) / old_time) * 100.0
+    } else {
+        0.0
+    };
+
+    // Require at least 10% savings
+    (savings_pct >= 10.0, savings_pct)
 }
 
 /// Scan a mask (`pixels`, `w`×`h`) into G-code scan rows.
@@ -879,6 +953,7 @@ mod tests {
             rotation_rad: 0.0,
             passes: 1,
             grayscale_pixels: None,
+            scan_motion: None,
         }
     }
 
@@ -1143,6 +1218,7 @@ G1 X0.818 Y199.061 S0";
             fill_order: None,
             newsprint_cell_size: None,
             newsprint_angle: None,
+            scan_motion: None,
         }
     }
 
@@ -1466,6 +1542,7 @@ G1 X0.818 Y199.061 S0";
             rotation_rad,
             passes: 1,
             grayscale_pixels: None,
+            scan_motion: None,
         };
         let result_bottom = scan_mask_to_gcode(&pixels, mask_w, mask_h, &params_bottom)
             .expect("scan should succeed");
@@ -2017,6 +2094,7 @@ G1 X0.818 Y199.061 S0";
             rotation_rad: 0.0,
             passes: 1,
             grayscale_pixels: None,
+            scan_motion: None,
         };
 
         let result = scan_mask_to_gcode(&pixels, w, h, &params);

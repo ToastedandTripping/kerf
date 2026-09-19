@@ -605,7 +605,8 @@ async function generateImageGcodeByLayer(
   workspaceHeight: number,
   originTop: boolean,
   sValueMax: number,
-  scanAccel: number = 0
+  scanAccel: number = 0,
+  scanMotion: { accelerationMmS2: number; rapidMmMin: number } | null = null
 ): Promise<{ byLayer: Map<number, GcodeResult[]>; lockedCount: number }> {
   const layerOrder = new Map(layers.map((l, pos) => [l.index, pos]));
   // Flatten groups so images nested inside groups are included with their
@@ -674,6 +675,7 @@ async function generateImageGcodeByLayer(
           powerCurve: layer.powerCurve?.map((p) => [p.x, p.y] as [number, number]),
           newsprintCellSize: layer.newsprintCellSize,
           newsprintAngle: layer.newsprintAngle,
+          ...(scanMotion && { scanMotion }),
         },
       });
 
@@ -906,6 +908,14 @@ export async function generateGcode(): Promise<GcodeResult> {
     Number.isFinite(store.grblAccelX) && store.grblAccelX > 0 ? store.grblAccelX : Infinity,
     Number.isFinite(store.grblAccelY) && store.grblAccelY > 0 ? store.grblAccelY : Infinity,
   );
+
+  // Compute scanRapid: conservative min of X/Y max feed rates for rapid gap optimization.
+  // Use min($110, $111) for arbitrary scan rotations. Non-positive defaults → omit metadata.
+  const scanRapid = Math.min(
+    Number.isFinite(store.grblMaxFeedRateX) && store.grblMaxFeedRateX > 0 ? store.grblMaxFeedRateX : Infinity,
+    Number.isFinite(store.grblMaxFeedRateY) && store.grblMaxFeedRateY > 0 ? store.grblMaxFeedRateY : Infinity,
+  );
+
   for (const obj of cutObjects) {
     const m = obj.layer.mode;
     if (m === "fill" || m === "fillLine" || m === "maskFill" || m === "offsetFill") {
@@ -1031,6 +1041,12 @@ export async function generateGcode(): Promise<GcodeResult> {
 
   const sValueMax = store.grblSValueMax;
 
+  // Build scanMotion metadata for rapid gap optimization if both acceleration and rapid rate are valid.
+  // Populate ONLY with finite positive values. If either is invalid/unknown, omit the field entirely.
+  const scanMotion = Number.isFinite(scanAccel) && scanAccel > 0 && Number.isFinite(scanRapid) && scanRapid > 0
+    ? { accelerationMmS2: scanAccel, rapidMmMin: scanRapid }
+    : null;
+
   // Step 1: Generate image fragments keyed by layer position
   const { byLayer: imageByLayer, lockedCount: lockedImageCount } = await generateImageGcodeByLayer(
     store.layers,
@@ -1038,7 +1054,8 @@ export async function generateGcode(): Promise<GcodeResult> {
     store.workspaceHeight,
     store.originTop,
     sValueMax,
-    scanAccel
+    scanAccel,
+    scanMotion
   );
 
   if (lockedImageCount > 0) {
@@ -1122,6 +1139,7 @@ export async function generateGcode(): Promise<GcodeResult> {
         startCorner: store.startCorner || "bottomLeft",
         workspaceWidth: store.workspaceWidth,
         originTop: store.originTop,
+        ...(scanMotion && { scanMotion }),
       });
       fragments.push(vectorResult);
     }

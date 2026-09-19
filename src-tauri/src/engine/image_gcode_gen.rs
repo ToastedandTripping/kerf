@@ -11,7 +11,7 @@ use image::imageops::FilterType;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::dither::{DitherAlgorithm, dither_image};
-use crate::engine::gcode_gen::{GcodeResult, RAPID_SPEED_MM_MIN};
+use crate::engine::gcode_gen::{GcodeResult, ScanMotion, RAPID_SPEED_MM_MIN};
 use crate::engine::limits;
 use crate::engine::mask_fill::{MaskScanParams, scan_mask_to_gcode};
 
@@ -57,6 +57,8 @@ pub struct ImageEngraveRequest {
     pub remove_background: bool,
     #[serde(default = "default_bg_tolerance")]
     pub bg_tolerance: f64,
+    #[serde(default)]
+    pub scan_motion: Option<ScanMotion>,  // Optional acceleration + rapid rate for gap optimization
 }
 
 fn default_s_value_max() -> f64 { 1000.0 }
@@ -383,6 +385,7 @@ fn generate_scan_gcode(
         rotation_rad,
         passes: req.passes,
         grayscale_pixels: if is_grayscale { Some(pixels) } else { None },
+        scan_motion: req.scan_motion.clone(),
     };
 
     // F9: image-specific preamble (idempotent modal commands).
@@ -593,6 +596,7 @@ mod tests {
             newsprint_angle: None,
             remove_background: false,
             bg_tolerance: 20.0,
+            scan_motion: None,
         }
     }
 
@@ -1052,6 +1056,7 @@ mod tests {
             newsprint_angle: None,
             remove_background: false,
             bg_tolerance: 20.0,
+            scan_motion: None,
         };
 
         let result = preview_dither(&req);

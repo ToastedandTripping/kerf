@@ -1458,4 +1458,51 @@ describe("Text auto-conversion at G-code generation", () => {
     );
     expect(fontWarnings).toHaveLength(1);
   });
+
+  it("passes scanMotion metadata on valid machine acceleration and rapid rates", async () => {
+    mockRustEngine();
+    const store = useStore.getState();
+    store.grblAccelX = 200;
+    store.grblAccelY = 250;
+    store.grblMaxFeedRateX = 8000;
+    store.grblMaxFeedRateY = 6000;
+
+    store.addObject(makeRect("r1", 0, 0, 10, 10));
+
+    await generateGcode();
+
+    // Check that generate_gcode was invoked with scanMotion
+    const calls = mockInvoke.mock.calls.filter((c: any[]) => c[0] === "generate_gcode");
+    expect(calls.length).toBeGreaterThan(0);
+    if (calls.length > 0) {
+      const lastCall = calls[calls.length - 1];
+      // scanMotion should be populated: min(accelX, accelY) = 200, min(rapidX, rapidY) = 6000
+      expect(lastCall[1].scanMotion).toEqual({
+        accelerationMmS2: 200,
+        rapidMmMin: 6000,
+      });
+    }
+  });
+
+  it("omits scanMotion when acceleration or rapid rate is zero or non-finite", async () => {
+    mockRustEngine();
+    const store = useStore.getState();
+    store.grblAccelX = 0;
+    store.grblAccelY = 0;
+    store.grblMaxFeedRateX = 0;
+    store.grblMaxFeedRateY = 0;
+
+    store.addObject(makeRect("r2", 0, 0, 10, 10));
+
+    await generateGcode();
+
+    // Check that generate_gcode was invoked without scanMotion (or with undefined)
+    const calls = mockInvoke.mock.calls.filter((c: any[]) => c[0] === "generate_gcode");
+    expect(calls.length).toBeGreaterThan(0);
+    if (calls.length > 0) {
+      const lastCall = calls[calls.length - 1];
+      // scanMotion should not be present or should be undefined
+      expect(lastCall[1].scanMotion).toBeUndefined();
+    }
+  });
 });

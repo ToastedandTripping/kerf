@@ -582,6 +582,7 @@ mod tests {
             fill_order: None,
             newsprint_cell_size: None,
             newsprint_angle: None,
+            scan_motion: None,
         }
     }
 
