@@ -446,6 +446,10 @@ pub fn scan_mask_to_gcode<'a>(
             // P2-A Fix #1: track (x, y) — not X-only — so rotated gap detection is 2D.
             let mut row_cur_x = first_entry_x;
             let mut row_cur_y = row_gy;
+            // Track the previous run's exit in IMAGE space for rapid-gap ramp computation.
+            // Ramp endpoints must be computed in image space then transformed, not from
+            // already-transformed GRBL coords (which would double-rotate).
+            let mut row_cur_x_img = first_entry_img;
 
             for (run_idx, (run_start, run_end, orig_bounds)) in ordered_runs.iter().enumerate() {
                 let x_start_img = params.origin_x + *run_start as f64 * interval + offset;
@@ -491,19 +495,22 @@ pub fn scan_mask_to_gcode<'a>(
                         // Direction: +1 for forward, -1 for reverse
                         let direction = if forward { 1.0 } else { -1.0 };
 
-                        // Compute ramp endpoints in 2D
+                        // Compute ramp endpoints in IMAGE space, then transform to GRBL.
+                        // row_cur_x/x_start are already GRBL coords — using them with
+                        // to_grbl would double-transform under rotation.
+                        let decel_ramp_img = row_cur_x_img + direction * d;
+                        let accel_ramp_img = x_start_img - direction * d;
+
                         let exit_to_ramp = if has_rotation {
-                            let ramp_img = if forward { row_cur_x + d } else { row_cur_x - d };
-                            to_grbl(ramp_img, y_mm)
+                            to_grbl(decel_ramp_img, y_mm)
                         } else {
-                            (row_cur_x + direction * d, row_cur_y)
+                            (decel_ramp_img, row_cur_y)
                         };
 
                         let entry_from_ramp = if has_rotation {
-                            let ramp_img = if forward { x_start - d } else { x_start + d };
-                            to_grbl(ramp_img, y_mm)
+                            to_grbl(accel_ramp_img, y_mm)
                         } else {
-                            (x_start - direction * d, y_start)
+                            (accel_ramp_img, y_start)
                         };
 
                         // Serialize check: reject if three-decimal formatting collapses center segment
@@ -655,6 +662,7 @@ pub fn scan_mask_to_gcode<'a>(
                         }
                         row_cur_x = x_end;
                         row_cur_y = gy_end;
+                        row_cur_x_img = x_end_img;
                     }
                 } else {
                     // Binary mode: constant power across the whole run.
@@ -671,6 +679,7 @@ pub fn scan_mask_to_gcode<'a>(
                     });
                     row_cur_x = x_end;
                     row_cur_y = gy_end;
+                    row_cur_x_img = x_end_img;
                 }
             }
 
@@ -2580,5 +2589,216 @@ G1 X0.818 Y199.061 S0";
                     "G0 must carry S0 even with zero overscan; got: {}", line);
             }
         }
+    }
+
+    // ─── Relay B: rapid-gap tests ──────────────────────────────────────────────
+
+    /// With scan_motion: None, a wide gap uses continuous G1 S0 (no G0 in gap).
+    #[test]
+    fn rapid_gap_disabled_without_scan_motion() {
+        let w = 100usize;
+        let h = 1usize;
+        let mut pixels = vec![255u8; w * h];
+        pixels[5] = 0; pixels[6] = 0; pixels[7] = 0;
+        pixels[70] = 0; pixels[71] = 0; pixels[72] = 0;
+
+        let mut params = base_scan_params();
+        params.width_mm = 100.0;
+        params.height_mm = 1.0;
+        params.interval = 1.0;
+        params.overscan = 0.5;
+        params.speed_mm_min = 1200.0;
+        params.scan_motion = None;
+
+        let result = scan_mask_to_gcode(&pixels, w, h, &params)
+            .expect("scan should succeed");
+        let lines: Vec<&str> = result.gcode.lines().collect();
+
+        let g0_count = lines.iter().filter(|l| l.starts_with("G0 ")).count();
+        assert_eq!(g0_count, 1, "Without scan_motion, only ONE G0 (row lead-in). Got {}\n{}",
+            g0_count, result.gcode);
+    }
+
+    /// With scan_motion where rapid ≤ engraving speed, gaps stay continuous G1 S0.
+    #[test]
+    fn rapid_gap_disabled_when_rapid_slower_than_feed() {
+        let w = 100usize;
+        let h = 1usize;
+        let mut pixels = vec![255u8; w * h];
+        pixels[5] = 0; pixels[6] = 0; pixels[7] = 0;
+        pixels[70] = 0; pixels[71] = 0; pixels[72] = 0;
+
+        let mut params = base_scan_params();
+        params.width_mm = 100.0;
+        params.height_mm = 1.0;
+        params.interval = 1.0;
+        params.overscan = 0.5;
+        params.speed_mm_min = 6000.0;
+        params.scan_motion = Some(ScanMotion {
+            acceleration_mm_s2: 300.0,
+            rapid_mm_min: 3000.0,
+        });
+
+        let result = scan_mask_to_gcode(&pixels, w, h, &params)
+            .expect("scan should succeed");
+        let lines: Vec<&str> = result.gcode.lines().collect();
+
+        let g0_count = lines.iter().filter(|l| l.starts_with("G0 ")).count();
+        assert_eq!(g0_count, 1, "Rapid ≤ feed → only ONE G0 (row lead-in). Got {}\n{}",
+            g0_count, result.gcode);
+    }
+
+    /// With valid scan_motion and a wide gap, the scanner emits a three-segment
+    /// rapid gap: G1 S0 (decel ramp), G0 S0 (rapid center), G1 S0 (accel ramp).
+    #[test]
+    fn rapid_gap_eligible_emits_three_segments() {
+        let w = 100usize;
+        let h = 1usize;
+        let mut pixels = vec![255u8; w * h];
+        // Run A at cols 5-7, Run B at cols 70-72 → 63mm gap
+        pixels[5] = 0; pixels[6] = 0; pixels[7] = 0;
+        pixels[70] = 0; pixels[71] = 0; pixels[72] = 0;
+
+        let mut params = base_scan_params();
+        params.width_mm = 100.0;
+        params.height_mm = 1.0;
+        params.interval = 1.0;
+        params.overscan = 0.5;
+        params.speed_mm_min = 1200.0; // v=20mm/s, d=max(0.5, 1.2*20²/(2*300), 0.5)=max(0.5,0.8,0.5)=0.8mm
+        params.scan_motion = Some(ScanMotion {
+            acceleration_mm_s2: 300.0,
+            rapid_mm_min: 8000.0,
+        });
+
+        let result = scan_mask_to_gcode(&pixels, w, h, &params)
+            .expect("scan should succeed");
+        let lines: Vec<&str> = result.gcode.lines().collect();
+
+        // Find the engrave moves (S1000)
+        let engrave_indices: Vec<usize> = lines.iter().enumerate()
+            .filter(|(_, l)| l.starts_with("G1 ") && l.contains("S1000"))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(engrave_indices.len(), 2,
+            "Expected 2 engrave moves; got {}\n{}", engrave_indices.len(), result.gcode);
+
+        // Between the two engrave moves, there should be a G0 (the rapid center).
+        let between = &lines[engrave_indices[0] + 1..engrave_indices[1]];
+        let g0_in_gap: Vec<&&str> = between.iter().filter(|l| l.starts_with("G0 ")).collect();
+        assert_eq!(g0_in_gap.len(), 1,
+            "Eligible gap should have exactly 1 G0 (rapid center).\nBetween: {:?}\nFull:\n{}",
+            between, result.gcode);
+
+        // The G0 must carry S0
+        assert!(g0_in_gap[0].contains("S0"),
+            "Rapid center G0 must carry S0; got: {}", g0_in_gap[0]);
+
+        // G1 S0 ramps should bracket the G0
+        let g1_s0_in_gap: Vec<&&str> = between.iter()
+            .filter(|l| l.starts_with("G1 ") && l.contains("S0"))
+            .collect();
+        assert!(g1_s0_in_gap.len() >= 2,
+            "Expected at least 2 G1 S0 ramps (decel + accel) around the G0.\nBetween: {:?}\nFull:\n{}",
+            between, result.gcode);
+
+        // No M5 or M3/M4 toggles in the gap
+        let mode_in_gap = between.iter().any(|l|
+            l.starts_with("M3") || l.starts_with("M4") || l.starts_with("M5"));
+        assert!(!mode_in_gap,
+            "No M3/M4/M5 toggles allowed in gap.\nBetween: {:?}", between);
+    }
+
+    /// A gap smaller than 2*d should NOT trigger rapid optimization.
+    #[test]
+    fn rapid_gap_ineligible_small_gap() {
+        let w = 20usize;
+        let h = 1usize;
+        let mut pixels = vec![255u8; w * h];
+        // Run A at cols 5-7, Run B at cols 9-11 → only 2mm gap
+        pixels[5] = 0; pixels[6] = 0; pixels[7] = 0;
+        pixels[9] = 0; pixels[10] = 0; pixels[11] = 0;
+
+        let mut params = base_scan_params();
+        params.width_mm = 20.0;
+        params.height_mm = 1.0;
+        params.interval = 1.0;
+        params.overscan = 0.5;
+        params.speed_mm_min = 1200.0;
+        params.scan_motion = Some(ScanMotion {
+            acceleration_mm_s2: 300.0,
+            rapid_mm_min: 8000.0,
+        });
+
+        let result = scan_mask_to_gcode(&pixels, w, h, &params)
+            .expect("scan should succeed");
+        let lines: Vec<&str> = result.gcode.lines().collect();
+
+        // Find engrave moves
+        let engrave_indices: Vec<usize> = lines.iter().enumerate()
+            .filter(|(_, l)| l.starts_with("G1 ") && l.contains("S1000"))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(engrave_indices.len(), 2,
+            "Expected 2 engrave moves; got {}", engrave_indices.len());
+
+        // Between the engrave moves, NO G0 (gap too small for rapid)
+        let between = &lines[engrave_indices[0] + 1..engrave_indices[1]];
+        let g0_in_gap = between.iter().any(|l| l.starts_with("G0 "));
+        assert!(!g0_in_gap,
+            "Small gap should NOT have rapid G0.\nBetween: {:?}\nFull:\n{}",
+            between, result.gcode);
+    }
+
+    /// is_rapid_gap_eligible unit tests for the eligibility function directly.
+    #[test]
+    fn rapid_gap_eligibility_unit() {
+        let sm_valid = Some(ScanMotion {
+            acceleration_mm_s2: 300.0,
+            rapid_mm_min: 8000.0,
+        });
+        let sm_slow_rapid = Some(ScanMotion {
+            acceleration_mm_s2: 300.0,
+            rapid_mm_min: 1000.0,
+        });
+
+        // None → ineligible
+        let (ok, _) = is_rapid_gap_eligible(50.0, 1200.0, 0.5, &None);
+        assert!(!ok, "None scan_motion → ineligible");
+
+        // Rapid ≤ feed → ineligible
+        let (ok, _) = is_rapid_gap_eligible(50.0, 6000.0, 0.5, &sm_slow_rapid);
+        assert!(!ok, "rapid ≤ feed → ineligible");
+
+        // Valid, large gap → eligible
+        let (ok, savings) = is_rapid_gap_eligible(50.0, 1200.0, 0.5, &sm_valid);
+        assert!(ok, "50mm gap at 1200mm/min should be eligible");
+        assert!(savings >= 10.0, "savings should be ≥10%; got {:.1}%", savings);
+
+        // Valid, tiny gap → ineligible
+        let (ok, _) = is_rapid_gap_eligible(1.0, 1200.0, 0.5, &sm_valid);
+        assert!(!ok, "1mm gap should be ineligible (< 2*d)");
+
+        // Zero speed → ineligible
+        let (ok, _) = is_rapid_gap_eligible(50.0, 0.0, 0.5, &sm_valid);
+        assert!(!ok, "zero speed → ineligible");
+
+        // Negative acceleration → ineligible
+        let sm_bad = Some(ScanMotion {
+            acceleration_mm_s2: -100.0,
+            rapid_mm_min: 8000.0,
+        });
+        let (ok, _) = is_rapid_gap_eligible(50.0, 1200.0, 0.5, &sm_bad);
+        assert!(!ok, "negative acceleration → ineligible");
+
+        // Overscan incorporated: d = max(overscan, kinematic, 0.5)
+        // At 1200 mm/min, 300 mm/s²: kinematic d = 1.2*20²/(2*300) = 0.8mm
+        // With overscan=5.0: d = max(5.0, 0.8, 0.5) = 5.0, so 2*d=10
+        // A 9mm gap should be ineligible
+        let (ok, _) = is_rapid_gap_eligible(9.0, 1200.0, 5.0, &sm_valid);
+        assert!(!ok, "9mm gap with 5mm overscan → ineligible (2*d=10)");
+
+        // Wide gap (50mm) with 5mm overscan → eligible (d=5, 2*d=10, L=40mm)
+        let (ok, _) = is_rapid_gap_eligible(50.0, 1200.0, 5.0, &sm_valid);
+        assert!(ok, "50mm gap with 5mm overscan → eligible");
     }
 }
