@@ -100,6 +100,7 @@ pub struct MaskScanParams<'a> {
 fn is_rapid_gap_eligible(
     gap_dist: f64,
     speed_mm_min: f64,
+    overscan: f64,
     scan_motion: &Option<ScanMotion>,
 ) -> (bool, f64) {
     // Metadata absent or invalid → retain G1 S0
@@ -123,11 +124,11 @@ fn is_rapid_gap_eligible(
         return (false, 0.0);
     }
 
-    // Conservative gap threshold: d = max(1.2 * v² / (2*a), 0.5)
+    // Conservative gap threshold: d = max(overscan, 1.2 * v² / (2*a), 0.5)
     // where v = speed_mm_min / 60 (convert to mm/s)
     let v_mm_s = speed_mm_min / 60.0;
     let accel_distance = 1.2 * v_mm_s * v_mm_s / (2.0 * sm.acceleration_mm_s2);
-    let d = accel_distance.max(0.5);
+    let d = overscan.max(accel_distance).max(0.5);
 
     // Gap must exceed 2*d plus serialize distance (use 2*d conservatively)
     let min_gap = 2.0 * d;
@@ -137,18 +138,28 @@ fn is_rapid_gap_eligible(
 
     // Estimate time savings (conservative stop-at-transition model).
     // Old: gap_dist / (speed_mm_min / 60)
-    // Candidate: decel + accel ramps (each ~d/v) + rapid over (gap_dist - 2*d)
+    // Candidate: decel + accel ramps + rapid over (gap_dist - 2*d)
     let old_time = gap_dist / v_mm_s;
     let L = (gap_dist - 2.0 * d).max(0.0);
+    let r_mm_s = sm.rapid_mm_min / 60.0;
 
-    // Conservative: assume triangular profile (accel then decel)
-    // Time ≈ 2 * sqrt(L / a) for rapid, plus 2 * (d/v + v/(2*a)) for ramps
+    // Ramp time: each ramp (decel or accel) is d/v + v/(2*a)
     let ramp_time = 2.0 * (d / v_mm_s + v_mm_s / (2.0 * sm.acceleration_mm_s2));
+
+    // Rapid center: use trapezoidal when L >= r²/a, else triangular
     let rapid_time = if L > 0.0 {
-        2.0 * (L / sm.acceleration_mm_s2).sqrt()
+        let r_sq_over_a = r_mm_s * r_mm_s / sm.acceleration_mm_s2;
+        if L >= r_sq_over_a {
+            // Trapezoidal: L/r + r/a
+            L / r_mm_s + r_mm_s / sm.acceleration_mm_s2
+        } else {
+            // Triangular: 2*sqrt(L/a)
+            2.0 * (L / sm.acceleration_mm_s2).sqrt()
+        }
     } else {
         0.0
     };
+
     let candidate_time = ramp_time + rapid_time;
 
     let savings_pct = if old_time > 0.0 {
@@ -455,19 +466,113 @@ pub fn scan_mask_to_gcode<'a>(
                 };
 
                 // Gap transit: if the head is not already at this run's start, traverse the
-                // gap with G1+S0 at engrave speed (laser off, constant velocity).
+                // gap with G1+S0 at engrave speed (laser off, constant velocity), or use
+                // a three-segment rapid profile if eligible (decel ramp, rapid center, accel ramp).
                 // P2-A Fix #1: use 2D Euclidean distance so rotated gaps (where runs stack
                 // at the same machine X but differ in Y) are properly detected.
                 let gap_dist_2d = ((x_start - row_cur_x).powi(2) + (y_start - row_cur_y).powi(2)).sqrt();
                 if run_idx > 0 && gap_dist_2d > 1e-6 {
-                    travel_distance += gap_dist_2d;
-                    total_distance += gap_dist_2d;
-                    emit_g1(&mut lines, x_start, y_start, params.speed_mm_min, 0,
-                        &mut modal_f, &mut modal_y_str);
-                    moves.push(GcodeMove {
-                        x: x_start, y: y_start,
-                        move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0,
-                    });
+                    // Check if rapid-gap optimization is applicable
+                    let (use_rapid, _savings_pct) = is_rapid_gap_eligible(
+                        gap_dist_2d,
+                        params.speed_mm_min,
+                        params.overscan,
+                        &params.scan_motion,
+                    );
+
+                    if use_rapid && params.scan_motion.is_some() {
+                        // Three-segment rapid gap: decel ramp + rapid center + accel ramp
+                        let sm = params.scan_motion.as_ref().unwrap();
+                        let v_mm_s = params.speed_mm_min / 60.0;
+                        let d = params.overscan.max(
+                            1.2 * v_mm_s * v_mm_s / (2.0 * sm.acceleration_mm_s2)
+                        ).max(0.5);
+
+                        // Direction: +1 for forward, -1 for reverse
+                        let direction = if forward { 1.0 } else { -1.0 };
+
+                        // Compute ramp endpoints in 2D
+                        let exit_to_ramp = if has_rotation {
+                            let ramp_img = if forward { row_cur_x + d } else { row_cur_x - d };
+                            to_grbl(ramp_img, y_mm)
+                        } else {
+                            (row_cur_x + direction * d, row_cur_y)
+                        };
+
+                        let entry_from_ramp = if has_rotation {
+                            let ramp_img = if forward { x_start - d } else { x_start + d };
+                            to_grbl(ramp_img, y_mm)
+                        } else {
+                            (x_start - direction * d, y_start)
+                        };
+
+                        // Serialize check: reject if three-decimal formatting collapses center segment
+                        let exit_str = format!("{:.3}:{:.3}", exit_to_ramp.0, exit_to_ramp.1);
+                        let entry_str = format!("{:.3}:{:.3}", entry_from_ramp.0, entry_from_ramp.1);
+                        let collapsed = exit_str == entry_str;
+
+                        if !collapsed {
+                            // Decel ramp: G1 S0 from current to exit_to_ramp
+                            let ramp_dist = ((exit_to_ramp.0 - row_cur_x).powi(2) + (exit_to_ramp.1 - row_cur_y).powi(2)).sqrt();
+                            travel_distance += ramp_dist;
+                            total_distance += ramp_dist;
+                            emit_g1(&mut lines, exit_to_ramp.0, exit_to_ramp.1, params.speed_mm_min, 0,
+                                &mut modal_f, &mut modal_y_str);
+                            moves.push(GcodeMove {
+                                x: exit_to_ramp.0, y: exit_to_ramp.1,
+                                move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0,
+                            });
+
+                            // Rapid center: G0 S0 to entry_from_ramp
+                            let rapid_dist = ((entry_from_ramp.0 - exit_to_ramp.0).powi(2) + (entry_from_ramp.1 - exit_to_ramp.1).powi(2)).sqrt();
+                            travel_distance += rapid_dist;
+                            total_distance += rapid_dist;
+                            lines.push(format!("G0 X{:.3} Y{:.3} S0", entry_from_ramp.0, entry_from_ramp.1));
+                            modal_y_str = format!("{:.3}", entry_from_ramp.1);
+                            moves.push(GcodeMove {
+                                x: entry_from_ramp.0, y: entry_from_ramp.1,
+                                move_type: "rapid".to_string(), speed: sm.rapid_mm_min, power: 0.0,
+                            });
+
+                            // Accel ramp: G1 S0 from entry_from_ramp to x_start
+                            let accel_dist = ((x_start - entry_from_ramp.0).powi(2) + (y_start - entry_from_ramp.1).powi(2)).sqrt();
+                            travel_distance += accel_dist;
+                            total_distance += accel_dist;
+                            emit_g1(&mut lines, x_start, y_start, params.speed_mm_min, 0,
+                                &mut modal_f, &mut modal_y_str);
+                            moves.push(GcodeMove {
+                                x: x_start, y: y_start,
+                                move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0,
+                            });
+
+                            row_cur_x = x_start;
+                            row_cur_y = y_start;
+                        } else {
+                            // Serialization collapsed: fall back to continuous G1 S0
+                            travel_distance += gap_dist_2d;
+                            total_distance += gap_dist_2d;
+                            emit_g1(&mut lines, x_start, y_start, params.speed_mm_min, 0,
+                                &mut modal_f, &mut modal_y_str);
+                            moves.push(GcodeMove {
+                                x: x_start, y: y_start,
+                                move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0,
+                            });
+                            row_cur_x = x_start;
+                            row_cur_y = y_start;
+                        }
+                    } else {
+                        // Ineligible or no metadata: continuous G1 S0
+                        travel_distance += gap_dist_2d;
+                        total_distance += gap_dist_2d;
+                        emit_g1(&mut lines, x_start, y_start, params.speed_mm_min, 0,
+                            &mut modal_f, &mut modal_y_str);
+                        moves.push(GcodeMove {
+                            x: x_start, y: y_start,
+                            move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0,
+                        });
+                        row_cur_x = x_start;
+                        row_cur_y = y_start;
+                    }
                 }
 
                 // Engrave this run.
