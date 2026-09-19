@@ -14,38 +14,69 @@ describe("computeOverscan", () => {
     expect(computeOverscan(200 * 60, 500)).toBeCloseTo(48, 6);
   });
 
-  // Clamp at minimum: very low speed → raw < 3, should return 3
-  it("clamps at minimum 3 mm", () => {
-    // v = 5 mm/s, a = 500: raw = 1.2 * 25 / 1000 = 0.03 → clamp to 3
-    expect(computeOverscan(5 * 60, 500)).toBe(3);
+  // Floor at 0.5 mm: very low speed → raw < 0.5, should return 0.5
+  it("floors at 0.5 mm", () => {
+    // v = 5 mm/s, a = 500: raw = 1.2 * 25 / 1000 = 0.03 → floor to 0.5
+    expect(computeOverscan(5 * 60, 500)).toBe(0.5);
   });
 
-  // Clamp at maximum: very high speed or very low accel → raw > 50, should return 50
-  it("clamps at maximum 50 mm", () => {
-    // v = 500 mm/s, a = 500: raw = 1.2 * 250000 / 1000 = 300 → clamp to 50
-    expect(computeOverscan(500 * 60, 500)).toBe(50);
+  // No upper clamp: very high speed or very low accel → raw > 50 passes through
+  it("no upper clamp (raw > 50 passes through)", () => {
+    // v = 500 mm/s, a = 500: raw = 1.2 * 250000 / 1000 = 300
+    expect(computeOverscan(500 * 60, 500)).toBe(300);
   });
 
-  // Fallback when accelX = 0: uses 300 mm/s² internally
+  // 1000/300 → 0.555556 mm (owner's machine at low speed)
+  it("1000 mm/min, 300 mm/s² → ~0.556 mm", () => {
+    // v = 1000/60 ≈ 16.667, raw = 1.2 * 16.667^2 / (2*300) = 1.2*277.78/600 ≈ 0.5556
+    expect(computeOverscan(1000, 300)).toBeCloseTo(0.5556, 3);
+  });
+
+  // 6000/1000 → 6 mm
+  it("6000 mm/min, 1000 mm/s² → 6 mm", () => {
+    // v = 100, raw = 1.2 * 10000 / 2000 = 6
+    expect(computeOverscan(6000, 1000)).toBeCloseTo(6, 6);
+  });
+
+  // Fallback when acceleration = 0: uses 300 mm/s² internally
   // v = 100 mm/s, a = 300: raw = 1.2 * 10000 / 600 = 20 mm
-  it("accelX=0 falls back to 300 mm/s²", () => {
+  it("acceleration=0 falls back to 300 mm/s²", () => {
     expect(computeOverscan(100 * 60, 0)).toBeCloseTo(20, 6);
   });
 
-  // NaN / non-positive speed guard → return min clamp (3)
-  it("NaN speed → 3", () => {
-    expect(computeOverscan(NaN, 500)).toBe(3);
+  // NaN / non-positive speed guard → return floor (0.5)
+  it("NaN speed → 0.5", () => {
+    expect(computeOverscan(NaN, 500)).toBe(0.5);
   });
 
-  it("speed=0 → 3", () => {
-    expect(computeOverscan(0, 500)).toBe(3);
+  it("speed=0 → 0.5", () => {
+    expect(computeOverscan(0, 500)).toBe(0.5);
   });
 
-  it("negative speed → 3", () => {
-    expect(computeOverscan(-100, 500)).toBe(3);
+  it("negative speed → 0.5", () => {
+    expect(computeOverscan(-100, 500)).toBe(0.5);
   });
 
-  it("Infinity speed → 3 (non-finite guard)", () => {
-    expect(computeOverscan(Infinity, 500)).toBe(3);
+  it("Infinity speed → 0.5 (non-finite guard)", () => {
+    expect(computeOverscan(Infinity, 500)).toBe(0.5);
+  });
+
+  // Acceleration edge cases
+  it("NaN acceleration falls back to 300 mm/s²", () => {
+    expect(computeOverscan(100 * 60, NaN)).toBeCloseTo(20, 6);
+  });
+
+  it("negative acceleration falls back to 300 mm/s²", () => {
+    expect(computeOverscan(100 * 60, -100)).toBeCloseTo(20, 6);
+  });
+
+  it("Infinity acceleration falls back to 300 mm/s²", () => {
+    expect(computeOverscan(100 * 60, Infinity)).toBeCloseTo(20, 6);
+  });
+
+  // Above-50 values pass through (no upper clamp)
+  it("values above 50 mm are not clamped", () => {
+    // v = 300 mm/s, a = 300: raw = 1.2 * 90000 / 600 = 180
+    expect(computeOverscan(300 * 60, 300)).toBe(180);
   });
 });

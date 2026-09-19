@@ -605,7 +605,7 @@ async function generateImageGcodeByLayer(
   workspaceHeight: number,
   originTop: boolean,
   sValueMax: number,
-  accelX: number = 0
+  scanAccel: number = 0
 ): Promise<{ byLayer: Map<number, GcodeResult[]>; lockedCount: number }> {
   const layerOrder = new Map(layers.map((l, pos) => [l.index, pos]));
   // Flatten groups so images nested inside groups are included with their
@@ -656,7 +656,10 @@ async function generateImageGcodeByLayer(
           powerMode: layer.powerMode,
           interval: layer.interval,
           dither: layer.dither,
-          overscan: computeOverscan(layer.speed, accelX),
+          overscan: Math.max(
+            Number.isFinite(layer.overscan) && layer.overscan >= 0 ? layer.overscan : 0,
+            computeOverscan(layer.speed, scanAccel)
+          ),
           bidirectional: layer.bidirectional,
           scanningOffset: layer.scanningOffset,
           brightness: adj.brightness,
@@ -893,14 +896,22 @@ export async function generateGcode(): Promise<GcodeResult> {
   warnings.push(...textConvertWarnings);
   const layerOrder = new Map(store.layers.map((l, pos) => [l.index, pos]));
 
-  // Lever 3: apply v²/(2·$120) overscan to all fill/engrave/maskFill CutObjects,
-  // replacing the flat layer.overscan default. Line-mode objects keep their own
-  // overscan unchanged (overscan is not meaningful for line cutting).
-  const accelX = store.grblAccelX;
+  // Lever 3: apply max(user, kinematic minimum) overscan to all fill/engrave/maskFill
+  // CutObjects. Preserves saved layer settings — the user value is a floor, and the
+  // kinematic rule raises it when necessary. Line-mode objects keep their own overscan
+  // unchanged (overscan is not meaningful for line cutting).
+  // Use the smaller of X/Y accelerations conservatively for arbitrary scan rotations.
+  // Both-bad → Infinity; computeOverscan treats non-finite as 0 → 300 fallback.
+  const scanAccel = Math.min(
+    Number.isFinite(store.grblAccelX) && store.grblAccelX > 0 ? store.grblAccelX : Infinity,
+    Number.isFinite(store.grblAccelY) && store.grblAccelY > 0 ? store.grblAccelY : Infinity,
+  );
   for (const obj of cutObjects) {
     const m = obj.layer.mode;
     if (m === "fill" || m === "fillLine" || m === "maskFill" || m === "offsetFill") {
-      obj.layer.overscan = computeOverscan(obj.layer.speed, accelX);
+      const userOverscan = Number.isFinite(obj.layer.overscan) && obj.layer.overscan >= 0
+        ? obj.layer.overscan : 0;
+      obj.layer.overscan = Math.max(userOverscan, computeOverscan(obj.layer.speed, scanAccel));
     }
   }
 
@@ -1027,13 +1038,45 @@ export async function generateGcode(): Promise<GcodeResult> {
     store.workspaceHeight,
     store.originTop,
     sValueMax,
-    accelX
+    scanAccel
   );
 
   if (lockedImageCount > 0) {
     console.info(
       `Note: ${lockedImageCount} locked image(s) included in G-code — use layer Output toggle to exclude from cut`
     );
+  }
+
+  // F6: Warn when images are assigned to non-fill layers (Cut/Score use line-mode
+  // speeds that are typically much slower or faster than ideal for engraving).
+  // Collect one warning per affected layer; do not auto-route or change settings.
+  {
+    const flat = flattenObjects(store.objects);
+    const imageObjects = flat.filter(
+      (obj) => obj.type === "image" && obj.visible && obj.imageData
+    );
+    const warnedLayers = new Set<number>();
+    for (const obj of imageObjects) {
+      const layer = store.layers.find((l) => l.index === obj.layerIndex) || store.layers[0];
+      if (!layer.visible || layer.output === false) continue;
+      // All fill-family modes (fill, fillLine, maskFill, offsetFill) use engrave-appropriate
+      // speeds — only line mode (Cut/Score) warrants a warning.
+      if (layer.mode !== "line") continue;
+      if (warnedLayers.has(layer.index)) continue;
+      warnedLayers.add(layer.index);
+
+      const imageCount = imageObjects.filter((im) => {
+        const imLayer = store.layers.find((l) => l.index === im.layerIndex) || store.layers[0];
+        return imLayer.index === layer.index && imLayer.visible && imLayer.output !== false;
+      }).length;
+
+      store.addConsoleLine(
+        `${imageCount} image(s) on layer "${layer.name}" (${layer.mode}) will engrave at ` +
+        `${layer.speed} mm/min, ${layer.passes} pass(es). ` +
+        `Consider using an Engrave/Fill layer or reviewing material settings for image work.`,
+        "warning"
+      );
+    }
   }
 
   // Step 2: Bucket vector CutObjects by layer position and call generate_gcode

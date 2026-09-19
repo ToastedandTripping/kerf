@@ -249,15 +249,15 @@ const layerDefaults = {
   dither: "floydSteinberg" as const,
   scanAngle: 0,
   angleIncrement: 0,
-  // B2: overscan raised from 2.5mm to 5mm — 2.5mm was ~10× short of the ~25mm
-  // accel distance at 6000 mm/min (v²/2a, a=200 mm/s²). 5mm is a sane M3
-  // fallback; M4 (variable power) is the primary fix for accel/decel unevenness.
-  // Cap is enforced in LayerPanel at 30mm (enough for slow feeds; avoids
-  // wasting bed on fast fills where M4 is already handling the accel zone).
+  // Overscan default: 0.5 mm user minimum for newly created layers.
+  // At generation time, max(user, kinematic minimum) is applied — the kinematic
+  // rule (1.2 * v²/(2*a)) overrides when the layer speed demands more. The low
+  // default lets new low-speed jobs benefit without a manual reduction; existing
+  // saved projects keep their stored value. See computeOverscan() in overscan.ts.
   overcut: 0,
   leadIn: 0,
   leadOut: 0,
-  overscan: 5.0,
+  overscan: 0.5,
   bidirectional: true,
   crossHatch: false,
   scanningOffset: 0,

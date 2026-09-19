@@ -1223,6 +1223,210 @@ describe("Text auto-conversion at G-code generation", () => {
     }
   });
 
+  // ─── Overscan integration (F3/F7) ─────────────────────────────────
+
+  it("overscan uses max(user, computed minimum) — user below minimum", async () => {
+    mockRustEngine();
+    const rect = makeRect("r1", 0, 0, 10, 10);
+    useStore.getState().addObject(rect);
+    // Layer defaults to overscan=0.5, speed=6000, fill mode.
+    // With grblAccelX=1000, computed = max(0.5, 1.2*100^2/2000) = 6mm.
+    // User default 0.5 < 6 → applied overscan should be 6.
+    useStore.setState({ grblAccelX: 1000, grblAccelY: 1000 });
+
+    await generateGcode();
+
+    const calls = mockInvoke.mock.calls.filter(([cmd]) => cmd === "generate_gcode");
+    if (calls.length > 0) {
+      const objs = (calls[0][1] as { objects: Array<Record<string, unknown>> }).objects;
+      for (const obj of objs) {
+        const layer = obj.layer as Record<string, unknown>;
+        const mode = layer.mode as string;
+        if (["fill", "fillLine", "maskFill", "offsetFill"].includes(mode)) {
+          expect(layer.overscan).toBeCloseTo(6.0, 1);
+        }
+      }
+    }
+  });
+
+  it("overscan preserves user value when above computed minimum", async () => {
+    mockRustEngine();
+    const rect = makeRect("r1", 0, 0, 10, 10);
+    useStore.getState().addObject(rect);
+    // Set a high user overscan (e.g., 20mm) with low speed where computed is 0.5mm.
+    useStore.getState().updateLayer(0, { overscan: 20.0, speed: 300 });
+    useStore.setState({ grblAccelX: 1000, grblAccelY: 1000 });
+    // computed = max(0.5, 1.2*(300/60)^2 / 2000) = max(0.5, 0.015) = 0.5
+    // max(user=20, computed=0.5) = 20
+
+    await generateGcode();
+
+    const calls = mockInvoke.mock.calls.filter(([cmd]) => cmd === "generate_gcode");
+    if (calls.length > 0) {
+      const objs = (calls[0][1] as { objects: Array<Record<string, unknown>> }).objects;
+      for (const obj of objs) {
+        const layer = obj.layer as Record<string, unknown>;
+        const mode = layer.mode as string;
+        if (["fill", "fillLine", "maskFill", "offsetFill"].includes(mode)) {
+          expect(layer.overscan).toBeCloseTo(20.0, 1);
+        }
+      }
+    }
+  });
+
+  it("overscan with unequal X/Y acceleration uses the smaller (conservative)", async () => {
+    mockRustEngine();
+    const rect = makeRect("r1", 0, 0, 10, 10);
+    useStore.getState().addObject(rect);
+    // grblAccelX=2000, grblAccelY=500 → scanAccel=500
+    // speed=6000 → v=100 → computed = 1.2*10000/1000 = 12mm
+    useStore.setState({ grblAccelX: 2000, grblAccelY: 500 });
+
+    await generateGcode();
+
+    const calls = mockInvoke.mock.calls.filter(([cmd]) => cmd === "generate_gcode");
+    if (calls.length > 0) {
+      const objs = (calls[0][1] as { objects: Array<Record<string, unknown>> }).objects;
+      for (const obj of objs) {
+        const layer = obj.layer as Record<string, unknown>;
+        const mode = layer.mode as string;
+        if (["fill", "fillLine", "maskFill", "offsetFill"].includes(mode)) {
+          // With scanAccel=500: 1.2*10000/1000 = 12
+          expect(layer.overscan).toBeCloseTo(12.0, 1);
+        }
+      }
+    }
+  });
+
+  it("new-layer default overscan is 0.5mm", () => {
+    const store = useStore.getState();
+    // DEFAULT_LAYERS come from layerDefaults
+    for (const layer of store.layers) {
+      expect(layer.overscan).toBe(0.5);
+    }
+  });
+
+  // ─── Layer speed warning (F6) ─────────────────────────────────────
+
+  it("warns when images are assigned to a non-fill layer", async () => {
+    mockRustEngine();
+    const imgObj: DesignObject = {
+      id: "img1",
+      type: "image",
+      name: "Test Image",
+      transform: { x: 0, y: 0, width: 10, height: 10, rotation: 0, scaleX: 1, scaleY: 1 },
+      layerIndex: 0,
+      visible: true,
+      locked: false,
+      fill: null,
+      stroke: "#4a90e2",
+      strokeWidth: 1,
+      opacity: 1,
+      imageData: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==",
+    };
+    useStore.getState().addObject(imgObj);
+    // Change layer 0 to line mode (simulating Cut layer)
+    useStore.getState().updateLayer(0, { mode: "line" });
+
+    await generateGcode();
+
+    const store = useStore.getState();
+    const layerWarnings = store.consoleLines.filter(
+      (l) => typeof l === "object" && "text" in l && l.text.includes("will engrave at")
+    );
+    expect(layerWarnings.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("no warning when images are on a fill layer", async () => {
+    mockRustEngine();
+    const imgObj: DesignObject = {
+      id: "img1",
+      type: "image",
+      name: "Test Image",
+      transform: { x: 0, y: 0, width: 10, height: 10, rotation: 0, scaleX: 1, scaleY: 1 },
+      layerIndex: 0,
+      visible: true,
+      locked: false,
+      fill: null,
+      stroke: "#4a90e2",
+      strokeWidth: 1,
+      opacity: 1,
+      imageData: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==",
+    };
+    useStore.getState().addObject(imgObj);
+    // Layer 0 defaults to fill mode — no warning expected
+
+    await generateGcode();
+
+    const store = useStore.getState();
+    const layerWarnings = store.consoleLines.filter(
+      (l) => typeof l === "object" && "text" in l && l.text.includes("will engrave at")
+    );
+    expect(layerWarnings).toHaveLength(0);
+  });
+
+  it("no warning for hidden/output-disabled images", async () => {
+    mockRustEngine();
+    const imgObj: DesignObject = {
+      id: "img1",
+      type: "image",
+      name: "Hidden Image",
+      transform: { x: 0, y: 0, width: 10, height: 10, rotation: 0, scaleX: 1, scaleY: 1 },
+      layerIndex: 0,
+      visible: false,
+      locked: false,
+      fill: null,
+      stroke: "#4a90e2",
+      strokeWidth: 1,
+      opacity: 1,
+      imageData: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==",
+    };
+    useStore.getState().addObject(imgObj);
+    useStore.getState().updateLayer(0, { mode: "line" });
+
+    await generateGcode();
+
+    const store = useStore.getState();
+    const layerWarnings = store.consoleLines.filter(
+      (l) => typeof l === "object" && "text" in l && l.text.includes("will engrave at")
+    );
+    expect(layerWarnings).toHaveLength(0);
+  });
+
+  it("warning does not alter speed, passes, or power", async () => {
+    mockRustEngine();
+    const imgObj: DesignObject = {
+      id: "img1",
+      type: "image",
+      name: "Test Image",
+      transform: { x: 0, y: 0, width: 10, height: 10, rotation: 0, scaleX: 1, scaleY: 1 },
+      layerIndex: 0,
+      visible: true,
+      locked: false,
+      fill: null,
+      stroke: "#4a90e2",
+      strokeWidth: 1,
+      opacity: 1,
+      imageData: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==",
+    };
+    useStore.getState().addObject(imgObj);
+    useStore.getState().updateLayer(0, {
+      mode: "line",
+      speed: 1200,
+      passes: 2,
+      power: 80,
+    });
+
+    await generateGcode();
+
+    // Verify the layer was not mutated
+    const store = useStore.getState();
+    const layer = store.layers[0];
+    expect(layer.speed).toBe(1200);
+    expect(layer.passes).toBe(2);
+    expect(layer.power).toBe(80);
+  });
+
   it("adds a warning and skips when font fails to load", async () => {
     const textObj: DesignObject = {
       id: "txt-fail",
