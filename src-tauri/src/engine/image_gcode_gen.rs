@@ -710,23 +710,22 @@ mod tests {
             })
             .collect();
 
+        // F2 compression: 3 equal-S pixels merge into 1 segment per row = 2 total.
         assert_eq!(
-            engrave_x.len(), 6,
-            "Expected 6 engrave moves (3 forward + 3 reverse); got {:?}\ngcode:\n{}", engrave_x, gcode
+            engrave_x.len(), 2,
+            "Expected 2 engrave moves (1 compressed forward + 1 compressed reverse); got {:?}\ngcode:\n{}", engrave_x, gcode
         );
 
-        let forward_x = &engrave_x[..3];
+        // Forward row endpoint: X=5.0 (boundary at orig_start + 3 pixels)
         assert_eq!(
-            forward_x, &[3.0f64, 4.0, 5.0],
-            "Forward row X wrong; got {:?}", forward_x
+            engrave_x[0], 5.0,
+            "Forward row endpoint wrong; got {:.1}", engrave_x[0]
         );
 
-        let reverse_x = &engrave_x[3..];
+        // Reverse row endpoint: X=2.0 (boundary at orig_end - 3 pixels)
         assert_eq!(
-            reverse_x, &[4.0f64, 3.0, 2.0],
-            "Reverse row X wrong (regression: orig_start used instead of orig_end); \
-             got {:?} — expected [4.0, 3.0, 2.0]",
-            reverse_x
+            engrave_x[1], 2.0,
+            "Reverse row endpoint wrong; got {:.1}", engrave_x[1]
         );
     }
 

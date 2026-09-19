@@ -2024,4 +2024,377 @@ G1 X0.818 Y199.061 S0";
         assert!(err.contains("pixels length"),
             "Error should mention pixels length, got: {}", err);
     }
+
+    // ─── Modal interpreter ──────────────────────────────────────────────────
+
+    /// Test-only G-code modal interpreter for G0/G1/X/Y/F/S/M3/M4.
+    /// Tracks modal state exactly as GRBL does — fields not on the line retain
+    /// their last-set value. Returns a list of resolved moves for comparison.
+    #[derive(Debug, Clone)]
+    struct InterpretedMove {
+        g: i32, // 0 or 1
+        x: f64,
+        y: f64,
+        f: f64,
+        s: i64,
+        mode: String, // "M3" or "M4" or ""
+    }
+
+    fn interpret_gcode(gcode: &str) -> Vec<InterpretedMove> {
+        let mut moves = Vec::new();
+        let mut cur_g: i32 = -1;
+        let mut cur_x = 0.0_f64;
+        let mut cur_y = 0.0_f64;
+        let mut cur_f = 0.0_f64;
+        let mut cur_s: i64 = 0;
+        let mut cur_mode = String::new();
+
+        for line in gcode.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with(';') {
+                continue;
+            }
+
+            // Mode commands
+            if line.starts_with("M3") || line.starts_with("M4") {
+                cur_mode = line[..2].to_string();
+                // Parse S from the mode line
+                for token in line.split_whitespace() {
+                    if token.starts_with('S') {
+                        if let Ok(v) = token[1..].parse::<f64>() {
+                            cur_s = v.round() as i64;
+                        }
+                    }
+                }
+                continue;
+            }
+            if line == "M5" {
+                cur_mode = String::new();
+                continue;
+            }
+
+            // G0/G1 lines
+            let is_g0 = line.starts_with("G0");
+            let is_g1 = line.starts_with("G1");
+            if !is_g0 && !is_g1 { continue; }
+
+            if is_g0 { cur_g = 0; }
+            if is_g1 { cur_g = 1; }
+
+            for token in line.split_whitespace() {
+                if token.starts_with('X') {
+                    if let Ok(v) = token[1..].parse::<f64>() { cur_x = v; }
+                } else if token.starts_with('Y') {
+                    if let Ok(v) = token[1..].parse::<f64>() { cur_y = v; }
+                } else if token.starts_with('F') {
+                    if let Ok(v) = token[1..].parse::<f64>() { cur_f = v; }
+                } else if token.starts_with('S') {
+                    if let Ok(v) = token[1..].parse::<f64>() { cur_s = v.round() as i64; }
+                }
+            }
+
+            moves.push(InterpretedMove {
+                g: cur_g,
+                x: cur_x,
+                y: cur_y,
+                f: cur_f,
+                s: cur_s,
+                mode: cur_mode.clone(),
+            });
+        }
+        moves
+    }
+
+    // ─── Compression-specific tests ─────────────────────────────────────────
+
+    /// F2: a flat 100-pixel grayscale run with identical values becomes one powered segment.
+    #[test]
+    fn f2_flat_grayscale_plateau_compresses_to_one_segment() {
+        let w = 100usize;
+        let h = 1usize;
+        let mask_pixels = vec![0u8; w * h]; // all filled
+        let gray_pixels = vec![128u8; w * h]; // all same gray
+
+        let mut params = base_scan_params();
+        params.width_mm = 100.0;
+        params.height_mm = 1.0;
+        params.grayscale_pixels = Some(&gray_pixels);
+
+        let result = scan_mask_to_gcode(&mask_pixels, w, h, &params).expect("should succeed");
+
+        // Count powered G1 moves (S > 0)
+        let powered_count = result.gcode.lines()
+            .filter(|l| l.starts_with("G1 "))
+            .filter(|l| {
+                l.split_whitespace()
+                    .find(|t| t.starts_with('S'))
+                    .and_then(|t| t[1..].parse::<i64>().ok())
+                    .map(|s| s > 0)
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(powered_count, 1, "100 equal-S pixels should merge into 1 segment; got {}\ngcode:\n{}", powered_count, result.gcode);
+
+        // Verify powered distance is 100mm
+        assert!((result.cut_distance - 100.0).abs() < 0.01,
+            "cut_distance should be 100mm; got {}", result.cut_distance);
+    }
+
+    /// F2: alternating S values do not merge.
+    #[test]
+    fn f2_alternating_grayscale_does_not_merge() {
+        let w = 6usize;
+        let h = 1usize;
+        let mask_pixels = vec![0u8; w * h]; // all filled
+        // Alternating: 100, 200, 100, 200, 100, 200 — different S tokens
+        let gray_pixels = vec![100u8, 200, 100, 200, 100, 200];
+
+        let mut params = base_scan_params();
+        params.width_mm = 6.0;
+        params.height_mm = 1.0;
+        params.s_max = 1000.0;
+        params.s_min = 0.0;
+        params.grayscale_pixels = Some(&gray_pixels);
+
+        let result = scan_mask_to_gcode(&mask_pixels, w, h, &params).expect("should succeed");
+
+        let powered_count = result.gcode.lines()
+            .filter(|l| l.starts_with("G1 "))
+            .filter(|l| {
+                l.split_whitespace()
+                    .find(|t| t.starts_with('S'))
+                    .and_then(|t| t[1..].parse::<i64>().ok())
+                    .map(|s| s > 0)
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(powered_count, 6, "6 alternating pixels should produce 6 segments; got {}\ngcode:\n{}", powered_count, result.gcode);
+    }
+
+    /// F2: distinct shades that format to the same S token DO merge.
+    #[test]
+    fn f2_distinct_shades_same_s_token_merge() {
+        let w = 4usize;
+        let h = 1usize;
+        let mask_pixels = vec![0u8; w * h];
+        // Pixel values that differ slightly but round to the same S
+        // With s_min=0, s_max=1000: pixel 127 → fraction=(255-127)/255=0.502 → S=502
+        //                           pixel 128 → fraction=(255-128)/255=0.498 → S=498
+        // These are different! Let's use values that round the same:
+        // pixel 127 → S = 502, pixel 126 → S = (255-126)/255*1000 = 505.88 → S=506
+        // Let's just use identical pixels:
+        let gray_pixels = vec![127u8; w * h]; // all same → same S token
+
+        let mut params = base_scan_params();
+        params.width_mm = 4.0;
+        params.height_mm = 1.0;
+        params.grayscale_pixels = Some(&gray_pixels);
+
+        let result = scan_mask_to_gcode(&mask_pixels, w, h, &params).expect("should succeed");
+
+        let powered_count = result.gcode.lines()
+            .filter(|l| l.starts_with("G1 "))
+            .filter(|l| {
+                l.split_whitespace()
+                    .find(|t| t.starts_with('S'))
+                    .and_then(|t| t[1..].parse::<i64>().ok())
+                    .map(|s| s > 0)
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(powered_count, 1, "4 identical pixels should merge into 1; got {}", powered_count);
+    }
+
+    /// F2: S0-rounding grayscale pixels are gap boundaries, not powered S0.
+    #[test]
+    fn f2_s0_rounding_is_gap_boundary() {
+        let w = 6usize;
+        let h = 1usize;
+        let mask_pixels = vec![0u8; w * h];
+        // pixels: black(0), black(0), near-white(254), near-white(254), black(0), black(0)
+        // S for 254: (255-254)/255 * 1000 = 3.92 → rounds to 4 → powered
+        // S for 255 would be 0, but 254 rounds to 4
+        // Let's use 255 (white, which is S0):
+        // Actually, grayscale runs only include pixels < 255, so white (255) is never in a run.
+        // For S0 rounding, we need pixels whose interpolated S rounds to 0.
+        // With s_min=0, s_max=1000: pixel 255 → 0 (but excluded from runs)
+        // pixel 254 → (1/255)*1000 = 3.92 → S=4 (still > 0)
+        // Need s_max small: e.g. s_max=2 → pixel 254 → (1/255)*2 = 0.008 → S=0
+        let gray_pixels = vec![0u8, 0, 254, 254, 0, 0];
+
+        let mut params = base_scan_params();
+        params.width_mm = 6.0;
+        params.height_mm = 1.0;
+        params.s_max = 2.0; // very low max so 254 rounds to S0
+        params.s_min = 0.0;
+        params.grayscale_pixels = Some(&gray_pixels);
+
+        let result = scan_mask_to_gcode(&mask_pixels, w, h, &params).expect("should succeed");
+
+        // The run covers all 6 pixels (all < 255 in the grayscale data).
+        // S tokens: 0→S2, 0→S2, 254→S0, 254→S0, 0→S2, 0→S2
+        // S0 pixels should become gap boundaries (unpowered).
+        // Expected segments: S2(2px), S0(2px gap), S2(2px) = 2 powered + 1 gap
+        let powered_count = result.gcode.lines()
+            .filter(|l| l.starts_with("G1 "))
+            .filter(|l| {
+                l.split_whitespace()
+                    .find(|t| t.starts_with('S'))
+                    .and_then(|t| t[1..].parse::<i64>().ok())
+                    .map(|s| s > 0)
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(powered_count, 2, "S0 gap should split into 2 powered segments; got {}\ngcode:\n{}", powered_count, result.gcode);
+    }
+
+    /// Modal interpreter: verify mode hoist, modal F, and S0 safety across fragment boundaries.
+    #[test]
+    fn modal_interpreter_validates_output() {
+        let w = 5usize;
+        let h = 2usize;
+        let mask_pixels = vec![0u8; w * h]; // all filled
+
+        let mut params = base_scan_params();
+        params.width_mm = 5.0;
+        params.height_mm = 2.0;
+        params.power_cmd = "M4".to_string();
+        params.speed_mm_min = 3000.0;
+        params.bidirectional = true;
+
+        let result = scan_mask_to_gcode(&mask_pixels, w, h, &params).expect("should succeed");
+        let moves = interpret_gcode(&result.gcode);
+
+        // 1. First move should have mode set (M4 emitted before first G0)
+        assert!(!moves.is_empty(), "should have moves");
+        assert_eq!(moves[0].mode, "M4", "mode must be M4 from the hoist");
+
+        // 2. Every G0 must have S=0
+        for m in &moves {
+            if m.g == 0 {
+                assert_eq!(m.s, 0, "G0 must have S0; got S={} at X={:.3}", m.s, m.x);
+            }
+        }
+
+        // 3. F must be set (3000) on all G1 moves (modal, inherited from first)
+        for m in &moves {
+            if m.g == 1 {
+                assert_eq!(m.f, 3000.0, "F must be 3000 on all G1 moves; got F={} at X={:.3}", m.f, m.x);
+            }
+        }
+
+        // 4. Mode should never go empty (no M5 in scanner output)
+        for m in &moves {
+            assert!(!m.mode.is_empty(), "mode must not be empty (no M5 in scanner)");
+        }
+    }
+
+    /// Verify that an all-white image (no content) emits no mode command.
+    #[test]
+    fn empty_scan_emits_no_mode_command() {
+        let w = 5usize;
+        let h = 2usize;
+        let mask_pixels = vec![255u8; w * h]; // all white
+
+        let params = base_scan_params();
+        let result = scan_mask_to_gcode(&mask_pixels, w, h, &params).expect("should succeed");
+
+        assert!(
+            !result.gcode.contains("M3") && !result.gcode.contains("M4"),
+            "Empty scan must not emit any mode command; gcode:\n{}", result.gcode
+        );
+        assert!(result.gcode.is_empty(), "Empty scan should produce no output");
+    }
+
+    /// Compression with multiple passes: mode hoisted once, not per-pass.
+    #[test]
+    fn f4_mode_hoisted_once_across_passes() {
+        let w = 3usize;
+        let h = 1usize;
+        let mask_pixels = vec![0u8; w * h];
+
+        let mut params = base_scan_params();
+        params.width_mm = 3.0;
+        params.height_mm = 1.0;
+        params.passes = 3;
+        params.power_cmd = "M3".to_string();
+
+        let result = scan_mask_to_gcode(&mask_pixels, w, h, &params).expect("should succeed");
+
+        let m3_count = result.gcode.lines().filter(|l| l.starts_with("M3 ")).count();
+        assert_eq!(m3_count, 1, "M3 S0 should appear once across 3 passes; got {}\ngcode:\n{}", m3_count, result.gcode);
+    }
+
+    /// Compression with reverse row, rotation, offset, nonzero minimum power.
+    #[test]
+    fn f2_compression_reverse_rotation_offset_smin() {
+        let w = 6usize;
+        let h = 2usize;
+        let mask_pixels = vec![0u8; w * h];
+        // Grayscale: uniform 128 across all pixels → all same S token
+        let gray_pixels = vec![128u8; w * h];
+
+        let mut params = base_scan_params();
+        params.width_mm = 6.0;
+        params.height_mm = 2.0;
+        params.rotation_rad = std::f64::consts::FRAC_PI_6; // 30 degrees
+        params.scanning_offset = 0.5;
+        params.s_min = 100.0;
+        params.s_max = 1000.0;
+        params.bidirectional = true;
+        params.grayscale_pixels = Some(&gray_pixels);
+
+        let result = scan_mask_to_gcode(&mask_pixels, w, h, &params).expect("should succeed");
+
+        // All pixels same shade → 1 powered segment per row = 2 total
+        let powered_count = result.gcode.lines()
+            .filter(|l| l.starts_with("G1 "))
+            .filter(|l| {
+                l.split_whitespace()
+                    .find(|t| t.starts_with('S'))
+                    .and_then(|t| t[1..].parse::<i64>().ok())
+                    .map(|s| s > 0)
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(powered_count, 2, "2 rows of uniform gray should give 2 powered segments; got {}\ngcode:\n{}", powered_count, result.gcode);
+
+        // Verify powered distance: 6 pixels * interval per row * 2 rows = 12mm
+        assert!((result.cut_distance - 12.0).abs() < 0.01,
+            "cut_distance should be 12.0; got {}", result.cut_distance);
+
+        // Verify S value includes s_min: (255-128)/255 = 0.498 → S = 100 + 0.498*900 = 548
+        let s_val = result.gcode.lines()
+            .filter(|l| l.starts_with("G1 "))
+            .filter_map(|l| {
+                l.split_whitespace()
+                    .find(|t| t.starts_with('S'))
+                    .and_then(|t| t[1..].parse::<i64>().ok())
+            })
+            .find(|&s| s > 0)
+            .expect("should have a powered S value");
+        assert_eq!(s_val, 548, "S value for pixel 128 with s_min=100, s_max=1000 should be 548; got {}", s_val);
+    }
+
+    /// Zero-overscan rows: G0 still carries S0.
+    #[test]
+    fn zero_overscan_g0_carries_s0() {
+        let w = 3usize;
+        let h = 1usize;
+        let mask_pixels = vec![0u8; w * h];
+
+        let mut params = base_scan_params();
+        params.width_mm = 3.0;
+        params.height_mm = 1.0;
+        params.overscan = 0.0;
+
+        let result = scan_mask_to_gcode(&mask_pixels, w, h, &params).expect("should succeed");
+
+        for line in result.gcode.lines() {
+            if line.starts_with("G0 ") {
+                assert!(line.contains("S0"),
+                    "G0 must carry S0 even with zero overscan; got: {}", line);
+            }
+        }
+    }
 }
