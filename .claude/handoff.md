@@ -37,8 +37,6 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - **RELEASE BLOCKED — two hardware-confirmed safety defects (2026-09-05).** (1) The pause volley re-arms the beam: `0x9E` is a toggle and stock GRBL already stops the laser at hold-complete, so Kerf's byte undoes the firmware's own protection; the v0.8.28 `Hold:0` poll can never succeed during a job (the status query `try_lock`s the command lock the pump holds), so it times out at 3s and fires anyway. Owner-confirmed: both the 3s warning and `[MSG:Restoring spindle]` appear on a real pause. (2) Laser-switch wedge: intermittently the controller stops acking every line command after an `M3`/`M4` while still answering `?` with `Idle`, until `0x18`. Full record, ruled-out hypotheses, and fix direction: `ROADMAP.md` → `### Deferred from the 2026-09-05 pause/stop investigation`. **Nothing is fixed; no production code changed.**
 
-- **OWED BY LEE: run `scripts/probe-grbl.py` and return the trace log.** Runs on the Mac with Kerf closed (`python3 -m pip install --user pyserial`, then `python3 probe-grbl.py --pause`). Drives the controller through eight laser-switch sequences at job speed, laser capped at 1%, inside a 60mm box next to home; ~4-6 min. That log is the input to the wedge fix plan — the defect is timing-dependent and cannot be diagnosed further from source.
-
 - **OWNER HARDWARE TEST — superseded card, Part 0 first.** The test card artifact (https://claude.ai/code/artifact/f1df614c-7007-4609-afb6-a898aab06de1) was revised 2026-09-05: the investigation sits at the top and a new Part 0 (7 probe steps) runs before everything else. Steps 6, 7 and 20 (pause/resume, stop) are marked superseded and excluded from the progress count. `docs/test-card.md` in-repo has NOT been updated to match — do that when the pause path is rebuilt.
 
 - **Phase 2A A/B test (gate D1c) is deferred behind both defects** and its premise is now in question: this controller reports a 127-block planner and 65536-byte RX buffer (`[OPT:VHL,127,65536]`), so per-line streaming may already keep it fed. Record that in the A/B result before buffered is considered for default.
@@ -51,6 +49,12 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - **Batch 2.3 must be re-specified before anyone implements it.** It was written to enforce a RESTRICTED release envelope; Lee chose the full feature set, so its refusals have to become actual corrections (R8, R13, R18, R19). It will likely split into three or four batches. The M4 default flip already pre-empts part of R8.
 
+- **Relay B (rapid gap traversal) is planned, critic-reviewed, and unblocked.** Depends on Relay A (merged). Plan at `.claude/plans/engrave-efficiency.md`. Seven files, Standard tier. The dominant optimization for text sign burn time.
+
+- **Charter amendment needed.** The text tool (4 bundled fonts, auto-convert at G-code time) ships in v0.8.29 and contradicts the charter's explicit exclusion of built-in font rendering. Lee requested it directly. Neither CHARTER.md nor ROADMAP's 'What We're NOT Building' has been amended. A one-line amendment approved by Lee closes the contradiction.
+
+- **Charter gap analysis at `.claude/plans/charter-gap-analysis.md`** — 293-line Fable audit of all 10 codebase areas vs the charter. None of the three 'done' conditions are met. Top gaps ranked. The fastest path to 'done' follows the existing remediation plan order.
+
 ## Open questions awaiting Lee
 
 | Question                                                                                            | Why it matters                                                                        | Raised     |
@@ -61,10 +65,29 @@ in this project has already been ruled on, usually for a reason that is not obvi
 | v0.9 Camera & Rotary — do you have/plan to get the hardware?                                        | Gate D4 — the feature stays parked with no planning until confirmed                   | 2026-07-05 |
 | streamingMode default: flip `perLine`→`buffered` after session #1's A/B?                            | Gate D1c — the rule is recorded in `DECISIONS.md`; you may override                   | 2026-07-05 |
 | Given the controller's 127-block planner, is Phase 2A buffered streaming still worth shipping on this machine? | Phase 2A was built to cure stutter caused by stock GRBL's 15-block planner. This vendor fork has 127. The A/B test may show no difference, which would make gate D1c a decision to keep perLine permanently. | 2026-09-05 |
+| Amend the charter to include the text tool? One line: 'built-in text from bundled fonts is in; font management and text-on-path stay out.' | The tree contradicts its own founding document. The ROADMAP parks text behind gate D3 (v1.0), which was skipped rather than opened. | 2026-09-19 |
 
 ---
 
 ## Log (newest first)
+
+### 2026-09-19
+
+**Session 1b2844: six relays, one audit, one release.**
+
+Probe script ran (first attempt failed — DTR fix applied and pushed; second run completed, 40/40 laser-switch sequences PASS, pause re-arm confirmed on wire with [MSG:Restoring spindle]). Laser-switch wedge reported again Sep 16 during engrave (console: normal G1 ok ok then 'terminal lost'). Machine identity confirmed: ESP32-S3, CV50-MASTER-Release V3.0.4, 127-block planner, 65536B RX.
+
+v0.8.29 tagged and pushed: pause safety ($32=1 gate, 0x9E removed, sim toggle + hold-complete auto-off), text tool (auto-convert at G-code time, 4 bundled fonts, font picker, multiline, alignment), color tracing (2-32 colors via vtracer, better presets, full-res preview). 748 JS + 235 Rust tests.
+
+Relay A of engrave efficiency merged post-v0.8.29: grayscale pixel compression (merge equal-S into one G1), modal power hoist (M3/M4 once not per-row), modal field omission (F on first G1 only), overscan floor fix (3mm → kinematic minimum), layer speed warning for images on cut layers. 762 JS + 246 Rust tests.
+
+Fable charter gap analysis completed (`.claude/plans/charter-gap-analysis.md`): none of the charter's three 'done' conditions met. Top gaps: unfixed wedge + abort order pin violation, laser-stops-firing (3 reports), incomplete $32 gate (material test bypasses), unqualifiable pause, silent Fill+Line rectangle drop. Text tool contradiction flagged. Process: v0.8.29 tagged while DECISIONS says RELEASE BLOCKED.
+
+Relay B (rapid gap traversal) planned and critic-reviewed, unblocked. Engrave efficiency plan at `.claude/plans/engrave-efficiency.md`.
+
+New symptom: 'laser stops firing' mid-job (head keeps moving, laser dark). Reported 3 times (Sep 14 twice, Sep 16). Phase 1 spindle-drop diagnostic deployed in v0.8.29 — will capture FS: field data on next occurrence.
+
+Next: Relay B (rapid gaps), then remediation batch 0.1 (native command-body trace harness), then charter amendment decision.
 
 ### 2026-09-10
 
