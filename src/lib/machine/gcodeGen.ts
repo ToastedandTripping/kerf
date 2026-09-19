@@ -901,10 +901,11 @@ export async function generateGcode(): Promise<GcodeResult> {
   // kinematic rule raises it when necessary. Line-mode objects keep their own overscan
   // unchanged (overscan is not meaningful for line cutting).
   // Use the smaller of X/Y accelerations conservatively for arbitrary scan rotations.
+  // Both-bad → Infinity; computeOverscan treats non-finite as 0 → 300 fallback.
   const scanAccel = Math.min(
     Number.isFinite(store.grblAccelX) && store.grblAccelX > 0 ? store.grblAccelX : Infinity,
     Number.isFinite(store.grblAccelY) && store.grblAccelY > 0 ? store.grblAccelY : Infinity,
-  ) || 0; // both non-finite → 0, triggers fallback in computeOverscan
+  );
   for (const obj of cutObjects) {
     const m = obj.layer.mode;
     if (m === "fill" || m === "fillLine" || m === "maskFill" || m === "offsetFill") {
@@ -1058,7 +1059,9 @@ export async function generateGcode(): Promise<GcodeResult> {
     for (const obj of imageObjects) {
       const layer = store.layers.find((l) => l.index === obj.layerIndex) || store.layers[0];
       if (!layer.visible || layer.output === false) continue;
-      if (layer.mode === "fill") continue; // Engrave preset uses fill — no warning
+      // All fill-family modes (fill, fillLine, maskFill, offsetFill) use engrave-appropriate
+      // speeds — only line mode (Cut/Score) warrants a warning.
+      if (layer.mode !== "line") continue;
       if (warnedLayers.has(layer.index)) continue;
       warnedLayers.add(layer.index);
 

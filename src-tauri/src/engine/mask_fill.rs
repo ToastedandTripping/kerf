@@ -162,10 +162,11 @@ pub fn scan_mask_to_gcode<'a>(
     let mut modal_y_str: String = String::new();
     let mut mode_emitted = false; // F4: emit M3/M4 S0 once before the first nonempty row
 
-    /// Compute the integer S token for a grayscale pixel, matching the existing
-    /// formatter's `S{:.0}` rounding. Pixels with value 255 get S0; other pixels
-    /// interpolate between s_min and s_max, then round. If the result rounds to 0,
-    /// the pixel is treated as a gap boundary (unpowered), not as a powered S0.
+    /// Map a grayscale pixel value to its integer S token.
+    ///
+    /// Returns the rounded S value: 255 → 0, otherwise interpolate between
+    /// `s_min` and `s_max` by `(255 - pixel) / 255` and round to nearest integer.
+    /// A return value of 0 signals an unpowered gap boundary to the caller.
     #[inline]
     fn compute_s_token(pixel: u8, s_min: f64, s_max: f64) -> i64 {
         if pixel == 255 {
