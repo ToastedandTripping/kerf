@@ -446,6 +446,16 @@ verbatim and are not to be edited into summaries — this index points at them.
   control under dynamic scaling is `$31`; `$31` appears nowhere in `src/`. This is the assumed remedy for M4
   under-powering short segments, so it is load-bearing for the perforation question — belongs with the
   `$30`/`$32` settings work in the plan's Phase 2, gated on reading what the controller actually reports.
+- **Cross-object scan merging for duplicated engrave pieces** — when identical pieces are
+  copy-pasted side by side, each copy is a separate `CutObject` with its own raster scan,
+  lead-in/lead-out, and mode command. Merging same-layer engrave objects into one shared mask
+  would produce a single continuous sweep across all copies, with the rapid-gap optimization
+  (v0.8.30 Relay B) handling the whitespace between copies automatically. The dominant
+  efficiency win for batch production of engraved signs/parts. Owner-reported 2026-09-20:
+  three copies of an engrave+cut design produce three sequential engraving passes instead of
+  one continuous sweep. Independent of the remediation program; can land anytime after
+  Relay B. Natural home: a scan-region scheduler that composites same-layer CutObjects
+  before calling `scan_mask_to_gcode`.
 - **Centerline tracing** — requires a different algorithm (medial axis / skeleton), not achievable
   through vtracer. Deferred from the Phase 3A color tracing relay (stateless-jingling-lark plan).
 - **Custom font upload / system font picker** — Phase 2A bundles 4 fonts; a full font picker is
