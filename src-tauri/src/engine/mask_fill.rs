@@ -479,9 +479,8 @@ pub fn scan_mask_to_gcode<'a>(
                         &params.scan_motion,
                     );
 
-                    if use_rapid && params.scan_motion.is_some() {
+                    if let (true, Some(sm)) = (use_rapid, params.scan_motion.as_ref()) {
                         // Three-segment rapid gap: decel ramp + rapid center + accel ramp
-                        let sm = params.scan_motion.as_ref().unwrap();
                         let v_mm_s = params.speed_mm_min / 60.0;
                         let d = params.overscan.max(
                             1.2 * v_mm_s * v_mm_s / (2.0 * sm.acceleration_mm_s2)
