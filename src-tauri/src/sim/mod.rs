@@ -6,6 +6,7 @@
 //! Gated `#[cfg(any(test, feature = "sim"))]` from `lib.rs`: excluded from
 //! plain `cargo build`/release builds, included whenever running tests, and
 //! includable standalone via `--features sim` for Phase 2's demo connectable
-//! port (not wired up in this relay).
+//! port (now wired up in batch 0.1).
 
 pub mod grbl;
+pub mod scripted_port;

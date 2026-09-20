@@ -219,6 +219,85 @@ pub(crate) fn drain_startup_banner(channel: &mut CommandChannel) -> String {
     startup
 }
 
+/// Connect body: extracted for testability with injected sleeper.
+/// `sleeper` is `&dyn Fn(Duration)` so tests can pass no-op sleepers.
+pub(crate) fn serial_connect_inner(
+    inner: &SerialInner,
+    port_name: &str,
+    baud_rate: u32,
+    sleeper: &dyn Fn(Duration),
+) -> Result<String, String> {
+    // P1-C: already-connected guard — if a connection is live, disconnect
+    // first to prevent resource leaks. This handles rapid reconnect or
+    // StrictMode double-mount on the frontend.
+    if inner.connected.load(Ordering::SeqCst) {
+        let _ = disconnect_inner(inner);
+    }
+
+    let mut port = serialport::new(port_name, baud_rate)
+        .timeout(Duration::from_millis(1000))
+        .open()
+        .map_err(|e| format!("Failed to open port '{}': {}", port_name, e))?;
+
+    // Hardware-reset the GRBL controller via DTR toggle. Arduino boards
+    // connect DTR to RESET through a 100nF cap — the falling edge (assert)
+    // pulses the MCU reset line. Deassert first to guarantee an edge
+    // regardless of the adapter's initial DTR state.
+    let _ = port.write_data_terminal_ready(false);
+    sleeper(Duration::from_millis(50));
+    let _ = port.write_data_terminal_ready(true);
+    sleeper(Duration::from_millis(1500));
+
+    let realtime = port.try_clone().map_err(|e| e.to_string())?;
+    let reader_port = port.try_clone().map_err(|e| e.to_string())?;
+    let mut channel = CommandChannel {
+        writer: port,
+        reader: BufReader::new(reader_port),
+        pending: Vec::new(),
+    };
+
+    // Read the GRBL startup banner through THE persistent reader — no reader
+    // is ever constructed after connect.
+    let startup = drain_startup_banner(&mut channel);
+
+    // Soft-reset fallback for non-Arduino boards (STM32, ESP32, etc.)
+    // that lack the DTR-to-RESET capacitor circuit.
+    let _ = channel.writer.write_all(b"\x18");
+    let _ = channel.writer.flush();
+    sleeper(Duration::from_millis(500));
+    let soft_banner = drain_startup_banner(&mut channel);
+
+    // Prefer the hardware-reset banner; fall back to soft-reset banner.
+    let banner = if !startup.trim().is_empty() {
+        startup
+    } else {
+        soft_banner
+    };
+
+    // P1-C: store both channels in one critical section to prevent
+    // cross-wiring if two connects race. Lock order: command first,
+    // realtime second (same order as disconnect_inner teardown).
+    {
+        let mut cmd_guard = inner
+            .command
+            .lock()
+            .map_err(|e| format!("Lock failed: {}", e))?;
+        let mut rt_guard = inner
+            .realtime
+            .lock()
+            .map_err(|e| format!("Lock failed: {}", e))?;
+        *cmd_guard = Some(channel);
+        *rt_guard = Some(realtime);
+    }
+    inner.connected.store(true, Ordering::SeqCst);
+
+    if banner.trim().is_empty() {
+        Ok(format!("Connected to {} at {} baud", port_name, baud_rate))
+    } else {
+        Ok(banner.trim().to_string())
+    }
+}
+
 /// Connect to a serial port
 #[tauri::command]
 pub async fn serial_connect(
@@ -228,75 +307,7 @@ pub async fn serial_connect(
 ) -> Result<String, String> {
     let inner = state.0.clone();
     tokio::task::spawn_blocking(move || {
-        // P1-C: already-connected guard — if a connection is live, disconnect
-        // first to prevent resource leaks. This handles rapid reconnect or
-        // StrictMode double-mount on the frontend.
-        if inner.connected.load(Ordering::SeqCst) {
-            let _ = disconnect_inner(&inner);
-        }
-
-        let mut port = serialport::new(&port_name, baud_rate)
-            .timeout(Duration::from_millis(1000))
-            .open()
-            .map_err(|e| format!("Failed to open port '{}': {}", port_name, e))?;
-
-        // Hardware-reset the GRBL controller via DTR toggle. Arduino boards
-        // connect DTR to RESET through a 100nF cap — the falling edge (assert)
-        // pulses the MCU reset line. Deassert first to guarantee an edge
-        // regardless of the adapter's initial DTR state.
-        let _ = port.write_data_terminal_ready(false);
-        std::thread::sleep(Duration::from_millis(50));
-        let _ = port.write_data_terminal_ready(true);
-        std::thread::sleep(Duration::from_millis(1500));
-
-        let realtime = port.try_clone().map_err(|e| e.to_string())?;
-        let reader_port = port.try_clone().map_err(|e| e.to_string())?;
-        let mut channel = CommandChannel {
-            writer: port,
-            reader: BufReader::new(reader_port),
-            pending: Vec::new(),
-        };
-
-        // Read the GRBL startup banner through THE persistent reader — no reader
-        // is ever constructed after connect.
-        let startup = drain_startup_banner(&mut channel);
-
-        // Soft-reset fallback for non-Arduino boards (STM32, ESP32, etc.)
-        // that lack the DTR-to-RESET capacitor circuit.
-        let _ = channel.writer.write_all(b"\x18");
-        let _ = channel.writer.flush();
-        std::thread::sleep(Duration::from_millis(500));
-        let soft_banner = drain_startup_banner(&mut channel);
-
-        // Prefer the hardware-reset banner; fall back to soft-reset banner.
-        let banner = if !startup.trim().is_empty() {
-            startup
-        } else {
-            soft_banner
-        };
-
-        // P1-C: store both channels in one critical section to prevent
-        // cross-wiring if two connects race. Lock order: command first,
-        // realtime second (same order as disconnect_inner teardown).
-        {
-            let mut cmd_guard = inner
-                .command
-                .lock()
-                .map_err(|e| format!("Lock failed: {}", e))?;
-            let mut rt_guard = inner
-                .realtime
-                .lock()
-                .map_err(|e| format!("Lock failed: {}", e))?;
-            *cmd_guard = Some(channel);
-            *rt_guard = Some(realtime);
-        }
-        inner.connected.store(true, Ordering::SeqCst);
-
-        if banner.trim().is_empty() {
-            Ok(format!("Connected to {} at {} baud", port_name, baud_rate))
-        } else {
-            Ok(banner.trim().to_string())
-        }
+        serial_connect_inner(&inner, &port_name, baud_rate, &std::thread::sleep)
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
@@ -356,6 +367,58 @@ pub(crate) fn disconnect_inner_with_job(inner: &SerialInner, job_active: bool) -
     Ok(())
 }
 
+/// Send body: extracted for testability.
+pub(crate) fn serial_send_inner(
+    inner: &SerialInner,
+    command: &str,
+) -> Result<SendOutcome, String> {
+    let mut guard = inner
+        .command
+        .lock()
+        .map_err(|e| format!("Lock failed: {}", e))?;
+    let channel = guard.as_mut().ok_or("Not connected")?;
+    let _flight = PumpFlight::begin(&inner.pump_in_flight);
+
+    // Pre-write drain: classify anything already buffered (a banner left by an
+    // idle-time 0x18, an unsolicited ALARM, …) so it is never attributed to
+    // THIS command.
+    let drain = serial_pump::drain_classified(&mut channel.reader, &mut channel.pending);
+    for line in &drain.dropped {
+        eprintln!("[serial] drained stale line: {}", line);
+    }
+
+    let cmd = if command.ends_with('\n') {
+        command.to_string()
+    } else {
+        format!("{}\n", command)
+    };
+    channel
+        .writer
+        .write_all(cmd.as_bytes())
+        .map_err(|e| format!("Write error: {}", e))?;
+    channel
+        .writer
+        .flush()
+        .map_err(|e| format!("Flush error: {}", e))?;
+
+    match serial_pump::run_pump(
+        &mut channel.reader,
+        &mut channel.writer,
+        &mut channel.pending,
+        DEFAULT_LIVENESS_TICKS,
+        serial_pump::DEFAULT_IDLE_STALL_TICKS,
+    ) {
+        Ok(out) => Ok(SendOutcome {
+            responses: out.lines,
+            drained: drain.surfaced,
+        }),
+        // Err here surfaces as an invoke rejection; the frontend maps it to
+        // its existing "error:disconnected" contract.
+        Err(PumpFailure::Disconnected(msg)) => Err(format!("disconnected: {}", msg)),
+        Err(PumpFailure::Io(msg)) => Err(msg),
+    }
+}
+
 /// Send a command line and pump until a terminal response (`ok` / `error:N` /
 /// `ALARM…` / reset banner). See `serial_pump` for the protocol design.
 #[tauri::command]
@@ -364,55 +427,9 @@ pub async fn serial_send(
     command: String,
 ) -> Result<SendOutcome, String> {
     let inner = state.0.clone();
-    tokio::task::spawn_blocking(move || {
-        let mut guard = inner
-            .command
-            .lock()
-            .map_err(|e| format!("Lock failed: {}", e))?;
-        let channel = guard.as_mut().ok_or("Not connected")?;
-        let _flight = PumpFlight::begin(&inner.pump_in_flight);
-
-        // Pre-write drain: classify anything already buffered (a banner left by an
-        // idle-time 0x18, an unsolicited ALARM, …) so it is never attributed to
-        // THIS command.
-        let drain = serial_pump::drain_classified(&mut channel.reader, &mut channel.pending);
-        for line in &drain.dropped {
-            eprintln!("[serial] drained stale line: {}", line);
-        }
-
-        let cmd = if command.ends_with('\n') {
-            command.clone()
-        } else {
-            format!("{}\n", command)
-        };
-        channel
-            .writer
-            .write_all(cmd.as_bytes())
-            .map_err(|e| format!("Write error: {}", e))?;
-        channel
-            .writer
-            .flush()
-            .map_err(|e| format!("Flush error: {}", e))?;
-
-        match serial_pump::run_pump(
-            &mut channel.reader,
-            &mut channel.writer,
-            &mut channel.pending,
-            DEFAULT_LIVENESS_TICKS,
-            serial_pump::DEFAULT_IDLE_STALL_TICKS,
-        ) {
-            Ok(out) => Ok(SendOutcome {
-                responses: out.lines,
-                drained: drain.surfaced,
-            }),
-            // Err here surfaces as an invoke rejection; the frontend maps it to
-            // its existing "error:disconnected" contract.
-            Err(PumpFailure::Disconnected(msg)) => Err(format!("disconnected: {}", msg)),
-            Err(PumpFailure::Io(msg)) => Err(msg),
-        }
-    })
-    .await
-    .map_err(|e| format!("Task join error: {}", e))?
+    tokio::task::spawn_blocking(move || serial_send_inner(&inner, &command))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
 }
 
 /// Send a raw real-time byte (`!`, `~`, 0x18, `?`).
@@ -438,6 +455,37 @@ pub(crate) fn send_byte_inner(inner: &SerialInner, byte: u8) -> Result<(), Strin
     port.flush().map_err(|e| format!("Flush error: {}", e))
 }
 
+/// Status body: extracted for testability. Uses try_lock to avoid blocking.
+pub(crate) fn serial_get_status_inner(inner: &SerialInner) -> Result<StatusOutcome, String> {
+    let mut guard = match inner.command.try_lock() {
+        Ok(g) => g,
+        Err(TryLockError::WouldBlock) => {
+            // A pump is in flight: the port path is provably alive, so this is
+            // "no data", not a failure.
+            return Ok(StatusOutcome {
+                status: String::new(),
+                events: Vec::new(),
+            });
+        }
+        Err(TryLockError::Poisoned(e)) => return Err(format!("Lock failed: {}", e)),
+    };
+    let channel = guard.as_mut().ok_or("Not connected")?;
+
+    let read = serial_pump::read_status_bounded(
+        &mut channel.reader,
+        &mut channel.writer,
+        &mut channel.pending,
+        STATUS_MAX_TICKS,
+    )?;
+    for line in &read.dropped {
+        eprintln!("[serial] status junk-skip: {}", line);
+    }
+    Ok(StatusOutcome {
+        status: read.status.unwrap_or_default(),
+        events: read.surfaced,
+    })
+}
+
 /// Query GRBL status (writes `?`, reads until a `<…>` report, bounded).
 ///
 /// Uses `try_lock` on the command lock: the status poller fires every 250ms and a
@@ -446,37 +494,9 @@ pub(crate) fn send_byte_inner(inner: &SerialInner, byte: u8) -> Result<(), Strin
 #[tauri::command]
 pub async fn serial_get_status(state: State<'_, SerialState>) -> Result<StatusOutcome, String> {
     let inner = state.0.clone();
-    tokio::task::spawn_blocking(move || {
-        let mut guard = match inner.command.try_lock() {
-            Ok(g) => g,
-            Err(TryLockError::WouldBlock) => {
-                // A pump is in flight: the port path is provably alive, so this is
-                // "no data", not a failure.
-                return Ok(StatusOutcome {
-                    status: String::new(),
-                    events: Vec::new(),
-                });
-            }
-            Err(TryLockError::Poisoned(e)) => return Err(format!("Lock failed: {}", e)),
-        };
-        let channel = guard.as_mut().ok_or("Not connected")?;
-
-        let read = serial_pump::read_status_bounded(
-            &mut channel.reader,
-            &mut channel.writer,
-            &mut channel.pending,
-            STATUS_MAX_TICKS,
-        )?;
-        for line in &read.dropped {
-            eprintln!("[serial] status junk-skip: {}", line);
-        }
-        Ok(StatusOutcome {
-            status: read.status.unwrap_or_default(),
-            events: read.surfaced,
-        })
-    })
-    .await
-    .map_err(|e| format!("Task join error: {}", e))?
+    tokio::task::spawn_blocking(move || serial_get_status_inner(&inner))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
 }
 
 /// Check if connected (atomic read — cannot block, but still async so no serial
@@ -510,6 +530,129 @@ pub enum JobEvent {
     Finished { outcome: String },
 }
 
+/// Stream body: extracted for testability with injected event sink.
+/// `on_event` is `&dyn Fn(JobEvent)` so tests can record events without a Channel.
+pub(crate) fn serial_stream_job_inner(
+    inner: &SerialInner,
+    gcode: &str,
+    on_event: &dyn Fn(JobEvent),
+) -> Result<String, String> {
+    // Reset the abort flag at the start of every job.
+    inner.job_abort.store(false, Ordering::SeqCst);
+
+    let mut guard = inner
+        .command
+        .lock()
+        .map_err(|e| format!("Lock failed: {}", e))?;
+    let cmd_channel = guard.as_mut().ok_or("Not connected")?;
+    let _flight = PumpFlight::begin(&inner.pump_in_flight);
+
+    // $32=1 hard gate (DECISIONS.md pin). Send via the existing per-line
+    // pump so it gets a proper drain + terminal wait.
+    let drain = serial_pump::drain_classified(&mut cmd_channel.reader, &mut cmd_channel.pending);
+    for line in &drain.dropped {
+        eprintln!("[serial] stream job drained: {}", line);
+    }
+    for line in &drain.surfaced {
+        on_event(JobEvent::Console { text: line.clone() });
+    }
+
+    // Write $32=1
+    cmd_channel
+        .writer
+        .write_all(b"$32=1\n")
+        .map_err(|e| format!("Write error: {}", e))?;
+    cmd_channel
+        .writer
+        .flush()
+        .map_err(|e| format!("Flush error: {}", e))?;
+
+    match serial_pump::run_pump(
+        &mut cmd_channel.reader,
+        &mut cmd_channel.writer,
+        &mut cmd_channel.pending,
+        DEFAULT_LIVENESS_TICKS,
+        serial_pump::DEFAULT_IDLE_STALL_TICKS,
+    ) {
+        Ok(out) => {
+            let has_ok = out.lines.iter().any(|l| l == "ok");
+            if !has_ok {
+                return Err(format!(
+                    "$32=1 gate failed: {:?}",
+                    out.lines
+                ));
+            }
+        }
+        Err(PumpFailure::Disconnected(msg)) => return Err(format!("disconnected: {}", msg)),
+        Err(PumpFailure::Io(msg)) => return Err(msg),
+    }
+
+    // Parse G-code lines (same filtering as the TS per-line path).
+    let lines: Vec<String> = gcode
+        .split('\n')
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty() && !l.starts_with(';'))
+        .collect();
+
+    if lines.is_empty() {
+        on_event(JobEvent::Finished {
+            outcome: "complete".to_string(),
+        });
+        return Ok("complete".to_string());
+    }
+
+    // Drain again before the buffered pump starts.
+    let drain = serial_pump::drain_classified(&mut cmd_channel.reader, &mut cmd_channel.pending);
+    for line in &drain.surfaced {
+        on_event(JobEvent::Console { text: line.clone() });
+    }
+
+    let config = BufferedPumpConfig::default();
+
+    let result = serial_pump::run_buffered_pump(
+        &lines,
+        &mut cmd_channel.reader,
+        &mut cmd_channel.writer,
+        &mut cmd_channel.pending,
+        &config,
+        &inner.job_abort,
+        &|event| {
+            match event {
+                BufferedPumpEvent::LineSent { line_index, total } => {
+                    on_event(JobEvent::Progress { line_index, total });
+                }
+                BufferedPumpEvent::ConsoleMessage(text) => {
+                    on_event(JobEvent::Console { text });
+                }
+                BufferedPumpEvent::StatusReport(report) => {
+                    on_event(JobEvent::Status { report });
+                }
+            }
+        },
+    );
+
+    let outcome_str = match &result {
+        Ok(BufferedPumpOutcome::Complete) => "complete".to_string(),
+        Ok(BufferedPumpOutcome::Cancelled) => "cancelled".to_string(),
+        Ok(BufferedPumpOutcome::Error { error_text, .. }) => format!("error: {}", error_text),
+        Ok(BufferedPumpOutcome::Alarm { alarm_text }) => format!("alarm: {}", alarm_text),
+        Ok(BufferedPumpOutcome::Aborted) => "aborted".to_string(),
+        Ok(BufferedPumpOutcome::Disconnected(msg)) => format!("disconnected: {}", msg),
+        Err(PumpFailure::Disconnected(msg)) => format!("disconnected: {}", msg),
+        Err(PumpFailure::Io(msg)) => format!("io error: {}", msg),
+    };
+
+    on_event(JobEvent::Finished {
+        outcome: outcome_str.clone(),
+    });
+
+    match result {
+        Ok(_) => Ok(outcome_str),
+        Err(PumpFailure::Disconnected(msg)) => Err(format!("disconnected: {}", msg)),
+        Err(PumpFailure::Io(msg)) => Err(msg),
+    }
+}
+
 /// Stream a G-code job using the buffered (character-counting) pump.
 ///
 /// The command lock is held for the ENTIRE job (same as per-line `serial_send`
@@ -527,127 +670,11 @@ pub async fn serial_stream_job(
 ) -> Result<String, String> {
     let inner = state.0.clone();
     tokio::task::spawn_blocking(move || {
-        // Reset the abort flag at the start of every job.
-        inner.job_abort.store(false, Ordering::SeqCst);
-
-        let mut guard = inner
-            .command
-            .lock()
-            .map_err(|e| format!("Lock failed: {}", e))?;
-        let cmd_channel = guard.as_mut().ok_or("Not connected")?;
-        let _flight = PumpFlight::begin(&inner.pump_in_flight);
-
-        // $32=1 hard gate (DECISIONS.md pin). Send via the existing per-line
-        // pump so it gets a proper drain + terminal wait.
-        let drain = serial_pump::drain_classified(&mut cmd_channel.reader, &mut cmd_channel.pending);
-        for line in &drain.dropped {
-            eprintln!("[serial] stream job drained: {}", line);
-        }
-        for line in &drain.surfaced {
-            if let Err(e) = channel.send(JobEvent::Console { text: line.clone() }) {
-                eprintln!("[serial] channel.send failed (drain console): {e}");
+        serial_stream_job_inner(&inner, &gcode, &|event| {
+            if let Err(e) = channel.send(event) {
+                eprintln!("[serial] channel.send failed: {e}");
             }
-        }
-
-        // Write $32=1
-        cmd_channel
-            .writer
-            .write_all(b"$32=1\n")
-            .map_err(|e| format!("Write error: {}", e))?;
-        cmd_channel
-            .writer
-            .flush()
-            .map_err(|e| format!("Flush error: {}", e))?;
-
-        match serial_pump::run_pump(
-            &mut cmd_channel.reader,
-            &mut cmd_channel.writer,
-            &mut cmd_channel.pending,
-            DEFAULT_LIVENESS_TICKS,
-            serial_pump::DEFAULT_IDLE_STALL_TICKS,
-        ) {
-            Ok(out) => {
-                let has_ok = out.lines.iter().any(|l| l == "ok");
-                if !has_ok {
-                    return Err(format!(
-                        "$32=1 gate failed: {:?}",
-                        out.lines
-                    ));
-                }
-            }
-            Err(PumpFailure::Disconnected(msg)) => return Err(format!("disconnected: {}", msg)),
-            Err(PumpFailure::Io(msg)) => return Err(msg),
-        }
-
-        // Parse G-code lines (same filtering as the TS per-line path).
-        let lines: Vec<String> = gcode
-            .split('\n')
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty() && !l.starts_with(';'))
-            .collect();
-
-        if lines.is_empty() {
-            if let Err(e) = channel.send(JobEvent::Finished {
-                outcome: "complete".to_string(),
-            }) { eprintln!("[serial] channel.send failed (empty finish): {e}"); }
-            return Ok("complete".to_string());
-        }
-
-        // Drain again before the buffered pump starts.
-        let drain = serial_pump::drain_classified(&mut cmd_channel.reader, &mut cmd_channel.pending);
-        for line in &drain.surfaced {
-            if let Err(e) = channel.send(JobEvent::Console { text: line.clone() }) {
-                eprintln!("[serial] channel.send failed (pre-pump console): {e}");
-            }
-        }
-
-        let config = BufferedPumpConfig::default();
-
-        let result = serial_pump::run_buffered_pump(
-            &lines,
-            &mut cmd_channel.reader,
-            &mut cmd_channel.writer,
-            &mut cmd_channel.pending,
-            &config,
-            &inner.job_abort,
-            &|event| {
-                let result = match event {
-                    BufferedPumpEvent::LineSent { line_index, total } => {
-                        channel.send(JobEvent::Progress { line_index, total })
-                    }
-                    BufferedPumpEvent::ConsoleMessage(text) => {
-                        channel.send(JobEvent::Console { text })
-                    }
-                    BufferedPumpEvent::StatusReport(report) => {
-                        channel.send(JobEvent::Status { report })
-                    }
-                };
-                if let Err(e) = result {
-                    eprintln!("[serial] channel.send failed (pump event): {e}");
-                }
-            },
-        );
-
-        let outcome_str = match &result {
-            Ok(BufferedPumpOutcome::Complete) => "complete".to_string(),
-            Ok(BufferedPumpOutcome::Cancelled) => "cancelled".to_string(),
-            Ok(BufferedPumpOutcome::Error { error_text, .. }) => format!("error: {}", error_text),
-            Ok(BufferedPumpOutcome::Alarm { alarm_text }) => format!("alarm: {}", alarm_text),
-            Ok(BufferedPumpOutcome::Aborted) => "aborted".to_string(),
-            Ok(BufferedPumpOutcome::Disconnected(msg)) => format!("disconnected: {}", msg),
-            Err(PumpFailure::Disconnected(msg)) => format!("disconnected: {}", msg),
-            Err(PumpFailure::Io(msg)) => format!("io error: {}", msg),
-        };
-
-        if let Err(e) = channel.send(JobEvent::Finished {
-            outcome: outcome_str.clone(),
-        }) { eprintln!("[serial] channel.send failed (finished): {e}"); }
-
-        match result {
-            Ok(_) => Ok(outcome_str),
-            Err(PumpFailure::Disconnected(msg)) => Err(format!("disconnected: {}", msg)),
-            Err(PumpFailure::Io(msg)) => Err(msg),
-        }
+        })
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
