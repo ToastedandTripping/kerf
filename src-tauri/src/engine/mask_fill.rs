@@ -242,7 +242,8 @@ pub fn scan_mask_to_gcode<'a>(
     // X is always explicit.
     let mut modal_f: Option<f64> = None;
     // Initial modal Y value — will be overwritten by the first G0's Y before any G1.
-    let mut modal_y_str: String = String::new();
+    #[allow(unused_assignments)]
+    let mut modal_y_str = String::new();
     let mut mode_emitted = false; // F4: emit M3/M4 S0 once before the first nonempty row
 
     /// Map a grayscale pixel value to its integer S token.
@@ -257,11 +258,7 @@ pub fn scan_mask_to_gcode<'a>(
         }
         let fraction = (255 - pixel) as f64 / 255.0;
         let s_val = s_min + fraction * (s_max - s_min);
-        let rounded = s_val.round() as i64;
-        // S0 rounding rule: a pixel whose interpolated S rounds to 0 is a gap
-        // boundary (unpowered), not a powered G1 S0 — under M3, S0 still fires
-        // at the $31 minimum, so emitting G1 S0 in a white region is incorrect.
-        rounded
+        s_val.round() as i64
     }
 
     /// Format a G1 move with modal field optimization.
@@ -2222,6 +2219,7 @@ G1 X0.818 Y199.061 S0";
     /// Tracks modal state exactly as GRBL does — fields not on the line retain
     /// their last-set value. Returns a list of resolved moves for comparison.
     #[derive(Debug, Clone)]
+    #[allow(dead_code)]
     struct InterpretedMove {
         g: i32, // 0 or 1
         x: f64,
@@ -2251,8 +2249,8 @@ G1 X0.818 Y199.061 S0";
                 cur_mode = line[..2].to_string();
                 // Parse S from the mode line
                 for token in line.split_whitespace() {
-                    if token.starts_with('S') {
-                        if let Ok(v) = token[1..].parse::<f64>() {
+                    if let Some(rest) = token.strip_prefix('S') {
+                        if let Ok(v) = rest.parse::<f64>() {
                             cur_s = v.round() as i64;
                         }
                     }
@@ -2273,14 +2271,14 @@ G1 X0.818 Y199.061 S0";
             if is_g1 { cur_g = 1; }
 
             for token in line.split_whitespace() {
-                if token.starts_with('X') {
-                    if let Ok(v) = token[1..].parse::<f64>() { cur_x = v; }
-                } else if token.starts_with('Y') {
-                    if let Ok(v) = token[1..].parse::<f64>() { cur_y = v; }
-                } else if token.starts_with('F') {
-                    if let Ok(v) = token[1..].parse::<f64>() { cur_f = v; }
-                } else if token.starts_with('S') {
-                    if let Ok(v) = token[1..].parse::<f64>() { cur_s = v.round() as i64; }
+                if let Some(rest) = token.strip_prefix('X') {
+                    if let Ok(v) = rest.parse::<f64>() { cur_x = v; }
+                } else if let Some(rest) = token.strip_prefix('Y') {
+                    if let Ok(v) = rest.parse::<f64>() { cur_y = v; }
+                } else if let Some(rest) = token.strip_prefix('F') {
+                    if let Ok(v) = rest.parse::<f64>() { cur_f = v; }
+                } else if let Some(rest) = token.strip_prefix('S') {
+                    if let Ok(v) = rest.parse::<f64>() { cur_s = v.round() as i64; }
                 }
             }
 
