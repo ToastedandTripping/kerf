@@ -1072,6 +1072,177 @@ mod tests {
         assert!(!inner.connected.load(Ordering::SeqCst));
     }
 
+    // ─── Batch 0.1 invariant pins ──────────────────────────────────────────
+
+    /// PIN 2: status body uses try_lock, not lock — calling it while the
+    /// command lock is held returns the empty-string sentinel without blocking.
+    /// If someone changes try_lock to lock, this test deadlocks and times out.
+    /// This is the property that DECISIONS.md "0x9E is a toggle" documents:
+    /// the Hold:0 poll could never succeed because the pump holds the lock.
+    #[test]
+    fn pin_status_try_lock_returns_empty_when_busy() {
+        let port: Box<dyn SerialPort> = Box::new(MockPort::new());
+        let reader_port: Box<dyn SerialPort> = Box::new(MockPort::new());
+        let inner = Arc::new(SerialInner {
+            command: Mutex::new(Some(CommandChannel {
+                writer: port,
+                reader: BufReader::new(reader_port),
+                pending: Vec::new(),
+            })),
+            realtime: Mutex::new(None),
+            connected: AtomicBool::new(true),
+            pump_in_flight: AtomicBool::new(true),
+            job_abort: AtomicBool::new(false),
+        });
+
+        let _guard = inner.command.lock().unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let inner2 = inner.clone();
+        thread::spawn(move || {
+            let result = serial_get_status_inner(&inner2);
+            let _ = tx.send(result);
+        });
+
+        let result = rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("status must return immediately via try_lock, not block");
+        let outcome = result.unwrap();
+        assert!(
+            outcome.status.is_empty(),
+            "busy sentinel must be an empty status string; got {:?}",
+            outcome.status
+        );
+    }
+
+    /// PIN 1: send body holds PumpFlight for its entire duration. The RAII
+    /// guard in serial_send_inner sets pump_in_flight=true, so a concurrent
+    /// disconnect will see it and send 0x18. We verify the flag is set by
+    /// checking it from inside a slow-read port (SlowMockPort blocks read
+    /// for 200ms per call so the send body is still in-flight when we check).
+    #[test]
+    fn pin_send_holds_pump_flight_during_execution() {
+        struct SlowMockPort { written: Arc<Mutex<Vec<u8>>> }
+        impl SlowMockPort {
+            fn new(written: Arc<Mutex<Vec<u8>>>) -> Self { Self { written } }
+        }
+        impl std::io::Read for SlowMockPort {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                std::thread::sleep(Duration::from_millis(200));
+                Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "slow mock"))
+            }
+        }
+        impl std::io::Write for SlowMockPort {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.written.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        impl SerialPort for SlowMockPort {
+            fn name(&self) -> Option<String> { Some("slow".to_string()) }
+            fn baud_rate(&self) -> serialport::Result<u32> { Ok(115200) }
+            fn data_bits(&self) -> serialport::Result<serialport::DataBits> { Ok(serialport::DataBits::Eight) }
+            fn flow_control(&self) -> serialport::Result<serialport::FlowControl> { Ok(serialport::FlowControl::None) }
+            fn parity(&self) -> serialport::Result<serialport::Parity> { Ok(serialport::Parity::None) }
+            fn stop_bits(&self) -> serialport::Result<serialport::StopBits> { Ok(serialport::StopBits::One) }
+            fn timeout(&self) -> Duration { Duration::from_millis(1000) }
+            fn set_baud_rate(&mut self, _: u32) -> serialport::Result<()> { Ok(()) }
+            fn set_data_bits(&mut self, _: serialport::DataBits) -> serialport::Result<()> { Ok(()) }
+            fn set_flow_control(&mut self, _: serialport::FlowControl) -> serialport::Result<()> { Ok(()) }
+            fn set_parity(&mut self, _: serialport::Parity) -> serialport::Result<()> { Ok(()) }
+            fn set_stop_bits(&mut self, _: serialport::StopBits) -> serialport::Result<()> { Ok(()) }
+            fn set_timeout(&mut self, _: Duration) -> serialport::Result<()> { Ok(()) }
+            fn write_request_to_send(&mut self, _: bool) -> serialport::Result<()> { Ok(()) }
+            fn write_data_terminal_ready(&mut self, _: bool) -> serialport::Result<()> { Ok(()) }
+            fn read_clear_to_send(&mut self) -> serialport::Result<bool> { Ok(false) }
+            fn read_data_set_ready(&mut self) -> serialport::Result<bool> { Ok(false) }
+            fn read_ring_indicator(&mut self) -> serialport::Result<bool> { Ok(false) }
+            fn read_carrier_detect(&mut self) -> serialport::Result<bool> { Ok(false) }
+            fn bytes_to_read(&self) -> serialport::Result<u32> { Ok(0) }
+            fn bytes_to_write(&self) -> serialport::Result<u32> { Ok(0) }
+            fn clear(&self, _: serialport::ClearBuffer) -> serialport::Result<()> { Ok(()) }
+            fn try_clone(&self) -> serialport::Result<Box<dyn SerialPort>> {
+                Ok(Box::new(SlowMockPort::new(self.written.clone())))
+            }
+            fn set_break(&self) -> serialport::Result<()> { Ok(()) }
+            fn clear_break(&self) -> serialport::Result<()> { Ok(()) }
+        }
+
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let port: Box<dyn SerialPort> = Box::new(SlowMockPort::new(written.clone()));
+        let reader_port: Box<dyn SerialPort> = Box::new(SlowMockPort::new(Arc::new(Mutex::new(Vec::new()))));
+        let rt_written = Arc::new(Mutex::new(Vec::new()));
+        let inner = Arc::new(SerialInner {
+            command: Mutex::new(Some(CommandChannel {
+                writer: port,
+                reader: BufReader::new(reader_port),
+                pending: Vec::new(),
+            })),
+            realtime: Mutex::new(Some(
+                Box::new(MockPort::shared(rt_written.clone())) as Box<dyn SerialPort>
+            )),
+            connected: AtomicBool::new(true),
+            pump_in_flight: AtomicBool::new(false),
+            job_abort: AtomicBool::new(false),
+        });
+
+        let inner2 = inner.clone();
+        let _send_handle = thread::spawn(move || {
+            let _ = serial_send_inner(&inner2, "G0 X10");
+        });
+
+        thread::sleep(Duration::from_millis(50));
+
+        assert!(
+            inner.pump_in_flight.load(Ordering::SeqCst),
+            "pump_in_flight must be true while serial_send_inner is parked on a slow read"
+        );
+    }
+
+    /// PIN 3: stream body writes $32=1 as its very first line command.
+    /// If someone removes the $32=1 write, this test fails. With $32=0, GRBL
+    /// does not blank the beam during G0 rapids — beam fires across travel moves.
+    /// The MockPort times out on reads so the pump returns Disconnected after the
+    /// $32=1 write, and we can observe the write in the buffer.
+    #[test]
+    fn pin_stream_writes_dollar32_first() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let port: Box<dyn SerialPort> = Box::new(MockPort::shared(written.clone()));
+        let reader_port: Box<dyn SerialPort> = Box::new(MockPort::new());
+        let inner = SerialInner {
+            command: Mutex::new(Some(CommandChannel {
+                writer: port,
+                reader: BufReader::new(reader_port),
+                pending: Vec::new(),
+            })),
+            realtime: Mutex::new(None),
+            connected: AtomicBool::new(true),
+            pump_in_flight: AtomicBool::new(false),
+            job_abort: AtomicBool::new(false),
+        };
+
+        let result = serial_stream_job_inner(
+            &inner,
+            "G0 X10\nG1 X20 F1000 S500\n",
+            &|_evt| {},
+        );
+
+        assert!(result.is_err(), "stream should fail (MockPort returns no ack for $32=1)");
+
+        let bytes = written.lock().unwrap();
+        let written_str = String::from_utf8_lossy(&bytes);
+        assert!(
+            written_str.starts_with("$32=1\n"),
+            "first write must be $32=1\\n; got: {:?}", written_str
+        );
+    }
+
+    // PIN 4: connect body writes exactly one 0x18 soft-reset. This pin cannot
+    // be tested without a port factory injection (serial_connect_inner calls
+    // serialport::new().open() directly). Routed to the Tauri test-port smoke.
+    // Tracked as UNPROVEN in this batch per the plan.
+
     /// P1-C: already-connected guard — calling serial_connect on a connected
     /// inner should disconnect first. Verified via the connected flag lifecycle.
     #[test]

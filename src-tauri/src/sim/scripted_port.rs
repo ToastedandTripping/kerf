@@ -21,9 +21,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::collections::VecDeque;
 
+#[allow(dead_code)]
 /// A single step in the scripted read sequence.
 #[derive(Debug, Clone)]
-enum ScriptStep {
+pub(crate) enum ScriptStep {
     /// Return this data, possibly chunked across multiple read() calls.
     Data(&'static [u8]),
     /// Return TimedOut on the next read() that finds no data already buffered.
@@ -32,6 +33,7 @@ enum ScriptStep {
     Error(String),
 }
 
+#[allow(dead_code)]
 /// A single I/O event in the ordered trace.
 #[derive(Debug, Clone)]
 pub enum TraceEvent {
@@ -47,6 +49,7 @@ pub enum TraceEvent {
     ReadData { bytes: usize },
 }
 
+#[allow(dead_code)]
 /// Which handle role issued an I/O event (for invariant checking).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandleRole {
@@ -55,6 +58,7 @@ pub enum HandleRole {
     Realtime,
 }
 
+#[allow(dead_code)]
 /// Shared state behind all clones of a ScriptedPort.
 struct Brain {
     /// Remaining script steps in order.
@@ -67,15 +71,16 @@ struct Brain {
     trace: Vec<TraceEvent>,
 }
 
+#[allow(dead_code)]
 /// A deterministic test port with scripted reads and ordered trace.
 pub struct ScriptedPort {
     brain: Arc<Mutex<Brain>>,
     role: HandleRole,
 }
 
+#[allow(dead_code)]
 impl ScriptedPort {
     /// Create a new scripted port from a sequence of read response steps.
-    /// Example: `vec![ScriptStep::Data(b"ok\n"), ScriptStep::Timeout, ...]`
     pub fn new(script: Vec<ScriptStep>) -> Self {
         Self {
             brain: Arc::new(Mutex::new(Brain {
@@ -150,7 +155,7 @@ impl Read for ScriptedPort {
                     return Err(io::Error::new(io::ErrorKind::TimedOut, "script timeout"));
                 }
                 Some(ScriptStep::Error(msg)) => {
-                    return Err(io::Error::new(io::ErrorKind::Other, msg));
+                    return Err(io::Error::other(msg));
                 }
                 None => {
                     // Script exhausted — return EOF.
