@@ -91,7 +91,9 @@ v0.8.30 tagged and pushed: engrave efficiency Relays A+B (pixel compression, mod
 
 Remediation batch 0.1 COMPLETE: four command bodies extracted, ScriptedPort infrastructure, three invariant pins. Razor PASS (0W/4N). 260 Rust tests.
 
-Next: batch 0.2 (test actual buttons + async continuations), then charter amendment decision.
+Batch 0.2 (test buttons + async continuations) COMPLETE: unified recorder, STOP dispatch test (0x21→0x18 byte order), it.fails cross-job corruption (R4/R11), recorder self-test, deferred-callback test. Razor PASS (1W fixed, 3N). 768 JS tests (767 pass + 1 expected fail).
+
+Next: Phase 0 exit — both harness batches done. Phase 1 (one owner, one stop, truthful observation) is next but BLOCKED on Decision "Abort policy" for batches 1.1/1.5. Charter amendment decision also pending.
 
 ### 2026-09-10
 
