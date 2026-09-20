@@ -9,6 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../../app/store";
 import { DEFAULT_LAYERS } from "../../../app/types";
 import { machineConnection, _testResetPollFailures } from "../connection";
+import { SerialTraceRecorder } from "../../../lib/machine/__tests__/serialTraceHarness";
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>;
 
@@ -38,6 +39,8 @@ function consoleLine(text: string) {
   return useStore.getState().consoleLines.find((l) => l.text === text);
 }
 
+let recorder: SerialTraceRecorder;
+
 describe("connection.ts (TN3)", () => {
   beforeEach(() => {
     _testResetPollFailures();
@@ -46,8 +49,11 @@ describe("connection.ts (TN3)", () => {
     seedConnectedStore();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
+    if (recorder) {
+      await recorder.dispose();
+    }
   });
 
   // TN3a — GRBL status-report regex parsing
@@ -539,6 +545,44 @@ describe("connection.ts (TN3)", () => {
 
       // E-stop fires even when jobRunning is false (machine is in hold)
       expect(calls.some((c) => c.startsWith("byte("))).toBe(true);
+    });
+  });
+
+  // ---- Recorder self-test: cross-channel order preservation ----
+  describe("SerialTraceRecorder — order preservation", () => {
+    it("preserves cross-channel order (bytes before/after sends)", async () => {
+      vi.useFakeTimers();
+      const onSend = () => ({ responses: ["ok"], drained: [] });
+      recorder = new SerialTraceRecorder(onSend);
+      mockInvoke.mockImplementation(recorder.handler);
+
+      // Simulate emergencyStop sequence: 0x21, (sleep 100ms), 0x18, (sleep 200ms), status, M5
+      await recorder.handler("serial_send_byte", { byte: 0x21 });
+      await vi.advanceTimersByTimeAsync(100);
+      await recorder.handler("serial_send_byte", { byte: 0x18 });
+      await vi.advanceTimersByTimeAsync(200);
+      await recorder.handler("serial_get_status", {});
+      await recorder.handler("serial_send", { command: "M5" });
+
+      // Verify order: all records in sequence
+      const records = recorder.allRecords();
+      expect(records.length).toBeGreaterThanOrEqual(4);
+      expect(records[0].command).toBe("serial_send_byte");
+      expect(records[0].args.byte).toBe(0x21);
+      expect(records[1].command).toBe("serial_send_byte");
+      expect(records[1].args.byte).toBe(0x18);
+      expect(records[2].command).toBe("serial_get_status");
+      expect(records[3].command).toBe("serial_send");
+      expect(records[3].args.command).toBe("M5");
+
+      // Derived views must preserve the same order
+      const bytes = recorder.sentBytes();
+      expect(bytes[0]).toBe(0x21);
+      expect(bytes[1]).toBe(0x18);
+      const commands = recorder.sentCommands();
+      expect(commands.some((c) => c === "M5")).toBe(true);
+
+      vi.useRealTimers();
     });
   });
 

@@ -15,7 +15,7 @@
  *  - FRAME uses machine-frame moves extents (Y-flip DELETED), requires fresh
  *    G-code, and no-ops on empty moves instead of sending G0 XInfinity
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -30,6 +30,7 @@ import { JobActionBar } from "../JobActionBar";
 import { MachinePanel } from "../MachinePanel";
 import { streamJob, pauseJob, resumeJob } from "../../../lib/machine/jobStream";
 import { machineConnection } from "../../../lib/machine/connection";
+import { SerialTraceRecorder } from "../../../lib/machine/__tests__/serialTraceHarness";
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>;
 
@@ -82,36 +83,40 @@ function consoleTexts(): string[] {
   return useStore.getState().consoleLines.map((l) => l.text);
 }
 
+let recorder: SerialTraceRecorder;
+
 /** All serial_send commands the mock received, in order. */
 function sentCommands(): string[] {
-  return mockInvoke.mock.calls
-    .filter(([cmd]) => cmd === "serial_send")
-    .map(([, args]) => (args as { command: string }).command);
+  return recorder.sentCommands();
 }
 
 function sentBytes(): number[] {
-  return mockInvoke.mock.calls
-    .filter(([cmd]) => cmd === "serial_send_byte")
-    .map(([, args]) => (args as { byte: number }).byte);
+  return recorder.sentBytes();
 }
 
 /** Default mock: list_serial_ports + get_status handled; per-command send hook. */
 let _mockHoldActive = false;
 function mockSerial(onSend: (command: string) => { responses: string[]; drained: string[] }) {
   _mockHoldActive = false;
+  recorder = new SerialTraceRecorder(onSend);
+
   mockInvoke.mockImplementation(async (cmd: string, args?: { command?: string; byte?: number }) => {
-    if (cmd === "list_serial_ports") return [];
-    if (cmd === "serial_get_status") {
-      if (_mockHoldActive) return { status: "<Hold:0|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
-      return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
-    }
+    // Handle hold state tracking
     if (cmd === "serial_send_byte") {
       if (args?.byte === 0x21) _mockHoldActive = true;
       if (args?.byte === 0x7e) _mockHoldActive = false;
-      return undefined;
     }
-    if (cmd === "serial_send") return onSend(args!.command!);
-    return undefined;
+
+    // For serial_get_status, use hold state
+    if (cmd === "serial_get_status") {
+      const result = _mockHoldActive
+        ? { status: "<Hold:0|MPos:0.000,0.000,0.000|FS:0,0>", events: [] }
+        : { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
+      return result;
+    }
+
+    // Use recorder for everything else
+    return recorder.handler(cmd, args);
   });
 }
 
@@ -121,6 +126,12 @@ describe("MachinePanel job loop (F13/F17)", () => {
     mockInvoke.mockReset();
     localStorage.clear();
     seedReadyToStart();
+  });
+
+  afterEach(async () => {
+    if (recorder) {
+      await recorder.dispose();
+    }
   });
 
   it("completes a job when every line acks", async () => {
@@ -184,9 +195,10 @@ describe("MachinePanel job loop (F13/F17)", () => {
     expect(sentBytes()).not.toContain(0x18);
   });
 
-  it("skips the abort volley when the user pressed STOP (emergencyStop owns it)", async () => {
+  it("stores skip abort volley guard: jobRunning false prevents loop volley (store-only check)", async () => {
     // Simulate handleStop firing mid-line: jobRunning goes false and the pump
     // returns the e-stop's reset banner for the in-flight line.
+    // This test verifies the store-side gate only, not dispatch of emergencyStop bytes.
     mockSerial((cmd) => {
       if (cmd.startsWith("G1")) {
         useStore.setState({ jobRunning: false }); // what handleStop does first
@@ -203,8 +215,9 @@ describe("MachinePanel job loop (F13/F17)", () => {
     expect(sentBytes()).not.toContain(0x18);
   });
 
-  it("STOP while PAUSED sends NO further line (e-stop re-poll leaves hold)", async () => {
+  it("stores hold-wait exit guard: jobRunning false un-parks hold even without state change (store-only check)", async () => {
     // PAUSE arrives right after line 1 acks: the mock parks the loop in hold.
+    // This test verifies the store-side hold-wait gate only.
     mockSerial((cmd) => {
       if (cmd === "G1 X10 Y20") {
         useStore.setState({ machineState: "hold" });
@@ -260,6 +273,31 @@ describe("MachinePanel job loop (F13/F17)", () => {
     await waitFor(() => expect(consoleTexts()).toContain("Job stopped due to error"));
     await waitFor(() => expect(sentCommands()).toContain("M5"));
   });
+
+  it("STOP click dispatches emergencyStop byte sequence (0x21 then 0x18)", async () => {
+    vi.useFakeTimers();
+    mockSerial(() => ({ responses: ["ok"], drained: [] }));
+    useStore.setState({ jobRunning: true }); // Simulate a running job
+    const { getByText } = render(<JobActionBar />);
+
+    fireEvent.click(getByText("STOP"));
+    await vi.runAllTimersAsync();
+
+    // The STOP button calls handleStop which sets jobRunning=false
+    // and then calls emergencyStop(). The byte sequence must be:
+    // 1. 0x21 (feed hold)
+    // 2. (100ms sleep)
+    // 3. 0x18 (soft reset)
+    // 4. (200ms sleep)
+    // 5. serial_get_status (re-poll)
+    // 6. conditional M5
+    const bytes = sentBytes();
+    expect(bytes.length).toBeGreaterThanOrEqual(2);
+    expect(bytes[0]).toBe(0x21); // Feed hold comes first
+    expect(bytes[1]).toBe(0x18); // Soft reset comes second
+
+    vi.useRealTimers();
+  });
 });
 
 describe("MachinePanel START/FRAME gating (F15)", () => {
@@ -268,6 +306,12 @@ describe("MachinePanel START/FRAME gating (F15)", () => {
     mockInvoke.mockReset();
     localStorage.clear();
     seedReadyToStart();
+  });
+
+  afterEach(async () => {
+    if (recorder) {
+      await recorder.dispose();
+    }
   });
 
   it("disables START with the regenerate hint when G-code is stale", () => {
@@ -354,6 +398,12 @@ describe("MachinePanel Fire button (F17 Fix 2.3)", () => {
     seedReadyToStart();
   });
 
+  afterEach(async () => {
+    if (recorder) {
+      await recorder.dispose();
+    }
+  });
+
   it("sends three sequential commands instead of one 3-line blob", async () => {
     mockSerial(() => ({ responses: ["ok"], drained: [] }));
     const { getByText } = render(<MachinePanel />);
@@ -382,6 +432,12 @@ describe("streamJob FRAME abort protocol (P1-A)", () => {
     seedReadyToStart();
     // Pre-set jobRunning as the caller (handleFrame) would
     useStore.setState({ jobRunning: true, jobProgress: 0 });
+  });
+
+  afterEach(async () => {
+    if (recorder) {
+      await recorder.dispose();
+    }
   });
 
   it("aborts FRAME on empty response (protocol failure)", async () => {
@@ -445,6 +501,12 @@ describe("streamJob material-test abort protocol (P1-A)", () => {
     useStore.setState({ jobRunning: true, jobProgress: 0 });
   });
 
+  afterEach(async () => {
+    if (recorder) {
+      await recorder.dispose();
+    }
+  });
+
   it("aborts material test on empty response (protocol failure)", async () => {
     mockSerial((cmd) =>
       cmd.startsWith("G1") ? { responses: [], drained: [] } : { responses: ["ok"], drained: [] }
@@ -506,6 +568,12 @@ describe("pauseJob / resumeJob volley contract (P1-B A1)", () => {
     mockInvoke.mockReset();
     localStorage.clear();
     seedReadyToStart();
+  });
+
+  afterEach(async () => {
+    if (recorder) {
+      await recorder.dispose();
+    }
   });
 
   it("pauseJob emits [! (0x21)] only — feed hold, no 0x9E toggle", async () => {
@@ -586,6 +654,13 @@ describe("emergencyStop edge cases (P1-B A6)", () => {
     mockInvoke.mockReset();
     localStorage.clear();
     seedReadyToStart();
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    if (recorder) {
+      await recorder.dispose();
+    }
   });
 
   it("retries 0x18 once when feedHold sent but reset failed, then completes", async () => {
