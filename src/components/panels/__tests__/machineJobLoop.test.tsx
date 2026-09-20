@@ -129,6 +129,7 @@ describe("MachinePanel job loop (F13/F17)", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     if (recorder) {
       await recorder.dispose();
     }
@@ -309,6 +310,7 @@ describe("MachinePanel START/FRAME gating (F15)", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     if (recorder) {
       await recorder.dispose();
     }
@@ -399,6 +401,7 @@ describe("MachinePanel Fire button (F17 Fix 2.3)", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     if (recorder) {
       await recorder.dispose();
     }
@@ -435,6 +438,7 @@ describe("streamJob FRAME abort protocol (P1-A)", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     if (recorder) {
       await recorder.dispose();
     }
@@ -502,6 +506,7 @@ describe("streamJob material-test abort protocol (P1-A)", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     if (recorder) {
       await recorder.dispose();
     }
@@ -571,6 +576,7 @@ describe("pauseJob / resumeJob volley contract (P1-B A1)", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     if (recorder) {
       await recorder.dispose();
     }
