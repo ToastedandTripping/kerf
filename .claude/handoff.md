@@ -45,7 +45,7 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - **Four astra audits + a 20-batch remediation plan exist and are unread by any later session.** Reports at `~/marvin/state/audits/kerf-astra-2026-09-08/` — A1 firmware contract (7 findings), A2 test validity (5), A3 concurrency (8), A4 gcode/geometry (9), reconciled into 22 ranked items in `PLAN.md` (6 phases, 20 relay-sized batches, each written to be liftable into its own spec file). Read `PLAN.md` before proposing any remediation: it explicitly rejects several tempting fixes, including the ROADMAP's parked compare-position-and-resend recovery.
 
-- **Batch 0.1 (native command-body trace harness) is the next relay and is unblocked.** No prerequisites, no pending decision, no hardware. It is first because A2 established the existing suite cannot distinguish a working stop from a mocked one, so fixing production code against it before 0.1 lands is theatre. 15 of the 20 batches need no laser; only 3.1, 3.2, 4.1, 4.2 and 4.3 do.
+- **Batch 0.1 (native command-body trace harness) COMPLETE (2026-09-20).** Relay `remediation-batch-01`: Ted+Razor PASS (0 CRITICAL, 0 WARNING, 4 NOTE). Four command bodies extracted (`serial_connect_inner`, `serial_send_inner`, `serial_get_status_inner`, `serial_stream_job_inner`), ScriptedPort infrastructure, three invariant pins (PumpFlight, try_lock, $32=1 gate). Pin 4 (connect 0x18 count) unproven — needs port factory injection, routed to Tauri smoke. 260 Rust / 764 JS tests. **Batch 0.2** (test actual buttons + async continuations, TS side) is next and unblocked.
 
 - **Batch 2.3 must be re-specified before anyone implements it.** It was written to enforce a RESTRICTED release envelope; Lee chose the full feature set, so its refusals have to become actual corrections (R8, R13, R18, R19). It will likely split into three or four batches. The M4 default flip already pre-empts part of R8.
 
@@ -87,7 +87,11 @@ Relay B (rapid gap traversal) COMPLETE: Ted+Razor PASS_WITH_WARNINGS (W1 vector 
 
 New symptom: 'laser stops firing' mid-job (head keeps moving, laser dark). Reported 3 times (Sep 14 twice, Sep 16). Phase 1 spindle-drop diagnostic deployed in v0.8.29 — will capture FS: field data on next occurrence.
 
-Next: remediation batch 0.1 (native command-body trace harness), then charter amendment decision.
+v0.8.30 tagged and pushed: engrave efficiency Relays A+B (pixel compression, modal hoist, overscan floor, layer warning, rapid gap traversal). 764 JS + 251 Rust tests. Cross-object scan merging parked in ROADMAP (owner-reported: duplicated pieces engrave one at a time instead of one continuous sweep).
+
+Remediation batch 0.1 COMPLETE: four command bodies extracted, ScriptedPort infrastructure, three invariant pins. Razor PASS (0W/4N). 260 Rust tests.
+
+Next: batch 0.2 (test actual buttons + async continuations), then charter amendment decision.
 
 ### 2026-09-10
 
