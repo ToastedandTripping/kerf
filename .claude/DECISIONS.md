@@ -92,6 +92,11 @@ powerMin was editable and completely inert on constant-power layers, so a layer 
 
 No build read formatVersion on the way in: every migration gate was false for a future version, which is arithmetic landing correctly rather than a decision, and the stamp was then unconditionally rewritten down to the running build's version. What has kept that survivable is a property nobody had written down — the downgrade is self-limiting because a build stamps to its own version and gates every migration strictly below it, so the only migrations that re-run on return are ones the older build never had. That fails the moment a non-idempotent migration meets a file an older build edited in between, and migrateSpeedToMmMin already multiplies by 60. Refuse outright: not loaded, not stamped, not added to Recent Files.
 
+### Abort sends 0x18 immediately — no feed hold, no M5, no ack wait
+*2026-09-20, Lee, per research*
+
+The host-side abort sequence is: send 0x18 (soft reset) as a realtime byte, then clear host state and wait for the reset banner with a bounded timeout. No feed hold (0x21) first — unnecessary delay for lasers, does not guarantee beam-off, and hold-then-reset causes ~10mm position displacement (gnea/grbl #810). No M5 before reset — M5 is a line-protocol command that blocks behind the planner queue while the laser fires; this is the ack-awaited write the standing pin forbids. No waiting for any acknowledgement before sending 0x18 — realtime characters bypass the serial buffer and execute in the ISR regardless of controller state. Retain the 0x18 write-failure retry (the A6 fix). Evidence: GRBL source (mc_reset unconditionally calls spindle_stop at the hardware PWM level), four established senders (LightBurn, LaserGRBL, UGS, bCNC all send 0x18 immediately with no M5), and Kerf hardware testing (0x18 confirmed working on the Falcon for recovery). Research report: ~/marvin/research/grbl-abort-policy-laser-20260920/report.md.
+
 ---
 
 ## Operating constraints
