@@ -45,8 +45,6 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - **Four astra audits + a 20-batch remediation plan exist and are unread by any later session.** Reports at `~/marvin/state/audits/kerf-astra-2026-09-08/` — A1 firmware contract (7 findings), A2 test validity (5), A3 concurrency (8), A4 gcode/geometry (9), reconciled into 22 ranked items in `PLAN.md` (6 phases, 20 relay-sized batches, each written to be liftable into its own spec file). Read `PLAN.md` before proposing any remediation: it explicitly rejects several tempting fixes, including the ROADMAP's parked compare-position-and-resend recovery.
 
-- **Batch 0.1 (native command-body trace harness) COMPLETE (2026-09-20).** Relay `remediation-batch-01`: Ted+Razor PASS (0 CRITICAL, 0 WARNING, 4 NOTE). Four command bodies extracted (`serial_connect_inner`, `serial_send_inner`, `serial_get_status_inner`, `serial_stream_job_inner`), ScriptedPort infrastructure, three invariant pins (PumpFlight, try_lock, $32=1 gate). Pin 4 (connect 0x18 count) unproven — needs port factory injection, routed to Tauri smoke. 260 Rust / 764 JS tests. **Batch 0.2** (test actual buttons + async continuations, TS side) is next and unblocked.
-
 - **Batch 2.3 must be re-specified before anyone implements it.** It was written to enforce a RESTRICTED release envelope; Lee chose the full feature set, so its refusals have to become actual corrections (R8, R13, R18, R19). It will likely split into three or four batches. The M4 default flip already pre-empts part of R8.
 
 - **Relay B (rapid gap traversal) COMPLETE (2026-09-19).** Relay `engrave-efficiency-b`: Ted+Razor PASS_WITH_WARNINGS (W1 fixed — vector path wiring gap). Acceleration-safe three-segment rapid gaps in the scanner, gated on 10% modeled savings. 251 Rust / 764 JS tests. On `relay-b-rapid-gaps` branch, not yet merged. Owner hardware coupon test recommended before calling production-validated.
@@ -70,6 +68,25 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-09-20
+
+**Session 1b2844 continued: v0.8.30 released, Phase 0 complete, abort policy decided.**
+
+v0.8.30 tagged and released (CI green after two clippy fixes for Rust 1.98 on CI): engrave efficiency Relays A+B (pixel compression, modal hoist, overscan floor, layer warning, rapid gap traversal). 764 JS + 251 Rust tests.
+
+Remediation Phase 0 complete — both harness batches done:
+- Batch 0.1 (Rust): four command bodies extracted (serial_connect_inner, serial_send_inner, serial_get_status_inner, serial_stream_job_inner), ScriptedPort infrastructure, three invariant pins (PumpFlight, try_lock, $32=1 gate). Razor PASS.
+- Batch 0.2 (TS): unified ordered recorder, STOP dispatch test (0x21→0x18 byte order through real production code), it.fails cross-job corruption (R4/R11), deferred-callback seam. Razor PASS.
+260 Rust + 768 JS tests (767 pass + 1 expected fail).
+
+Cross-object scan merging parked in ROADMAP — owner-reported: duplicated engrave pieces generate separate raster passes instead of one continuous sweep.
+
+Abort policy research (scan tier, 13 sources): send 0x18 immediately, no feed hold, no M5, no ack wait. Decision recorded in DECISIONS.md. Phase 1 batches 1.1 and 1.5 unblocked.
+
+Owner hardware photos: v0.8.30 engrave quality confirmed good on birch plywood SSC signs.
+
+Next: Phase 1 batch 1.1 (backend admission fence + reset submission). Pause policy decision needed for batch 1.5 but can be deferred until 1.1-1.4 are done.
 
 ### 2026-09-19
 
