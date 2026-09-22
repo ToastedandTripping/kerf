@@ -834,26 +834,22 @@ export function createGeometryActions(set: StoreSet, get: StoreGet) {
           const ring = poly[0];
           const offsetRing = offsetRingByDistance(ring, distance);
           const newId = generateId();
-          const xs = offsetRing.map((p) => p[0]);
-          const ys = offsetRing.map((p) => p[1]);
-          const minX = Math.min(...xs),
-            minY = Math.min(...ys);
-          const maxX = Math.max(...xs),
-            maxY = Math.max(...ys);
+          const points = offsetRing.map((p) => ({ x: p[0], y: p[1] }));
+          const bb = pointsBBox(points);
           addObject({
             ...obj,
             id: newId,
             type: "path",
-            points: offsetRing.map((p) => ({ x: p[0], y: p[1] })),
+            points,
             closed: true,
             // rotation: 0 — objectToPolygon already baked rotation into world-frame
             // points. Keeping the source rotation would double-apply it downstream.
             transform: {
               ...obj.transform,
-              x: minX,
-              y: minY,
-              width: maxX - minX,
-              height: maxY - minY,
+              x: bb.x,
+              y: bb.y,
+              width: bb.width,
+              height: bb.height,
               rotation: 0,
             },
           });

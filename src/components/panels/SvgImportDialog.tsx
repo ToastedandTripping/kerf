@@ -686,13 +686,12 @@ function n(el: Element, attr: string): number {
 }
 
 function boundingBox(points: { x: number; y: number }[]) {
-  const xs = points.map((p) => p.x),
-    ys = points.map((p) => p.y);
+  const bb = pointsBBox(points as any);
   return {
-    x: Math.min(...xs),
-    y: Math.min(...ys),
-    w: Math.max(...xs) - Math.min(...xs),
-    h: Math.max(...ys) - Math.min(...ys),
+    x: bb.x,
+    y: bb.y,
+    w: bb.width,
+    h: bb.height,
   };
 }
 
