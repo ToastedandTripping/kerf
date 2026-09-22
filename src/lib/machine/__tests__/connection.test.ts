@@ -48,10 +48,10 @@ function makeStatusOutcome(
   opts?: { epoch?: number; busy?: boolean; noResponse?: boolean }
 ) {
   if (opts?.busy) {
-    return { status: "", events, kind: "Busy", snapshot: null };
+    return { status: "", events, kind: "busy", snapshot: null };
   }
   if (opts?.noResponse) {
-    return { status: "", events, kind: "NoResponse", snapshot: null };
+    return { status: "", events, kind: "noResponse", snapshot: null };
   }
   // Parse enough of the raw string to build a minimal snapshot.
   // Rust's serde(rename_all = "camelCase") serializes MachineState variants
@@ -72,7 +72,7 @@ function makeStatusOutcome(
   return {
     status: raw,
     events,
-    kind: "Report",
+    kind: "report",
     snapshot: {
       epoch: opts?.epoch ?? 1,
       seq: snapshotSeq,

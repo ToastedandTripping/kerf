@@ -82,6 +82,8 @@ function seedBase() {
     workspaceVerified: true,
     // $32=1 gate: seed as true so this suite tests G-code failure, not laser mode.
     grblLaserMode: true,
+    // B2b: statusStale must be false for canStartJob to pass.
+    statusStale: false,
   });
 }
 

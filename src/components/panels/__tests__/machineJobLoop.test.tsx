@@ -30,6 +30,7 @@ import { JobActionBar } from "../JobActionBar";
 import { MachinePanel } from "../MachinePanel";
 import { streamJob, pauseJob, resumeJob } from "../../../lib/machine/jobStream";
 import { machineConnection } from "../../../lib/machine/connection";
+import { resetStatusConsumer } from "../../../lib/machine/machineStatus";
 import { SerialTraceRecorder } from "../../../lib/machine/__tests__/serialTraceHarness";
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>;
@@ -76,6 +77,8 @@ function seedReadyToStart() {
     workspaceVerified: true,
     // $32=1 gate: canStartJob blocks START and FRAME without laser mode.
     grblLaserMode: true,
+    // B2b: statusStale must be false for canStartJob to pass.
+    statusStale: false,
   });
 }
 
@@ -84,6 +87,7 @@ function consoleTexts(): string[] {
 }
 
 let recorder: SerialTraceRecorder;
+let _mockSeq = 0;
 
 /** All serial_send commands the mock received, in order. */
 function sentCommands(): string[] {
@@ -107,12 +111,33 @@ function mockSerial(onSend: (command: string) => { responses: string[]; drained:
       if (args?.byte === 0x7e) _mockHoldActive = false;
     }
 
-    // For serial_get_status, use hold state
+    // For serial_get_status, use hold state — B2b extended StatusOutcome
     if (cmd === "serial_get_status") {
-      const result = _mockHoldActive
-        ? { status: "<Hold:0|MPos:0.000,0.000,0.000|FS:0,0>", events: [] }
-        : { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
-      return result;
+      _mockSeq++;
+      if (_mockHoldActive) {
+        return {
+          status: "<Hold:0|MPos:0.000,0.000,0.000|FS:0,0>", events: [],
+          kind: "report",
+          snapshot: {
+            epoch: 1, seq: _mockSeq, state: { hold: { substate: 0 } },
+            positionKind: "MPos", position: [0, 0, 0],
+            wco: null, feed: 0, spindle: 0,
+            accessory: "Unknown", units: "Unknown",
+            raw: "<Hold:0|MPos:0.000,0.000,0.000|FS:0,0>", unknownFields: [],
+          },
+        };
+      }
+      return {
+        status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [],
+        kind: "report",
+        snapshot: {
+          epoch: 1, seq: _mockSeq, state: "idle",
+          positionKind: "MPos", position: [0, 0, 0],
+          wco: null, feed: 0, spindle: 0,
+          accessory: "Unknown", units: "Unknown",
+          raw: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", unknownFields: [],
+        },
+      };
     }
 
     // Use recorder for everything else
@@ -124,6 +149,8 @@ describe("MachinePanel job loop (F13/F17)", () => {
   beforeEach(() => {
     cleanup();
     mockInvoke.mockReset();
+    resetStatusConsumer();
+    _mockSeq = 0;
     localStorage.clear();
     seedReadyToStart();
   });
@@ -689,7 +716,18 @@ describe("emergencyStop edge cases (P1-B A6)", () => {
         }
         if (cmd === "serial_get_status") {
           calls.push("status");
-          return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
+          _mockSeq++;
+          return {
+            status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [],
+            kind: "report",
+            snapshot: {
+              epoch: 1, seq: _mockSeq, state: "idle",
+              positionKind: "MPos", position: [0, 0, 0],
+              wco: null, feed: 0, spindle: 0,
+              accessory: "Unknown", units: "Unknown",
+              raw: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", unknownFields: [],
+            },
+          };
         }
         if (cmd === "serial_send") {
           calls.push(`send(${args?.command ?? "?"})`);

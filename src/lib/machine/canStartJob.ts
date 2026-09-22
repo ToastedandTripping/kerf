@@ -15,6 +15,10 @@
  * explicit gate here and an explicit no-op in frameTargets.
  */
 
+// B2b: isStatusEligible is consumed by the poll loop which writes
+// statusStale to the store. canStartJob reads it as a JobGateState field,
+// keeping canStartJob a pure function.
+
 interface MovesPoint {
   x: number;
   y: number;
@@ -129,6 +133,8 @@ export interface JobGateState {
    *  Without $32=1 the firmware does NOT auto-stop the spindle at hold-complete,
    *  so a pause leaves a 40W beam stationary on the workpiece. */
   grblLaserMode: boolean;
+  /** B2b: true when last valid status is older than 3s (set by poll loop). */
+  statusStale?: boolean;
 }
 
 export interface JobGate {
@@ -143,6 +149,14 @@ export interface JobGate {
  *  a user queue a new job while a pause was in progress. */
 export function canStartJob(state: JobGateState): JobGate {
   if (!state.machineConnected) return { ok: false, reason: "Machine not connected" };
+  // B2b: 3s eligibility rule — status freshness check. statusStale is written
+  // by the poll loop using isStatusEligible(). Fail-closed: undefined = stale.
+  if (state.statusStale) {
+    return {
+      ok: false,
+      reason: "Machine status stale — waiting for a fresh status report",
+    };
+  }
   // $32=1 gate (DECISIONS.md: "$32=1 is hard-gated at job_start"). Without laser
   // mode the firmware does NOT auto-stop the spindle at hold-complete — a pause
   // would leave a 40W beam stationary on the workpiece. Fail-closed: any falsy

@@ -5,6 +5,7 @@ import {
   consumeStatusOutcome,
   resetStatusConsumer,
   machineStateToStore,
+  isStatusEligible,
   type GrblSnapshot,
 } from "./machineStatus";
 
@@ -31,7 +32,7 @@ interface SendOutcome {
 interface StatusOutcome {
   status: string;
   events: string[];
-  kind: "Report" | "Busy" | "NoResponse" | "TransportError";
+  kind: "report" | "busy" | "noResponse" | "transportError";
   snapshot: GrblSnapshot | null;
 }
 
@@ -178,9 +179,10 @@ export const machineConnection = {
         // the machine is actually locked.
         try {
           const initOutcome = await invoke<StatusOutcome>("serial_get_status");
-          for (const e of initOutcome.events) surfaceUnsolicited(e);
+          // consumeStatusOutcome handles event surfacing — no separate loop
+          // to avoid double surfacing.
+          consumeStatusOutcome(initOutcome);
           if (initOutcome.snapshot) {
-            consumeStatusOutcome(initOutcome);
             const storeState = machineStateToStore(initOutcome.snapshot.state);
             if (storeState === "alarm") {
               store.addConsoleLine(
@@ -352,6 +354,10 @@ export const machineConnection = {
       // - Event surfacing (ALARM, MSG)
       // - Nonfinite value rejection
       const accepted = consumeStatusOutcome(outcome);
+
+      // B2b: update the statusStale store field from isStatusEligible().
+      // This drives the canStartJob gate (3s eligibility rule).
+      store.setStatusStale(!isStatusEligible());
 
       // Spindle-drop diagnostic: warn on drop-to-zero during active Run.
       // The consumer writes spindleSpeed to the store; we check it here

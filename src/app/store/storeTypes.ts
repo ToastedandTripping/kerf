@@ -148,6 +148,8 @@ export interface AppState {
   setFeedRate: (v: number) => void;
   accessoryFlags: string | null; // Raw A: field flags, null = unknown (NOT off)
   setAccessoryFlags: (v: string | null) => void;
+  statusStale: boolean; // B2b: true when last valid status is older than 3s
+  setStatusStale: (v: boolean) => void;
 
   // Workspace verification — true only when $130/$131 were both > 0
   workspaceVerified: boolean;

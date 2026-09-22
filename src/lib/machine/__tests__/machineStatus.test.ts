@@ -65,7 +65,7 @@ function makeSnapshot(overrides: Partial<GrblSnapshot> = {}): GrblSnapshot {
 
 function makeOutcome(
   snap: GrblSnapshot | null,
-  kind: StatusOutcome["kind"] = "Report",
+  kind: StatusOutcome["kind"] = "report",
   events: string[] = []
 ): StatusOutcome {
   return {
@@ -115,7 +115,7 @@ describe("machineStatus.ts — B2b status consumer", () => {
       vi.advanceTimersByTime(2500);
 
       // Busy should not update lastValidStatusTime
-      consumeStatusOutcome(makeOutcome(null, "Busy"));
+      consumeStatusOutcome(makeOutcome(null, "busy"));
       vi.advanceTimersByTime(600);
       // Total: 3100ms since last real snapshot
       expect(isStatusEligible()).toBe(false);
@@ -128,11 +128,11 @@ describe("machineStatus.ts — B2b status consumer", () => {
       vi.advanceTimersByTime(3500); // Past 3s threshold
 
       // Busy does not help
-      consumeStatusOutcome(makeOutcome(null, "Busy"));
+      consumeStatusOutcome(makeOutcome(null, "busy"));
       expect(isStatusEligible()).toBe(false);
 
       // NoResponse does not help
-      consumeStatusOutcome(makeOutcome(null, "NoResponse"));
+      consumeStatusOutcome(makeOutcome(null, "noResponse"));
       expect(isStatusEligible()).toBe(false);
     });
   });
@@ -289,20 +289,20 @@ describe("machineStatus.ts — B2b status consumer", () => {
   // ---- Event surfacing ----
   describe("event surfacing", () => {
     it("surfaces ALARM events as errors even on Busy", () => {
-      consumeStatusOutcome(makeOutcome(null, "Busy", ["ALARM:1"]));
+      consumeStatusOutcome(makeOutcome(null, "busy", ["ALARM:1"]));
       const alarm = useStore.getState().consoleLines.find((l) => l.text === "ALARM:1");
       expect(alarm?.type).toBe("error");
     });
 
     it("surfaces MSG events as info", () => {
-      consumeStatusOutcome(makeOutcome(null, "Busy", ["[MSG:Check Door]"]));
+      consumeStatusOutcome(makeOutcome(null, "busy", ["[MSG:Check Door]"]));
       const msg = useStore.getState().consoleLines.find((l) => l.text === "[MSG:Check Door]");
       expect(msg?.type).toBe("info");
     });
 
     it("cancels job on ALARM event", () => {
       useStore.setState({ jobRunning: true });
-      consumeStatusOutcome(makeOutcome(null, "Busy", ["ALARM:2"]));
+      consumeStatusOutcome(makeOutcome(null, "busy", ["ALARM:2"]));
       expect(useStore.getState().jobRunning).toBe(false);
     });
   });
@@ -360,7 +360,7 @@ describe("machineStatus.ts — B2b status consumer", () => {
       consumeStatusOutcome(makeOutcome(makeSnapshot({ epoch: 1, seq: 1, state: "run" })));
       expect(useStore.getState().machineState).toBe("run");
 
-      const result = consumeStatusOutcome(makeOutcome(null, "Busy"));
+      const result = consumeStatusOutcome(makeOutcome(null, "busy"));
       expect(result).toBe(true);
       // State unchanged — Busy preserves, never overwrites
       expect(useStore.getState().machineState).toBe("run");

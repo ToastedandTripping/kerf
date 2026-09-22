@@ -621,6 +621,8 @@ export const useStore = create<AppState>((set, get) => ({
   setFeedRate: (v) => set({ feedRate: v }),
   accessoryFlags: null,
   setAccessoryFlags: (v) => set({ accessoryFlags: v }),
+  statusStale: true, // B2b: starts stale (no valid status yet)
+  setStatusStale: (v) => set({ statusStale: v }),
 
   // Workstream E: workspace verification
   workspaceVerified: false,

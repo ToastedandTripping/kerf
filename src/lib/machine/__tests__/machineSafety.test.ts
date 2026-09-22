@@ -212,7 +212,7 @@ describe("pollStatus — WCO parsing", () => {
     mockInvoke.mockResolvedValueOnce({
       status: "<Idle|MPos:10.000,20.000,0.000|FS:0,0|WCO:5.000,3.500,0.000>",
       events: [],
-      kind: "Report",
+      kind: "report",
       snapshot: {
         epoch: 1, seq: 1, state: "idle",
         positionKind: "MPos", position: [10, 20, 0],
@@ -233,7 +233,7 @@ describe("pollStatus — WCO parsing", () => {
     mockInvoke.mockResolvedValueOnce({
       status: "<Idle|MPos:10.000,20.000,0.000|FS:0,0>",
       events: [],
-      kind: "Report",
+      kind: "report",
       snapshot: {
         epoch: 1, seq: 2, state: "idle",
         positionKind: "MPos", position: [10, 20, 0],

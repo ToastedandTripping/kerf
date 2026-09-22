@@ -52,11 +52,13 @@ export interface GrblSnapshot {
   unknownFields: string[];
 }
 
-/** B2a's StatusOutcome with the additive fields. */
+/** B2a's StatusOutcome with the additive fields.
+ *  Rust's `#[serde(rename_all = "camelCase")]` on `StatusKind` serializes
+ *  variants as: report, busy, noResponse, transportError. */
 export interface StatusOutcome {
   status: string;
   events: string[];
-  kind: "Report" | "Busy" | "NoResponse" | "TransportError";
+  kind: "report" | "busy" | "noResponse" | "transportError";
   snapshot: GrblSnapshot | null;
 }
 
@@ -140,15 +142,19 @@ export function consumeStatusOutcome(outcome: StatusOutcome): boolean {
     }
   }
 
+  // Classify the outcome. If `kind` is missing (pre-B2a compat), infer from
+  // the raw status string: empty = busy/noResponse, non-empty = report.
+  const kind = outcome.kind ?? (outcome.status ? "report" : "busy");
+
   // Busy: the command lock is held (e.g. during $H homing). The port is alive
   // but we have no fresh data. Preserve age (don't update lastValidStatusTime),
   // don't update state. Return true to indicate "not a failure."
-  if (outcome.kind === "Busy") {
+  if (kind === "busy") {
     return true;
   }
 
   // NoResponse or TransportError with no snapshot: status goes unknown.
-  if (outcome.kind === "NoResponse" || outcome.kind === "TransportError") {
+  if (kind === "noResponse" || kind === "transportError") {
     // Don't update lastValidStatusTime — staleness clock keeps ticking.
     return false;
   }
