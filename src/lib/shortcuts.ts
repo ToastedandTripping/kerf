@@ -322,12 +322,6 @@ export function useKeyboardShortcuts() {
         return;
       }
 
-      // Snap toggle
-      if (key === "s" && !ctrl && !shift && !alt) {
-        // 's' is already a tool shortcut - only toggle snap when not a tool key
-        // Actually 's' is not in toolShortcuts, so this works
-      }
-
       // Zoom shortcuts
       if (ctrl && (key === "=" || key === "+")) {
         e.preventDefault();
