@@ -53,6 +53,8 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - **Charter gap analysis at `.claude/plans/charter-gap-analysis.md`** — 293-line Fable audit of all 10 codebase areas vs the charter. None of the three 'done' conditions are met. Top gaps ranked. The fastest path to 'done' follows the existing remediation plan order.
 
+- B4 (shared abort) Razor review outstanding — Ted complete on relay/kerf-b4-shared-abort, 6/6 mutants killed, tsc clean. Abort sites rewritten but unreviewed. Dispatch Razor at Opus high-effort; plan at .claude/plans/kerf-b4-shared-abort.md.
+
 ## Open questions awaiting Lee
 
 | Question                                                                                            | Why it matters                                                                        | Raised     |
@@ -68,6 +70,10 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-09-22
+
+**Phase B stop spine — 4 relay batches.** B1 Razor PASS (2W fixed). B2a Razor PASS (1W fixed). B2b Razor PASS (1C fixed — serde case mismatch). B3 Razor PASS (1C fixed — stop deadlock). B4 Ted DONE, Razor NOT yet run (session quota 97%). All abort sites rewritten: 0x18 immediately, no M5, no hold, pause becomes stop. Next: B4 Razor review.
 
 ### 2026-09-20
 
