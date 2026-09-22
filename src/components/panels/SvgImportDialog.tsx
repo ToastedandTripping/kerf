@@ -686,7 +686,7 @@ function n(el: Element, attr: string): number {
 }
 
 function boundingBox(points: { x: number; y: number }[]) {
-  const bb = pointsBBox(points as any);
+  const bb = pointsBBox(points);
   return {
     x: bb.x,
     y: bb.y,

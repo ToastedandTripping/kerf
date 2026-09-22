@@ -6,8 +6,9 @@
  * inhibitor, and on true→false to release it.
  *
  * ## Coverage
- * The `jobRunning` flag is set by JobActionBar via jobStream, so this single
- * subscription covers all job types automatically. If the writer is ever split
+ * The `jobRunning` flag is set by JobActionBar (jobs, frame) and
+ * MaterialTestDialog, so this single subscription covers all job types
+ * automatically. If the writer is ever split
  * into separate flags, keep-awake coverage for those paths must be re-wired
  * explicitly.
  *
@@ -22,7 +23,7 @@
  *
  * ## React Error 185 note
  * This module does NOT use `useStore(selector)` inside a React component. It uses
- * the vanilla `useStore.subscribe` API (identical to the pattern at connection.ts:155)
+ * the vanilla `useStore.subscribe` API (the same pattern connection.ts uses for `unsubscribeJobRunning`)
  * which subscribes to the full state and extracts the scalar. No new object or
  * array is returned — no re-render loop risk.
  */
