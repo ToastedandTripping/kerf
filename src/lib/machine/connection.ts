@@ -362,7 +362,7 @@ export const machineConnection = {
         if (currentSpindle !== null && Number.isFinite(currentSpindle)) {
           const snapState = snap.state;
           if (
-            snapState === "Run" &&
+            snapState === "run" &&
             prevSpindleSpeed !== null &&
             prevSpindleSpeed > 0 &&
             currentSpindle === 0

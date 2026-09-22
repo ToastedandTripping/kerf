@@ -12,18 +12,20 @@ import { useStore } from "../../app/store";
 
 // ---- Mirror types for B2a's Rust contract ----
 
-/** Machine state from the first field of a `<…>` report. */
+/** Machine state from the first field of a `<…>` report.
+ *  Rust's `#[serde(rename_all = "camelCase")]` serializes these as lowercase
+ *  simple variants and camelCase for struct variants. */
 export type MachineState =
-  | "Idle"
-  | "Run"
-  | { Hold: { substate: number | null } }
-  | "Jog"
-  | "Home"
-  | { Door: { substate: number | null } }
-  | "Alarm"
-  | "Check"
-  | "Sleep"
-  | { Unknown: string };
+  | "idle"
+  | "run"
+  | { hold: { substate: number | null } }
+  | "jog"
+  | "home"
+  | { door: { substate: number | null } }
+  | "alarm"
+  | "check"
+  | "sleep"
+  | { unknown: string };
 
 /** Which coordinate system the position was reported in. */
 export type PositionKind = "MPos" | "WPos";
@@ -77,17 +79,17 @@ const ELIGIBILITY_AGE_MS = 3000;
 export function machineStateToStore(
   s: MachineState
 ): "idle" | "run" | "hold" | "alarm" | "door" | "disconnected" {
-  if (s === "Idle") return "idle";
-  if (s === "Run") return "run";
-  if (s === "Jog") return "run"; // Jog is motion; map to run for UI
-  if (s === "Alarm") return "alarm";
-  if (s === "Check") return "idle"; // Check mode is idle-like
-  if (s === "Sleep") return "idle";
-  if (s === "Home") return "run"; // Homing is motion
+  if (s === "idle") return "idle";
+  if (s === "run") return "run";
+  if (s === "jog") return "run"; // Jog is motion; map to run for UI
+  if (s === "alarm") return "alarm";
+  if (s === "check") return "idle"; // Check mode is idle-like
+  if (s === "sleep") return "idle";
+  if (s === "home") return "run"; // Homing is motion
   if (typeof s === "object") {
-    if ("Hold" in s) return "hold";
-    if ("Door" in s) return "door";
-    if ("Unknown" in s) return "alarm"; // Unknown state → conservative
+    if ("hold" in s) return "hold";
+    if ("door" in s) return "door";
+    if ("unknown" in s) return "alarm"; // Unknown state → conservative
   }
   return "alarm"; // Unreachable fallback → conservative
 }
@@ -95,9 +97,9 @@ export function machineStateToStore(
 /** True if the given state represents active motion (renews liveness).
  *  Exported for future use by eligibility logic. */
 export function isRunLike(s: MachineState): boolean {
-  if (s === "Run" || s === "Jog" || s === "Home") return true;
+  if (s === "run" || s === "jog" || s === "home") return true;
   if (typeof s === "object") {
-    if ("Hold" in s || "Door" in s) return true;
+    if ("hold" in s || "door" in s) return true;
   }
   return false;
 }
