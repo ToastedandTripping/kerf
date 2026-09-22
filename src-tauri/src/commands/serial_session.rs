@@ -237,6 +237,9 @@ impl SerialSession {
         // Clear admitted job
         let mut aj = self.admitted_job.lock().unwrap_or_else(|e| e.into_inner());
         *aj = None;
+        // Invalidate snapshot: after disconnect + reconnect to a different
+        // machine, stale position data must not be readable.
+        self.invalidate_snapshot();
     }
 }
 
