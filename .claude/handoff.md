@@ -53,7 +53,7 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - **Charter gap analysis at `.claude/plans/charter-gap-analysis.md`** — 293-line Fable audit of all 10 codebase areas vs the charter. None of the three 'done' conditions are met. Top gaps ranked. The fastest path to 'done' follows the existing remediation plan order.
 
-- B4 (shared abort) Razor review outstanding — Ted complete on relay/kerf-b4-shared-abort, 6/6 mutants killed, tsc clean. Abort sites rewritten but unreviewed. Dispatch Razor at Opus high-effort; plan at .claude/plans/kerf-b4-shared-abort.md.
+- Phase B stop spine COMPLETE — all 4 batches Razor PASS, 0 CRITICAL. 5 relay branches unmerged on master (B1: relay/kerf-b1-admission-fence 10 ahead, B2a: relay/kerf-b2a-status-contract 13 ahead, B2b: relay/kerf-b2b-status-consumer 17 ahead, B3: relay/kerf-b3-job-lifetime 21 ahead, B4: relay/kerf-b4-shared-abort 23 ahead). The chain is sequential (B4 includes all prior batches). Merge of B4's branch onto master lands the full stop spine. Merge is deploy-gated. Owner hardware verification follows merge.
 
 ## Open questions awaiting Lee
 
@@ -70,6 +70,10 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-09-22
+
+**B4 Razor PASS — Phase B stop spine complete.** B4 (shared abort/disconnect + pause containment): Razor PASS, 0 CRITICAL, 0 WARNING, 4 NOTE (stale comments only). 11/11 spec items covered. emergencyStop calls serial_stop (0x18 immediately), both abort sites in jobStream.ts route through it, Hold:0 poll deleted, pause becomes stop. All four CRITICAL checks confirmed: no M5 in any abort path, no 0x21/feedHold, no 0x9E on pause, serial_stop is the sole stop mechanism. Combined across Phase B: B1 Razor PASS (2W fixed), B2a Razor PASS (1W fixed), B2b Razor PASS (1C+2W fixed), B3 Razor PASS (1C+2W fixed), B4 Razor PASS (0 findings). The 0x18 abort patch is implemented, reviewed, and ready for merge + owner hardware verification.
 
 ### 2026-09-22
 
