@@ -38,18 +38,23 @@ pub const PHASE_STOPPING: u8 = 3;
 pub const PHASE_UNKNOWN: u8 = 4;
 
 /// Result of a stop operation. Serialized for the TS side (B4 consumes this).
+/// The `tag = "outcome"` with `rename_all = "camelCase"` camelCases variant
+/// names only. Field names use explicit `#[serde(rename)]` for TS compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "outcome", rename_all = "camelCase")]
 pub enum StopResult {
     /// Reset banner observed within the deadline.
     Confirmed {
+        #[serde(rename = "epochBefore")]
         epoch_before: u64,
+        #[serde(rename = "epochAfter")]
         epoch_after: u64,
         messages: Vec<String>,
     },
     /// `0x18` sent but banner not observed within the deadline.
     SubmittedUnconfirmed {
         epoch: u64,
+        #[serde(rename = "inFlightWrite")]
         in_flight_write: bool,
         messages: Vec<String>,
     },
@@ -62,7 +67,8 @@ pub enum StopResult {
 }
 
 impl StopResult {
-    /// Console messages this result carries.
+    /// Console messages this result carries. Used by B4's TS-side display.
+    #[allow(dead_code)]
     pub fn messages(&self) -> &[String] {
         match self {
             StopResult::Confirmed { messages, .. } => messages,
@@ -71,6 +77,9 @@ impl StopResult {
         }
     }
 }
+
+/// Type alias to avoid clippy::type_complexity on the observer.
+type SessionObserver = Box<dyn Fn(&str) + Send + Sync>;
 
 /// The session-level admission fence. Lives as a field of `SerialInner`.
 pub struct SerialSession {
@@ -89,7 +98,7 @@ pub struct SerialSession {
     /// Result slot for joiners — written by the stop, read+cleared by the joiner.
     pub(crate) last_stop: Mutex<Option<StopResult>>,
     /// Session-event sink for tests. Production leaves this None.
-    pub(crate) observer: Mutex<Option<Box<dyn Fn(&str) + Send + Sync>>>,
+    pub(crate) observer: Mutex<Option<SessionObserver>>,
     /// Set when an event-sink failure caused the stop (so the wrapper can
     /// distinguish sink failure from user cancel).
     pub(crate) sink_failed: AtomicBool,
@@ -245,10 +254,10 @@ mod tests {
         let parsed: StopResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, parsed);
         // Pin the shape for B4's TS test
-        assert!(json.contains("\"outcome\": \"confirmed\""));
-        assert!(json.contains("\"epochBefore\""));
-        assert!(json.contains("\"epochAfter\""));
-        assert!(json.contains("\"messages\""));
+        assert!(json.contains("\"outcome\": \"confirmed\""), "json: {json}");
+        assert!(json.contains("\"epochBefore\""), "json: {json}");
+        assert!(json.contains("\"epochAfter\""), "json: {json}");
+        assert!(json.contains("\"messages\""), "json: {json}");
     }
 
     #[test]
@@ -264,8 +273,8 @@ mod tests {
         let json = serde_json::to_string_pretty(&result).unwrap();
         let parsed: StopResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, parsed);
-        assert!(json.contains("\"outcome\": \"submittedUnconfirmed\""));
-        assert!(json.contains("\"inFlightWrite\""));
+        assert!(json.contains("\"outcome\": \"submittedUnconfirmed\""), "json: {json}");
+        assert!(json.contains("\"inFlightWrite\""), "json: {json}");
     }
 
     #[test]

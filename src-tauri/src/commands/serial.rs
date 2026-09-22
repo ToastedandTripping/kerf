@@ -47,6 +47,9 @@ use super::serial_session::{
     PHASE_STOPPING, PHASE_UNKNOWN,
 };
 
+/// Type alias for the port-factory parameter to avoid clippy::type_complexity.
+type PortFactory = dyn Fn(&str, u32) -> Result<Box<dyn SerialPort>, serialport::Error>;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PortInfo {
@@ -244,7 +247,7 @@ pub(crate) fn serial_connect_inner(
     port_name: &str,
     baud_rate: u32,
     sleeper: &dyn Fn(Duration),
-    open_port: &dyn Fn(&str, u32) -> Result<Box<dyn SerialPort>, serialport::Error>,
+    open_port: &PortFactory,
 ) -> Result<String, String> {
     // P1-C: already-connected guard — if a connection is live, disconnect
     // first to prevent resource leaks. This handles rapid reconnect or
