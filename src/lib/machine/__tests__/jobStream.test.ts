@@ -120,10 +120,26 @@ describe("jobStream.ts — Phase 2A streaming mode dispatch", () => {
       expect(result.endState).toBe("alarm");
     });
 
-    it("maps error outcome correctly", async () => {
-      mockInvoke.mockResolvedValueOnce("error: error:9");
+    it("maps error outcome and fires emergencyStop via serial_stop (not M5+softReset)", async () => {
+      const calls: string[] = [];
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        calls.push(cmd);
+        if (cmd === "serial_stream_job") return "error: error:9";
+        if (cmd === "serial_stop") {
+          return {
+            outcome: "confirmed",
+            epochBefore: 1,
+            epochAfter: 2,
+            messages: ["STOP: 0x18 sent"],
+          };
+        }
+        return undefined;
+      });
       const result = await streamJob("G1 X10 F500", { label: "Test" });
       expect(result.endState).toBe("error");
+      // Safety volley must route through serial_stop, NOT send M5+softReset
+      expect(calls).toContain("serial_stop");
+      expect(calls).not.toContain("serial_send");
     });
 
     it("maps disconnected outcome and updates store", async () => {
