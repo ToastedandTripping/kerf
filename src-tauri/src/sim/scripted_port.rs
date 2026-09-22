@@ -31,6 +31,10 @@ pub(crate) enum ScriptStep {
     Timeout,
     /// Return this I/O error.
     Error(String),
+    /// Block until the named hold point is released by the test.
+    /// Backed by `mpsc::Sender/Receiver` — the read blocks on `recv_timeout`.
+    /// The brain mutex is released while parked to prevent deadlocks.
+    HoldUntilRelease { id: &'static str },
 }
 
 #[allow(dead_code)]
@@ -47,6 +51,12 @@ pub enum TraceEvent {
     ReadTimeout,
     /// A read that returned data (bytes count).
     ReadData { bytes: usize },
+    /// Session event emitted by the observer on `SerialSession`.
+    SessionEvent { name: String },
+    /// A hold point was reached.
+    HoldReached { id: String },
+    /// A hold point was released.
+    HoldReleased { id: String },
 }
 
 #[allow(dead_code)]
@@ -58,9 +68,18 @@ pub enum HandleRole {
     Realtime,
 }
 
+/// A hold-point channel pair: the test sends () to release it.
+#[allow(dead_code)]
+struct HoldPoint {
+    /// The test calls `release()` → sends () on this channel.
+    release_tx: std::sync::mpsc::Sender<()>,
+    /// The read thread blocks on this receiver.
+    release_rx: std::sync::mpsc::Receiver<()>,
+}
+
 #[allow(dead_code)]
 /// Shared state behind all clones of a ScriptedPort.
-struct Brain {
+pub(crate) struct Brain {
     /// Remaining script steps in order.
     script: VecDeque<ScriptStep>,
     /// Current step's data, if it's a Data step.
@@ -69,6 +88,8 @@ struct Brain {
     data_offset: usize,
     /// Ordered log of all I/O events.
     trace: Vec<TraceEvent>,
+    /// Hold-point channels keyed by id.
+    holds: std::collections::HashMap<&'static str, HoldPoint>,
 }
 
 #[allow(dead_code)]
@@ -82,12 +103,21 @@ pub struct ScriptedPort {
 impl ScriptedPort {
     /// Create a new scripted port from a sequence of read response steps.
     pub fn new(script: Vec<ScriptStep>) -> Self {
+        // Pre-create hold-point channels for any HoldUntilRelease steps.
+        let mut holds = std::collections::HashMap::new();
+        for step in &script {
+            if let ScriptStep::HoldUntilRelease { id } = step {
+                let (tx, rx) = std::sync::mpsc::channel();
+                holds.insert(*id, HoldPoint { release_tx: tx, release_rx: rx });
+            }
+        }
         Self {
             brain: Arc::new(Mutex::new(Brain {
                 script: script.into(),
                 current_data: Vec::new(),
                 data_offset: 0,
                 trace: Vec::new(),
+                holds,
             })),
             role: HandleRole::Reader,
         }
@@ -113,19 +143,54 @@ impl ScriptedPort {
             .unwrap_or_default()
     }
 
-    /// Run a closure with a deadline, returning Ok if it completes or Err on timeout.
-    pub fn run_with_deadline<F, T>(dur: Duration, f: F) -> Result<T, String>
-    where
-        F: FnOnce() -> T,
-    {
-        let start = std::time::Instant::now();
-        let result = f();
-        if start.elapsed() > dur {
-            Err(format!("deadline exceeded: {:?}", dur))
-        } else {
-            Ok(result)
+    /// Release a named hold point, allowing the blocked read to proceed.
+    pub fn release_hold(&self, id: &str) {
+        let brain = self.brain.lock().unwrap();
+        if let Some(hold) = brain.holds.get(id) {
+            let _ = hold.release_tx.send(());
         }
     }
+
+    /// Push a session event into the shared trace. Used by the session observer
+    /// to record events in the same ordered trace as port I/O.
+    pub fn push_session_event(&self, name: &str) {
+        let mut brain = self.brain.lock().unwrap();
+        brain.trace.push(TraceEvent::SessionEvent { name: name.to_string() });
+    }
+
+    /// Get the shared brain Arc for wiring up session observers.
+    pub fn brain_arc(&self) -> Arc<Mutex<Brain>> {
+        Arc::clone(&self.brain)
+    }
+
+    /// Run a closure on a separate thread with a real deadline.
+    /// Returns Ok(result) if the closure completes, Err if the deadline expires.
+    /// A deadlock in the closure is a test failure, not a CI hang.
+    pub fn run_scenario<F, T>(f: F, timeout: Duration) -> Result<T, String>
+    where
+        F: FnOnce() -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = f();
+            let _ = tx.send(result);
+        });
+        rx.recv_timeout(timeout)
+            .map_err(|_| format!("scenario deadline exceeded: {:?}", timeout))
+    }
+}
+
+/// Make the brain's trace accessible for test assertions via a shared Arc.
+#[allow(dead_code)]
+pub fn make_session_observer(
+    brain: Arc<Mutex<Brain>>,
+) -> Box<dyn Fn(&str) + Send + Sync> {
+    Box::new(move |event: &str| {
+        if let Ok(mut b) = brain.lock() {
+            b.trace.push(TraceEvent::SessionEvent { name: event.to_string() });
+        }
+    })
 }
 
 impl Read for ScriptedPort {
@@ -156,6 +221,52 @@ impl Read for ScriptedPort {
                 }
                 Some(ScriptStep::Error(msg)) => {
                     return Err(io::Error::other(msg));
+                }
+                Some(ScriptStep::HoldUntilRelease { id }) => {
+                    // Record that the hold was reached.
+                    brain.trace.push(TraceEvent::HoldReached { id: id.to_string() });
+                    // Clone the receiver out and drop the brain lock to prevent
+                    // deadlocks with stop threads that also need the brain lock.
+                    let hold_id = id.to_string();
+                    if brain.holds.contains_key(id) {
+                        // We can't move the receiver, but we can try_recv in a loop.
+                        // Actually we need to drop the brain lock first.
+                        drop(brain);
+                        // Now wait for release without holding the brain lock.
+                        // Re-acquire brain to get the receiver reference — but we
+                        // can't hold it while waiting. Use a channel approach instead.
+                        // The simplest safe approach: poll with try_recv + sleep.
+                        loop {
+                            let b = self.brain.lock().unwrap();
+                            if let Some(hold) = b.holds.get(hold_id.as_str()) {
+                                match hold.release_rx.try_recv() {
+                                    Ok(()) => {
+                                        // Released. Re-lock brain and continue.
+                                        drop(b);
+                                        brain = self.brain.lock().unwrap();
+                                        brain.trace.push(TraceEvent::HoldReleased { id: hold_id });
+                                        break;
+                                    }
+                                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                                        drop(b);
+                                        std::thread::sleep(Duration::from_millis(5));
+                                    }
+                                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                        // Poisoned — test is tearing down.
+                                        drop(b);
+                                        return Err(io::Error::other(
+                                            format!("hold point '{}' poisoned (sender dropped)", hold_id),
+                                        ));
+                                    }
+                                }
+                            } else {
+                                drop(b);
+                                brain = self.brain.lock().unwrap();
+                                break;
+                            }
+                        }
+                        // Continue to the next script step.
+                    }
                 }
                 None => {
                     // Script exhausted — return EOF.
@@ -269,7 +380,7 @@ impl SerialPort for ScriptedPort {
         for step in &brain.script {
             match step {
                 ScriptStep::Data(data) => queued += data.len() as u32,
-                ScriptStep::Timeout | ScriptStep::Error(_) => break,
+                ScriptStep::Timeout | ScriptStep::Error(_) | ScriptStep::HoldUntilRelease { .. } => break,
             }
         }
         Ok(buffered + queued)

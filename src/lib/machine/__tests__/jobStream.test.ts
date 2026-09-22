@@ -15,6 +15,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../../app/store";
 import { DEFAULT_LAYERS } from "../../../app/types";
 import { getStreamingMode, streamJob } from "../jobStream";
+import { beginJobSession, _testResetJobSession } from "../jobSession";
 import { SerialTraceRecorder } from "../../../lib/machine/__tests__/serialTraceHarness";
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>;
@@ -45,6 +46,7 @@ describe("jobStream.ts — Phase 2A streaming mode dispatch", () => {
   beforeEach(() => {
     mockInvoke.mockReset();
     localStorage.clear();
+    _testResetJobSession();
     seedStore();
   });
 
@@ -118,10 +120,26 @@ describe("jobStream.ts — Phase 2A streaming mode dispatch", () => {
       expect(result.endState).toBe("alarm");
     });
 
-    it("maps error outcome correctly", async () => {
-      mockInvoke.mockResolvedValueOnce("error: error:9");
+    it("maps error outcome and fires emergencyStop via serial_stop (not M5+softReset)", async () => {
+      const calls: string[] = [];
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        calls.push(cmd);
+        if (cmd === "serial_stream_job") return "error: error:9";
+        if (cmd === "serial_stop") {
+          return {
+            outcome: "confirmed",
+            epochBefore: 1,
+            epochAfter: 2,
+            messages: ["STOP: 0x18 sent"],
+          };
+        }
+        return undefined;
+      });
       const result = await streamJob("G1 X10 F500", { label: "Test" });
       expect(result.endState).toBe("error");
+      // Safety volley must route through serial_stop, NOT send M5+softReset
+      expect(calls).toContain("serial_stop");
+      expect(calls).not.toContain("serial_send");
     });
 
     it("maps disconnected outcome and updates store", async () => {
@@ -186,48 +204,222 @@ describe("jobStream.ts — Phase 2A streaming mode dispatch", () => {
     });
   });
 
-  // ---- Cross-job corruption edge case (batch 1.4 fix) ----
-  describe("Cross-job safety (currently unsafe, batch 1.4)", () => {
-    it.fails(
-      "R4/R11: job A late callback corrupts job B — owned by batch 1.4",
+  // ---- B3: Job session draining and lifetime tests ----
+  describe("Job session draining (B3)", () => {
+    it("drain timeout returns unknown, not complete", async () => {
+      // Mutant 2: if 30s expiry returns "complete" instead of "unknown", this fails.
+      vi.useFakeTimers();
+
+      recorder = new SerialTraceRecorder();
+      mockInvoke.mockImplementation(async (cmd: string, args?: any) => {
+        if (cmd === "serial_job_begin") return 1;
+        if (cmd === "serial_job_end") return undefined;
+        if (cmd === "serial_get_status") {
+          // Always return Run — never Idle — to trigger drain timeout.
+          return {
+            status: "<Run|MPos:0.000,0.000,0.000|FS:1000,0>",
+            events: [],
+          };
+        }
+        return recorder.handler(cmd, args);
+      });
+
+      const session = await beginJobSession("Test");
+      expect(session).not.toBeNull();
+      useStore.setState({ jobRunning: true, jobProgress: 0 });
+
+      // Start drain in background.
+      const drainPromise = session!.drain(true);
+
+      // Advance past the 30s drain timeout.
+      await vi.advanceTimersByTimeAsync(35000);
+
+      const result = await drainPromise;
+      // Must be "unknown", NOT "complete".
+      expect(result).toBe("unknown");
+
+      // Verify console warning about drain timeout.
+      const consoleTexts = useStore.getState().consoleLines.map((l) => l.text);
+      expect(consoleTexts.some((t) => t.includes("drain timeout"))).toBe(true);
+
+      vi.useRealTimers();
+    });
+
+    it("auxiliary jobs (FRAME) go through session draining", async () => {
+      // Mutant 3: if auxiliary jobs skip draining, they wouldn't acquire a session.
+      recorder = new SerialTraceRecorder();
+      let jobBeginCalled = false;
+      let jobEndCalled = false;
+      mockInvoke.mockImplementation(async (cmd: string, args?: any) => {
+        if (cmd === "serial_job_begin") {
+          jobBeginCalled = true;
+          return 1;
+        }
+        if (cmd === "serial_job_end") {
+          jobEndCalled = true;
+          return undefined;
+        }
+        return recorder.handler(cmd, args);
+      });
+
+      const session = await beginJobSession("Frame");
+      expect(session).not.toBeNull();
+      expect(jobBeginCalled).toBe(true);
+
+      useStore.setState({ jobRunning: true, jobProgress: 0 });
+      await streamJob("M5\nG0 X10 Y10\nM5", { label: "Frame", session: session! });
+
+      expect(jobEndCalled).toBe(true);
+      expect(useStore.getState().jobRunning).toBe(false);
+    });
+
+    it("session.cancel() wakes drain wait", async () => {
+      // Mutant 5: STOP clears running before native quiescence.
+      // If cancel doesn't work, drain hangs.
+      recorder = new SerialTraceRecorder();
+      mockInvoke.mockImplementation(async (cmd: string, args?: any) => {
+        if (cmd === "serial_job_begin") return 1;
+        if (cmd === "serial_job_end") return undefined;
+        if (cmd === "serial_get_status") {
+          return {
+            status: "<Run|MPos:0.000,0.000,0.000|FS:1000,0>",
+            events: [],
+          };
+        }
+        return recorder.handler(cmd, args);
+      });
+
+      const session = await beginJobSession("Test");
+      expect(session).not.toBeNull();
+
+      // Start draining in background.
+      const drainPromise = session!.drain(true);
+
+      // Cancel after a brief delay (simulates STOP).
+      await new Promise((r) => setTimeout(r, 300));
+      session!.cancel();
+
+      const result = await drainPromise;
+      expect(result).toBe("cancelled");
+    });
+
+    it("old Channel callback is discarded when session is cancelled", async () => {
+      // Mutant 4: if old callback changes B's progress, this fails.
+      localStorage.setItem("streamingMode", "buffered");
+      recorder = new SerialTraceRecorder();
+      recorder.defer("serial_stream_job");
+      // Use recorder as base handler, which captures channels for emit().
+      mockInvoke.mockImplementation(recorder.handler);
+
+      // Start job A with session
+      const sessionA = await beginJobSession("Job A");
+      expect(sessionA).not.toBeNull();
+      useStore.setState({ jobRunning: true, jobProgress: 0 });
+
+      const jobA = streamJob("G1 X10 F500", {
+        label: "Job A",
+        session: sessionA!,
+      });
+      recorder.trackJobPromise(jobA);
+
+      await recorder.waitUntilInvoked("serial_stream_job");
+
+      // Cancel session A (simulates STOP)
+      sessionA!.cancel();
+
+      // Emit a progress event to the channel AFTER cancellation.
+      // This should be discarded, not applied to the store.
+      recorder.emit({ type: "progress", lineIndex: 5, total: 10 });
+      const progressAfterCancel = useStore.getState().jobProgress;
+      expect(progressAfterCancel).toBe(0); // Must not have been updated
+
+      // Release to let the promise settle.
+      const idx = recorder.getRecordIndex("serial_stream_job");
+      recorder.releaseInvoke(idx, "complete");
+      await jobA;
+    });
+
+    it("Rust progress fixture yields finite sent-lines percentage; 100% does not release ownership", async () => {
+      // Mutant acceptance criterion 4: 100% progress does not release ownership.
+      localStorage.setItem("streamingMode", "buffered");
+      recorder = new SerialTraceRecorder();
+      recorder.defer("serial_stream_job");
+      // Use recorder as base handler, which captures channels for emit().
+      mockInvoke.mockImplementation(recorder.handler);
+
+      const session = await beginJobSession("Test");
+      expect(session).not.toBeNull();
+      useStore.setState({ jobRunning: true, jobProgress: 0 });
+
+      const job = streamJob("G1 X10 F500", {
+        label: "Test",
+        session: session!,
+      });
+      recorder.trackJobPromise(job);
+
+      await recorder.waitUntilInvoked("serial_stream_job");
+
+      // Emit progress to 100%
+      recorder.emit({ type: "progress", lineIndex: 9, total: 10 });
+      expect(useStore.getState().jobProgress).toBeCloseTo(1.0);
+
+      // jobRunning must still be true — 100% does not release.
+      expect(useStore.getState().jobRunning).toBe(true);
+
+      // Release the job
+      const idx = recorder.getRecordIndex("serial_stream_job");
+      recorder.releaseInvoke(idx, "complete");
+      await job;
+    });
+  });
+
+  // ---- Cross-job safety (B3: session ownership) ----
+  describe("Cross-job safety (B3 session ownership)", () => {
+    it(
+      "R4/R11: job B is refused while job A session is active",
       async () => {
-        // This test documents the CURRENT unsafe behavior:
-        // When job A's callback arrives after job B has started,
-        // and job A re-reads jobRunning (which B set to true),
-        // job A continues sending and corrupts B's state.
-        //
-        // it.fails() means: this test is EXPECTED to fail today.
-        // When batch 1.4 fixes the cross-job ownership issue,
-        // remove the .fails wrapper and the test becomes a regression guard.
+        // B3 fix: beginJobSession blocks a second job while the first
+        // session is still active. Job A's late callback cannot corrupt
+        // job B because job B is never admitted.
 
         localStorage.setItem("streamingMode", "buffered");
         recorder = new SerialTraceRecorder();
         recorder.defer("serial_stream_job");
+        // Use recorder which handles serial_job_begin/end natively.
         mockInvoke.mockImplementation(recorder.handler);
 
-        // Start job A
+        // Start job A with a session
+        const sessionA = await beginJobSession("Job A");
+        expect(sessionA).not.toBeNull();
+
         useStore.setState({ jobRunning: true, jobProgress: 0 });
-        const jobA = streamJob("G1 X10 F500", { label: "Job A" });
+        const jobA = streamJob("G1 X10 F500", {
+          label: "Job A",
+          session: sessionA!,
+        });
         recorder.trackJobPromise(jobA);
 
         // Wait for job A to invoke serial_stream_job
-        const jobAIndex = await recorder.waitUntilInvoked("serial_stream_job");
+        await recorder.waitUntilInvoked("serial_stream_job");
 
-        // Simulate job B starting (new streamJob call)
-        useStore.setState({ jobRunning: true, jobProgress: 0 });
-        const jobB = streamJob("G1 X20 F500", { label: "Job B" });
-        recorder.trackJobPromise(jobB);
+        // Attempt to start job B — should be refused (session A is active).
+        const sessionB = await beginJobSession("Job B");
+        expect(sessionB).toBeNull();
 
-        // Now release job A's invoke — CURRENT BEHAVIOR: job A's callback
-        // re-reads jobRunning (true, set by job B) and continues sending,
-        // which corrupts job B's execution.
+        // Verify console reports the block.
+        const consoleTexts = useStore
+          .getState()
+          .consoleLines.map((l) => l.text);
+        expect(
+          consoleTexts.some((t) => t.includes("Cannot start Job B"))
+        ).toBe(true);
+
+        // Release job A's invoke — cleanup is session-gated.
+        const jobAIndex = recorder.getRecordIndex("serial_stream_job");
         recorder.releaseInvoke(jobAIndex, "complete");
 
-        // Both jobs should eventually complete, but job B's output is corrupted.
-        // The test fails because we can't reliably detect corruption here without
-        // the fix. The fix (batch 1.4) will make this test pass by ensuring
-        // callbacks only execute if they still own the current job.
-        await expect(Promise.race([jobA, jobB])).rejects.toThrow();
+        const resultA = await jobA;
+        expect(resultA.endState).toBe("complete");
       }
     );
   });

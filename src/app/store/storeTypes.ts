@@ -139,6 +139,18 @@ export interface AppState {
   workCoordOffset: { x: number; y: number };
   setWorkCoordOffset: (offset: { x: number; y: number }) => void;
 
+  // B2b: snapshot-derived fields
+  positionKind: "machine" | "work" | null; // MPos vs WPos identity, never merged
+  setPositionKind: (kind: "machine" | "work" | null) => void;
+  spindleSpeed: number; // Last known spindle speed from snapshot
+  setSpindleSpeed: (v: number) => void;
+  feedRate: number; // Last known feed rate from snapshot
+  setFeedRate: (v: number) => void;
+  accessoryFlags: string | null; // Raw A: field flags, null = unknown (NOT off)
+  setAccessoryFlags: (v: string | null) => void;
+  statusStale: boolean; // B2b: true when last valid status is older than 3s
+  setStatusStale: (v: boolean) => void;
+
   // Workspace verification — true only when $130/$131 were both > 0
   workspaceVerified: boolean;
   setWorkspaceVerified: (v: boolean) => void;

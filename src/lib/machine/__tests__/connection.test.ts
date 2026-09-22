@@ -9,6 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../../app/store";
 import { DEFAULT_LAYERS } from "../../../app/types";
 import { machineConnection, _testResetPollFailures } from "../connection";
+import { resetStatusConsumer } from "../machineStatus";
 import { SerialTraceRecorder } from "../../../lib/machine/__tests__/serialTraceHarness";
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>;
@@ -39,11 +40,67 @@ function consoleLine(text: string) {
   return useStore.getState().consoleLines.find((l) => l.text === text);
 }
 
+/** Build a StatusOutcome with a snapshot, matching what B2a's Rust side returns. */
+let snapshotSeq = 0;
+function makeStatusOutcome(
+  raw: string,
+  events: string[] = [],
+  opts?: { epoch?: number; busy?: boolean; noResponse?: boolean }
+) {
+  if (opts?.busy) {
+    return { status: "", events, kind: "busy", snapshot: null };
+  }
+  if (opts?.noResponse) {
+    return { status: "", events, kind: "noResponse", snapshot: null };
+  }
+  // Parse enough of the raw string to build a minimal snapshot.
+  // Rust's serde(rename_all = "camelCase") serializes MachineState variants
+  // as lowercase simple variants and camelCase struct variant keys.
+  const stateMatch = raw.match(/^<(\w+)/);
+  const stateToken = stateMatch?.[1] ?? "Idle";
+  let state: unknown = stateToken.toLowerCase();
+  const holdMatch = stateToken.match(/^Hold(?::(\d+))?$/);
+  const doorMatch = stateToken.match(/^Door(?::(\d+))?$/);
+  if (holdMatch) state = { hold: { substate: holdMatch[1] ? parseInt(holdMatch[1]) : null } };
+  else if (doorMatch) state = { door: { substate: doorMatch[1] ? parseInt(doorMatch[1]) : null } };
+
+  const posMatch = raw.match(/([MW])Pos:([-\d.]+),([-\d.]+),([-\d.]+)/);
+  const wcoMatch = raw.match(/WCO:([-\d.]+),([-\d.]+),([-\d.]+)/);
+  const fsMatch = raw.match(/FS:([-\d.]+),([-\d.]+)/);
+
+  snapshotSeq++;
+  return {
+    status: raw,
+    events,
+    kind: "report",
+    snapshot: {
+      epoch: opts?.epoch ?? 1,
+      seq: snapshotSeq,
+      state,
+      positionKind: posMatch ? (posMatch[1] === "M" ? "MPos" : "WPos") : null,
+      position: posMatch
+        ? [parseFloat(posMatch[2]), parseFloat(posMatch[3]), parseFloat(posMatch[4])]
+        : null,
+      wco: wcoMatch
+        ? [parseFloat(wcoMatch[1]), parseFloat(wcoMatch[2]), parseFloat(wcoMatch[3])]
+        : null,
+      feed: fsMatch ? parseFloat(fsMatch[1]) : null,
+      spindle: fsMatch ? parseFloat(fsMatch[2]) : null,
+      accessory: "Unknown",
+      units: "Unknown",
+      raw,
+      unknownFields: [],
+    },
+  };
+}
+
 let recorder: SerialTraceRecorder;
 
 describe("connection.ts (TN3)", () => {
   beforeEach(() => {
     _testResetPollFailures();
+    resetStatusConsumer();
+    snapshotSeq = 0;
     mockInvoke.mockReset();
     localStorage.clear();
     seedConnectedStore();
@@ -59,10 +116,9 @@ describe("connection.ts (TN3)", () => {
   // TN3a — GRBL status-report regex parsing
   describe("pollStatus — status regex", () => {
     it("parses <Idle|MPos:1.000,2.000,0.000> and updates store", async () => {
-      mockInvoke.mockResolvedValueOnce({
-        status: "<Idle|MPos:1.000,2.000,0.000|FS:0,0>",
-        events: [],
-      });
+      mockInvoke.mockResolvedValueOnce(
+        makeStatusOutcome("<Idle|MPos:1.000,2.000,0.000|FS:0,0>")
+      );
       await machineConnection.pollStatus();
 
       const state = useStore.getState();
@@ -71,10 +127,9 @@ describe("connection.ts (TN3)", () => {
     });
 
     it("parses <Run|MPos:5.500,3.250,0.000> and sets run state", async () => {
-      mockInvoke.mockResolvedValueOnce({
-        status: "<Run|MPos:5.500,3.250,0.000|FS:100,0>",
-        events: [],
-      });
+      mockInvoke.mockResolvedValueOnce(
+        makeStatusOutcome("<Run|MPos:5.500,3.250,0.000|FS:100,0>")
+      );
       await machineConnection.pollStatus();
 
       const state = useStore.getState();
@@ -83,18 +138,19 @@ describe("connection.ts (TN3)", () => {
       expect(state.machinePosition!.y).toBeCloseTo(3.25, 5);
     });
 
-    it("handles non-matching status string without crashing", async () => {
-      mockInvoke.mockResolvedValueOnce({ status: "ok", events: [] });
+    it("handles NoResponse without crashing", async () => {
+      mockInvoke.mockResolvedValueOnce(
+        makeStatusOutcome("", [], { noResponse: true })
+      );
       await expect(machineConnection.pollStatus()).resolves.toBeUndefined();
       // State should not change from idle
       expect(useStore.getState().machineState).toBe("idle");
     });
 
     it("surfaces junk-skip events: ALARM styled error, [MSG:] styled info", async () => {
-      mockInvoke.mockResolvedValueOnce({
-        status: "",
-        events: ["ALARM:1", "[MSG:Reset to continue]"],
-      });
+      mockInvoke.mockResolvedValueOnce(
+        makeStatusOutcome("", ["ALARM:1", "[MSG:Reset to continue]"], { noResponse: true })
+      );
       await machineConnection.pollStatus();
       expect(consoleLine("ALARM:1")?.type).toBe("error");
       expect(consoleLine("[MSG:Reset to continue]")?.type).toBe("info");
@@ -209,7 +265,9 @@ describe("connection.ts (TN3)", () => {
       // The Ok-typed empty sentinel means "a pump holds the lock" (e.g. a 30s
       // $H). Three of them within 750ms must NOT disconnect — that would abort
       // the homing cycle the skip exists to tolerate.
-      mockInvoke.mockResolvedValue({ status: "", events: [] });
+      mockInvoke.mockResolvedValue(
+        makeStatusOutcome("", [], { busy: true })
+      );
       await machineConnection.pollStatus();
       await machineConnection.pollStatus();
       await machineConnection.pollStatus();
@@ -220,7 +278,9 @@ describe("connection.ts (TN3)", () => {
       mockInvoke.mockReset();
       mockInvoke.mockRejectedValueOnce(new Error("x"));
       mockInvoke.mockRejectedValueOnce(new Error("x"));
-      mockInvoke.mockResolvedValueOnce({ status: "", events: [] });
+      mockInvoke.mockResolvedValueOnce(
+        makeStatusOutcome("", [], { busy: true })
+      );
       mockInvoke.mockRejectedValueOnce(new Error("x"));
       mockInvoke.mockRejectedValueOnce(new Error("x"));
       for (let i = 0; i < 5; i++) await machineConnection.pollStatus();
@@ -283,7 +343,7 @@ describe("connection.ts (TN3)", () => {
           return { responses: settings, drained: [] };
         if (cmd === "serial_send") return { responses: ["ok"], drained: [] };
         if (cmd === "serial_get_status")
-          return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
+          return makeStatusOutcome("<Idle|MPos:0.000,0.000,0.000|FS:0,0>");
         if (cmd === "list_serial_ports")
           return [
             {
@@ -374,7 +434,7 @@ describe("connection.ts (TN3)", () => {
           }
           if (cmd === "serial_send") return { responses: ["ok"], drained: [] };
           if (cmd === "serial_get_status")
-            return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
+            return makeStatusOutcome("<Idle|MPos:0.000,0.000,0.000|FS:0,0>");
           if (cmd === "serial_disconnect") return undefined;
           return undefined;
         }
@@ -391,113 +451,133 @@ describe("connection.ts (TN3)", () => {
     });
   });
 
-  // TN3d — e-stop sequencing, REWRITTEN for the F13 protocol redesign.
-  // OLD order (! → M5 → 0x18) deadlocks under the read pump: M5 queues on the
-  // command lock held by the in-flight line, 0x18 never sends, laser stays on.
-  describe("emergencyStop sequencing (new contract)", () => {
-    function mockEStop(statusOutcome: { status: string; events: string[] }) {
+  // TN3d — e-stop sequencing, REWRITTEN for the 2026-09-20 DECISIONS ruling:
+  // "Abort sends 0x18 immediately — no feed hold, no M5, no ack wait."
+  // emergencyStop now invokes B1's serial_stop. No TS-side bytes at all.
+  describe("emergencyStop sequencing (native stop contract)", () => {
+    it("invokes serial_stop and surfaces confirmed messages", async () => {
+      mockInvoke.mockResolvedValueOnce({
+        outcome: "confirmed",
+        epochBefore: 1,
+        epochAfter: 2,
+        messages: [
+          "STOP: 0x18 sent",
+          "STOP: reset confirmed. Controller reset confirmed. Beam state unqualified — verify visually.",
+        ],
+      });
+
+      await machineConnection.emergencyStop();
+
+      expect(mockInvoke).toHaveBeenCalledWith("serial_stop");
+      expect(consoleTexts()).toContain("Emergency stop initiated");
+      expect(consoleTexts()).toContain("STOP: 0x18 sent");
+      expect(consoleTexts()).toContain(
+        "STOP: reset confirmed. Controller reset confirmed. Beam state unqualified — verify visually."
+      );
+    });
+
+    it("sets alarm state on submissionFailed outcome", async () => {
+      mockInvoke.mockResolvedValueOnce({
+        outcome: "submissionFailed",
+        epoch: 1,
+        error: "not connected",
+        messages: [
+          "STOP failed: could not send reset. Use the machine's physical emergency stop. Beam state unqualified.",
+        ],
+      });
+
+      await machineConnection.emergencyStop();
+
+      expect(useStore.getState().machineState).toBe("alarm");
+      expect(consoleTexts()).toContain(
+        "STOP failed: could not send reset. Use the machine's physical emergency stop. Beam state unqualified."
+      );
+    });
+
+    it("surfaces unconfirmed messages as warnings", async () => {
+      mockInvoke.mockResolvedValueOnce({
+        outcome: "submittedUnconfirmed",
+        epoch: 1,
+        inFlightWrite: false,
+        messages: [
+          "STOP: 0x18 sent",
+          "STOP: unconfirmed — use the machine's physical stop before reconnecting. Beam state unqualified — verify visually.",
+        ],
+      });
+
+      await machineConnection.emergencyStop();
+
+      expect(consoleTexts()).toContain("STOP: 0x18 sent");
+      expect(consoleTexts()).toContain(
+        "STOP: unconfirmed — use the machine's physical stop before reconnecting. Beam state unqualified — verify visually."
+      );
+      // Not submissionFailed, so state is NOT forced to alarm
+      expect(useStore.getState().machineState).not.toBe("alarm");
+    });
+
+    it("sets alarm and surfaces error when invoke rejects (IPC failure)", async () => {
+      mockInvoke.mockRejectedValueOnce(new Error("IPC channel closed"));
+
+      await machineConnection.emergencyStop();
+
+      expect(useStore.getState().machineState).toBe("alarm");
+      expect(
+        consoleTexts().some((t) => t.includes("Beam state unqualified"))
+      ).toBe(true);
+    });
+
+    it("sends NO bytes from TS — no 0x21, no 0x18, no M5", async () => {
       const calls: string[] = [];
       mockInvoke.mockImplementation(
-        async (cmd: string, args?: { byte?: number; command?: string }) => {
-          if (cmd === "serial_send_byte") {
-            calls.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
-            return;
-          }
-          if (cmd === "serial_send") {
-            calls.push(`send(${args?.command ?? "?"})`);
-            return { responses: ["ok"], drained: [] };
-          }
-          if (cmd === "serial_get_status") {
-            calls.push("status");
-            return statusOutcome;
+        async (cmd: string) => {
+          calls.push(cmd);
+          if (cmd === "serial_stop") {
+            return {
+              outcome: "confirmed",
+              epochBefore: 1,
+              epochAfter: 2,
+              messages: ["STOP: 0x18 sent"],
+            };
           }
           return undefined;
         }
       );
-      return calls;
-    }
 
-    it("pins ! → settle → 0x18 → bounded re-poll → M5 on a non-alarm report", async () => {
-      vi.useFakeTimers();
-      const calls = mockEStop({ status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] });
+      await machineConnection.emergencyStop();
 
-      const stopPromise = machineConnection.emergencyStop();
-      await vi.runAllTimersAsync();
-      await stopPromise;
-
-      expect(calls).toEqual(["byte(21)", "byte(18)", "status", "send(M5)"]);
-      expect(consoleTexts()).toContain("Emergency stop complete");
-    });
-
-    it("skips M5 and surfaces honest guidance when the re-poll shows alarm", async () => {
-      vi.useFakeTimers();
-      const calls = mockEStop({ status: "<Alarm|MPos:0.000,0.000,0.000|FS:0,0>", events: [] });
-
-      const stopPromise = machineConnection.emergencyStop();
-      await vi.runAllTimersAsync();
-      await stopPromise;
-
-      // M5 into a post-reset alarm earns the confusing error:9 — never sent.
-      expect(calls).toEqual(["byte(21)", "byte(18)", "status"]);
-      expect(consoleTexts()).toContain(
-        "Machine in alarm after stop -- laser off, unlock to continue"
-      );
-      // The alarm panel keys off machineState — refreshed from the report.
-      expect(useStore.getState().machineState).toBe("alarm");
-    });
-
-    it("skips M5 when the re-poll returns the busy/none sentinel (race branch)", async () => {
-      vi.useFakeTimers();
-      const calls = mockEStop({ status: "", events: [] });
-
-      const stopPromise = machineConnection.emergencyStop();
-      await vi.runAllTimersAsync();
-      await stopPromise;
-
-      // No report ⇒ no M5 decision basis ⇒ skip (reset already de-energized
-      // the laser); NEVER fall back to store.machineState (stale during jobs).
-      expect(calls).toEqual(["byte(21)", "byte(18)", "status"]);
-      expect(consoleTexts()).toContain(
-        "Emergency stop complete -- machine reset, laser de-energized"
-      );
+      // Only serial_stop — no serial_send_byte, no serial_send, no serial_get_status
+      expect(calls).toEqual(["serial_stop"]);
     });
   });
 
   // ---- A2: disconnect beam-on safety ----
   describe("disconnect — A2 beam-on safety", () => {
-    it("fires emergencyStop before teardown when a job is running", async () => {
-      vi.useFakeTimers();
+    it("fires emergencyStop (serial_stop) before teardown when a job is running", async () => {
       const calls: string[] = [];
       mockInvoke.mockImplementation(
-        async (cmd: string, args?: { byte?: number; command?: string }) => {
-          if (cmd === "serial_send_byte") {
-            calls.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
-            return;
+        async (cmd: string) => {
+          calls.push(cmd);
+          if (cmd === "serial_stop") {
+            return {
+              outcome: "confirmed",
+              epochBefore: 1,
+              epochAfter: 2,
+              messages: ["STOP: 0x18 sent"],
+            };
           }
-          if (cmd === "serial_send") {
-            calls.push(`send(${args?.command ?? "?"})`);
-            return { responses: ["ok"], drained: [] };
-          }
-          if (cmd === "serial_get_status") {
-            calls.push("status");
-            return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
-          }
-          if (cmd === "serial_disconnect") {
-            calls.push("disconnect");
-            return undefined;
-          }
+          if (cmd === "serial_disconnect") return undefined;
           return undefined;
         }
       );
 
       useStore.setState({ jobRunning: true, machineState: "run" });
-      const disconnectPromise = machineConnection.disconnect();
-      await vi.runAllTimersAsync();
-      await disconnectPromise;
+      await machineConnection.disconnect();
 
-      // E-stop sequence must fire BEFORE serial_disconnect
-      expect(calls.indexOf("byte(21)")).toBeLessThan(calls.indexOf("disconnect"));
-      expect(calls.indexOf("byte(18)")).toBeLessThan(calls.indexOf("disconnect"));
+      // serial_stop must fire BEFORE serial_disconnect
+      const stopIdx = calls.indexOf("serial_stop");
+      const disconnectIdx = calls.indexOf("serial_disconnect");
+      expect(stopIdx).toBeGreaterThanOrEqual(0);
+      expect(disconnectIdx).toBeGreaterThan(stopIdx);
       // jobRunning must be false after disconnect
       expect(useStore.getState().jobRunning).toBe(false);
       expect(useStore.getState().machineConnected).toBe(false);
@@ -514,37 +594,33 @@ describe("connection.ts (TN3)", () => {
       useStore.setState({ jobRunning: false, machineState: "idle" });
       await machineConnection.disconnect();
 
-      // No e-stop bytes sent — only the teardown
-      expect(calls).not.toContain("serial_send_byte");
+      // No serial_stop — only the teardown
+      expect(calls).not.toContain("serial_stop");
       expect(calls).toContain("serial_disconnect");
       expect(useStore.getState().machineConnected).toBe(false);
     });
 
     it("fires emergencyStop when machine is in hold state (even if jobRunning is false)", async () => {
-      vi.useFakeTimers();
       const calls: string[] = [];
-      mockInvoke.mockImplementation(async (cmd: string, args?: { byte?: number }) => {
-        if (cmd === "serial_send_byte") {
-          calls.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
-          return;
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        calls.push(cmd);
+        if (cmd === "serial_stop") {
+          return {
+            outcome: "confirmed",
+            epochBefore: 1,
+            epochAfter: 2,
+            messages: ["STOP: 0x18 sent"],
+          };
         }
-        if (cmd === "serial_get_status")
-          return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
-        if (cmd === "serial_send") return { responses: ["ok"], drained: [] };
-        if (cmd === "serial_disconnect") {
-          calls.push("disconnect");
-          return undefined;
-        }
+        if (cmd === "serial_disconnect") return undefined;
         return undefined;
       });
 
       useStore.setState({ jobRunning: false, machineState: "hold" });
-      const disconnectPromise = machineConnection.disconnect();
-      await vi.runAllTimersAsync();
-      await disconnectPromise;
+      await machineConnection.disconnect();
 
       // E-stop fires even when jobRunning is false (machine is in hold)
-      expect(calls.some((c) => c.startsWith("byte("))).toBe(true);
+      expect(calls).toContain("serial_stop");
     });
   });
 
@@ -556,31 +632,26 @@ describe("connection.ts (TN3)", () => {
       recorder = new SerialTraceRecorder(onSend);
       mockInvoke.mockImplementation(recorder.handler);
 
-      // Simulate emergencyStop sequence: 0x21, (sleep 100ms), 0x18, (sleep 200ms), status, M5
-      await recorder.handler("serial_send_byte", { byte: 0x21 });
-      await vi.advanceTimersByTimeAsync(100);
+      // Simulate a generic byte+send sequence for recorder verification
       await recorder.handler("serial_send_byte", { byte: 0x18 });
       await vi.advanceTimersByTimeAsync(200);
       await recorder.handler("serial_get_status", {});
-      await recorder.handler("serial_send", { command: "M5" });
+      await recorder.handler("serial_send", { command: "$$" });
 
       // Verify order: all records in sequence
       const records = recorder.allRecords();
-      expect(records.length).toBeGreaterThanOrEqual(4);
+      expect(records.length).toBeGreaterThanOrEqual(3);
       expect(records[0].command).toBe("serial_send_byte");
-      expect(records[0].args.byte).toBe(0x21);
-      expect(records[1].command).toBe("serial_send_byte");
-      expect(records[1].args.byte).toBe(0x18);
-      expect(records[2].command).toBe("serial_get_status");
-      expect(records[3].command).toBe("serial_send");
-      expect(records[3].args.command).toBe("M5");
+      expect(records[0].args.byte).toBe(0x18);
+      expect(records[1].command).toBe("serial_get_status");
+      expect(records[2].command).toBe("serial_send");
+      expect(records[2].args.command).toBe("$$");
 
       // Derived views must preserve the same order
       const bytes = recorder.sentBytes();
-      expect(bytes[0]).toBe(0x21);
-      expect(bytes[1]).toBe(0x18);
+      expect(bytes[0]).toBe(0x18);
       const commands = recorder.sentCommands();
-      expect(commands.some((c) => c === "M5")).toBe(true);
+      expect(commands.some((c) => c === "$$")).toBe(true);
 
       vi.useRealTimers();
     });
@@ -595,7 +666,7 @@ describe("connection.ts (TN3)", () => {
         if (cmd === "serial_send_byte") return undefined;
         if (cmd === "serial_send") return { responses: ["$30=1000", "$32=1"], drained: [] };
         if (cmd === "serial_get_status")
-          return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
+          return makeStatusOutcome("<Idle|MPos:0.000,0.000,0.000|FS:0,0>");
         if (cmd === "serial_disconnect") return undefined;
         return undefined;
       });

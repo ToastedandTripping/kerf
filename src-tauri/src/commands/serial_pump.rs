@@ -36,6 +36,15 @@ pub const DEFAULT_LIVENESS_TICKS: u32 = 60;
 /// probe is rewritten once (covers a `?` eaten during the post-reset boot window).
 pub const STATUS_MAX_TICKS: u32 = 2;
 
+/// Maximum single-frame length in bytes. A `<…>` status report or any other
+/// single line exceeding this is truncated — prevents unbounded accumulation from
+/// a junk-spewing hardware fault.
+pub const FRAME_LENGTH_CAP: usize = 4096;
+
+/// Maximum diagnostic data accumulated in `pending` before the pump truncates.
+/// Defense against a flood of partial bytes that never produce a newline.
+pub const DIAGNOSTIC_DATA_CAP: usize = 65536;
+
 /// Total-line ceiling: if the pump collects more than this many non-terminal lines
 /// without finding an ok/error/ALARM/banner, something is badly wrong (a chatty
 /// hardware fault spewing junk that's none of the terminal classes). Return
@@ -163,6 +172,7 @@ pub fn run_pump<R: BufRead, P: ProbeWriter>(
     pending: &mut Vec<u8>,
     liveness_ticks: u32,
     idle_stall_ticks: u32,
+    on_status: Option<&dyn Fn(&str)>,
 ) -> Result<PumpOutput, PumpFailure> {
     let mut lines: Vec<String> = Vec::new();
     let mut silent_ticks: u32 = 0;
@@ -177,6 +187,10 @@ pub fn run_pump<R: BufRead, P: ProbeWriter>(
             }
             Ok(_) => {
                 silent_ticks = 0;
+                // Frame length cap: truncate oversized single lines.
+                if pending.len() > FRAME_LENGTH_CAP {
+                    pending.truncate(FRAME_LENGTH_CAP);
+                }
                 let line = String::from_utf8_lossy(pending).trim().to_string();
                 pending.clear();
                 if line.is_empty() {
@@ -201,6 +215,13 @@ pub fn run_pump<R: BufRead, P: ProbeWriter>(
                 } else {
                     // Any non-status line (including terminals) resets the counter.
                     consecutive_idle = 0;
+                }
+                // Snapshot callback: publish status frames mid-pump so the
+                // snapshot is available without the command lock.
+                if class == LineClass::Status {
+                    if let Some(cb) = on_status {
+                        cb(&line);
+                    }
                 }
                 lines.push(line);
                 match class {
@@ -238,6 +259,16 @@ pub fn run_pump<R: BufRead, P: ProbeWriter>(
                             silent_ticks
                         )));
                     }
+                }
+                // Diagnostic data cap: if pending has accumulated past the
+                // ceiling without producing a newline, truncate and treat as
+                // a flood.
+                if pending.len() > DIAGNOSTIC_DATA_CAP {
+                    pending.clear();
+                    return Err(PumpFailure::Disconnected(format!(
+                        "diagnostic data cap exceeded: {}B without a newline",
+                        DIAGNOSTIC_DATA_CAP
+                    )));
                 }
                 probe
                     .write_probe()
@@ -750,7 +781,7 @@ mod tests {
         let mut reader = ScriptReader::new(steps);
         let mut probe = CountingProbe::new();
         let mut pending = Vec::new();
-        let result = run_pump(&mut reader, &mut probe, &mut pending, ticks, idle_stall_ticks);
+        let result = run_pump(&mut reader, &mut probe, &mut pending, ticks, idle_stall_ticks, None);
         (result, probe.probes, pending)
     }
 
@@ -896,7 +927,7 @@ mod tests {
 
         // The NEXT command's pump sees only its own fresh ack — zero misattribution.
         let mut probe = CountingProbe::new();
-        let out = run_pump(&mut reader, &mut probe, &mut pending, 5, DEFAULT_IDLE_STALL_TICKS).unwrap();
+        let out = run_pump(&mut reader, &mut probe, &mut pending, 5, DEFAULT_IDLE_STALL_TICKS, None).unwrap();
         assert_eq!(out.terminal, PumpTerminal::Ok);
         assert_eq!(out.lines, vec!["ok"]);
     }
@@ -964,7 +995,7 @@ mod tests {
         let mut pending = Vec::new();
 
         // Line 1
-        let out = run_pump(&mut reader, &mut probe, &mut pending, 60, DEFAULT_IDLE_STALL_TICKS).unwrap();
+        let out = run_pump(&mut reader, &mut probe, &mut pending, 60, DEFAULT_IDLE_STALL_TICKS, None).unwrap();
         assert_eq!(out.terminal, PumpTerminal::Ok);
         assert_eq!(out.lines.len(), 1, "no empty-ack advance");
 
@@ -980,7 +1011,7 @@ mod tests {
         steps.push(Step::Timeout);
         steps.push(Step::Data(b"k\n"));
         let mut reader = ScriptReader::new(steps);
-        let out = run_pump(&mut reader, &mut probe, &mut pending, 60, DEFAULT_IDLE_STALL_TICKS).unwrap();
+        let out = run_pump(&mut reader, &mut probe, &mut pending, 60, DEFAULT_IDLE_STALL_TICKS, None).unwrap();
         assert_eq!(out.terminal, PumpTerminal::Ok);
         assert_eq!(out.lines.last().map(String::as_str), Some("ok"));
         assert_eq!(
@@ -996,7 +1027,7 @@ mod tests {
             // Stale debris that lands AFTER the banner (post-reset MSG + delayed junk)
             Step::Data(b"[MSG:'$H'|'$X' to unlock]\nok\n"),
         ]);
-        let out = run_pump(&mut reader, &mut probe, &mut pending, 60, DEFAULT_IDLE_STALL_TICKS).unwrap();
+        let out = run_pump(&mut reader, &mut probe, &mut pending, 60, DEFAULT_IDLE_STALL_TICKS, None).unwrap();
         assert_eq!(out.terminal, PumpTerminal::Banner, "reset banner = aborted, never acked");
 
         // Line 4: the drain consumes the leftover debris before the next write …
@@ -1006,7 +1037,7 @@ mod tests {
 
         // … so the fresh command attributes only its own ack.
         let mut reader = ScriptReader::new(vec![Step::Data(b"ok\n")]);
-        let out = run_pump(&mut reader, &mut probe, &mut pending, 60, DEFAULT_IDLE_STALL_TICKS).unwrap();
+        let out = run_pump(&mut reader, &mut probe, &mut pending, 60, DEFAULT_IDLE_STALL_TICKS, None).unwrap();
         assert_eq!(out.terminal, PumpTerminal::Ok);
         assert_eq!(out.lines, vec!["ok"]);
     }

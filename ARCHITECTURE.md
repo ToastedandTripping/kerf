@@ -88,15 +88,20 @@ src/
 src-tauri/src/
   commands/
     serial.rs                — Serial port open/close/send/status, two-mutex (command +
-                               realtime) state; contains the sim_integration test module
+                               realtime) state, stop operation, per-line job admission;
+                               contains the sim_integration test module
+    serial_session.rs        — Session-level admission fence: epoch, phase transitions,
+                               permit generation, stop result enum, StopGuard RAII
     serial_pump.rs           — Wait-for-terminal read pump (run_pump): liveness `?` probing,
                                idle-stall detector, line classification (ok/error/ALARM/banner)
     gcode.rs                 — Tauri command: generate_gcode (calls engine); golden_tests module
     image_trace.rs           — Tauri command: trace_image (calls engine)
     power.rs                 — keep-awake acquire/release (OS sleep inhibitor during jobs)
     file_io.rs               — Empty (filesystem handled by tauri-plugin-fs)
-  sim/                       — GRBL 1.1 simulator, #[cfg(any(test, feature = "sim"))] only
+  sim/                       — Test infrastructure, #[cfg(any(test, feature = "sim"))] only
     grbl.rs                  — Virtual controller implementing serialport::SerialPort:
+    scripted_port.rs         — Deterministic test double with scripted read steps,
+                               ordered I/O trace, hold points, session-event observer
                                shared Arc<Mutex> brain, two-stage RX→planner buffer with
                                ok-on-accept, fault injection, strict-hold (M3/M4/M5-in-Hold)
                                invariant. The CI backbone for the streaming stack.
@@ -148,6 +153,18 @@ src-tauri/tests/
    MachinePanel "Start" → line-by-line serial send
    → connection.ts → serial.rs → GRBL controller
 ```
+
+### Serial Lock Order
+
+| Order | Lock | Held by | Duration |
+|-------|------|---------|----------|
+| leaf  | `session.admitted_job`, `session.last_stop`, `session.observer` | admission/stop/test | Microseconds |
+| 2     | `realtime` | `send_byte_inner`, `serial_stop_inner`, `disconnect` | Microseconds |
+| 3     | `command` | `serial_send_inner`, `serial_stream_job_inner`, `serial_connect_inner` | Seconds to minutes |
+
+Connect is the one nesting exception: acquires `command` then `realtime` to install both
+handles atomically. The stop operation takes `admitted_job` then `realtime` (never `command`);
+after `0x18` it may `try_lock` `command` (never wait) for a banner read.
 
 ### State Architecture
 

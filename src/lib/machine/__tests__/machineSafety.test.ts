@@ -13,6 +13,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../../app/store";
 import { DEFAULT_LAYERS } from "../../../app/types";
 import { machineConnection, _testResetPollFailures } from "../connection";
+import { resetStatusConsumer } from "../machineStatus";
 import {
   canStartJob,
   movesExtents,
@@ -55,6 +56,7 @@ function consoleTexts(): string[] {
 
 beforeEach(() => {
   _testResetPollFailures();
+  resetStatusConsumer();
   mockInvoke.mockReset();
   localStorage.clear();
   seedStore();
@@ -210,6 +212,15 @@ describe("pollStatus — WCO parsing", () => {
     mockInvoke.mockResolvedValueOnce({
       status: "<Idle|MPos:10.000,20.000,0.000|FS:0,0|WCO:5.000,3.500,0.000>",
       events: [],
+      kind: "report",
+      snapshot: {
+        epoch: 1, seq: 1, state: "idle",
+        positionKind: "MPos", position: [10, 20, 0],
+        wco: [5.0, 3.5, 0.0],
+        feed: 0, spindle: 0, accessory: "Unknown", units: "Unknown",
+        raw: "<Idle|MPos:10.000,20.000,0.000|FS:0,0|WCO:5.000,3.500,0.000>",
+        unknownFields: [],
+      },
     });
     await machineConnection.pollStatus();
     const { workCoordOffset } = useStore.getState();
@@ -222,6 +233,15 @@ describe("pollStatus — WCO parsing", () => {
     mockInvoke.mockResolvedValueOnce({
       status: "<Idle|MPos:10.000,20.000,0.000|FS:0,0>",
       events: [],
+      kind: "report",
+      snapshot: {
+        epoch: 1, seq: 2, state: "idle",
+        positionKind: "MPos", position: [10, 20, 0],
+        wco: null,
+        feed: 0, spindle: 0, accessory: "Unknown", units: "Unknown",
+        raw: "<Idle|MPos:10.000,20.000,0.000|FS:0,0>",
+        unknownFields: [],
+      },
     });
     await machineConnection.pollStatus();
     // WCO absent: keeps the last known value (GRBL only sends WCO occasionally)

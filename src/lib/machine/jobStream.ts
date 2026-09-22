@@ -16,55 +16,31 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { useStore } from "../../app/store";
 import { machineConnection } from "./connection";
+import type { JobSession } from "./jobSession";
 
 /**
- * pauseJob — feed hold only.
+ * pauseJob — becomes STOP per DECISIONS.md rulings.
  *
- * With $32=1 enforced at job start (canStartJob gate), the firmware
- * automatically stops the spindle at hold-complete. No 0x9E toggle needed.
+ * "Pause is hold-only, and becomes stop wherever a dark hold has not been
+ * observed on hardware." + "Hardware evidence for this program is status-only;
+ * optical shutdown cannot be qualified." = hold cannot be qualified = pause is
+ * stop.
  *
- * History: the previous version sent 0x9E (spindle-stop-override) after hold.
- * Probe 2026-09-14 proved 0x9E is a TOGGLE — the firmware already stops the
- * spindle, so 0x9E RE-ARMED the beam. DECISIONS.md: "0x9E is a TOGGLE and
- * GRBL already stops the laser itself at hold-complete — Kerf's pause volley
- * re-arms the beam."
- *
- * The Hold:0 poll is retained as informational logging — it confirms the
- * machine reached full hold, which is useful diagnostic data.
+ * The old feed-hold + Hold:0 poll is deleted. Its Rust side
+ * (serial_get_status's try_lock) returned the empty sentinel for as long as
+ * the pump held the command lock — it could never succeed during a job. It
+ * always timed out at 3s and would have fired 0x9E (the pause re-arm defect).
  */
 export async function pauseJob(): Promise<void> {
-  await machineConnection.feedHold();
+  const store = useStore.getState();
+  store.addConsoleLine(
+    "Paused jobs cannot resume until a dark hold is qualified on hardware; the job has been stopped.",
+    "warning"
+  );
 
-  const HOLD_POLL_MS = 50;
-  const HOLD_TIMEOUT_MS = 3000;
-  const deadline = Date.now() + HOLD_TIMEOUT_MS;
-  let reachedHold0 = false;
-
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, HOLD_POLL_MS));
-    try {
-      const report = await machineConnection.getStatusReport();
-      if (report && /^<Hold:0/i.test(report)) {
-        reachedHold0 = true;
-        break;
-      }
-      if (report && /^<Hold\|/i.test(report)) {
-        reachedHold0 = true;
-        break;
-      }
-    } catch {
-      break;
-    }
-  }
-
-  if (!reachedHold0) {
-    useStore
-      .getState()
-      .addConsoleLine(
-        "WARNING: Machine did not reach full Hold within 3s",
-        "warning"
-      );
-  }
+  // Route through the shared stop — same path as STOP button and error abort.
+  store.setJobRunning(false);
+  await machineConnection.emergencyStop();
 }
 
 /**
@@ -87,10 +63,15 @@ export interface StreamJobOptions {
   /** When true, wait up to 30s for machine to reach Idle after the last line
    *  acks (head is still decelerating at last-ack time). START-only. */
   waitForIdle?: boolean;
+
+  /** B3: job session that owns this stream. When provided, the session gates
+   *  progress/cleanup and handles draining. Callbacks that don't match the
+   *  session's jobId are discarded (cross-job safety). */
+  session?: JobSession;
 }
 
 export interface StreamJobResult {
-  endState: "complete" | "cancelled" | "aborted" | "alarm" | "error";
+  endState: "complete" | "cancelled" | "aborted" | "alarm" | "error" | "unknown";
   portDisconnected: boolean;
 }
 
@@ -140,14 +121,19 @@ interface JobEvent {
  */
 async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise<StreamJobResult> {
   const store = useStore.getState();
+  const session = opts.session;
 
   const channel = new Channel<JobEvent>();
 
   channel.onmessage = (event: JobEvent) => {
+    // B3: discard callbacks that don't belong to this session.
+    if (session && session.cancelled) return;
     const s = useStore.getState();
     switch (event.type) {
       case "progress":
         if (event.total && event.total > 0) {
+          // B3: progress yields a finite sent-lines percentage.
+          // 100% does NOT release ownership — draining does that.
           s.setJobProgress((event.lineIndex! + 1) / event.total);
         }
         break;
@@ -187,7 +173,28 @@ async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise
 
     if (outcome.startsWith("complete")) {
       endState = "complete";
-      if (opts.waitForIdle) {
+      // B3: when a session owns this stream, drain through the session.
+      // The session handles idle-wait and timeout-to-unknown.
+      if (session) {
+        const drainResult = await session.drain(!!opts.waitForIdle);
+        if (drainResult === "unknown") {
+          // 30s drain timeout: "unknown" state. Session retains protection
+          // (jobRunning stays true, keep-awake held). Razor W1: must NOT
+          // map to "complete" — that releases protection prematurely.
+          endState = "unknown";
+        } else if (drainResult === "alarm") {
+          endState = "alarm";
+          store.addConsoleLine(
+            `${opts.label} stopped -- machine alarm (laser already off; unlock to continue)`,
+            "error"
+          );
+        } else if (drainResult === "cancelled") {
+          endState = "cancelled";
+          store.addConsoleLine(`${opts.label} cancelled`, "info");
+        } else {
+          store.addConsoleLine(`${opts.label} complete`, "info");
+        }
+      } else if (opts.waitForIdle) {
         const IDLE_TIMEOUT_MS = 30000;
         const IDLE_POLL_MS = 200;
         const idleDeadline = Date.now() + IDLE_TIMEOUT_MS;
@@ -248,25 +255,27 @@ async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise
     }
   }
 
-  // Safety volley: ensure laser is off on non-complete, non-alarm outcomes.
-  // ALARM excluded: GRBL is already locked and the volley earns error:9.
-  // SKIPPED when jobRunning is already false -- the user pressed STOP and
-  // emergencyStop ran its own sequence; a second M5+0x18 would be redundant.
+  // Safety: on non-complete, non-alarm outcomes, route through one shared
+  // emergencyStop (B1's native stop). ALARM excluded: GRBL is already locked.
+  // SKIPPED when jobRunning is already false — the user pressed STOP and
+  // emergencyStop already ran; duplicate stops are harmless (B1 single-flight)
+  // but pointless.
   if (endState !== "complete" && endState !== "alarm" && useStore.getState().jobRunning) {
     try {
-      await machineConnection.send("M5");
-    } catch {
-      /* port may be gone */
-    }
-    try {
-      await machineConnection.softReset();
+      await machineConnection.emergencyStop();
     } catch {
       /* port may be gone */
     }
   }
 
-  store.setJobRunning(false);
-  store.setJobProgress(0);
+  // B3: when a session owns this stream, the session handles cleanup.
+  // Otherwise, legacy direct cleanup.
+  if (session) {
+    await session.end(endState as "complete" | "cancelled" | "aborted" | "alarm" | "error" | "unknown");
+  } else {
+    store.setJobRunning(false);
+    store.setJobProgress(0);
+  }
 
   if (portDisconnected) {
     try {
@@ -350,9 +359,29 @@ export async function streamJob(gcode: string, opts: StreamJobOptions): Promise<
   }
 
   // -- Post-loop handling --
+  const session = opts.session;
 
   if (endState === "complete") {
-    if (opts.waitForIdle) {
+    // B3: when a session owns this stream, drain through the session.
+    if (session) {
+      const drainResult = await session.drain(!!opts.waitForIdle);
+      if (drainResult === "unknown") {
+        // Drain timeout: session retains protection; don't announce complete.
+        // Razor W1: must map to "unknown", not leave as "complete".
+        endState = "unknown";
+      } else if (drainResult === "alarm") {
+        endState = "alarm";
+        store.addConsoleLine(
+          `${opts.label} stopped -- machine alarm (laser already off; unlock to continue)`,
+          "error"
+        );
+      } else if (drainResult === "cancelled") {
+        endState = "cancelled";
+        store.addConsoleLine(`${opts.label} cancelled`, "info");
+      } else {
+        store.addConsoleLine(`${opts.label} complete`, "info");
+      }
+    } else if (opts.waitForIdle) {
       // F19: after last ack, wait for machine to actually reach Idle before
       // re-enabling START -- head is still decelerating at last-ack time.
       const IDLE_TIMEOUT_MS = 30000;
@@ -388,17 +417,11 @@ export async function streamJob(gcode: string, opts: StreamJobOptions): Promise<
       "error"
     );
   } else {
-    // Safety volley: ensure laser is off. SKIPPED when jobRunning is already
-    // false -- the user pressed STOP and emergencyStop ran its own sequence;
-    // a second M5+0x18 would push another reset banner into the buffer.
+    // Safety: route through one shared emergencyStop (B1's native stop).
+    // SKIPPED when jobRunning is already false — STOP already ran.
     if (useStore.getState().jobRunning) {
       try {
-        await machineConnection.send("M5");
-      } catch {
-        /* port may be gone */
-      }
-      try {
-        await machineConnection.softReset();
+        await machineConnection.emergencyStop();
       } catch {
         /* port may be gone */
       }
@@ -406,8 +429,13 @@ export async function streamJob(gcode: string, opts: StreamJobOptions): Promise<
     store.addConsoleLine(`${opts.label} aborted`, "error");
   }
 
-  store.setJobRunning(false);
-  store.setJobProgress(0);
+  // B3: when a session owns this stream, the session handles cleanup.
+  if (session) {
+    await session.end(endState as "complete" | "cancelled" | "aborted" | "alarm" | "error" | "unknown");
+  } else {
+    store.setJobRunning(false);
+    store.setJobProgress(0);
+  }
 
   // Tear down the serial port on disconnect so a subsequent reconnect
   // (which now sends 0x18) doesn't fail with "port busy". Runs AFTER the

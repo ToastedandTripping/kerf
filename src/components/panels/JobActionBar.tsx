@@ -22,6 +22,7 @@ import {
   isWithinBounds,
 } from "../../lib/machine/canStartJob";
 import { streamJob, pauseJob, resumeJob } from "../../lib/machine/jobStream";
+import { beginJobSession, stopActiveSession } from "../../lib/machine/jobSession";
 import { formatTime } from "../../lib/constants";
 
 export function JobActionBar() {
@@ -41,6 +42,7 @@ export function JobActionBar() {
   const originTop = useStore((s) => s.originTop);
   const workspaceVerified = useStore((s) => s.workspaceVerified);
   const grblLaserMode = useStore((s) => s.grblLaserMode);
+  const statusStale = useStore((s) => s.statusStale);
 
   // Elapsed-time timer (moved verbatim from MachinePanel)
   const jobStartTimeRef = useRef<number>(0);
@@ -71,6 +73,10 @@ export function JobActionBar() {
     }
     const job = useStore.getState().gcodeResult!;
 
+    // B3: acquire a job session before streaming.
+    const session = await beginJobSession("Job");
+    if (!session) return; // blocked by active/stopping session
+
     setJobRunning(true);
     setJobProgress(0);
     addConsoleLine("Sending job...", "info");
@@ -78,6 +84,7 @@ export function JobActionBar() {
     const result = await streamJob(job.gcode, {
       label: "Job",
       waitForIdle: true,
+      session,
     });
 
     if (result.endState === "complete") {
@@ -101,6 +108,11 @@ export function JobActionBar() {
   }
 
   async function handleStop() {
+    // B3: cancel the active session (wakes drain waits) but do NOT await
+    // it before the emergency stop — awaiting session.settled creates a
+    // circular dependency in buffered mode (Razor C1). The pre-B3 order
+    // (setJobRunning false, then emergencyStop) is safety-critical.
+    stopActiveSession(); // fire-and-forget: session settles after e-stop
     setJobRunning(false);
     await machineConnection.emergencyStop();
   }
@@ -148,9 +160,13 @@ export function JobActionBar() {
     }
     frameLines.push("M5");
 
+    // B3: acquire a job session for FRAME.
+    const session = await beginJobSession("Frame");
+    if (!session) return;
+
     setJobRunning(true);
     setJobProgress(0);
-    await streamJob(frameLines.join("\n"), { label: "Frame" });
+    await streamJob(frameLines.join("\n"), { label: "Frame", session });
   }
 
   // --- Gate computation (scalars passed individually — same as MachinePanel IIFE) ---
@@ -165,6 +181,7 @@ export function JobActionBar() {
     originTop,
     workspaceVerified,
     grblLaserMode,
+    statusStale,
   });
 
   // FRAME contract: framing traces the true G-code extents; fresh G-code +
