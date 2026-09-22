@@ -52,6 +52,7 @@ vi.mock("pdfjs-dist", () => ({
     endPath: 28,
     setStrokeRGBColor: 58,
     setStrokeGray: 51,
+    constructPath: 60,
   },
 }));
 
@@ -303,6 +304,311 @@ describe("PDF import", () => {
     expect(objects.length).toBe(1);
     expect(objects[0].transform.height).toBe(0); // no ||1 clamp
     assertPointsInvariant(objects[0]);
+  });
+
+  describe("constructPath (pdfjs v5 path packing)", () => {
+    // Test the live v5 constructPath branch with moveTo, lineTo, curveTo, quadraticCurveTo, closePath, rectangle
+    // constructPath encodes drawOps (0-4) interleaved with coordinates in a Float32Array
+
+    it("constructPath: moveTo + lineTo + stroke", async () => {
+      const objects = await extract((OPS) => ({
+        fnArray: [OPS.constructPath],
+        argsArray: [
+          [
+            OPS.stroke, // finishing op
+            [new Float32Array([0, 10, 10, 1, 90, 50])], // drawOps: 0=moveTo(2 coords), 1=lineTo(2 coords)
+          ],
+        ],
+      }));
+      expect(objects.length).toBe(1);
+      expect(objects[0].type).toBe("path");
+      expect(objects[0].points!.length).toBe(2);
+      expect(objects[0].points![0]).toEqual({ x: 10 * (25.4 / 72), y: (100 - 10) * (25.4 / 72) });
+      expect(objects[0].points![1]).toEqual({ x: 90 * (25.4 / 72), y: (100 - 50) * (25.4 / 72) });
+      assertPointsInvariant(objects[0]);
+    });
+
+    it("constructPath: cubic bezier (curveTo with 6 coords)", async () => {
+      const objects = await extract((OPS) => ({
+        fnArray: [OPS.constructPath],
+        argsArray: [
+          [
+            OPS.stroke,
+            [
+              new Float32Array([
+                0,
+                10,
+                10, // moveTo: (10, 10)
+                2,
+                20,
+                40,
+                60,
+                40,
+                70,
+                10, // curveTo: cp1=(20,40), cp2=(60,40), end=(70,10)
+              ]),
+            ],
+          ],
+        ],
+      }));
+      expect(objects.length).toBe(1);
+      const obj = objects[0];
+      expect(obj.points!.length).toBe(2);
+      // Start point
+      expect(obj.points![0].x).toBeCloseTo(10 * (25.4 / 72));
+      expect(obj.points![0].y).toBeCloseTo((100 - 10) * (25.4 / 72));
+      // End point has handleIn from cp2
+      expect(obj.points![1].x).toBeCloseTo(70 * (25.4 / 72));
+      expect(obj.points![1].y).toBeCloseTo((100 - 10) * (25.4 / 72));
+      expect(obj.points![1].handleIn).toBeDefined();
+      assertPointsInvariant(obj);
+    });
+
+    it("constructPath: quadratic bezier promoted to cubic", async () => {
+      const objects = await extract((OPS) => ({
+        fnArray: [OPS.constructPath],
+        argsArray: [
+          [
+            OPS.stroke,
+            [
+              new Float32Array([
+                0,
+                10,
+                10, // moveTo: (10, 10)
+                3,
+                50,
+                50,
+                90,
+                10, // quadraticCurveTo: qx,qy,x,y
+              ]),
+            ],
+          ],
+        ],
+      }));
+      expect(objects.length).toBe(1);
+      const obj = objects[0];
+      expect(obj.points!.length).toBe(2);
+      // Start point
+      expect(obj.points![0].x).toBeCloseTo(10 * (25.4 / 72));
+      // End point
+      expect(obj.points![1].x).toBeCloseTo(90 * (25.4 / 72));
+      // Quadratic is promoted to cubic, so handles should be defined
+      expect(obj.points![0].handleOut).toBeDefined();
+      expect(obj.points![1].handleIn).toBeDefined();
+      assertPointsInvariant(obj);
+    });
+
+    it("constructPath: closePath inside constructPath", async () => {
+      const objects = await extract((OPS) => ({
+        fnArray: [OPS.constructPath],
+        argsArray: [
+          [
+            OPS.fill, // finishing op = fill (causes closePath marking)
+            [
+              new Float32Array([
+                0,
+                10,
+                10, // moveTo
+                1,
+                50,
+                10, // lineTo
+                1,
+                50,
+                50, // lineTo
+                4, // closePath (drawOp)
+              ]),
+            ],
+          ],
+        ],
+      }));
+      expect(objects.length).toBe(1);
+      expect(objects[0].closed).toBe(true);
+      expect(objects[0].points!.length).toBe(3);
+      assertPointsInvariant(objects[0]);
+    });
+
+    it("constructPath: rectangle via drawOps", async () => {
+      const objects = await extract((OPS) => ({
+        fnArray: [OPS.constructPath],
+        argsArray: [
+          [
+            OPS.stroke,
+            [
+              new Float32Array([
+                0,
+                10,
+                10, // moveTo (top-left)
+                1,
+                50,
+                10, // lineTo (top-right)
+                1,
+                50,
+                50, // lineTo (bottom-right)
+                1,
+                10,
+                50, // lineTo (bottom-left)
+                4, // closePath
+              ]),
+            ],
+          ],
+        ],
+      }));
+      expect(objects.length).toBe(1);
+      expect(objects[0].points!.length).toBe(4);
+      expect(objects[0].closed).toBe(true);
+      assertPointsInvariant(objects[0]);
+    });
+
+    it("constructPath: compound path (multiple subpaths)", async () => {
+      const objects = await extract((OPS) => ({
+        fnArray: [OPS.constructPath],
+        argsArray: [
+          [
+            OPS.fill,
+            [
+              new Float32Array([
+                0,
+                10,
+                10, // moveTo (first subpath)
+                1,
+                30,
+                30, // lineTo
+                4, // closePath
+                0,
+                50,
+                50, // moveTo (second subpath)
+                1,
+                70,
+                70, // lineTo
+                4, // closePath
+              ]),
+            ],
+          ],
+        ],
+      }));
+      // Multiple subpaths should be grouped
+      expect(objects.length).toBe(1);
+      expect(objects[0].type).toBe("group");
+      expect(objects[0].children!.length).toBe(2);
+      assertPointsInvariant(objects[0]);
+    });
+
+    it("constructPath with transform matrix", async () => {
+      const objects = await extract((OPS) => ({
+        fnArray: [OPS.transform, OPS.constructPath],
+        argsArray: [
+          [2, 0, 0, 2, 10, 10], // scale 2x, translate (10, 10)
+          [
+            OPS.stroke,
+            [
+              new Float32Array([
+                0,
+                10,
+                10, // moveTo (10, 10) → scaled to (30, 30) after transform
+                1,
+                20,
+                20, // lineTo (20, 20) → scaled to (50, 50)
+              ]),
+            ],
+          ],
+        ],
+      }));
+      expect(objects.length).toBe(1);
+      const obj = objects[0];
+      // After transform: (10,10) → (2*10+10, 2*10+10) = (30, 30)
+      const pt0x = 30 * (25.4 / 72);
+      const pt0y = (100 - 30) * (25.4 / 72);
+      expect(obj.points![0].x).toBeCloseTo(pt0x, 1);
+      expect(obj.points![0].y).toBeCloseTo(pt0y, 1);
+      assertPointsInvariant(obj);
+    });
+
+    it("constructPath: closeStroke finishing op", async () => {
+      const objects = await extract((OPS) => ({
+        fnArray: [OPS.constructPath],
+        argsArray: [
+          [
+            OPS.closeStroke,
+            [
+              new Float32Array([
+                0,
+                10,
+                10, // moveTo
+                1,
+                50,
+                50, // lineTo
+                // no explicit closePath — closeStroke does it
+              ]),
+            ],
+          ],
+        ],
+      }));
+      expect(objects.length).toBe(1);
+      expect(objects[0].closed).toBe(true);
+      assertPointsInvariant(objects[0]);
+    });
+
+    it("constructPath: mixed draw ops (moveTo, lineTo, curveTo)", async () => {
+      const objects = await extract((OPS) => ({
+        fnArray: [OPS.constructPath],
+        argsArray: [
+          [
+            OPS.stroke,
+            [
+              new Float32Array([
+                0,
+                10,
+                10, // moveTo
+                1,
+                50,
+                10, // lineTo
+                2,
+                55,
+                30,
+                60,
+                30,
+                70,
+                10, // curveTo
+                1,
+                70,
+                50, // lineTo
+                4, // closePath
+              ]),
+            ],
+          ],
+        ],
+      }));
+      expect(objects.length).toBe(1);
+      expect(objects[0].points!.length).toBeGreaterThanOrEqual(3);
+      assertPointsInvariant(objects[0]);
+    });
+
+    it("constructPath: fillStroke finishing op marks path as closed", async () => {
+      const objects = await extract((OPS) => ({
+        fnArray: [OPS.constructPath],
+        argsArray: [
+          [
+            OPS.fillStroke,
+            [
+              new Float32Array([
+                0,
+                10,
+                10, // moveTo
+                1,
+                50,
+                10, // lineTo
+                1,
+                50,
+                50, // lineTo
+              ]),
+            ],
+          ],
+        ],
+      }));
+      expect(objects.length).toBe(1);
+      expect(objects[0].closed).toBe(true);
+      assertPointsInvariant(objects[0]);
+    });
   });
 });
 
