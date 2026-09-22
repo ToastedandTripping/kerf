@@ -187,8 +187,8 @@ impl PumpReader for BufReader<Box<dyn SerialPort>> {
 #[tauri::command]
 pub async fn list_serial_ports() -> Result<Vec<PortInfo>, String> {
     tokio::task::spawn_blocking(|| {
-        let ports = serialport::available_ports()
-            .map_err(|e| format!("Failed to list ports: {}", e))?;
+        let ports =
+            serialport::available_ports().map_err(|e| format!("Failed to list ports: {}", e))?;
 
         Ok(ports
             .iter()
@@ -357,11 +357,17 @@ pub async fn serial_connect(
 ) -> Result<String, String> {
     let inner = state.0.clone();
     tokio::task::spawn_blocking(move || {
-        serial_connect_inner(&inner, &port_name, baud_rate, &std::thread::sleep, &|name, baud| {
-            serialport::new(name, baud)
-                .timeout(Duration::from_millis(1000))
-                .open()
-        })
+        serial_connect_inner(
+            &inner,
+            &port_name,
+            baud_rate,
+            &std::thread::sleep,
+            &|name, baud| {
+                serialport::new(name, baud)
+                    .timeout(Duration::from_millis(1000))
+                    .open()
+            },
+        )
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
@@ -385,9 +391,11 @@ pub async fn serial_disconnect(
     job_active: Option<bool>,
 ) -> Result<(), String> {
     let inner = state.0.clone();
-    tokio::task::spawn_blocking(move || disconnect_inner_with_job(&inner, job_active.unwrap_or(false)))
-        .await
-        .map_err(|e| format!("Task join error: {}", e))?
+    tokio::task::spawn_blocking(move || {
+        disconnect_inner_with_job(&inner, job_active.unwrap_or(false))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 /// Disconnect body (backwards-compatible wrapper). See `disconnect_inner_with_job`.
@@ -401,11 +409,13 @@ pub(crate) fn disconnect_inner(inner: &SerialInner) -> Result<(), String> {
 ///
 /// The realtime `0x18` happens BEFORE any wait on the command lock (pinned by
 /// `disconnect_aborts_in_flight_pump_via_realtime_reset`).
-pub(crate) fn disconnect_inner_with_job(inner: &SerialInner, job_active: bool) -> Result<(), String> {
+pub(crate) fn disconnect_inner_with_job(
+    inner: &SerialInner,
+    job_active: bool,
+) -> Result<(), String> {
     let phase = inner.session.phase.load(Ordering::SeqCst);
-    let needs_stop = inner.pump_in_flight.load(Ordering::SeqCst)
-        || job_active
-        || phase == PHASE_ACTIVE;
+    let needs_stop =
+        inner.pump_in_flight.load(Ordering::SeqCst) || job_active || phase == PHASE_ACTIVE;
 
     if needs_stop {
         // Route through the stop operation for the 0x18 + admission closure.
@@ -654,7 +664,11 @@ pub async fn serial_is_connected(state: State<'_, SerialState>) -> Result<bool, 
 
 /// Events streamed to the frontend during a buffered job via Tauri's Channel API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum JobEvent {
     /// Job progress update.
     Progress {
@@ -725,10 +739,7 @@ pub(crate) fn serial_stream_job_inner(
         Ok(out) => {
             let has_ok = out.lines.iter().any(|l| l == "ok");
             if !has_ok {
-                return Err(format!(
-                    "$32=1 gate failed: {:?}",
-                    out.lines
-                ));
+                return Err(format!("$32=1 gate failed: {:?}", out.lines));
             }
         }
         Err(PumpFailure::Disconnected(msg)) => return Err(format!("disconnected: {}", msg)),
@@ -769,9 +780,7 @@ pub(crate) fn serial_stream_job_inner(
                 BufferedPumpEvent::LineSent { line_index, total } => {
                     JobEvent::Progress { line_index, total }
                 }
-                BufferedPumpEvent::ConsoleMessage(text) => {
-                    JobEvent::Console { text }
-                }
+                BufferedPumpEvent::ConsoleMessage(text) => JobEvent::Console { text },
                 BufferedPumpEvent::StatusReport(report) => {
                     // Publish snapshot from the buffered pump's status frames.
                     inner.session.publish_snapshot(&report, lock_epoch);
@@ -890,10 +899,7 @@ pub async fn serial_abort_job(state: State<'_, SerialState>) -> Result<(), Strin
 /// nothing about a stale epoch makes the reset byte less correct.
 ///
 /// See `serial_session.rs` for the full concurrency design.
-pub(crate) fn serial_stop_inner(
-    inner: &SerialInner,
-    sleeper: &dyn Fn(Duration),
-) -> StopResult {
+pub(crate) fn serial_stop_inner(inner: &SerialInner, sleeper: &dyn Fn(Duration)) -> StopResult {
     let session = &inner.session;
     let epoch_before = session.epoch.load(Ordering::SeqCst);
 
@@ -989,10 +995,7 @@ pub(crate) fn serial_stop_inner(
             )],
         };
         session.phase.store(PHASE_UNKNOWN, Ordering::SeqCst);
-        *session
-            .last_stop
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(result.clone());
+        *session.last_stop.lock().unwrap_or_else(|e| e.into_inner()) = Some(result.clone());
         // _guard drops here, clearing stop_in_flight
         return result;
     }
@@ -1056,10 +1059,7 @@ pub(crate) fn serial_stop_inner(
         }
     };
 
-    *session
-        .last_stop
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) = Some(result.clone());
+    *session.last_stop.lock().unwrap_or_else(|e| e.into_inner()) = Some(result.clone());
 
     // _guard drops here, clearing stop_in_flight
     result
@@ -1068,15 +1068,11 @@ pub(crate) fn serial_stop_inner(
 /// Tauri command: stop the machine. Sends `0x18` immediately per DECISIONS.md
 /// (2026-09-20): no feed hold, no M5, no ack wait.
 #[tauri::command]
-pub async fn serial_stop(
-    state: State<'_, SerialState>,
-) -> Result<StopResult, String> {
+pub async fn serial_stop(state: State<'_, SerialState>) -> Result<StopResult, String> {
     let inner = state.0.clone();
-    tokio::task::spawn_blocking(move || {
-        Ok(serial_stop_inner(&inner, &std::thread::sleep))
-    })
-    .await
-    .map_err(|e| format!("Task join error: {}", e))?
+    tokio::task::spawn_blocking(move || Ok(serial_stop_inner(&inner, &std::thread::sleep)))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
 }
 
 /// Begin a per-line job: set phase to active, store epoch in admitted_job,
@@ -1135,10 +1131,7 @@ pub async fn serial_job_begin(state: State<'_, SerialState>) -> Result<u64, Stri
 
 /// Tauri command: end a per-line job.
 #[tauri::command]
-pub async fn serial_job_end(
-    state: State<'_, SerialState>,
-    job_id: u64,
-) -> Result<(), String> {
+pub async fn serial_job_end(state: State<'_, SerialState>, job_id: u64) -> Result<(), String> {
     let inner = state.0.clone();
     tokio::task::spawn_blocking(move || serial_job_end_inner(&inner, job_id))
         .await
@@ -1162,7 +1155,9 @@ mod tests {
 
     impl MockPort {
         fn new() -> Self {
-            Self { written: Arc::new(Mutex::new(Vec::new())) }
+            Self {
+                written: Arc::new(Mutex::new(Vec::new())),
+            }
         }
 
         fn shared(written: Arc<Mutex<Vec<u8>>>) -> Self {
@@ -1357,7 +1352,10 @@ mod tests {
         };
 
         disconnect_inner(&inner).unwrap();
-        assert!(written.lock().unwrap().is_empty(), "clean disconnect must not write 0x18");
+        assert!(
+            written.lock().unwrap().is_empty(),
+            "clean disconnect must not write 0x18"
+        );
         assert!(!inner.connected.load(Ordering::SeqCst));
     }
 
@@ -1439,33 +1437,81 @@ mod tests {
             }
         }
         impl SerialPort for EofPort {
-            fn name(&self) -> Option<String> { Some("eof".to_string()) }
-            fn baud_rate(&self) -> serialport::Result<u32> { Ok(115200) }
-            fn data_bits(&self) -> serialport::Result<serialport::DataBits> { Ok(serialport::DataBits::Eight) }
-            fn flow_control(&self) -> serialport::Result<serialport::FlowControl> { Ok(serialport::FlowControl::None) }
-            fn parity(&self) -> serialport::Result<serialport::Parity> { Ok(serialport::Parity::None) }
-            fn stop_bits(&self) -> serialport::Result<serialport::StopBits> { Ok(serialport::StopBits::One) }
-            fn timeout(&self) -> Duration { Duration::from_millis(1000) }
-            fn set_baud_rate(&mut self, _: u32) -> serialport::Result<()> { Ok(()) }
-            fn set_data_bits(&mut self, _: serialport::DataBits) -> serialport::Result<()> { Ok(()) }
-            fn set_flow_control(&mut self, _: serialport::FlowControl) -> serialport::Result<()> { Ok(()) }
-            fn set_parity(&mut self, _: serialport::Parity) -> serialport::Result<()> { Ok(()) }
-            fn set_stop_bits(&mut self, _: serialport::StopBits) -> serialport::Result<()> { Ok(()) }
-            fn set_timeout(&mut self, _: Duration) -> serialport::Result<()> { Ok(()) }
-            fn write_request_to_send(&mut self, _: bool) -> serialport::Result<()> { Ok(()) }
-            fn write_data_terminal_ready(&mut self, _: bool) -> serialport::Result<()> { Ok(()) }
-            fn read_clear_to_send(&mut self) -> serialport::Result<bool> { Ok(false) }
-            fn read_data_set_ready(&mut self) -> serialport::Result<bool> { Ok(false) }
-            fn read_ring_indicator(&mut self) -> serialport::Result<bool> { Ok(false) }
-            fn read_carrier_detect(&mut self) -> serialport::Result<bool> { Ok(false) }
-            fn bytes_to_read(&self) -> serialport::Result<u32> { Ok(0) }
-            fn bytes_to_write(&self) -> serialport::Result<u32> { Ok(0) }
-            fn clear(&self, _: serialport::ClearBuffer) -> serialport::Result<()> { Ok(()) }
+            fn name(&self) -> Option<String> {
+                Some("eof".to_string())
+            }
+            fn baud_rate(&self) -> serialport::Result<u32> {
+                Ok(115200)
+            }
+            fn data_bits(&self) -> serialport::Result<serialport::DataBits> {
+                Ok(serialport::DataBits::Eight)
+            }
+            fn flow_control(&self) -> serialport::Result<serialport::FlowControl> {
+                Ok(serialport::FlowControl::None)
+            }
+            fn parity(&self) -> serialport::Result<serialport::Parity> {
+                Ok(serialport::Parity::None)
+            }
+            fn stop_bits(&self) -> serialport::Result<serialport::StopBits> {
+                Ok(serialport::StopBits::One)
+            }
+            fn timeout(&self) -> Duration {
+                Duration::from_millis(1000)
+            }
+            fn set_baud_rate(&mut self, _: u32) -> serialport::Result<()> {
+                Ok(())
+            }
+            fn set_data_bits(&mut self, _: serialport::DataBits) -> serialport::Result<()> {
+                Ok(())
+            }
+            fn set_flow_control(&mut self, _: serialport::FlowControl) -> serialport::Result<()> {
+                Ok(())
+            }
+            fn set_parity(&mut self, _: serialport::Parity) -> serialport::Result<()> {
+                Ok(())
+            }
+            fn set_stop_bits(&mut self, _: serialport::StopBits) -> serialport::Result<()> {
+                Ok(())
+            }
+            fn set_timeout(&mut self, _: Duration) -> serialport::Result<()> {
+                Ok(())
+            }
+            fn write_request_to_send(&mut self, _: bool) -> serialport::Result<()> {
+                Ok(())
+            }
+            fn write_data_terminal_ready(&mut self, _: bool) -> serialport::Result<()> {
+                Ok(())
+            }
+            fn read_clear_to_send(&mut self) -> serialport::Result<bool> {
+                Ok(false)
+            }
+            fn read_data_set_ready(&mut self) -> serialport::Result<bool> {
+                Ok(false)
+            }
+            fn read_ring_indicator(&mut self) -> serialport::Result<bool> {
+                Ok(false)
+            }
+            fn read_carrier_detect(&mut self) -> serialport::Result<bool> {
+                Ok(false)
+            }
+            fn bytes_to_read(&self) -> serialport::Result<u32> {
+                Ok(0)
+            }
+            fn bytes_to_write(&self) -> serialport::Result<u32> {
+                Ok(0)
+            }
+            fn clear(&self, _: serialport::ClearBuffer) -> serialport::Result<()> {
+                Ok(())
+            }
             fn try_clone(&self) -> serialport::Result<Box<dyn SerialPort>> {
                 Ok(Box::new(EofPort))
             }
-            fn set_break(&self) -> serialport::Result<()> { Ok(()) }
-            fn clear_break(&self) -> serialport::Result<()> { Ok(()) }
+            fn set_break(&self) -> serialport::Result<()> {
+                Ok(())
+            }
+            fn clear_break(&self) -> serialport::Result<()> {
+                Ok(())
+            }
         }
 
         let port: Box<dyn SerialPort> = Box::new(EofPort);
@@ -1560,7 +1606,8 @@ mod tests {
 
         let outcome = serial_get_status_inner(&inner).unwrap();
         assert_eq!(
-            outcome.kind, StatusKind::NoResponse,
+            outcome.kind,
+            StatusKind::NoResponse,
             "bounded read expiry must report NoResponse, not Busy"
         );
         assert!(outcome.status.is_empty());
@@ -1617,14 +1664,21 @@ mod tests {
     /// for 200ms per call so the send body is still in-flight when we check).
     #[test]
     fn pin_send_holds_pump_flight_during_execution() {
-        struct SlowMockPort { written: Arc<Mutex<Vec<u8>>> }
+        struct SlowMockPort {
+            written: Arc<Mutex<Vec<u8>>>,
+        }
         impl SlowMockPort {
-            fn new(written: Arc<Mutex<Vec<u8>>>) -> Self { Self { written } }
+            fn new(written: Arc<Mutex<Vec<u8>>>) -> Self {
+                Self { written }
+            }
         }
         impl std::io::Read for SlowMockPort {
             fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
                 std::thread::sleep(Duration::from_millis(200));
-                Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "slow mock"))
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "slow mock",
+                ))
             }
         }
         impl std::io::Write for SlowMockPort {
@@ -1632,41 +1686,92 @@ mod tests {
                 self.written.lock().unwrap().extend_from_slice(buf);
                 Ok(buf.len())
             }
-            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
         }
         impl SerialPort for SlowMockPort {
-            fn name(&self) -> Option<String> { Some("slow".to_string()) }
-            fn baud_rate(&self) -> serialport::Result<u32> { Ok(115200) }
-            fn data_bits(&self) -> serialport::Result<serialport::DataBits> { Ok(serialport::DataBits::Eight) }
-            fn flow_control(&self) -> serialport::Result<serialport::FlowControl> { Ok(serialport::FlowControl::None) }
-            fn parity(&self) -> serialport::Result<serialport::Parity> { Ok(serialport::Parity::None) }
-            fn stop_bits(&self) -> serialport::Result<serialport::StopBits> { Ok(serialport::StopBits::One) }
-            fn timeout(&self) -> Duration { Duration::from_millis(1000) }
-            fn set_baud_rate(&mut self, _: u32) -> serialport::Result<()> { Ok(()) }
-            fn set_data_bits(&mut self, _: serialport::DataBits) -> serialport::Result<()> { Ok(()) }
-            fn set_flow_control(&mut self, _: serialport::FlowControl) -> serialport::Result<()> { Ok(()) }
-            fn set_parity(&mut self, _: serialport::Parity) -> serialport::Result<()> { Ok(()) }
-            fn set_stop_bits(&mut self, _: serialport::StopBits) -> serialport::Result<()> { Ok(()) }
-            fn set_timeout(&mut self, _: Duration) -> serialport::Result<()> { Ok(()) }
-            fn write_request_to_send(&mut self, _: bool) -> serialport::Result<()> { Ok(()) }
-            fn write_data_terminal_ready(&mut self, _: bool) -> serialport::Result<()> { Ok(()) }
-            fn read_clear_to_send(&mut self) -> serialport::Result<bool> { Ok(false) }
-            fn read_data_set_ready(&mut self) -> serialport::Result<bool> { Ok(false) }
-            fn read_ring_indicator(&mut self) -> serialport::Result<bool> { Ok(false) }
-            fn read_carrier_detect(&mut self) -> serialport::Result<bool> { Ok(false) }
-            fn bytes_to_read(&self) -> serialport::Result<u32> { Ok(0) }
-            fn bytes_to_write(&self) -> serialport::Result<u32> { Ok(0) }
-            fn clear(&self, _: serialport::ClearBuffer) -> serialport::Result<()> { Ok(()) }
+            fn name(&self) -> Option<String> {
+                Some("slow".to_string())
+            }
+            fn baud_rate(&self) -> serialport::Result<u32> {
+                Ok(115200)
+            }
+            fn data_bits(&self) -> serialport::Result<serialport::DataBits> {
+                Ok(serialport::DataBits::Eight)
+            }
+            fn flow_control(&self) -> serialport::Result<serialport::FlowControl> {
+                Ok(serialport::FlowControl::None)
+            }
+            fn parity(&self) -> serialport::Result<serialport::Parity> {
+                Ok(serialport::Parity::None)
+            }
+            fn stop_bits(&self) -> serialport::Result<serialport::StopBits> {
+                Ok(serialport::StopBits::One)
+            }
+            fn timeout(&self) -> Duration {
+                Duration::from_millis(1000)
+            }
+            fn set_baud_rate(&mut self, _: u32) -> serialport::Result<()> {
+                Ok(())
+            }
+            fn set_data_bits(&mut self, _: serialport::DataBits) -> serialport::Result<()> {
+                Ok(())
+            }
+            fn set_flow_control(&mut self, _: serialport::FlowControl) -> serialport::Result<()> {
+                Ok(())
+            }
+            fn set_parity(&mut self, _: serialport::Parity) -> serialport::Result<()> {
+                Ok(())
+            }
+            fn set_stop_bits(&mut self, _: serialport::StopBits) -> serialport::Result<()> {
+                Ok(())
+            }
+            fn set_timeout(&mut self, _: Duration) -> serialport::Result<()> {
+                Ok(())
+            }
+            fn write_request_to_send(&mut self, _: bool) -> serialport::Result<()> {
+                Ok(())
+            }
+            fn write_data_terminal_ready(&mut self, _: bool) -> serialport::Result<()> {
+                Ok(())
+            }
+            fn read_clear_to_send(&mut self) -> serialport::Result<bool> {
+                Ok(false)
+            }
+            fn read_data_set_ready(&mut self) -> serialport::Result<bool> {
+                Ok(false)
+            }
+            fn read_ring_indicator(&mut self) -> serialport::Result<bool> {
+                Ok(false)
+            }
+            fn read_carrier_detect(&mut self) -> serialport::Result<bool> {
+                Ok(false)
+            }
+            fn bytes_to_read(&self) -> serialport::Result<u32> {
+                Ok(0)
+            }
+            fn bytes_to_write(&self) -> serialport::Result<u32> {
+                Ok(0)
+            }
+            fn clear(&self, _: serialport::ClearBuffer) -> serialport::Result<()> {
+                Ok(())
+            }
             fn try_clone(&self) -> serialport::Result<Box<dyn SerialPort>> {
                 Ok(Box::new(SlowMockPort::new(self.written.clone())))
             }
-            fn set_break(&self) -> serialport::Result<()> { Ok(()) }
-            fn clear_break(&self) -> serialport::Result<()> { Ok(()) }
+            fn set_break(&self) -> serialport::Result<()> {
+                Ok(())
+            }
+            fn clear_break(&self) -> serialport::Result<()> {
+                Ok(())
+            }
         }
 
         let written = Arc::new(Mutex::new(Vec::new()));
         let port: Box<dyn SerialPort> = Box::new(SlowMockPort::new(written.clone()));
-        let reader_port: Box<dyn SerialPort> = Box::new(SlowMockPort::new(Arc::new(Mutex::new(Vec::new()))));
+        let reader_port: Box<dyn SerialPort> =
+            Box::new(SlowMockPort::new(Arc::new(Mutex::new(Vec::new()))));
         let rt_written = Arc::new(Mutex::new(Vec::new()));
         let inner = Arc::new(SerialInner {
             command: Mutex::new(Some(CommandChannel {
@@ -1719,19 +1824,19 @@ mod tests {
             session: SerialSession::default(),
         };
 
-        let result = serial_stream_job_inner(
-            &inner,
-            "G0 X10\nG1 X20 F1000 S500\n",
-            &|_evt| Ok(()),
-        );
+        let result = serial_stream_job_inner(&inner, "G0 X10\nG1 X20 F1000 S500\n", &|_evt| Ok(()));
 
-        assert!(result.is_err(), "stream should fail (MockPort returns no ack for $32=1)");
+        assert!(
+            result.is_err(),
+            "stream should fail (MockPort returns no ack for $32=1)"
+        );
 
         let bytes = written.lock().unwrap();
         let written_str = String::from_utf8_lossy(&bytes);
         assert!(
             written_str.starts_with("$32=1\n"),
-            "first write must be $32=1\\n; got: {:?}", written_str
+            "first write must be $32=1\\n; got: {:?}",
+            written_str
         );
     }
 
@@ -1781,7 +1886,10 @@ mod tests {
 
         // Second begin must fail — session is active.
         let result = serial_job_begin_inner(&inner);
-        assert!(result.is_err(), "second job_begin must be refused while active");
+        assert!(
+            result.is_err(),
+            "second job_begin must be refused while active"
+        );
     }
 
     /// Mutant 3: RED if serial_send_inner with a stopped session succeeds.
@@ -1816,8 +1924,10 @@ mod tests {
         // Verify no G-code bytes were written (only 0x18 from the stop).
         let bytes = written.lock().unwrap();
         // The only write should be the 0x18 from stop.
-        assert!(!bytes.windows(5).any(|w| w == b"G0 X1"),
-            "no G-code must reach the wire after stop");
+        assert!(
+            !bytes.windows(5).any(|w| w == b"G0 X1"),
+            "no G-code must reach the wire after stop"
+        );
     }
 
     /// Mutant: serial_job_end with wrong epoch is refused.
@@ -1860,7 +1970,10 @@ mod tests {
 
         // Permit generation must have incremented
         let gen_after = inner.session.permit_generation.load(Ordering::SeqCst);
-        assert!(gen_after > gen_before, "permit generation must increment on stop");
+        assert!(
+            gen_after > gen_before,
+            "permit generation must increment on stop"
+        );
 
         // Admitted job must be cleared
         assert!(inner.session.admitted_job.lock().unwrap().is_none());
@@ -1870,7 +1983,7 @@ mod tests {
 
         // Result must be present
         match result {
-            StopResult::Confirmed { .. } | StopResult::SubmittedUnconfirmed { .. } => {},
+            StopResult::Confirmed { .. } | StopResult::SubmittedUnconfirmed { .. } => {}
             other => panic!("unexpected stop result: {:?}", other),
         }
     }
@@ -1896,7 +2009,11 @@ mod tests {
             },
         );
         // Should succeed (though banner will be empty since MockPort returns TimedOut)
-        assert!(result.is_ok(), "connect with port factory failed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "connect with port factory failed: {:?}",
+            result
+        );
         assert!(inner.connected.load(Ordering::SeqCst));
         assert_eq!(inner.session.phase.load(Ordering::SeqCst), PHASE_IDLE);
         assert!(inner.session.epoch.load(Ordering::SeqCst) > 0);
@@ -1930,7 +2047,10 @@ mod tests {
             "disconnect from active phase must send 0x18 via stop"
         );
         assert!(!inner.connected.load(Ordering::SeqCst));
-        assert_eq!(inner.session.phase.load(Ordering::SeqCst), PHASE_DISCONNECTED);
+        assert_eq!(
+            inner.session.phase.load(Ordering::SeqCst),
+            PHASE_DISCONNECTED
+        );
     }
 
     /// StopResult serde fixture: all three variants round-trip and have the
@@ -1972,7 +2092,10 @@ mod tests {
         let g0 = inner.session.try_permit_begin(Some(1)).unwrap();
 
         // Simulate a stop: bump generation
-        inner.session.permit_generation.fetch_add(1, Ordering::SeqCst);
+        inner
+            .session
+            .permit_generation
+            .fetch_add(1, Ordering::SeqCst);
 
         // The post-write check should fail
         assert!(inner.session.try_permit_end(g0).is_err());
@@ -2140,7 +2263,11 @@ mod sim_integration {
     // keeps the test fast.
     #[test]
     fn dropped_ok_triggers_idle_stall_disconnect() {
-        let sim = SimPort::new(SimConfig { planner_depth: 15, line_ticks: 1, ..SimConfig::default() });
+        let sim = SimPort::new(SimConfig {
+            planner_depth: 15,
+            line_ticks: 1,
+            ..SimConfig::default()
+        });
         let mut writer = sim.try_clone().unwrap();
         let mut reader = BufReader::new(sim.try_clone().unwrap());
         let mut pending = Vec::new();
@@ -2149,7 +2276,14 @@ mod sim_integration {
         sim.set_drop_ok_at_line(1); // the very next accepted line never acks
 
         writer.write_all(b"G1 X1\n").unwrap();
-        let result = serial_pump::run_pump(&mut reader, &mut writer, &mut pending, DEFAULT_LIVENESS_TICKS, 3, None);
+        let result = serial_pump::run_pump(
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            DEFAULT_LIVENESS_TICKS,
+            3,
+            None,
+        );
         match result {
             Err(serial_pump::PumpFailure::Disconnected(msg)) => {
                 assert!(
@@ -2178,11 +2312,20 @@ mod sim_integration {
         // READ direction, so that `ok` is never delivered back to the pump.
         writer.write_all(b"G1 X1\n").unwrap();
 
-        let result =
-            serial_pump::run_pump(&mut reader, &mut writer, &mut pending, 3, serial_pump::DEFAULT_IDLE_STALL_TICKS, None);
+        let result = serial_pump::run_pump(
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            3,
+            serial_pump::DEFAULT_IDLE_STALL_TICKS,
+            None,
+        );
         match result {
             Err(serial_pump::PumpFailure::Disconnected(msg)) => {
-                assert!(msg.contains("probe ticks") || msg.contains("no response"), "got: {msg}");
+                assert!(
+                    msg.contains("probe ticks") || msg.contains("no response"),
+                    "got: {msg}"
+                );
             }
             other => panic!("expected liveness Disconnected, got {other:?}"),
         }
@@ -2232,7 +2375,11 @@ mod sim_integration {
     // a plain `Err(String)` directly.) This test pins the actual behavior.
     #[test]
     fn write_fail_fault_surfaces_as_probe_write_failure_not_io() {
-        let sim = SimPort::new(SimConfig { planner_depth: 15, line_ticks: 1000, ..SimConfig::default() });
+        let sim = SimPort::new(SimConfig {
+            planner_depth: 15,
+            line_ticks: 1000,
+            ..SimConfig::default()
+        });
         let mut writer = sim.try_clone().unwrap();
         let mut reader = BufReader::new(sim.try_clone().unwrap());
         let mut pending = Vec::new();
@@ -2313,7 +2460,11 @@ mod sim_integration {
         )
         .unwrap();
         assert_eq!(out.terminal, serial_pump::PumpTerminal::Alarm);
-        assert!(out.lines.iter().any(|l| l.starts_with("ALARM")), "got: {:?}", out.lines);
+        assert!(
+            out.lines.iter().any(|l| l.starts_with("ALARM")),
+            "got: {:?}",
+            out.lines
+        );
     }
 
     // 7. banner-mid-line (reset abort): the host is still transmitting a
@@ -2343,7 +2494,11 @@ mod sim_integration {
         )
         .unwrap();
         assert_eq!(out.terminal, serial_pump::PumpTerminal::Banner);
-        assert!(out.lines.iter().any(|l| l.contains("Grbl")), "got: {:?}", out.lines);
+        assert!(
+            out.lines.iter().any(|l| l.contains("Grbl")),
+            "got: {:?}",
+            out.lines
+        );
     }
 
     // 8. e-stop realtime bypass: mirrors `realtime_write_completes_while_
@@ -2485,16 +2640,26 @@ mod sim_integration {
         // Start spindle and a motion command so we're in Run state
         writer.write_all(b"M3 S1000\n").unwrap();
         let _ = serial_pump::run_pump(
-            &mut reader, &mut writer, &mut pending,
-            DEFAULT_LIVENESS_TICKS, serial_pump::DEFAULT_IDLE_STALL_TICKS, None,
-        ).unwrap();
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            DEFAULT_LIVENESS_TICKS,
+            serial_pump::DEFAULT_IDLE_STALL_TICKS,
+            None,
+        )
+        .unwrap();
         assert!(sim.spindle_energized(), "spindle must be on after M3");
 
         writer.write_all(b"G1 X50 F500\n").unwrap();
         let _ = serial_pump::run_pump(
-            &mut reader, &mut writer, &mut pending,
-            DEFAULT_LIVENESS_TICKS, serial_pump::DEFAULT_IDLE_STALL_TICKS, None,
-        ).unwrap();
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            DEFAULT_LIVENESS_TICKS,
+            serial_pump::DEFAULT_IDLE_STALL_TICKS,
+            None,
+        )
+        .unwrap();
 
         // Pause: feed hold only — no 0x9E
         writer.write_all(b"!").unwrap();
@@ -2529,15 +2694,25 @@ mod sim_integration {
 
         writer.write_all(b"M3 S1000\n").unwrap();
         let _ = serial_pump::run_pump(
-            &mut reader, &mut writer, &mut pending,
-            DEFAULT_LIVENESS_TICKS, serial_pump::DEFAULT_IDLE_STALL_TICKS, None,
-        ).unwrap();
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            DEFAULT_LIVENESS_TICKS,
+            serial_pump::DEFAULT_IDLE_STALL_TICKS,
+            None,
+        )
+        .unwrap();
 
         writer.write_all(b"G1 X50 F500\n").unwrap();
         let _ = serial_pump::run_pump(
-            &mut reader, &mut writer, &mut pending,
-            DEFAULT_LIVENESS_TICKS, serial_pump::DEFAULT_IDLE_STALL_TICKS, None,
-        ).unwrap();
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            DEFAULT_LIVENESS_TICKS,
+            serial_pump::DEFAULT_IDLE_STALL_TICKS,
+            None,
+        )
+        .unwrap();
 
         // Feed hold — spindle auto-off
         writer.write_all(b"!").unwrap();
@@ -2568,14 +2743,24 @@ mod sim_integration {
         // Start spindle, motion, then pause
         writer.write_all(b"M3 S1000\n").unwrap();
         let _ = serial_pump::run_pump(
-            &mut reader, &mut writer, &mut pending,
-            DEFAULT_LIVENESS_TICKS, serial_pump::DEFAULT_IDLE_STALL_TICKS, None,
-        ).unwrap();
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            DEFAULT_LIVENESS_TICKS,
+            serial_pump::DEFAULT_IDLE_STALL_TICKS,
+            None,
+        )
+        .unwrap();
         writer.write_all(b"G1 X50 F500\n").unwrap();
         let _ = serial_pump::run_pump(
-            &mut reader, &mut writer, &mut pending,
-            DEFAULT_LIVENESS_TICKS, serial_pump::DEFAULT_IDLE_STALL_TICKS, None,
-        ).unwrap();
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            DEFAULT_LIVENESS_TICKS,
+            serial_pump::DEFAULT_IDLE_STALL_TICKS,
+            None,
+        )
+        .unwrap();
 
         // Pause: feed hold only (no 0x9E — it's a toggle that re-arms)
         writer.write_all(b"!").unwrap();
@@ -2588,7 +2773,8 @@ mod sim_integration {
         let state = sim.machine_state();
         assert!(
             state == MachineState::Run || state == MachineState::Idle,
-            "machine must leave Hold after resume, got: {:?}", state
+            "machine must leave Hold after resume, got: {:?}",
+            state
         );
         assert!(
             sim.hold_invariant_violations().is_empty(),
@@ -2610,9 +2796,14 @@ mod sim_integration {
         // Start spindle + motion
         writer.write_all(b"M3 S1000\n").unwrap();
         let _ = serial_pump::run_pump(
-            &mut reader, &mut writer, &mut pending,
-            DEFAULT_LIVENESS_TICKS, serial_pump::DEFAULT_IDLE_STALL_TICKS, None,
-        ).unwrap();
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            DEFAULT_LIVENESS_TICKS,
+            serial_pump::DEFAULT_IDLE_STALL_TICKS,
+            None,
+        )
+        .unwrap();
         assert!(sim.spindle_energized());
 
         // E-stop volley: [!, 0x18, ?]
@@ -2714,15 +2905,17 @@ mod sim_integration {
     // SI-BP1: Full job through sim — 20 lines → overflow_count == 0, Complete
     #[test]
     fn buffered_pump_full_job_20_lines_zero_overflow() {
-        let sim = SimPort::new(SimConfig { planner_depth: 15, line_ticks: 1, ..SimConfig::default() });
+        let sim = SimPort::new(SimConfig {
+            planner_depth: 15,
+            line_ticks: 1,
+            ..SimConfig::default()
+        });
         let mut writer = sim.try_clone().unwrap();
         let mut reader = BufReader::new(sim.try_clone().unwrap());
         let mut pending = Vec::new();
         let _ = serial_pump::drain_classified(&mut reader, &mut pending); // drain banner
 
-        let lines: Vec<String> = (0..20)
-            .map(|i| format!("G1 X{} F500", i))
-            .collect();
+        let lines: Vec<String> = (0..20).map(|i| format!("G1 X{} F500", i)).collect();
 
         let abort = std::sync::atomic::AtomicBool::new(false);
         let config = serial_pump::BufferedPumpConfig::default();
@@ -2739,7 +2932,8 @@ mod sim_integration {
 
         assert_eq!(result.unwrap(), serial_pump::BufferedPumpOutcome::Complete);
         assert_eq!(
-            sim.overflow_count(), 0,
+            sim.overflow_count(),
+            0,
             "THE proof of correctness: zero RX overflows"
         );
     }
@@ -2747,15 +2941,17 @@ mod sim_integration {
     // SI-BP2: Dense short lines — 100 × "G1 X0.1 F500" → overflow_count == 0
     #[test]
     fn buffered_pump_dense_short_lines_zero_overflow() {
-        let sim = SimPort::new(SimConfig { planner_depth: 15, line_ticks: 1, ..SimConfig::default() });
+        let sim = SimPort::new(SimConfig {
+            planner_depth: 15,
+            line_ticks: 1,
+            ..SimConfig::default()
+        });
         let mut writer = sim.try_clone().unwrap();
         let mut reader = BufReader::new(sim.try_clone().unwrap());
         let mut pending = Vec::new();
         let _ = serial_pump::drain_classified(&mut reader, &mut pending);
 
-        let lines: Vec<String> = (0..100)
-            .map(|_| "G1 X0.1 F500".to_string())
-            .collect();
+        let lines: Vec<String> = (0..100).map(|_| "G1 X0.1 F500".to_string()).collect();
 
         let abort = std::sync::atomic::AtomicBool::new(false);
         let config = serial_pump::BufferedPumpConfig::default();
@@ -2777,16 +2973,18 @@ mod sim_integration {
     // SI-BP3: Pause/resume through sim — `!` → Hold → no sends → `~` → resumes
     #[test]
     fn buffered_pump_pause_resume_through_sim() {
-        let sim = SimPort::new(SimConfig { planner_depth: 15, line_ticks: 2, ..SimConfig::default() });
+        let sim = SimPort::new(SimConfig {
+            planner_depth: 15,
+            line_ticks: 2,
+            ..SimConfig::default()
+        });
         let mut writer = sim.try_clone().unwrap();
         let mut reader = BufReader::new(sim.try_clone().unwrap());
         let mut pending = Vec::new();
         let _ = serial_pump::drain_classified(&mut reader, &mut pending);
 
         // Start spindle + send some lines, then pause mid-job
-        let lines: Vec<String> = (0..10)
-            .map(|i| format!("G1 X{} F500", i))
-            .collect();
+        let lines: Vec<String> = (0..10).map(|i| format!("G1 X{} F500", i)).collect();
 
         let abort = std::sync::atomic::AtomicBool::new(false);
         let config = serial_pump::BufferedPumpConfig {
@@ -2842,15 +3040,17 @@ mod sim_integration {
         // (filling the planner), the second blocks waiting for a slot that takes
         // 1000 ticks (~1000 read timeouts) to free. The pump will sit in Phase B
         // reading timeouts — plenty of time for the abort flag to fire.
-        let sim = SimPort::new(SimConfig { planner_depth: 1, line_ticks: 1000, ..SimConfig::default() });
+        let sim = SimPort::new(SimConfig {
+            planner_depth: 1,
+            line_ticks: 1000,
+            ..SimConfig::default()
+        });
         let mut writer = sim.try_clone().unwrap();
         let mut reader = BufReader::new(sim.try_clone().unwrap());
         let mut pending = Vec::new();
         let _ = serial_pump::drain_classified(&mut reader, &mut pending);
 
-        let lines: Vec<String> = (0..50)
-            .map(|i| format!("G1 X{} F500", i))
-            .collect();
+        let lines: Vec<String> = (0..50).map(|i| format!("G1 X{} F500", i)).collect();
 
         let abort = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let abort_clone = abort.clone();
@@ -2899,7 +3099,10 @@ mod sim_integration {
             total: 100,
         };
         let progress_json = serde_json::to_value(&progress).unwrap();
-        assert_eq!(progress_json["lineIndex"], 42, "field must be camelCase: lineIndex");
+        assert_eq!(
+            progress_json["lineIndex"], 42,
+            "field must be camelCase: lineIndex"
+        );
         assert!(
             progress_json.get("line_index").is_none(),
             "snake_case field 'line_index' must not appear in serialization"
@@ -2970,7 +3173,9 @@ mod sim_integration {
         inner.session.phase.store(PHASE_IDLE, Ordering::SeqCst);
 
         // Publish a snapshot manually.
-        inner.session.publish_snapshot("<Idle|MPos:0,0,0|FS:0,0>", 1);
+        inner
+            .session
+            .publish_snapshot("<Idle|MPos:0,0,0|FS:0,0>", 1);
         let snap_before = inner.session.read_snapshot().unwrap();
 
         // Hold the command lock so status goes to the busy path.
@@ -2983,7 +3188,8 @@ mod sim_integration {
             let _ = tx.send(result);
         });
 
-        let result = rx.recv_timeout(Duration::from_millis(500))
+        let result = rx
+            .recv_timeout(Duration::from_millis(500))
             .expect("status must return immediately on busy path");
         let outcome = result.unwrap();
         assert_eq!(outcome.kind, StatusKind::Busy);
@@ -3013,7 +3219,10 @@ mod sim_integration {
         };
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"lineIndex\""), "must be camelCase: {json}");
-        assert!(!json.contains("\"line_index\""), "must not be snake_case: {json}");
+        assert!(
+            !json.contains("\"line_index\""),
+            "must not be snake_case: {json}"
+        );
     }
 
     /// B2a mutant 8: A snapshot published after a stop must NOT carry the
@@ -3027,7 +3236,9 @@ mod sim_integration {
         inner.session.phase.store(PHASE_IDLE, Ordering::SeqCst);
 
         // Publish a snapshot at epoch 1.
-        inner.session.publish_snapshot("<Run|MPos:1,2,3|FS:500,1000>", 1);
+        inner
+            .session
+            .publish_snapshot("<Run|MPos:1,2,3|FS:500,1000>", 1);
         assert!(inner.session.read_snapshot().is_some());
 
         // Stop: invalidates the snapshot.
@@ -3036,16 +3247,21 @@ mod sim_integration {
 
         // Try to publish with the old epoch after stop incremented it.
         inner.session.epoch.store(2, Ordering::SeqCst);
-        inner.session.publish_snapshot("<Idle|MPos:0,0,0|FS:0,0>", 1); // old epoch
-        // The monotonic guard should reject epoch 1 < current snapshot seq context.
-        // Since snapshot was invalidated (None), a publish with epoch 1 IS accepted
-        // (there's no existing snapshot to compare against). But the epoch in the
-        // snapshot will be 1, not 2 — the caller's lock_epoch.
-        // In practice, after stop+epoch-increment, no pump holds the old epoch.
-        // The real protection is that stop invalidates and the new pump captures
-        // the new epoch. Let's verify the epoch is carried correctly.
+        inner
+            .session
+            .publish_snapshot("<Idle|MPos:0,0,0|FS:0,0>", 1); // old epoch
+                                                              // The monotonic guard should reject epoch 1 < current snapshot seq context.
+                                                              // Since snapshot was invalidated (None), a publish with epoch 1 IS accepted
+                                                              // (there's no existing snapshot to compare against). But the epoch in the
+                                                              // snapshot will be 1, not 2 — the caller's lock_epoch.
+                                                              // In practice, after stop+epoch-increment, no pump holds the old epoch.
+                                                              // The real protection is that stop invalidates and the new pump captures
+                                                              // the new epoch. Let's verify the epoch is carried correctly.
         let snap = inner.session.read_snapshot().unwrap();
-        assert_eq!(snap.epoch, 1, "epoch must be from lock acquisition, not current");
+        assert_eq!(
+            snap.epoch, 1,
+            "epoch must be from lock acquisition, not current"
+        );
     }
 
     /// B2a mutant 4: Door status must NOT clear suspended sending.
@@ -3116,7 +3332,9 @@ mod sim_integration {
 
         struct NullProbe;
         impl serial_pump::ProbeWriter for NullProbe {
-            fn write_probe(&mut self) -> std::io::Result<()> { Ok(()) }
+            fn write_probe(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
         }
 
         // 5 [MSG:] lines then timeouts. With liveness_ticks=2, the pump
@@ -3136,7 +3354,15 @@ mod sim_integration {
     /// Pin the values so a change requires updating this test.
     #[test]
     fn b2a_frame_length_cap_enforced() {
-        assert_eq!(serial_pump::FRAME_LENGTH_CAP, 4096, "frame cap changed — update test");
-        assert_eq!(serial_pump::DIAGNOSTIC_DATA_CAP, 65536, "diagnostic cap changed — update test");
+        assert_eq!(
+            serial_pump::FRAME_LENGTH_CAP,
+            4096,
+            "frame cap changed — update test"
+        );
+        assert_eq!(
+            serial_pump::DIAGNOSTIC_DATA_CAP,
+            65536,
+            "diagnostic cap changed — update test"
+        );
     }
 }

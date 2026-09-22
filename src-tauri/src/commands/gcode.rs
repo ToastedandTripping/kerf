@@ -43,7 +43,8 @@ pub async fn generate_gcode(
         let ws_width = workspace_width.unwrap_or(500.0);
         let origin_top = origin_top.unwrap_or(false);
         let corner = start_corner.as_deref().unwrap_or("bottomLeft");
-        let (start_x, start_y) = start_point_from_corner(corner, ws_width, workspace_height, origin_top);
+        let (start_x, start_y) =
+            start_point_from_corner(corner, ws_width, workspace_height, origin_top);
 
         // F7: Group by layer_index to preserve user-set layer order.
         // Within each layer group:
@@ -65,7 +66,8 @@ pub async fn generate_gcode(
         let mut cur_y = start_y;
 
         for &li in &layer_order {
-            let layer_objs: Vec<CutObject> = objects.iter()
+            let layer_objs: Vec<CutObject> = objects
+                .iter()
                 .filter(|o| o.layer_index.unwrap_or(0) == li)
                 .cloned()
                 .collect();
@@ -77,20 +79,20 @@ pub async fn generate_gcode(
             // interleave them, cutting the perimeter before the fill finishes and
             // shifting the workpiece. For pre-fillLine layers every object has one
             // mode, so the partition is a no-op.
-            let is_fill_ish = |mode: &str| {
-                matches!(mode, "fill" | "maskFill" | "offsetFill")
-            };
+            let is_fill_ish = |mode: &str| matches!(mode, "fill" | "maskFill" | "offsetFill");
 
             let has_mixed = layer_objs.iter().any(|o| is_fill_ish(&o.layer.mode))
                 && layer_objs.iter().any(|o| o.layer.mode == "line");
 
             if has_mixed {
                 // Partition into fill-ish and line groups
-                let fill_group: Vec<CutObject> = layer_objs.iter()
+                let fill_group: Vec<CutObject> = layer_objs
+                    .iter()
                     .filter(|o| is_fill_ish(&o.layer.mode))
                     .cloned()
                     .collect();
-                let line_group: Vec<CutObject> = layer_objs.iter()
+                let line_group: Vec<CutObject> = layer_objs
+                    .iter()
                     .filter(|o| o.layer.mode == "line")
                     .cloned()
                     .collect();
@@ -115,7 +117,10 @@ pub async fn generate_gcode(
                 // All objects in this layer group share one layer definition; reading the
                 // first object's flag is correct. (If per-object overrides are ever added,
                 // this becomes a per-object branch rather than a group-level read.)
-                let inner_first = line_group.first().map(|o| o.layer.cut_inner_first).unwrap_or(true);
+                let inner_first = line_group
+                    .first()
+                    .map(|o| o.layer.cut_inner_first)
+                    .unwrap_or(true);
                 let line_order = if inner_first {
                     optimizer::order_inner_first_nn(&line_group, cur_x, cur_y)
                 } else {
@@ -132,7 +137,8 @@ pub async fn generate_gcode(
                 }
             } else {
                 // Homogeneous layer (pre-fillLine case — no-op partition)
-                let is_line_mode = layer_objs.first()
+                let is_line_mode = layer_objs
+                    .first()
                     .map(|o| o.layer.mode.as_str() == "line")
                     .unwrap_or(false);
 
@@ -141,7 +147,10 @@ pub async fn generate_gcode(
                     // All objects in this layer group share one layer definition; reading the
                     // first object's flag is correct. (If per-object overrides are ever added,
                     // this becomes a per-object branch rather than a group-level read.)
-                    let inner_first = layer_objs.first().map(|o| o.layer.cut_inner_first).unwrap_or(true);
+                    let inner_first = layer_objs
+                        .first()
+                        .map(|o| o.layer.cut_inner_first)
+                        .unwrap_or(true);
                     if inner_first {
                         optimizer::order_inner_first_nn(&layer_objs, cur_x, cur_y)
                     } else {
@@ -172,17 +181,17 @@ pub async fn generate_gcode(
 /// Runs in spawn_blocking since image processing is CPU-heavy
 #[tauri::command]
 pub async fn generate_image_gcode(request: ImageEngraveRequest) -> Result<GcodeResult, String> {
-    tokio::task::spawn_blocking(move || {
-        image_gcode_gen::generate(&request)
-    })
-    .await
-    .map_err(|e| format!("Task join error: {}", e))?
+    tokio::task::spawn_blocking(move || image_gcode_gen::generate(&request))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
 }
 
 /// Preview dithered image: returns base64 PNG of the processed/dithered result
 /// along with dimensions and the dither method used.
 #[tauri::command]
-pub async fn preview_image_dither(request: ImageEngraveRequest) -> Result<PreviewDitherResult, String> {
+pub async fn preview_image_dither(
+    request: ImageEngraveRequest,
+) -> Result<PreviewDitherResult, String> {
     tokio::task::spawn_blocking(move || {
         let dither_method = request.dither.clone();
         let (pixels, width, height) = image_gcode_gen::preview_dither(&request)?;
@@ -190,7 +199,8 @@ pub async fn preview_image_dither(request: ImageEngraveRequest) -> Result<Previe
         // Encode as PNG
         let mut png_buf = Vec::new();
         let encoder = image::codecs::png::PngEncoder::new(&mut png_buf);
-        encoder.write_image(&pixels, width, height, image::ExtendedColorType::L8)
+        encoder
+            .write_image(&pixels, width, height, image::ExtendedColorType::L8)
             .map_err(|e| format!("PNG encode error: {}", e))?;
 
         let b64 = base64::engine::general_purpose::STANDARD.encode(&png_buf);
@@ -232,8 +242,16 @@ mod tests {
             return objs;
         }
 
-        let fill_group: Vec<CutObject> = objs.iter().filter(|o| is_fill_ish(&o.layer.mode)).cloned().collect();
-        let line_group: Vec<CutObject> = objs.iter().filter(|o| o.layer.mode == "line").cloned().collect();
+        let fill_group: Vec<CutObject> = objs
+            .iter()
+            .filter(|o| is_fill_ish(&o.layer.mode))
+            .cloned()
+            .collect();
+        let line_group: Vec<CutObject> = objs
+            .iter()
+            .filter(|o| o.layer.mode == "line")
+            .cloned()
+            .collect();
 
         let mut result: Vec<CutObject> = Vec::new();
         let mut cur_x = start_x;
@@ -322,8 +340,13 @@ mod tests {
         let line_pos = result.iter().position(|o| o.layer.mode == "line").unwrap();
         for (i, obj) in result.iter().enumerate() {
             if obj.layer.mode != "line" {
-                assert!(i < line_pos,
-                    "fill-ish object '{}' at pos {} must precede line at pos {}", obj.id, i, line_pos);
+                assert!(
+                    i < line_pos,
+                    "fill-ish object '{}' at pos {} must precede line at pos {}",
+                    obj.id,
+                    i,
+                    line_pos
+                );
             }
         }
         // Total object count preserved
@@ -366,27 +389,54 @@ mod tests {
     fn start_point_from_corner_origin_bottom() {
         let (w, h) = (500.0, 300.0);
         // origin_top = false: Y=0 at bottom, Y=height at top
-        assert_eq!(start_point_from_corner("bottomLeft", w, h, false), (0.0, 0.0));
-        assert_eq!(start_point_from_corner("bottomRight", w, h, false), (500.0, 0.0));
-        assert_eq!(start_point_from_corner("topLeft", w, h, false), (0.0, 300.0));
-        assert_eq!(start_point_from_corner("topRight", w, h, false), (500.0, 300.0));
+        assert_eq!(
+            start_point_from_corner("bottomLeft", w, h, false),
+            (0.0, 0.0)
+        );
+        assert_eq!(
+            start_point_from_corner("bottomRight", w, h, false),
+            (500.0, 0.0)
+        );
+        assert_eq!(
+            start_point_from_corner("topLeft", w, h, false),
+            (0.0, 300.0)
+        );
+        assert_eq!(
+            start_point_from_corner("topRight", w, h, false),
+            (500.0, 300.0)
+        );
     }
 
     #[test]
     fn start_point_from_corner_origin_top() {
         let (w, h) = (500.0, 300.0);
         // origin_top = true: Y=0 at top, Y=-height at bottom
-        assert_eq!(start_point_from_corner("bottomLeft", w, h, true), (0.0, -300.0));
-        assert_eq!(start_point_from_corner("bottomRight", w, h, true), (500.0, -300.0));
+        assert_eq!(
+            start_point_from_corner("bottomLeft", w, h, true),
+            (0.0, -300.0)
+        );
+        assert_eq!(
+            start_point_from_corner("bottomRight", w, h, true),
+            (500.0, -300.0)
+        );
         assert_eq!(start_point_from_corner("topLeft", w, h, true), (0.0, 0.0));
-        assert_eq!(start_point_from_corner("topRight", w, h, true), (500.0, 0.0));
+        assert_eq!(
+            start_point_from_corner("topRight", w, h, true),
+            (500.0, 0.0)
+        );
     }
 
     #[test]
     fn start_point_from_corner_unknown_defaults_to_bottom_left() {
         // Unknown corner names fall through to the default arm (bottomLeft behavior)
-        assert_eq!(start_point_from_corner("nonsense", 400.0, 200.0, false), (0.0, 0.0));
-        assert_eq!(start_point_from_corner("nonsense", 400.0, 200.0, true), (0.0, -200.0));
+        assert_eq!(
+            start_point_from_corner("nonsense", 400.0, 200.0, false),
+            (0.0, 0.0)
+        );
+        assert_eq!(
+            start_point_from_corner("nonsense", 400.0, 200.0, true),
+            (0.0, -200.0)
+        );
     }
 }
 
@@ -414,7 +464,9 @@ mod golden_tests {
     // ── golden-file harness ────────────────────────────────────────────────
 
     fn golden_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("golden")
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("golden")
     }
 
     /// Compare `actual` (the generator's emitted `gcode` string) against the
@@ -426,9 +478,8 @@ mod golden_tests {
         if std::env::var("KERF_UPDATE_GOLDEN").is_ok() {
             std::fs::create_dir_all(path.parent().expect("golden path has a parent dir"))
                 .expect("failed to create tests/golden directory");
-            std::fs::write(&path, format!("{actual}\n")).unwrap_or_else(|e| {
-                panic!("failed to write golden file {}: {e}", path.display())
-            });
+            std::fs::write(&path, format!("{actual}\n"))
+                .unwrap_or_else(|e| panic!("failed to write golden file {}: {e}", path.display()));
         } else {
             let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| {
                 panic!(
@@ -439,7 +490,8 @@ mod golden_tests {
             });
             let expected = raw.strip_suffix('\n').unwrap_or(&raw);
             assert_eq!(
-                actual, expected,
+                actual,
+                expected,
                 "\nGolden mismatch for '{name}'.\n\
                  If this is a deliberate generator change (e.g. Phase 4 geometry work), \
                  regenerate with `KERF_UPDATE_GOLDEN=1 cargo test` and review the diff at \
@@ -537,7 +589,10 @@ mod golden_tests {
 
     #[tokio::test]
     async fn golden_01_simple_rect_cut() {
-        let layer = CutLayer { power: 80.0, ..base_layer("line") };
+        let layer = CutLayer {
+            power: 80.0,
+            ..base_layer("line")
+        };
         let obj = rect_obj("rect", 10.0, 10.0, 30.0, 20.0, layer);
         let result = generate_gcode(vec![obj], 300.0, Some(1000.0), None, None, None)
             .await
@@ -602,15 +657,31 @@ mod golden_tests {
         // Deliberately present the line object FIRST in input order -- the
         // A4b partition in commands::gcode::generate_gcode must still emit
         // ALL fill-ish objects before ANY line objects within the shared layer.
-        let result = generate_gcode(vec![line_obj, mask_obj], 60.0, Some(1000.0), None, None, None)
-            .await
-            .expect("generate_gcode should succeed");
+        let result = generate_gcode(
+            vec![line_obj, mask_obj],
+            60.0,
+            Some(1000.0),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("generate_gcode should succeed");
 
         // Explicit invariant check (belt-and-suspenders alongside the snapshot):
         // the fill marker comment must precede the line-cut marker comment.
-        let fill_pos = result.gcode.find("; Mask Fill:").expect("mask fill marker present");
-        let line_pos = result.gcode.find("; Cut:").expect("line cut marker present");
-        assert!(fill_pos < line_pos, "fill-ish pass must be emitted before the line pass");
+        let fill_pos = result
+            .gcode
+            .find("; Mask Fill:")
+            .expect("mask fill marker present");
+        let line_pos = result
+            .gcode
+            .find("; Cut:")
+            .expect("line cut marker present");
+        assert!(
+            fill_pos < line_pos,
+            "fill-ish pass must be emitted before the line pass"
+        );
 
         assert_golden("04_fillline_mixed_layer", &result.gcode);
     }
@@ -698,17 +769,36 @@ mod golden_tests {
         let mut obj_c = rect_obj("C_far_sibling", 220.0, 200.0, 5.0, 5.0, base_layer("line"));
         obj_c.layer_index = Some(5);
 
-        let result = generate_gcode(vec![obj_a, obj_b, obj_c], 250.0, Some(1000.0), None, None, None)
-            .await
-            .expect("generate_gcode should succeed");
+        let result = generate_gcode(
+            vec![obj_a, obj_b, obj_c],
+            250.0,
+            Some(1000.0),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("generate_gcode should succeed");
 
         // Explicit invariant: both layer-5 objects precede the layer-1 object,
         // despite B being geometrically nearest the start corner.
         let pos_a = result.gcode.find("; Cut: A_far").expect("A_far present");
-        let pos_b = result.gcode.find("; Cut: B_near_origin").expect("B_near_origin present");
-        let pos_c = result.gcode.find("; Cut: C_far_sibling").expect("C_far_sibling present");
-        assert!(pos_a < pos_b, "layer_index 5 (arrival order first) must precede layer_index 1");
-        assert!(pos_c < pos_b, "layer_index 5 (arrival order first) must precede layer_index 1");
+        let pos_b = result
+            .gcode
+            .find("; Cut: B_near_origin")
+            .expect("B_near_origin present");
+        let pos_c = result
+            .gcode
+            .find("; Cut: C_far_sibling")
+            .expect("C_far_sibling present");
+        assert!(
+            pos_a < pos_b,
+            "layer_index 5 (arrival order first) must precede layer_index 1"
+        );
+        assert!(
+            pos_c < pos_b,
+            "layer_index 5 (arrival order first) must precede layer_index 1"
+        );
 
         assert_golden("07_multilayer_priority_order", &result.gcode);
     }
@@ -721,17 +811,31 @@ mod golden_tests {
 
     #[tokio::test]
     async fn golden_08a_origin_bottom() {
-        let result = generate_gcode(vec![origin_test_object()], 100.0, Some(1000.0), None, None, Some(false))
-            .await
-            .expect("generate_gcode should succeed");
+        let result = generate_gcode(
+            vec![origin_test_object()],
+            100.0,
+            Some(1000.0),
+            None,
+            None,
+            Some(false),
+        )
+        .await
+        .expect("generate_gcode should succeed");
         assert_golden("08a_origin_bottom", &result.gcode);
     }
 
     #[tokio::test]
     async fn golden_08b_origin_top() {
-        let result = generate_gcode(vec![origin_test_object()], 100.0, Some(1000.0), None, None, Some(true))
-            .await
-            .expect("generate_gcode should succeed");
+        let result = generate_gcode(
+            vec![origin_test_object()],
+            100.0,
+            Some(1000.0),
+            None,
+            None,
+            Some(true),
+        )
+        .await
+        .expect("generate_gcode should succeed");
         assert_golden("08b_origin_top", &result.gcode);
     }
 
@@ -849,9 +953,9 @@ mod golden_tests {
     #[tokio::test]
     async fn golden_15_line_variable_power_min() {
         let mut layer = base_layer("line");
-        layer.power = 40.0;                            // s_max = 400
-        layer.power_min = 60.0;                        // clamped to 40 => s_min = 400
-        layer.power_mode = "variable".to_string();     // M4
+        layer.power = 40.0; // s_max = 400
+        layer.power_min = 60.0; // clamped to 40 => s_min = 400
+        layer.power_mode = "variable".to_string(); // M4
         let mut obj = rect_obj("var_sq", 0.0, 0.0, 30.0, 20.0, layer);
         obj.obj_type = "path".to_string();
         obj.paths = vec![rect_path(0.0, 0.0, 30.0, 20.0)];
@@ -861,11 +965,16 @@ mod golden_tests {
 
         // Asserted inline as well as against the fixture: a golden proves the
         // bytes did not move, but only a named assertion says WHY these bytes.
-        assert!(result.gcode.contains("M4 S400"),
-            "expected M4 S400 (power=40% of s_value_max=1000); gcode:\n{}", result.gcode);
-        assert!(!result.gcode.contains("S600"),
+        assert!(
+            result.gcode.contains("M4 S400"),
+            "expected M4 S400 (power=40% of s_value_max=1000); gcode:\n{}",
+            result.gcode
+        );
+        assert!(
+            !result.gcode.contains("S600"),
             "power_min=60 must not raise commanded power above power=40; gcode:\n{}",
-            result.gcode);
+            result.gcode
+        );
 
         assert_golden("15_line_variable_power_min", &result.gcode);
     }
@@ -898,6 +1007,9 @@ mod golden_tests {
             .await
             .expect("run 2 should succeed");
 
-        assert_eq!(run1.gcode, run2.gcode, "generator output must be deterministic across runs");
+        assert_eq!(
+            run1.gcode, run2.gcode,
+            "generator output must be deterministic across runs"
+        );
     }
 }

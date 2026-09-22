@@ -13,9 +13,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 // resolve under jsdom. We use vi.spyOn after import to avoid breaking the
 // Zustand store init which calls createGeometryActions from the same module.
 import * as geometryActions from "../../../app/store/geometryActions";
-const mockTextObjectToPaths = vi
-  .spyOn(geometryActions, "textObjectToPaths")
-  .mockResolvedValue([]);
+const mockTextObjectToPaths = vi.spyOn(geometryActions, "textObjectToPaths").mockResolvedValue([]);
 
 import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../../app/store";

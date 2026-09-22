@@ -271,7 +271,9 @@ async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise
   // B3: when a session owns this stream, the session handles cleanup.
   // Otherwise, legacy direct cleanup.
   if (session) {
-    await session.end(endState as "complete" | "cancelled" | "aborted" | "alarm" | "error" | "unknown");
+    await session.end(
+      endState as "complete" | "cancelled" | "aborted" | "alarm" | "error" | "unknown"
+    );
   } else {
     store.setJobRunning(false);
     store.setJobProgress(0);
@@ -431,7 +433,9 @@ export async function streamJob(gcode: string, opts: StreamJobOptions): Promise<
 
   // B3: when a session owns this stream, the session handles cleanup.
   if (session) {
-    await session.end(endState as "complete" | "cancelled" | "aborted" | "alarm" | "error" | "unknown");
+    await session.end(
+      endState as "complete" | "cancelled" | "aborted" | "alarm" | "error" | "unknown"
+    );
   } else {
     store.setJobRunning(false);
     store.setJobProgress(0);

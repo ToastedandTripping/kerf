@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
 use super::limits;
 use super::optimizer;
+use serde::{Deserialize, Serialize};
 
 /// Rapid (G0) traverse speed reported on generated moves, mm/min.
 ///
@@ -65,18 +65,18 @@ pub fn clamp_power_min(power: f64, power_min: f64) -> f64 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CutLayer {
-    pub mode: String,        // "line", "fill"
-    pub power: f64,          // 0-100
-    pub power_min: f64,      // 0-100
-    pub speed: f64,          // mm/min
+    pub mode: String,   // "line", "fill"
+    pub power: f64,     // 0-100
+    pub power_min: f64, // 0-100
+    pub speed: f64,     // mm/min
     pub passes: u32,
-    pub power_mode: String,  // "constant" or "variable"
-    pub interval: f64,       // mm - line interval for fill
+    pub power_mode: String, // "constant" or "variable"
+    pub interval: f64,      // mm - line interval for fill
     pub air_assist: bool,
     pub cut_inner_first: bool,
     pub dither: String,
     #[serde(default)]
-    pub scan_angle: f64,     // degrees - scan direction for fill mode
+    pub scan_angle: f64, // degrees - scan direction for fill mode
     #[serde(default)]
     pub angle_increment: f64, // degrees - added per pass
     pub overcut: f64,
@@ -88,25 +88,25 @@ pub struct CutLayer {
     pub scanning_offset: f64,
     pub tab_spacing: f64,
     pub tab_width: f64,
-    pub perforation_cut: f64,   // mm - 0 = disabled
-    pub perforation_skip: f64,  // mm
+    pub perforation_cut: f64,  // mm - 0 = disabled
+    pub perforation_skip: f64, // mm
     #[serde(default)]
-    pub power_curve: Option<Vec<(f64, f64)>>,  // (shade 0-255, power 0-100%) control points
+    pub power_curve: Option<Vec<(f64, f64)>>, // (shade 0-255, power 0-100%) control points
     #[serde(default)]
-    pub fill_order: Option<String>,  // "sequential" (default) or "flood"
+    pub fill_order: Option<String>, // "sequential" (default) or "flood"
     #[serde(default)]
-    pub newsprint_cell_size: Option<u32>,  // Newsprint dither cell size (default 6)
+    pub newsprint_cell_size: Option<u32>, // Newsprint dither cell size (default 6)
     #[serde(default)]
-    pub newsprint_angle: Option<f64>,      // Newsprint dither angle (default 45)
+    pub newsprint_angle: Option<f64>, // Newsprint dither angle (default 45)
     #[serde(default)]
-    pub scan_motion: Option<ScanMotion>,   // Optional acceleration + rapid rate for gap optimization
+    pub scan_motion: Option<ScanMotion>, // Optional acceleration + rapid rate for gap optimization
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CutObject {
     pub id: String,
-    pub obj_type: String,    // "rectangle", "ellipse", "line", "path"
+    pub obj_type: String, // "rectangle", "ellipse", "line", "path"
     pub x: f64,
     pub y: f64,
     pub width: f64,
@@ -126,7 +126,7 @@ pub struct CutObject {
     #[serde(default)]
     pub group_id: Option<String>,
     #[serde(default)]
-    pub layer_index: Option<i32>,  // F7: preserves TS layer position for cut ordering
+    pub layer_index: Option<i32>, // F7: preserves TS layer position for cut ordering
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,9 +134,9 @@ pub struct CutObject {
 pub struct GcodeMove {
     pub x: f64,
     pub y: f64,
-    pub move_type: String,   // "rapid", "cut", "engrave"
-    pub speed: f64,          // mm/min (GRBL uses mm/min)
-    pub power: f64,          // 0-1000 (S value)
+    pub move_type: String, // "rapid", "cut", "engrave"
+    pub speed: f64,        // mm/min (GRBL uses mm/min)
+    pub power: f64,        // 0-1000 (S value)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,9 +144,9 @@ pub struct GcodeMove {
 pub struct GcodeResult {
     pub gcode: String,
     pub moves: Vec<GcodeMove>,
-    pub total_distance: f64,       // mm
-    pub cut_distance: f64,         // mm
-    pub travel_distance: f64,      // mm
+    pub total_distance: f64,  // mm
+    pub cut_distance: f64,    // mm
+    pub travel_distance: f64, // mm
     pub estimated_time_secs: f64,
     pub line_count: usize,
 }
@@ -171,9 +171,9 @@ struct ScanLineParams {
 /// and `forward` indicates direction (for bidirectional scanning).
 #[derive(Debug, Clone)]
 struct ScanSegment {
-    y: f64,       // line position (scan-line coordinate)
-    x_start: f64, // start of engrave (in scan axis)
-    x_end: f64,   // end of engrave (in scan axis)
+    y: f64,        // line position (scan-line coordinate)
+    x_start: f64,  // start of engrave (in scan axis)
+    x_end: f64,    // end of engrave (in scan axis)
     forward: bool, // direction of travel
 }
 
@@ -181,8 +181,10 @@ struct ScanSegment {
 /// Delegates to the shared `coords::to_grbl_coords` helper.
 fn transform_to_grbl(x: f64, y: f64, params: &ScanLineParams) -> (f64, f64) {
     super::coords::to_grbl_coords(
-        x, y,
-        params.center_x, params.center_y,
+        x,
+        y,
+        params.center_x,
+        params.center_y,
         params.rotation_rad,
         params.origin_top,
         params.workspace_height,
@@ -202,7 +204,11 @@ fn collect_scan_segments(
     let mut forward = true;
 
     while pos <= line_max {
-        let offset = if !forward { params.scanning_offset } else { 0.0 };
+        let offset = if !forward {
+            params.scanning_offset
+        } else {
+            0.0
+        };
         let (start, end) = if forward {
             (scan_min, scan_max)
         } else {
@@ -240,8 +246,16 @@ fn emit_scan_segments(
     vertical: bool,
 ) {
     for seg in segments {
-        let overscan_start = if seg.forward { seg.x_start - params.overscan } else { seg.x_start + params.overscan };
-        let overscan_end = if seg.forward { seg.x_end + params.overscan } else { seg.x_end - params.overscan };
+        let overscan_start = if seg.forward {
+            seg.x_start - params.overscan
+        } else {
+            seg.x_start + params.overscan
+        };
+        let overscan_end = if seg.forward {
+            seg.x_end + params.overscan
+        } else {
+            seg.x_end - params.overscan
+        };
 
         let (rsx, rsy) = if vertical {
             transform_to_grbl(seg.y, overscan_start, params)
@@ -254,7 +268,13 @@ fn emit_scan_segments(
         *travel_distance += dist;
         *total_distance += dist;
         lines.push(format!("G0 X{:.3} Y{:.3}", rsx, rsy));
-        moves.push(GcodeMove { x: rsx, y: rsy, move_type: "rapid".to_string(), speed: RAPID_SPEED_MM_MIN, power: 0.0 });
+        moves.push(GcodeMove {
+            x: rsx,
+            y: rsy,
+            move_type: "rapid".to_string(),
+            speed: RAPID_SPEED_MM_MIN,
+            power: 0.0,
+        });
 
         // Accelerate to boundary at engrave speed with laser off
         if params.overscan > 0.0 {
@@ -266,8 +286,17 @@ fn emit_scan_segments(
             let d = params.overscan;
             *travel_distance += d;
             *total_distance += d;
-            lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S0", bsx, bsy, params.speed_mm_min));
-            moves.push(GcodeMove { x: bsx, y: bsy, move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0 });
+            lines.push(format!(
+                "G1 X{:.3} Y{:.3} F{:.0} S0",
+                bsx, bsy, params.speed_mm_min
+            ));
+            moves.push(GcodeMove {
+                x: bsx,
+                y: bsy,
+                move_type: "rapid".to_string(),
+                speed: params.speed_mm_min,
+                power: 0.0,
+            });
         }
 
         // Engrave scan line
@@ -280,8 +309,17 @@ fn emit_scan_segments(
         let scan_dist = (seg.x_end - seg.x_start).abs();
         *cut_distance += scan_dist;
         *total_distance += scan_dist;
-        lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", esx, esy, params.speed_mm_min, params.s_max));
-        moves.push(GcodeMove { x: esx, y: esy, move_type: "engrave".to_string(), speed: params.speed_mm_min, power: params.s_max });
+        lines.push(format!(
+            "G1 X{:.3} Y{:.3} F{:.0} S{}",
+            esx, esy, params.speed_mm_min, params.s_max
+        ));
+        moves.push(GcodeMove {
+            x: esx,
+            y: esy,
+            move_type: "engrave".to_string(),
+            speed: params.speed_mm_min,
+            power: params.s_max,
+        });
         lines.push("M5".to_string());
 
         // Deceleration overscan zone
@@ -294,8 +332,17 @@ fn emit_scan_segments(
             let d = params.overscan;
             *travel_distance += d;
             *total_distance += d;
-            lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S0", oex, oey, params.speed_mm_min));
-            moves.push(GcodeMove { x: oex, y: oey, move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0 });
+            lines.push(format!(
+                "G1 X{:.3} Y{:.3} F{:.0} S0",
+                oex, oey, params.speed_mm_min
+            ));
+            moves.push(GcodeMove {
+                x: oex,
+                y: oey,
+                move_type: "rapid".to_string(),
+                speed: params.speed_mm_min,
+                power: 0.0,
+            });
             *cur_x = oex;
             *cur_y = oey;
         } else {
@@ -328,12 +375,12 @@ fn generate_scan_lines(
 
     let segments = if fill_order == Some("flood") {
         // Convert to (y, x_start, x_end) tuples for flood reorder
-        let tuples: Vec<(f64, f64, f64)> = segments.iter()
-            .map(|s| (s.y, s.x_start, s.x_end))
-            .collect();
+        let tuples: Vec<(f64, f64, f64)> =
+            segments.iter().map(|s| (s.y, s.x_start, s.x_end)).collect();
         let reordered = super::optimizer::flood_reorder_segments(&tuples);
         // Rebuild ScanSegments from reordered tuples, recalculating direction
-        reordered.iter()
+        reordered
+            .iter()
             .map(|&(y, x_start, x_end)| ScanSegment {
                 y,
                 x_start,
@@ -346,9 +393,16 @@ fn generate_scan_lines(
     };
 
     emit_scan_segments(
-        &segments, params, lines, moves,
-        cut_distance, travel_distance, total_distance,
-        cur_x, cur_y, vertical,
+        &segments,
+        params,
+        lines,
+        moves,
+        cut_distance,
+        travel_distance,
+        total_distance,
+        cur_x,
+        cur_y,
+        vertical,
     );
 }
 
@@ -358,8 +412,19 @@ fn generate_scan_lines(
 /// would produce billions of scan segments). Geometry errors (degenerate
 /// shapes) are handled per-object — the object is skipped with a warning
 /// comment, but the job continues.
-pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max: f64, origin_top: bool) -> Result<GcodeResult, String> {
-    let fy = |y: f64| -> f64 { if origin_top { -y } else { workspace_height - y } };
+pub fn generate_gcode(
+    objects: &[CutObject],
+    workspace_height: f64,
+    s_value_max: f64,
+    origin_top: bool,
+) -> Result<GcodeResult, String> {
+    let fy = |y: f64| -> f64 {
+        if origin_top {
+            -y
+        } else {
+            workspace_height - y
+        }
+    };
     let mut lines: Vec<String> = Vec::new();
     let mut moves: Vec<GcodeMove> = Vec::new();
     let mut total_distance = 0.0_f64;
@@ -393,7 +458,11 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
         let s_min = (clamp_power_min(layer.power, layer.power_min) / 100.0 * s_value_max).round();
 
         // Power mode command
-        let power_cmd = if layer.power_mode == "variable" { "M4" } else { "M3" };
+        let power_cmd = if layer.power_mode == "variable" {
+            "M4"
+        } else {
+            "M3"
+        };
 
         // P2-A Fix #5: compute effective_s_max ONCE, outside the mode match.
         // In M4 (variable) mode, floor S values at s_min so the laser doesn't
@@ -419,7 +488,10 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
             match layer.mode.as_str() {
                 "line" => {
                     // Vector cut mode
-                    lines.push(format!("; Cut: {} ({}% @ {}mm/min)", obj.id, layer.power, layer.speed));
+                    lines.push(format!(
+                        "; Cut: {} ({}% @ {}mm/min)",
+                        obj.id, layer.power, layer.speed
+                    ));
 
                     let mut paths = if obj.paths.is_empty() {
                         vec![object_to_path(obj)]
@@ -440,12 +512,13 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                     }
 
                     for path in &paths {
-                        if path.points.len() < 2 { continue; }
+                        if path.points.len() < 2 {
+                            continue;
+                        }
 
                         // Build flattened point list in G-code coords (Y-flipped)
-                        let mut gpts: Vec<(f64, f64)> = path.points.iter()
-                            .map(|p| (p.x, fy(p.y)))
-                            .collect();
+                        let mut gpts: Vec<(f64, f64)> =
+                            path.points.iter().map(|p| (p.x, fy(p.y))).collect();
                         if path.closed && gpts.len() > 2 {
                             gpts.push(gpts[0]);
                         }
@@ -453,8 +526,10 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                         // Compute cumulative distances along the path
                         let mut cum_dist = vec![0.0_f64];
                         for i in 1..gpts.len() {
-                            let d = ((gpts[i].0 - gpts[i-1].0).powi(2) + (gpts[i].1 - gpts[i-1].1).powi(2)).sqrt();
-                            cum_dist.push(cum_dist[i-1] + d);
+                            let d = ((gpts[i].0 - gpts[i - 1].0).powi(2)
+                                + (gpts[i].1 - gpts[i - 1].1).powi(2))
+                            .sqrt();
+                            cum_dist.push(cum_dist[i - 1] + d);
                         }
 
                         // Lead-in: approach from perpendicular/linear offset
@@ -494,24 +569,45 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
 
                                     // Flip for CCW (positive area) — left normal is inward.
                                     let sign = if signed_area > 0.0 { -1.0 } else { 1.0 };
-                                    (gpts[0].0 + sign * nx * lead_in,
-                                     gpts[0].1 + sign * ny * lead_in)
+                                    (
+                                        gpts[0].0 + sign * nx * lead_in,
+                                        gpts[0].1 + sign * ny * lead_in,
+                                    )
                                 } else {
-                                    (gpts[0].0 - dx / seg_len * lead_in, gpts[0].1 - dy / seg_len * lead_in)
+                                    (
+                                        gpts[0].0 - dx / seg_len * lead_in,
+                                        gpts[0].1 - dy / seg_len * lead_in,
+                                    )
                                 };
                                 // Rapid to lead-in start
                                 let dist = ((lix - cur_x).powi(2) + (liy - cur_y).powi(2)).sqrt();
                                 travel_distance += dist;
                                 total_distance += dist;
                                 lines.push(format!("G0 X{:.3} Y{:.3}", lix, liy));
-                                moves.push(GcodeMove { x: lix, y: liy, move_type: "rapid".to_string(), speed: RAPID_SPEED_MM_MIN, power: 0.0 });
+                                moves.push(GcodeMove {
+                                    x: lix,
+                                    y: liy,
+                                    move_type: "rapid".to_string(),
+                                    speed: RAPID_SPEED_MM_MIN,
+                                    power: 0.0,
+                                });
                                 // Laser on, cut to first point
                                 lines.push(format!("{} S{}", power_cmd, effective_s_max));
-                                let d = ((gpts[0].0 - lix).powi(2) + (gpts[0].1 - liy).powi(2)).sqrt();
+                                let d =
+                                    ((gpts[0].0 - lix).powi(2) + (gpts[0].1 - liy).powi(2)).sqrt();
                                 cut_distance += d;
                                 total_distance += d;
-                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", gpts[0].0, gpts[0].1, speed_mm_min, effective_s_max));
-                                moves.push(GcodeMove { x: gpts[0].0, y: gpts[0].1, move_type: "cut".to_string(), speed: speed_mm_min, power: effective_s_max });
+                                lines.push(format!(
+                                    "G1 X{:.3} Y{:.3} F{:.0} S{}",
+                                    gpts[0].0, gpts[0].1, speed_mm_min, effective_s_max
+                                ));
+                                moves.push(GcodeMove {
+                                    x: gpts[0].0,
+                                    y: gpts[0].1,
+                                    move_type: "cut".to_string(),
+                                    speed: speed_mm_min,
+                                    power: effective_s_max,
+                                });
                                 cur_x = gpts[0].0;
                                 cur_y = gpts[0].1;
                             }
@@ -519,11 +615,18 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
 
                         if lead_in <= 0.0 {
                             // Rapid to start
-                            let dist = ((gpts[0].0 - cur_x).powi(2) + (gpts[0].1 - cur_y).powi(2)).sqrt();
+                            let dist =
+                                ((gpts[0].0 - cur_x).powi(2) + (gpts[0].1 - cur_y).powi(2)).sqrt();
                             travel_distance += dist;
                             total_distance += dist;
                             lines.push(format!("G0 X{:.3} Y{:.3}", gpts[0].0, gpts[0].1));
-                            moves.push(GcodeMove { x: gpts[0].0, y: gpts[0].1, move_type: "rapid".to_string(), speed: RAPID_SPEED_MM_MIN, power: 0.0 });
+                            moves.push(GcodeMove {
+                                x: gpts[0].0,
+                                y: gpts[0].1,
+                                move_type: "rapid".to_string(),
+                                speed: RAPID_SPEED_MM_MIN,
+                                power: 0.0,
+                            });
                             cur_x = gpts[0].0;
                             cur_y = gpts[0].1;
                             lines.push(format!("{} S{}", power_cmd, effective_s_max));
@@ -551,7 +654,7 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                         for i in 1..gpts.len() {
                             let px = gpts[i].0;
                             let py = gpts[i].1;
-                            let seg_start_dist = cum_dist[i-1];
+                            let seg_start_dist = cum_dist[i - 1];
                             let seg_end_dist = cum_dist[i];
 
                             if perf_enabled {
@@ -559,20 +662,34 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                 let seg_dx = px - cur_x;
                                 let seg_dy = py - cur_y;
                                 let seg_len = ((seg_dx).powi(2) + (seg_dy).powi(2)).sqrt();
-                                if seg_len < 0.001 { continue; }
+                                if seg_len < 0.001 {
+                                    continue;
+                                }
                                 loop {
-                                    if next_toggle_dist >= seg_end_dist { break; }
+                                    if next_toggle_dist >= seg_end_dist {
+                                        break;
+                                    }
                                     // Interpolate toggle point within segment
-                                    let t = (next_toggle_dist - seg_start_dist) / (seg_end_dist - seg_start_dist);
-                                    let tx = gpts[i-1].0 + seg_dx * t;
-                                    let ty = gpts[i-1].1 + seg_dy * t;
+                                    let t = (next_toggle_dist - seg_start_dist)
+                                        / (seg_end_dist - seg_start_dist);
+                                    let tx = gpts[i - 1].0 + seg_dx * t;
+                                    let ty = gpts[i - 1].1 + seg_dy * t;
                                     let d = ((tx - cur_x).powi(2) + (ty - cur_y).powi(2)).sqrt();
                                     if laser_on {
                                         // End of cut segment
                                         cut_distance += d;
                                         total_distance += d;
-                                        lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", tx, ty, speed_mm_min, effective_s_max));
-                                        moves.push(GcodeMove { x: tx, y: ty, move_type: "cut".to_string(), speed: speed_mm_min, power: effective_s_max });
+                                        lines.push(format!(
+                                            "G1 X{:.3} Y{:.3} F{:.0} S{}",
+                                            tx, ty, speed_mm_min, effective_s_max
+                                        ));
+                                        moves.push(GcodeMove {
+                                            x: tx,
+                                            y: ty,
+                                            move_type: "cut".to_string(),
+                                            speed: speed_mm_min,
+                                            power: effective_s_max,
+                                        });
                                         lines.push("M5".to_string());
                                         laser_on = false;
                                         next_toggle_dist += perf_skip;
@@ -581,7 +698,13 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                         travel_distance += d;
                                         total_distance += d;
                                         lines.push(format!("G0 X{:.3} Y{:.3}", tx, ty));
-                                        moves.push(GcodeMove { x: tx, y: ty, move_type: "rapid".to_string(), speed: RAPID_SPEED_MM_MIN, power: 0.0 });
+                                        moves.push(GcodeMove {
+                                            x: tx,
+                                            y: ty,
+                                            move_type: "rapid".to_string(),
+                                            speed: RAPID_SPEED_MM_MIN,
+                                            power: 0.0,
+                                        });
                                         lines.push(format!("{} S{}", power_cmd, effective_s_max));
                                         laser_on = true;
                                         next_toggle_dist += perf_cut;
@@ -594,34 +717,59 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                 let seg_dx = px - cur_x;
                                 let seg_dy = py - cur_y;
                                 let seg_len = ((seg_dx).powi(2) + (seg_dy).powi(2)).sqrt();
-                                if seg_len < 0.001 { continue; }
+                                if seg_len < 0.001 {
+                                    continue;
+                                }
                                 loop {
                                     if !laser_on {
                                         let tab_end_dist = next_toggle_dist;
-                                        if tab_end_dist >= seg_end_dist { break; }
-                                        let t = (tab_end_dist - seg_start_dist) / (seg_end_dist - seg_start_dist);
-                                        let tx = gpts[i-1].0 + seg_dx * t;
-                                        let ty = gpts[i-1].1 + seg_dy * t;
-                                        let d = ((tx - cur_x).powi(2) + (ty - cur_y).powi(2)).sqrt();
+                                        if tab_end_dist >= seg_end_dist {
+                                            break;
+                                        }
+                                        let t = (tab_end_dist - seg_start_dist)
+                                            / (seg_end_dist - seg_start_dist);
+                                        let tx = gpts[i - 1].0 + seg_dx * t;
+                                        let ty = gpts[i - 1].1 + seg_dy * t;
+                                        let d =
+                                            ((tx - cur_x).powi(2) + (ty - cur_y).powi(2)).sqrt();
                                         travel_distance += d;
                                         total_distance += d;
                                         lines.push(format!("G0 X{:.3} Y{:.3}", tx, ty));
-                                        moves.push(GcodeMove { x: tx, y: ty, move_type: "rapid".to_string(), speed: RAPID_SPEED_MM_MIN, power: 0.0 });
+                                        moves.push(GcodeMove {
+                                            x: tx,
+                                            y: ty,
+                                            move_type: "rapid".to_string(),
+                                            speed: RAPID_SPEED_MM_MIN,
+                                            power: 0.0,
+                                        });
                                         cur_x = tx;
                                         cur_y = ty;
                                         lines.push(format!("{} S{}", power_cmd, effective_s_max));
                                         laser_on = true;
                                         next_toggle_dist = tab_end_dist + tab_spacing;
                                     } else {
-                                        if next_toggle_dist >= seg_end_dist { break; }
-                                        let t = (next_toggle_dist - seg_start_dist) / (seg_end_dist - seg_start_dist);
-                                        let tx = gpts[i-1].0 + seg_dx * t;
-                                        let ty = gpts[i-1].1 + seg_dy * t;
-                                        let d = ((tx - cur_x).powi(2) + (ty - cur_y).powi(2)).sqrt();
+                                        if next_toggle_dist >= seg_end_dist {
+                                            break;
+                                        }
+                                        let t = (next_toggle_dist - seg_start_dist)
+                                            / (seg_end_dist - seg_start_dist);
+                                        let tx = gpts[i - 1].0 + seg_dx * t;
+                                        let ty = gpts[i - 1].1 + seg_dy * t;
+                                        let d =
+                                            ((tx - cur_x).powi(2) + (ty - cur_y).powi(2)).sqrt();
                                         cut_distance += d;
                                         total_distance += d;
-                                        lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", tx, ty, speed_mm_min, effective_s_max));
-                                        moves.push(GcodeMove { x: tx, y: ty, move_type: "cut".to_string(), speed: speed_mm_min, power: effective_s_max });
+                                        lines.push(format!(
+                                            "G1 X{:.3} Y{:.3} F{:.0} S{}",
+                                            tx, ty, speed_mm_min, effective_s_max
+                                        ));
+                                        moves.push(GcodeMove {
+                                            x: tx,
+                                            y: ty,
+                                            move_type: "cut".to_string(),
+                                            speed: speed_mm_min,
+                                            power: effective_s_max,
+                                        });
                                         cur_x = tx;
                                         cur_y = ty;
                                         lines.push("M5".to_string());
@@ -636,14 +784,29 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                 let d = ((px - cur_x).powi(2) + (py - cur_y).powi(2)).sqrt();
                                 cut_distance += d;
                                 total_distance += d;
-                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", px, py, speed_mm_min, effective_s_max));
-                                moves.push(GcodeMove { x: px, y: py, move_type: "cut".to_string(), speed: speed_mm_min, power: effective_s_max });
+                                lines.push(format!(
+                                    "G1 X{:.3} Y{:.3} F{:.0} S{}",
+                                    px, py, speed_mm_min, effective_s_max
+                                ));
+                                moves.push(GcodeMove {
+                                    x: px,
+                                    y: py,
+                                    move_type: "cut".to_string(),
+                                    speed: speed_mm_min,
+                                    power: effective_s_max,
+                                });
                             } else {
                                 let d = ((px - cur_x).powi(2) + (py - cur_y).powi(2)).sqrt();
                                 travel_distance += d;
                                 total_distance += d;
                                 lines.push(format!("G0 X{:.3} Y{:.3}", px, py));
-                                moves.push(GcodeMove { x: px, y: py, move_type: "rapid".to_string(), speed: RAPID_SPEED_MM_MIN, power: 0.0 });
+                                moves.push(GcodeMove {
+                                    x: px,
+                                    y: py,
+                                    move_type: "rapid".to_string(),
+                                    speed: RAPID_SPEED_MM_MIN,
+                                    power: 0.0,
+                                });
                             }
                             cur_x = px;
                             cur_y = py;
@@ -665,8 +828,17 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                 }
                                 cut_distance += ext;
                                 total_distance += ext;
-                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", ox, oy, speed_mm_min, effective_s_max));
-                                moves.push(GcodeMove { x: ox, y: oy, move_type: "cut".to_string(), speed: speed_mm_min, power: effective_s_max });
+                                lines.push(format!(
+                                    "G1 X{:.3} Y{:.3} F{:.0} S{}",
+                                    ox, oy, speed_mm_min, effective_s_max
+                                ));
+                                moves.push(GcodeMove {
+                                    x: ox,
+                                    y: oy,
+                                    move_type: "cut".to_string(),
+                                    speed: speed_mm_min,
+                                    power: effective_s_max,
+                                });
                                 cur_x = ox;
                                 cur_y = oy;
                             }
@@ -676,19 +848,28 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                         let lead_out = layer.lead_out;
                         if lead_out > 0.0 && gpts.len() >= 2 {
                             let n = gpts.len();
-                            let dx = gpts[n-1].0 - gpts[n-2].0;
-                            let dy = gpts[n-1].1 - gpts[n-2].1;
+                            let dx = gpts[n - 1].0 - gpts[n - 2].0;
+                            let dy = gpts[n - 1].1 - gpts[n - 2].1;
                             let seg_len = (dx * dx + dy * dy).sqrt();
                             if seg_len > 0.001 {
-                                let lox = gpts[n-1].0 + dx / seg_len * lead_out;
-                                let loy = gpts[n-1].1 + dy / seg_len * lead_out;
+                                let lox = gpts[n - 1].0 + dx / seg_len * lead_out;
+                                let loy = gpts[n - 1].1 + dy / seg_len * lead_out;
                                 if !laser_on {
                                     lines.push(format!("{} S{}", power_cmd, effective_s_max));
                                 }
                                 cut_distance += lead_out;
                                 total_distance += lead_out;
-                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", lox, loy, speed_mm_min, effective_s_max));
-                                moves.push(GcodeMove { x: lox, y: loy, move_type: "cut".to_string(), speed: speed_mm_min, power: effective_s_max });
+                                lines.push(format!(
+                                    "G1 X{:.3} Y{:.3} F{:.0} S{}",
+                                    lox, loy, speed_mm_min, effective_s_max
+                                ));
+                                moves.push(GcodeMove {
+                                    x: lox,
+                                    y: loy,
+                                    move_type: "cut".to_string(),
+                                    speed: speed_mm_min,
+                                    power: effective_s_max,
+                                });
                                 cur_x = lox;
                                 cur_y = loy;
                             }
@@ -700,8 +881,10 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                 }
                 "fill" => {
                     // Raster engrave mode
-                    lines.push(format!("; Engrave: {} ({}% @ {}mm/min, interval {}mm)",
-                        obj.id, layer.power, layer.speed, layer.interval));
+                    lines.push(format!(
+                        "; Engrave: {} ({}% @ {}mm/min, interval {}mm)",
+                        obj.id, layer.power, layer.speed, layer.interval
+                    ));
 
                     // P2-A Fix #6: fill mode engraves the full AABB unclipped. Guard against
                     // non-rectangular paths — the TS routing should send these to maskFill.
@@ -714,7 +897,8 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                         if !is_rect {
                             eprintln!(
                                 "[gcode_gen] fill mode skipped '{}': non-rectangular paths \
-                                 (use maskFill for compound/non-rect shapes)", obj.id
+                                 (use maskFill for compound/non-rect shapes)",
+                                obj.id
                             );
                             lines.push(format!(
                                 "; fill skipped: non-rectangular paths for '{}' (use maskFill)",
@@ -724,15 +908,22 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                         }
                     }
 
-                    let interval = limits::validated_interval(
-                        if layer.interval > 0.0 { layer.interval } else { 0.1 }
-                    );
+                    let interval = limits::validated_interval(if layer.interval > 0.0 {
+                        layer.interval
+                    } else {
+                        0.1
+                    });
                     let overscan = layer.overscan.max(0.0);
                     let scanning_offset = layer.scanning_offset;
 
                     // Combine object rotation + layer scan angle + per-pass angle increment
-                    let obj_rot = if obj.rotation.abs() > 0.001 { obj.rotation.to_radians() } else { 0.0 };
-                    let layer_angle = layer.scan_angle.to_radians() + (pass as f64) * layer.angle_increment.to_radians();
+                    let obj_rot = if obj.rotation.abs() > 0.001 {
+                        obj.rotation.to_radians()
+                    } else {
+                        0.0
+                    };
+                    let layer_angle = layer.scan_angle.to_radians()
+                        + (pass as f64) * layer.angle_increment.to_radians();
                     let rotation_rad = obj_rot + layer_angle;
                     let center_x = obj.x + obj.width / 2.0;
                     let center_y = obj.y + obj.height / 2.0;
@@ -744,23 +935,40 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                     // back by +rotation_rad, giving full corner coverage.
                     let (x_min, x_max, y_min, y_max) = if rotation_rad.abs() > 1e-6 {
                         let corners = [
-                            (obj.x,              obj.y),
-                            (obj.x + obj.width,  obj.y),
-                            (obj.x + obj.width,  obj.y + obj.height),
-                            (obj.x,              obj.y + obj.height),
+                            (obj.x, obj.y),
+                            (obj.x + obj.width, obj.y),
+                            (obj.x + obj.width, obj.y + obj.height),
+                            (obj.x, obj.y + obj.height),
                         ];
                         let cos_r = (-rotation_rad).cos();
                         let sin_r = (-rotation_rad).sin();
-                        let rotated: Vec<(f64, f64)> = corners.iter().map(|&(px, py)| {
-                            let dx = px - center_x;
-                            let dy = py - center_y;
-                            (center_x + dx * cos_r - dy * sin_r,
-                             center_y + dx * sin_r + dy * cos_r)
-                        }).collect();
-                        let rx_min = rotated.iter().map(|&(x, _)| x).fold(f64::INFINITY, f64::min);
-                        let rx_max = rotated.iter().map(|&(x, _)| x).fold(f64::NEG_INFINITY, f64::max);
-                        let ry_min = rotated.iter().map(|&(_, y)| y).fold(f64::INFINITY, f64::min);
-                        let ry_max = rotated.iter().map(|&(_, y)| y).fold(f64::NEG_INFINITY, f64::max);
+                        let rotated: Vec<(f64, f64)> = corners
+                            .iter()
+                            .map(|&(px, py)| {
+                                let dx = px - center_x;
+                                let dy = py - center_y;
+                                (
+                                    center_x + dx * cos_r - dy * sin_r,
+                                    center_y + dx * sin_r + dy * cos_r,
+                                )
+                            })
+                            .collect();
+                        let rx_min = rotated
+                            .iter()
+                            .map(|&(x, _)| x)
+                            .fold(f64::INFINITY, f64::min);
+                        let rx_max = rotated
+                            .iter()
+                            .map(|&(x, _)| x)
+                            .fold(f64::NEG_INFINITY, f64::max);
+                        let ry_min = rotated
+                            .iter()
+                            .map(|&(_, y)| y)
+                            .fold(f64::INFINITY, f64::min);
+                        let ry_max = rotated
+                            .iter()
+                            .map(|&(_, y)| y)
+                            .fold(f64::NEG_INFINITY, f64::max);
                         (rx_min, rx_max, ry_min, ry_max)
                     } else {
                         (obj.x, obj.x + obj.width, obj.y, obj.y + obj.height)
@@ -787,55 +995,90 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
 
                     // Horizontal scan lines
                     generate_scan_lines(
-                        &scan_params, &mut lines, &mut moves,
-                        &mut cut_distance, &mut travel_distance, &mut total_distance,
-                        &mut cur_x, &mut cur_y,
-                        x_min, x_max, y_min, y_max, false, fill_order,
+                        &scan_params,
+                        &mut lines,
+                        &mut moves,
+                        &mut cut_distance,
+                        &mut travel_distance,
+                        &mut total_distance,
+                        &mut cur_x,
+                        &mut cur_y,
+                        x_min,
+                        x_max,
+                        y_min,
+                        y_max,
+                        false,
+                        fill_order,
                     );
 
                     // Cross-hatch: vertical scan lines
                     if layer.cross_hatch {
                         lines.push("; Cross-hatch pass".to_string());
                         generate_scan_lines(
-                            &scan_params, &mut lines, &mut moves,
-                            &mut cut_distance, &mut travel_distance, &mut total_distance,
-                            &mut cur_x, &mut cur_y,
-                            y_min, y_max, x_min, x_max, true, fill_order,
+                            &scan_params,
+                            &mut lines,
+                            &mut moves,
+                            &mut cut_distance,
+                            &mut travel_distance,
+                            &mut total_distance,
+                            &mut cur_x,
+                            &mut cur_y,
+                            y_min,
+                            y_max,
+                            x_min,
+                            x_max,
+                            true,
+                            fill_order,
                         );
                     }
                 }
                 "offsetFill" => {
                     // Offset fill mode: concentric paths spiraling inward
-                    lines.push(format!("; Offset Fill: {} ({}% @ {}mm/min, interval {}mm)",
-                        obj.id, layer.power, layer.speed, layer.interval));
+                    lines.push(format!(
+                        "; Offset Fill: {} ({}% @ {}mm/min, interval {}mm)",
+                        obj.id, layer.power, layer.speed, layer.interval
+                    ));
 
-                    let interval = if layer.interval > 0.0 { layer.interval } else { 0.5 };
+                    let interval = if layer.interval > 0.0 {
+                        layer.interval
+                    } else {
+                        0.5
+                    };
 
                     // Build polygons from object geometry -- iterate all paths
                     let paths_to_offset: Vec<PathSegment> = if obj.paths.is_empty() {
                         vec![object_to_path(obj)]
                     } else {
-                        obj.paths.iter().map(|p| {
-                            let mut seg = p.clone();
-                            rotate_segment(&mut seg, obj);
-                            seg
-                        }).collect()
+                        obj.paths
+                            .iter()
+                            .map(|p| {
+                                let mut seg = p.clone();
+                                rotate_segment(&mut seg, obj);
+                                seg
+                            })
+                            .collect()
                     };
 
                     // F8: no bulk M3 here — laser is enabled per-ring, off between rings.
                     // This prevents G0 rapids between rings from firing the laser under $32=0.
 
                     for path in &paths_to_offset {
-                        if path.points.len() < 3 { continue; }
+                        if path.points.len() < 3 {
+                            continue;
+                        }
 
-                        let polygon: Vec<super::gcode_gen::Point> = path.points.iter()
+                        let polygon: Vec<super::gcode_gen::Point> = path
+                            .points
+                            .iter()
                             .map(|p| Point { x: p.x, y: p.y })
                             .collect();
 
                         let rings = super::offset::generate_offset_rings(&polygon, interval);
 
                         for ring in &rings {
-                            if ring.len() < 2 { continue; }
+                            if ring.len() < 2 {
+                                continue;
+                            }
 
                             // Laser off before rapid — safe traverse between rings (F8)
                             lines.push("M5".to_string());
@@ -846,7 +1089,13 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                             travel_distance += dist;
                             total_distance += dist;
                             lines.push(format!("G0 X{:.3} Y{:.3}", rsx, rsy));
-                            moves.push(GcodeMove { x: rsx, y: rsy, move_type: "rapid".to_string(), speed: RAPID_SPEED_MM_MIN, power: 0.0 });
+                            moves.push(GcodeMove {
+                                x: rsx,
+                                y: rsy,
+                                move_type: "rapid".to_string(),
+                                speed: RAPID_SPEED_MM_MIN,
+                                power: 0.0,
+                            });
                             cur_x = rsx;
                             cur_y = rsy;
 
@@ -860,8 +1109,17 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                 let d = ((px - cur_x).powi(2) + (py - cur_y).powi(2)).sqrt();
                                 cut_distance += d;
                                 total_distance += d;
-                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", px, py, speed_mm_min, effective_s_max));
-                                moves.push(GcodeMove { x: px, y: py, move_type: "cut".to_string(), speed: speed_mm_min, power: effective_s_max });
+                                lines.push(format!(
+                                    "G1 X{:.3} Y{:.3} F{:.0} S{}",
+                                    px, py, speed_mm_min, effective_s_max
+                                ));
+                                moves.push(GcodeMove {
+                                    x: px,
+                                    y: py,
+                                    move_type: "cut".to_string(),
+                                    speed: speed_mm_min,
+                                    power: effective_s_max,
+                                });
                                 cur_x = px;
                                 cur_y = py;
                             }
@@ -872,8 +1130,17 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                             if d > 0.001 {
                                 cut_distance += d;
                                 total_distance += d;
-                                lines.push(format!("G1 X{:.3} Y{:.3} F{:.0} S{}", cfx, cfy, speed_mm_min, effective_s_max));
-                                moves.push(GcodeMove { x: cfx, y: cfy, move_type: "cut".to_string(), speed: speed_mm_min, power: effective_s_max });
+                                lines.push(format!(
+                                    "G1 X{:.3} Y{:.3} F{:.0} S{}",
+                                    cfx, cfy, speed_mm_min, effective_s_max
+                                ));
+                                moves.push(GcodeMove {
+                                    x: cfx,
+                                    y: cfy,
+                                    move_type: "cut".to_string(),
+                                    speed: speed_mm_min,
+                                    power: effective_s_max,
+                                });
                                 cur_x = cfx;
                                 cur_y = cfy;
                             }
@@ -889,16 +1156,24 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                     // re-add CCW import normalization (Fix-2 in ImageTraceDialog) when
                     // debugging hole issues. If a counter still burns, check the EvenOdd
                     // probe test or the alpha-threshold in mask_fill.rs.
-                    lines.push(format!("; Mask Fill: {} ({}% @ {}mm/min, interval {}mm)",
-                        obj.id, layer.power, layer.speed, layer.interval));
+                    lines.push(format!(
+                        "; Mask Fill: {} ({}% @ {}mm/min, interval {}mm)",
+                        obj.id, layer.power, layer.speed, layer.interval
+                    ));
 
-                    let interval = limits::validated_interval(
-                        if layer.interval > 0.0 { layer.interval } else { 0.1 }
-                    );
+                    let interval = limits::validated_interval(if layer.interval > 0.0 {
+                        layer.interval
+                    } else {
+                        0.1
+                    });
 
                     // Combine object rotation + scan angle + per-pass increment.
                     // Matches the "fill" arm's rotation convention exactly.
-                    let obj_rot = if obj.rotation.abs() > 0.001 { obj.rotation.to_radians() } else { 0.0 };
+                    let obj_rot = if obj.rotation.abs() > 0.001 {
+                        obj.rotation.to_radians()
+                    } else {
+                        0.0
+                    };
                     let layer_angle = layer.scan_angle.to_radians()
                         + (pass as f64) * layer.angle_increment.to_radians();
                     let rotation_rad = obj_rot + layer_angle;
@@ -936,7 +1211,10 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                      (zero-area path after thin-stroke dilation). Skipping.",
                                     obj.id
                                 );
-                                lines.push(format!("; maskFill skipped: all-background mask for '{}'", obj.id));
+                                lines.push(format!(
+                                    "; maskFill skipped: all-background mask for '{}'",
+                                    obj.id
+                                ));
                             } else {
                                 let scan_params = super::mask_fill::MaskScanParams {
                                     origin_x,
@@ -960,7 +1238,10 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                 };
 
                                 match super::mask_fill::scan_mask_to_gcode(
-                                    &pixels, mask_w, mask_h, &scan_params,
+                                    &pixels,
+                                    mask_w,
+                                    mask_h,
+                                    &scan_params,
                                 ) {
                                     Ok(scan_result) => {
                                         for line in scan_result.gcode.lines() {
@@ -976,7 +1257,10 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                                         moves.extend(scan_result.moves);
                                     }
                                     Err(e) => {
-                                        eprintln!("[gcode_gen] maskFill scan error for '{}': {}", obj.id, e);
+                                        eprintln!(
+                                            "[gcode_gen] maskFill scan error for '{}': {}",
+                                            obj.id, e
+                                        );
                                         lines.push(format!("; maskFill scan error: {}", e));
                                     }
                                 }
@@ -988,7 +1272,10 @@ pub fn generate_gcode(objects: &[CutObject], workspace_height: f64, s_value_max:
                     // Unrecognized layer mode: do not silently emit nothing.
                     // Mirrors the maskFill skip path — warn on stderr AND leave an
                     // in-band marker so the omission is visible in the G-code itself.
-                    eprintln!("[gcode_gen] unknown layer mode '{}': object '{}' skipped", other, obj.id);
+                    eprintln!(
+                        "[gcode_gen] unknown layer mode '{}': object '{}' skipped",
+                        other, obj.id
+                    );
                     lines.push(format!("; unknown layer mode '{}' — object skipped", other));
                 }
             }
@@ -1069,13 +1356,19 @@ pub(crate) fn object_to_path(obj: &CutObject) -> PathSegment {
                 points.push(Point { x: x + r, y });
                 points.push(Point { x: x + w - r, y });
                 arc_points(&mut points, x + w - r, y + r, r, -90.0, 0.0, 8);
-                points.push(Point { x: x + w, y: y + h - r });
+                points.push(Point {
+                    x: x + w,
+                    y: y + h - r,
+                });
                 arc_points(&mut points, x + w - r, y + h - r, r, 0.0, 90.0, 8);
                 points.push(Point { x: x + r, y: y + h });
                 arc_points(&mut points, x + r, y + h - r, r, 90.0, 180.0, 8);
                 points.push(Point { x, y: y + r });
                 arc_points(&mut points, x + r, y + r, r, 180.0, 270.0, 8);
-                PathSegment { points, closed: true }
+                PathSegment {
+                    points,
+                    closed: true,
+                }
             } else {
                 PathSegment {
                     points: vec![
@@ -1102,20 +1395,30 @@ pub(crate) fn object_to_path(obj: &CutObject) -> PathSegment {
                     y: cy + ry * angle.sin(),
                 });
             }
-            PathSegment { points, closed: true }
-        }
-        "line" => {
             PathSegment {
-                points: vec![
-                    Point { x: obj.x, y: obj.y },
-                    Point { x: obj.x + obj.width, y: obj.y + obj.height },
-                ],
-                closed: false,
+                points,
+                closed: true,
             }
         }
+        "line" => PathSegment {
+            points: vec![
+                Point { x: obj.x, y: obj.y },
+                Point {
+                    x: obj.x + obj.width,
+                    y: obj.y + obj.height,
+                },
+            ],
+            closed: false,
+        },
         other => {
-            eprintln!("[gcode_gen] object_to_path: unknown obj_type '{}' for '{}'", other, obj.id);
-            PathSegment { points: vec![], closed: false }
+            eprintln!(
+                "[gcode_gen] object_to_path: unknown obj_type '{}' for '{}'",
+                other, obj.id
+            );
+            PathSegment {
+                points: vec![],
+                closed: false,
+            }
         }
     };
 
@@ -1124,7 +1427,15 @@ pub(crate) fn object_to_path(obj: &CutObject) -> PathSegment {
 }
 
 /// Generate arc points for rounded corners
-fn arc_points(points: &mut Vec<Point>, cx: f64, cy: f64, r: f64, start_deg: f64, end_deg: f64, segments: usize) {
+fn arc_points(
+    points: &mut Vec<Point>,
+    cx: f64,
+    cy: f64,
+    r: f64,
+    start_deg: f64,
+    end_deg: f64,
+    segments: usize,
+) {
     let start_rad = start_deg.to_radians();
     let end_rad = end_deg.to_radians();
     for i in 0..=segments {
@@ -1240,18 +1551,28 @@ mod tests {
     fn tn1a_y_flip_10mm_square() {
         let workspace_height = 100.0;
         let obj = make_rect_obj("sq", 0.0, 0.0, 10.0, 10.0, make_layer_line());
-        let result = generate_gcode(&[obj], workspace_height, 1000.0, false).expect("generate_gcode");
+        let result =
+            generate_gcode(&[obj], workspace_height, 1000.0, false).expect("generate_gcode");
         let gcode = &result.gcode;
 
         // Rapid to first corner (0,0) design → (0,100) grbl
-        assert!(gcode.contains("G0 X0.000 Y100.000"),
-            "Expected G0 to (0,100); got:\n{}", gcode);
+        assert!(
+            gcode.contains("G0 X0.000 Y100.000"),
+            "Expected G0 to (0,100); got:\n{}",
+            gcode
+        );
         // After closing, should visit (10,100)
-        assert!(gcode.contains("Y100.000") && gcode.contains("X10.000"),
-            "Expected cut moves at Y=100 (bottom edge flipped); got:\n{}", gcode);
+        assert!(
+            gcode.contains("Y100.000") && gcode.contains("X10.000"),
+            "Expected cut moves at Y=100 (bottom edge flipped); got:\n{}",
+            gcode
+        );
         // Top of square in design = y=10 → grbl y = 100-10 = 90
-        assert!(gcode.contains("Y90.000"),
-            "Expected Y90 for top edge (design y=10 flipped); got:\n{}", gcode);
+        assert!(
+            gcode.contains("Y90.000"),
+            "Expected Y90 for top edge (design y=10 flipped); got:\n{}",
+            gcode
+        );
     }
 
     // TN1b — perforation toggle: 2mm cut / 1mm skip on a 10mm line.
@@ -1284,11 +1605,18 @@ mod tests {
         let gcode = &result.gcode;
         // Should contain an M5 (laser off between perforations) beyond the final M5
         let m5_count = gcode.matches("M5").count();
-        assert!(m5_count >= 2,
-            "Expected at least 2 M5 commands (one per skip + final); got {} in:\n{}", m5_count, gcode);
+        assert!(
+            m5_count >= 2,
+            "Expected at least 2 M5 commands (one per skip + final); got {} in:\n{}",
+            m5_count,
+            gcode
+        );
         // Should also contain a G0 (rapid for the skip segment)
-        assert!(gcode.matches("G0 X").count() >= 2,
-            "Expected at least 2 G0 moves (lead-in + skip); got:\n{}", gcode);
+        assert!(
+            gcode.matches("G0 X").count() >= 2,
+            "Expected at least 2 G0 moves (lead-in + skip); got:\n{}",
+            gcode
+        );
     }
 
     // TN1c — tab insertion: 5mm spacing, 1mm tab on a 10mm line.
@@ -1319,8 +1647,11 @@ mod tests {
         let result = generate_gcode(&[obj], 100.0, 1000.0, false).expect("generate_gcode");
         let gcode = &result.gcode;
         // Should have M5 for the tab gap
-        assert!(gcode.contains("M5"),
-            "Expected M5 for tab gap; got:\n{}", gcode);
+        assert!(
+            gcode.contains("M5"),
+            "Expected M5 for tab gap; got:\n{}",
+            gcode
+        );
     }
 
     // TN1d — lead-in/out: a path with lead-in 2mm must emit a G0 approach before
@@ -1338,8 +1669,16 @@ mod tests {
         // At minimum the gcode should have more than the bare minimum G0/G1 sequence
         let g0_count = gcode.matches("G0 X").count();
         let g1_count = gcode.matches("G1 X").count();
-        assert!(g0_count >= 2, "Expected multiple G0 moves (home + lead-in approach); got:\n{}", gcode);
-        assert!(g1_count >= 2, "Expected G1 for lead-in cut + path cuts; got:\n{}", gcode);
+        assert!(
+            g0_count >= 2,
+            "Expected multiple G0 moves (home + lead-in approach); got:\n{}",
+            gcode
+        );
+        assert!(
+            g1_count >= 2,
+            "Expected G1 for lead-in cut + path cuts; got:\n{}",
+            gcode
+        );
     }
 
     // F8 — offsetFill: each ring's G0 rapid is preceded by M5 and followed by
@@ -1361,18 +1700,25 @@ mod tests {
         // Every G0 rapid must be preceded by M5 (no active laser across rapids)
         let lines: Vec<&str> = gcode.lines().collect();
         for (i, line) in lines.iter().enumerate() {
-            if line.starts_with("G0 X") && !line.contains("Y0") { // skip final G0 home
+            if line.starts_with("G0 X") && !line.contains("Y0") {
+                // skip final G0 home
                 // Scan backward for the nearest M5 or power command before this G0
                 let mut found_m5 = false;
                 let mut found_power = false;
                 for j in (0..i).rev() {
-                    if lines[j].starts_with("M5") { found_m5 = true; break; }
+                    if lines[j].starts_with("M5") {
+                        found_m5 = true;
+                        break;
+                    }
                     if lines[j].starts_with("M3") || lines[j].starts_with("M4") {
-                        found_power = true; break;
+                        found_power = true;
+                        break;
                     }
                 }
-                assert!(found_m5 && !found_power,
-                    "Expected M5 immediately before G0 at line {i}: {line}\nFull G-code:\n{gcode}");
+                assert!(
+                    found_m5 && !found_power,
+                    "Expected M5 immediately before G0 at line {i}: {line}\nFull G-code:\n{gcode}"
+                );
             }
         }
 
@@ -1383,11 +1729,16 @@ mod tests {
                 let mut found_g0 = false;
                 for j in (0..i).rev() {
                     if lines[j].starts_with("M3") || lines[j].starts_with("M4") {
-                        found_power = true; break;
+                        found_power = true;
+                        break;
                     }
-                    if lines[j].starts_with("G0 X") { found_g0 = true; }
+                    if lines[j].starts_with("G0 X") {
+                        found_g0 = true;
+                    }
                     // Stop scan at object header comment
-                    if lines[j].starts_with("; Offset Fill:") { break; }
+                    if lines[j].starts_with("; Offset Fill:") {
+                        break;
+                    }
                 }
                 let _ = found_g0; // presence of G0 is expected between power and G1
                 assert!(found_power,
@@ -1418,8 +1769,8 @@ mod tests {
         for line in gcode.lines() {
             if line.starts_with("G0 X") || line.starts_with("G1 X") {
                 if let (Some(xi), Some(yi)) = (line.find('X'), line.find('Y')) {
-                    let x_str = &line[xi+1..].split_whitespace().next().unwrap_or("0");
-                    let y_str = &line[yi+1..].split_whitespace().next().unwrap_or("0");
+                    let x_str = &line[xi + 1..].split_whitespace().next().unwrap_or("0");
+                    let y_str = &line[yi + 1..].split_whitespace().next().unwrap_or("0");
                     if let (Ok(x), Ok(y)) = (x_str.parse::<f64>(), y_str.parse::<f64>()) {
                         xs.push(x);
                         ys.push(y);
@@ -1446,7 +1797,10 @@ mod tests {
             "Expected scan coverage span > 10mm at 45° (rotated AABB fix); x_span={x_span:.3} y_span={y_span:.3}\nG-code:\n{gcode}"
         );
         // Also verify there are actual scan moves (not an empty result)
-        assert!(!xs.is_empty(), "Expected scan moves to be generated; got:\n{gcode}");
+        assert!(
+            !xs.is_empty(),
+            "Expected scan moves to be generated; got:\n{gcode}"
+        );
     }
 
     // SPEED-UNIT — after the mm/s → mm/min canonical switch, the ×60 multiplier
@@ -1556,7 +1910,8 @@ mod tests {
 
         // All 3 path segments must survive
         assert_eq!(
-            restored.paths.len(), 3,
+            restored.paths.len(),
+            3,
             "Expected 3 PathSegments after round-trip, got {}. \
              IPC or serde is silently dropping compound paths.",
             restored.paths.len()
@@ -1565,9 +1920,11 @@ mod tests {
         // Each segment's point count must be preserved
         for (i, seg) in restored.paths.iter().enumerate() {
             assert_eq!(
-                seg.points.len(), 4,
+                seg.points.len(),
+                4,
                 "Segment {} should have 4 points after round-trip, got {}",
-                i, seg.points.len()
+                i,
+                seg.points.len()
             );
             assert!(
                 seg.closed,
@@ -1580,19 +1937,22 @@ mod tests {
         let left_x1 = restored.paths[0].points[1].x;
         assert!(
             (left_x1 - 2.0).abs() < 1e-9,
-            "Left vertical segment point[1].x should be 2.0, got {}", left_x1
+            "Left vertical segment point[1].x should be 2.0, got {}",
+            left_x1
         );
         let crossbar_y0 = restored.paths[2].points[0].y;
         assert!(
             (crossbar_y0 - 4.0).abs() < 1e-9,
-            "Crossbar segment point[0].y should be 4.0, got {}", crossbar_y0
+            "Crossbar segment point[0].y should be 4.0, got {}",
+            crossbar_y0
         );
 
         // Layer mode must survive (if "maskFill" were coerced to a default the
         // dispatch arm would silently skip the object)
         assert_eq!(
             restored.layer.mode, "maskFill",
-            "Layer mode must survive serde round-trip; got '{}'", restored.layer.mode
+            "Layer mode must survive serde round-trip; got '{}'",
+            restored.layer.mode
         );
     }
 
@@ -1651,7 +2011,10 @@ mod tests {
     fn transform_to_grbl_origin_bottom_flips_y() {
         let params = make_scan_params(0.0, 0.0, 0.0, false, 100.0);
         let (x, y) = transform_to_grbl(5.0, 30.0, &params);
-        assert!((x - 5.0).abs() < 1e-9, "x should pass through unchanged, got {x}");
+        assert!(
+            (x - 5.0).abs() < 1e-9,
+            "x should pass through unchanged, got {x}"
+        );
         assert!(
             (y - 70.0).abs() < 1e-9,
             "origin-bottom: y should flip to workspace_height - y = 70, got {y}"
@@ -1662,7 +2025,10 @@ mod tests {
     fn transform_to_grbl_origin_top_negates_y() {
         let params = make_scan_params(0.0, 0.0, 0.0, true, 100.0);
         let (x, y) = transform_to_grbl(5.0, 30.0, &params);
-        assert!((x - 5.0).abs() < 1e-9, "x should pass through unchanged, got {x}");
+        assert!(
+            (x - 5.0).abs() < 1e-9,
+            "x should pass through unchanged, got {x}"
+        );
         assert!(
             (y - (-30.0)).abs() < 1e-9,
             "origin-top: y should negate to -y = -30 (workspace_height irrelevant), got {y}"
@@ -1677,7 +2043,10 @@ mod tests {
         let params = make_scan_params(std::f64::consts::FRAC_PI_2, 0.0, 0.0, true, 100.0);
         let (x, y) = transform_to_grbl(10.0, 0.0, &params);
         // (10,0) rotated 90deg CCW about (0,0) -> (0,10); origin_top negates y -> (0,-10)
-        assert!((x - 0.0).abs() < 1e-9, "expected x~0 after 90deg rotation, got {x}");
+        assert!(
+            (x - 0.0).abs() < 1e-9,
+            "expected x~0 after 90deg rotation, got {x}"
+        );
         assert!(
             (y - (-10.0)).abs() < 1e-9,
             "expected y~-10 after 90deg rotation + origin-top negate, got {y}"
@@ -1695,7 +2064,11 @@ mod tests {
 
         let segments = collect_scan_segments(&params, 0.0, 10.0, 0.0, 6.0);
         // pos steps 0,2,4,6 (all <= line_max=6.0) -> 4 scan lines
-        assert_eq!(segments.len(), 4, "expected 4 scan lines at interval 2 over [0,6]");
+        assert_eq!(
+            segments.len(),
+            4,
+            "expected 4 scan lines at interval 2 over [0,6]"
+        );
 
         let forwards: Vec<bool> = segments.iter().map(|s| s.forward).collect();
         assert_eq!(
@@ -1825,7 +2198,8 @@ mod tests {
         layer_hatch.cross_hatch = true;
         let obj_hatch = make_rect_obj("sq2", 0.0, 0.0, 20.0, 20.0, layer_hatch);
 
-        let no_hatch = generate_gcode(&[obj_no_hatch], 50.0, 1000.0, false).expect("generate_gcode");
+        let no_hatch =
+            generate_gcode(&[obj_no_hatch], 50.0, 1000.0, false).expect("generate_gcode");
         let with_hatch = generate_gcode(&[obj_hatch], 50.0, 1000.0, false).expect("generate_gcode");
 
         assert!(
@@ -1939,13 +2313,18 @@ mod tests {
         let result = generate_gcode(&[obj], 200.0, 1000.0, false).expect("generate_gcode");
 
         // Find the G0 lead-in (first G0 after PREAMBLE_END, which has decimal coords)
-        let after_preamble = result.gcode.split("PREAMBLE_END").nth(1)
+        let after_preamble = result
+            .gcode
+            .split("PREAMBLE_END")
+            .nth(1)
             .expect("Expected PREAMBLE_END marker");
-        let g0_lead = after_preamble.lines()
+        let g0_lead = after_preamble
+            .lines()
             .find(|l| l.starts_with("G0 X") && l.contains("Y"))
             .expect("Expected a G0 lead-in line after preamble");
 
-        let lead_y: f64 = g0_lead.split_whitespace()
+        let lead_y: f64 = g0_lead
+            .split_whitespace()
             .find(|t| t.starts_with("Y"))
             .and_then(|t| t[1..].parse::<f64>().ok())
             .expect("lead-in should have Y");
@@ -1957,7 +2336,8 @@ mod tests {
             lead_y > 200.0,
             "CW outer path: lead-in Y ({lead_y:.3}) must be > 200 (outside the shape). \
              Got Y={lead_y:.3} which is inside. Bug: left normal picks inward for CW paths.\n\
-             G-code:\n{}", result.gcode
+             G-code:\n{}",
+            result.gcode
         );
     }
 
@@ -2004,13 +2384,18 @@ mod tests {
         let result = generate_gcode(&[obj], 200.0, 1000.0, false).expect("generate_gcode");
 
         // Find the G0 lead-in (after preamble)
-        let after_preamble = result.gcode.split("PREAMBLE_END").nth(1)
+        let after_preamble = result
+            .gcode
+            .split("PREAMBLE_END")
+            .nth(1)
             .expect("Expected PREAMBLE_END marker");
-        let g0_lead = after_preamble.lines()
+        let g0_lead = after_preamble
+            .lines()
             .find(|l| l.starts_with("G0 X") && l.contains("Y"))
             .expect("Expected a G0 lead-in line");
 
-        let lead_x: f64 = g0_lead.split_whitespace()
+        let lead_x: f64 = g0_lead
+            .split_whitespace()
             .find(|t| t.starts_with("X"))
             .and_then(|t| t[1..].parse::<f64>().ok())
             .expect("lead-in should have X");
@@ -2026,7 +2411,8 @@ mod tests {
             "CCW outer path: lead-in X ({lead_x:.3}) must be < 0 (outside the shape). \
              Got X={lead_x:.3} which is inside [0..100]. Bug: left normal picks inward \
              for CCW design-space paths after Y-flip.\n\
-             G-code:\n{}", result.gcode
+             G-code:\n{}",
+            result.gcode
         );
     }
 
@@ -2047,15 +2433,17 @@ mod tests {
     fn w4_fill_clamps_power_min_to_power() {
         let mut layer = make_layer_line();
         layer.mode = "fill".to_string();
-        layer.power = 10.0;       // s_max = 100
-        layer.power_min = 50.0;   // unclamped s_min would be 500
+        layer.power = 10.0; // s_max = 100
+        layer.power_min = 50.0; // unclamped s_min would be 500
         layer.power_mode = "variable".to_string();
         layer.interval = 1.0;
         let obj = make_rect_obj("fill_smin", 0.0, 0.0, 5.0, 5.0, layer);
 
         let result = generate_gcode(&[obj], 100.0, 1000.0, false).expect("generate_gcode");
 
-        let engrave_s_values: Vec<f64> = result.gcode.lines()
+        let engrave_s_values: Vec<f64> = result
+            .gcode
+            .lines()
             .filter(|l| l.starts_with("G1 ") && !l.contains("S0"))
             .filter_map(|l| {
                 l.split_whitespace()
@@ -2064,15 +2452,19 @@ mod tests {
             })
             .collect();
 
-        assert!(!engrave_s_values.is_empty(),
-            "Expected engrave moves; gcode:\n{}", result.gcode);
+        assert!(
+            !engrave_s_values.is_empty(),
+            "Expected engrave moves; gcode:\n{}",
+            result.gcode
+        );
 
         for &s in &engrave_s_values {
             assert!(
                 s <= 100.0,
                 "Fill mode: engrave S={s} exceeds s_max=100 (power=10%). power_min \
                  must be clamped to power, never raise commanded power.\n\
-                 G-code:\n{}", result.gcode
+                 G-code:\n{}",
+                result.gcode
             );
         }
     }
@@ -2082,15 +2474,17 @@ mod tests {
     fn w4_offset_fill_clamps_power_min_to_power() {
         let mut layer = make_layer_line();
         layer.mode = "offsetFill".to_string();
-        layer.power = 10.0;       // s_max = 100
-        layer.power_min = 50.0;   // unclamped s_min would be 500
+        layer.power = 10.0; // s_max = 100
+        layer.power_min = 50.0; // unclamped s_min would be 500
         layer.power_mode = "variable".to_string();
         layer.interval = 2.0;
         let obj = make_rect_obj("ofill_smin", 0.0, 0.0, 10.0, 10.0, layer);
 
         let result = generate_gcode(&[obj], 100.0, 1000.0, false).expect("generate_gcode");
 
-        let cut_s_values: Vec<f64> = result.gcode.lines()
+        let cut_s_values: Vec<f64> = result
+            .gcode
+            .lines()
             .filter(|l| l.starts_with("G1 ") && !l.contains("S0"))
             .filter_map(|l| {
                 l.split_whitespace()
@@ -2099,14 +2493,18 @@ mod tests {
             })
             .collect();
 
-        assert!(!cut_s_values.is_empty(),
-            "Expected cut moves; gcode:\n{}", result.gcode);
+        assert!(
+            !cut_s_values.is_empty(),
+            "Expected cut moves; gcode:\n{}",
+            result.gcode
+        );
 
         for &s in &cut_s_values {
             assert!(
                 s <= 100.0,
                 "OffsetFill mode: cut S={s} exceeds s_max=100 (power=10%).\n\
-                 G-code:\n{}", result.gcode
+                 G-code:\n{}",
+                result.gcode
             );
         }
     }
@@ -2117,34 +2515,64 @@ mod tests {
     #[test]
     fn w4_line_clamps_power_min_to_power() {
         let mut layer = make_layer_line();
-        layer.power = 40.0;       // s_max = 400
-        layer.power_min = 60.0;   // unclamped s_min would be 600
+        layer.power = 40.0; // s_max = 400
+        layer.power_min = 60.0; // unclamped s_min would be 600
         layer.power_mode = "variable".to_string();
         let obj = make_rect_obj("line_clamp", 0.0, 0.0, 10.0, 10.0, layer);
 
         let result = generate_gcode(&[obj], 100.0, 1000.0, false).expect("generate_gcode");
 
-        assert!(result.gcode.contains("M4 S400"),
-            "Expected M4 S400 (power=40% of 1000); gcode:\n{}", result.gcode);
-        assert!(!result.gcode.contains("S600"),
+        assert!(
+            result.gcode.contains("M4 S400"),
+            "Expected M4 S400 (power=40% of 1000); gcode:\n{}",
+            result.gcode
+        );
+        assert!(
+            !result.gcode.contains("S600"),
             "power_min=60 must NOT raise commanded power above power=40.\n\
-             G-code:\n{}", result.gcode);
+             G-code:\n{}",
+            result.gcode
+        );
     }
 
     /// W4: the clamp helper itself, including the degenerate inputs. Pinned
     /// directly so the rule has a home that does not depend on any arm.
     #[test]
     fn w4_clamp_power_min_helper() {
-        assert_eq!(clamp_power_min(40.0, 60.0), 40.0, "must clamp down to power");
-        assert_eq!(clamp_power_min(40.0, 10.0), 10.0, "must pass through when below power");
+        assert_eq!(
+            clamp_power_min(40.0, 60.0),
+            40.0,
+            "must clamp down to power"
+        );
+        assert_eq!(
+            clamp_power_min(40.0, 10.0),
+            10.0,
+            "must pass through when below power"
+        );
         assert_eq!(clamp_power_min(40.0, 40.0), 40.0, "equal is allowed");
         // W3 is the owner's call and this must not disturb it: the current
         // default of 0 passes through untouched.
-        assert_eq!(clamp_power_min(40.0, 0.0), 0.0, "power_min=0 default unaffected");
-        assert_eq!(clamp_power_min(0.0, 50.0), 0.0, "power=0 floors everything to 0");
+        assert_eq!(
+            clamp_power_min(40.0, 0.0),
+            0.0,
+            "power_min=0 default unaffected"
+        );
+        assert_eq!(
+            clamp_power_min(0.0, 50.0),
+            0.0,
+            "power=0 floors everything to 0"
+        );
         assert_eq!(clamp_power_min(40.0, -5.0), 0.0, "never negative");
-        assert_eq!(clamp_power_min(f64::NAN, 50.0), 0.0, "NaN is not a power level");
-        assert_eq!(clamp_power_min(40.0, f64::NAN), 0.0, "NaN is not a power level");
+        assert_eq!(
+            clamp_power_min(f64::NAN, 50.0),
+            0.0,
+            "NaN is not a power level"
+        );
+        assert_eq!(
+            clamp_power_min(40.0, f64::NAN),
+            0.0,
+            "NaN is not a power level"
+        );
     }
 
     // ─── P5: Engine robustness (limits + error propagation) ─────────────
@@ -2162,8 +2590,15 @@ mod tests {
         let result = generate_gcode(&[obj], 100.0, 1000.0, false).expect("generate_gcode");
         // 1mm / 0.01mm = 100 scan lines max — should produce a finite count
         let g1_count = result.gcode.matches("G1 X").count();
-        assert!(g1_count > 0, "Expected scan moves even with corrupt interval");
-        assert!(g1_count < 1_000_000, "Expected clamped interval to produce < 1M moves, got {}", g1_count);
+        assert!(
+            g1_count > 0,
+            "Expected scan moves even with corrupt interval"
+        );
+        assert!(
+            g1_count < 1_000_000,
+            "Expected clamped interval to produce < 1M moves, got {}",
+            g1_count
+        );
     }
 
     /// P5 Finding 2: generate_gcode returns Result — verify it succeeds for
@@ -2195,7 +2630,10 @@ mod tests {
             group_id: None,
             layer_index: None,
         });
-        assert!(path.points.is_empty(), "Unknown obj_type should produce empty path");
+        assert!(
+            path.points.is_empty(),
+            "Unknown obj_type should produce empty path"
+        );
     }
 
     /// P5: the legit golden corpus must pass under the caps — verify the
@@ -2217,6 +2655,10 @@ mod tests {
         let offset_obj = make_rect_obj("r3", 100.0, 0.0, 20.0, 20.0, offset_layer);
 
         let result = generate_gcode(&[line_obj, fill_obj, offset_obj], 200.0, 1000.0, false);
-        assert!(result.is_ok(), "Legit multi-mode job must pass under caps: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Legit multi-mode job must pass under caps: {:?}",
+            result.err()
+        );
     }
 }

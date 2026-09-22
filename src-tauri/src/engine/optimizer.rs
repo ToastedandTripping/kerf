@@ -1,4 +1,4 @@
-use super::gcode_gen::{CutObject, PathSegment, Point, object_to_path, rotate_segment};
+use super::gcode_gen::{object_to_path, rotate_segment, CutObject, PathSegment, Point};
 
 /// Optimize cut order using nearest-neighbor heuristic starting from a given point.
 /// Returns indices into the original objects vec in optimized order.
@@ -18,7 +18,9 @@ pub fn optimize_cut_order_from(objects: &[CutObject], start_x: f64, start_y: f64
         let mut best_dist = f64::MAX;
 
         for (i, obj) in objects.iter().enumerate() {
-            if visited[i] { continue; }
+            if visited[i] {
+                continue;
+            }
 
             // Get the starting point of this object
             let (sx, sy) = object_start_point(obj);
@@ -43,7 +45,6 @@ pub fn optimize_cut_order_from(objects: &[CutObject], start_x: f64, start_y: f64
     order
 }
 
-
 /// Reorder scan segments by nearest-neighbor (flood fill order).
 /// Each segment is (y_pos, x_start, x_end). Returns reordered segments.
 ///
@@ -52,9 +53,7 @@ pub fn optimize_cut_order_from(objects: &[CutObject], start_x: f64, start_y: f64
 /// the `forward` flag from the sign of (x_end - x_start), so the swap is
 /// sufficient to produce the correct direction. Also starts from a given head
 /// position instead of hard-coded (0,0).
-pub fn flood_reorder_segments(
-    segments: &[(f64, f64, f64)],
-) -> Vec<(f64, f64, f64)> {
+pub fn flood_reorder_segments(segments: &[(f64, f64, f64)]) -> Vec<(f64, f64, f64)> {
     flood_reorder_segments_from(segments, 0.0, 0.0)
 }
 
@@ -80,7 +79,9 @@ pub fn flood_reorder_segments_from(
         let mut use_reverse = false;
 
         for (i, seg) in segments.iter().enumerate() {
-            if visited[i] { continue; }
+            if visited[i] {
+                continue;
+            }
 
             // Distance to start of this segment
             let dist_start = ((seg.1 - cur_x).powi(2) + (seg.0 - cur_y).powi(2)).sqrt();
@@ -158,7 +159,10 @@ fn polygon_centroid(pts: &[Point]) -> Point {
         return Point { x: 0.0, y: 0.0 };
     }
     if n == 1 {
-        return Point { x: pts[0].x, y: pts[0].y };
+        return Point {
+            x: pts[0].x,
+            y: pts[0].y,
+        };
     }
     let area = polygon_signed_area(pts);
     if area.abs() < 1e-10 {
@@ -167,7 +171,10 @@ fn polygon_centroid(pts: &[Point]) -> Point {
         let max_x = pts.iter().map(|p| p.x).fold(f64::MIN, f64::max);
         let min_y = pts.iter().map(|p| p.y).fold(f64::MAX, f64::min);
         let max_y = pts.iter().map(|p| p.y).fold(f64::MIN, f64::max);
-        return Point { x: (min_x + max_x) / 2.0, y: (min_y + max_y) / 2.0 };
+        return Point {
+            x: (min_x + max_x) / 2.0,
+            y: (min_y + max_y) / 2.0,
+        };
     }
     let mut cx = 0.0_f64;
     let mut cy = 0.0_f64;
@@ -177,7 +184,10 @@ fn polygon_centroid(pts: &[Point]) -> Point {
         cx += (pts[i].x + pts[j].x) * cross;
         cy += (pts[i].y + pts[j].y) * cross;
     }
-    Point { x: cx / (6.0 * area), y: cy / (6.0 * area) }
+    Point {
+        x: cx / (6.0 * area),
+        y: cy / (6.0 * area),
+    }
 }
 
 /// Even-odd ray-casting point-in-polygon test.
@@ -259,7 +269,10 @@ fn guaranteed_interior_point(pts: &[Point]) -> Point {
     xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
     if xs.len() >= 2 {
-        Point { x: (xs[0] + xs[1]) / 2.0, y: scan_y }
+        Point {
+            x: (xs[0] + xs[1]) / 2.0,
+            y: scan_y,
+        }
     } else {
         c // Last resort: return centroid (degenerate polygon)
     }
@@ -377,7 +390,11 @@ fn compute_ranks(outlines: &[Vec<Point>], rep_points: &[(f64, f64)]) -> Vec<usiz
         }
         // Guard against cycles (mutual containment — degenerate but safe)
         memo[v] = Some(0); // temporary sentinel to break cycles
-        let r = contained_by[v].iter().map(|&p| dfs(p, contained_by, memo) + 1).max().unwrap_or(0);
+        let r = contained_by[v]
+            .iter()
+            .map(|&p| dfs(p, contained_by, memo) + 1)
+            .max()
+            .unwrap_or(0);
         memo[v] = Some(r);
         r
     }
@@ -586,7 +603,15 @@ mod tests {
         }
     }
 
-    fn make_obj(id: &str, x: f64, y: f64, w: f64, h: f64, pri: Option<i32>, gid: Option<&str>) -> CutObject {
+    fn make_obj(
+        id: &str,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        pri: Option<i32>,
+        gid: Option<&str>,
+    ) -> CutObject {
         CutObject {
             id: id.to_string(),
             obj_type: "rectangle".to_string(),
@@ -622,11 +647,7 @@ mod tests {
     fn flood_single_contiguous_row_unchanged() {
         // A single contiguous row of segments should come out in the same order
         // (each segment's end is already nearest to the next segment's start)
-        let segments = vec![
-            (0.0, 0.0, 10.0),
-            (0.0, 10.0, 20.0),
-            (0.0, 20.0, 30.0),
-        ];
+        let segments = vec![(0.0, 0.0, 10.0), (0.0, 10.0, 20.0), (0.0, 20.0, 30.0)];
         let result = flood_reorder_segments(&segments);
         assert_eq!(result.len(), 3);
         // All on same row, already sequential -- order should be preserved
@@ -648,11 +669,23 @@ mod tests {
         let result = flood_reorder_segments(&segments);
         assert_eq!(result.len(), 4);
         // Near-origin segments should come first
-        assert!(result[0].0 < 50.0, "first segment should be from near region");
-        assert!(result[1].0 < 50.0, "second segment should be from near region");
+        assert!(
+            result[0].0 < 50.0,
+            "first segment should be from near region"
+        );
+        assert!(
+            result[1].0 < 50.0,
+            "second segment should be from near region"
+        );
         // Far segments last
-        assert!(result[2].0 >= 50.0, "third segment should be from far region");
-        assert!(result[3].0 >= 50.0, "fourth segment should be from far region");
+        assert!(
+            result[2].0 >= 50.0,
+            "third segment should be from far region"
+        );
+        assert!(
+            result[3].0 >= 50.0,
+            "fourth segment should be from far region"
+        );
     }
 
     #[test]
@@ -689,12 +722,20 @@ mod tests {
         assert_eq!(result.len(), 2);
 
         // B should be reversed: (0, 100.0, 80.0)
-        assert_eq!(result[0], (0.0, 100.0, 80.0),
-            "Seg B should be reversed (end was closer); got {:?}", result[0]);
+        assert_eq!(
+            result[0],
+            (0.0, 100.0, 80.0),
+            "Seg B should be reversed (end was closer); got {:?}",
+            result[0]
+        );
 
         // A should be reversed: head at (80, 0), A's end (50) is closer than start (0)
-        assert_eq!(result[1], (0.0, 50.0, 0.0),
-            "Seg A should be reversed (end was closer); got {:?}", result[1]);
+        assert_eq!(
+            result[1],
+            (0.0, 50.0, 0.0),
+            "Seg A should be reversed (end was closer); got {:?}",
+            result[1]
+        );
     }
 
     // ─── Helpers for new inner-first tests ────────────────────────────────────
@@ -711,7 +752,14 @@ mod tests {
         }
     }
 
-    fn make_obj_with_paths(id: &str, x: f64, y: f64, w: f64, h: f64, paths: Vec<PathSegment>) -> CutObject {
+    fn make_obj_with_paths(
+        id: &str,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        paths: Vec<PathSegment>,
+    ) -> CutObject {
         let mut obj = make_obj(id, x, y, w, h, None, None);
         obj.paths = paths;
         obj
@@ -754,7 +802,7 @@ mod tests {
         // A single object has two sub-paths: an outer perimeter (large) and a hole (small).
         // order_paths_inner_first must put the hole before the perimeter.
         let perimeter = make_rect_path(0.0, 0.0, 100.0, 100.0); // area = 10000
-        let hole      = make_rect_path(40.0, 40.0, 20.0, 20.0); // area = 400
+        let hole = make_rect_path(40.0, 40.0, 20.0, 20.0); // area = 400
 
         let mut paths = vec![perimeter, hole]; // perimeter=idx 0, hole=idx 1
         order_paths_inner_first(&mut paths);
@@ -762,8 +810,14 @@ mod tests {
         // After ordering: hole (smaller area) must be first
         let area0 = polygon_area_abs(&paths[0].points);
         let area1 = polygon_area_abs(&paths[1].points);
-        assert!(area0 < area1, "hole (smaller area ≈400) must come first, got area0={area0} area1={area1}");
-        assert!((area0 - 400.0).abs() < 1.0, "first path should be the hole (area≈400), got {area0}");
+        assert!(
+            area0 < area1,
+            "hole (smaller area ≈400) must come first, got area0={area0} area1={area1}"
+        );
+        assert!(
+            (area0 - 400.0).abs() < 1.0,
+            "first path should be the hole (area≈400), got {area0}"
+        );
     }
 
     // ─── Test #3: toggle on/off ───────────────────────────────────────────────
@@ -777,7 +831,10 @@ mod tests {
 
         // Pure NN from (0,0): outer's start is at (0,0) = distance 0 → outer first
         let order = optimize_cut_order_from(&objs, 0.0, 0.0);
-        assert_eq!(order[0], 0, "toggle off: NN picks outer (start 0,0 = distance 0 from head)");
+        assert_eq!(
+            order[0], 0,
+            "toggle off: NN picks outer (start 0,0 = distance 0 from head)"
+        );
         assert_eq!(order[1], 1);
     }
 
@@ -790,7 +847,10 @@ mod tests {
         let objs = vec![outer, inner];
 
         let order = order_inner_first_nn(&objs, 0.0, 0.0);
-        assert_eq!(order[0], 1, "toggle on: inner must cut before its outer container");
+        assert_eq!(
+            order[0], 1,
+            "toggle on: inner must cut before its outer container"
+        );
         assert_eq!(order[1], 0);
     }
 
@@ -808,7 +868,10 @@ mod tests {
         let objs = vec![outer, inner];
 
         let order = order_inner_first_nn(&objs, 0.0, 0.0);
-        assert_eq!(order[0], 1, "rotated inner must be detected as contained and cut first");
+        assert_eq!(
+            order[0], 1,
+            "rotated inner must be detected as contained and cut first"
+        );
 
         // Variant: outer also rotated (30°). A 200×200 outer rotated 30° still contains a
         // small 10×10 inner near the center.
@@ -818,7 +881,10 @@ mod tests {
         inner2.rotation = 45.0;
         let objs2 = vec![outer2, inner2];
         let order2 = order_inner_first_nn(&objs2, 0.0, 0.0);
-        assert_eq!(order2[0], 1, "rotated inner inside rotated outer must still be detected");
+        assert_eq!(
+            order2[0], 1,
+            "rotated inner inside rotated outer must still be detected"
+        );
     }
 
     // ─── Test #5: irregular and concave shapes ────────────────────────────────
@@ -842,7 +908,10 @@ mod tests {
 
         let objs = vec![outer_tri, inner];
         let order = order_inner_first_nn(&objs, 0.0, 0.0);
-        assert_eq!(order[0], 1, "inner must be detected inside irregular (triangle) outer");
+        assert_eq!(
+            order[0], 1,
+            "inner must be detected inside irregular (triangle) outer"
+        );
 
         // Concave-outer (L-shape): inner is in the bottom-left arm of the L.
         // A centroid-based check on a CONCAVE inner would fail if it put the rep point
@@ -856,26 +925,37 @@ mod tests {
             points: vec![
                 Point { x: 10.0, y: 0.0 },
                 Point { x: 10.0, y: 10.0 },
-                Point { x: 8.0,  y: 10.0 },
-                Point { x: 8.0,  y: 2.0 },
-                Point { x: 2.0,  y: 2.0 },
-                Point { x: 2.0,  y: 10.0 },
-                Point { x: 0.0,  y: 10.0 },
-                Point { x: 0.0,  y: 0.0 },
+                Point { x: 8.0, y: 10.0 },
+                Point { x: 8.0, y: 2.0 },
+                Point { x: 2.0, y: 2.0 },
+                Point { x: 2.0, y: 10.0 },
+                Point { x: 0.0, y: 10.0 },
+                Point { x: 0.0, y: 0.0 },
             ],
             closed: true,
         };
         // Shift U to be inside the large outer (offset to 50,50)
-        let u_shifted: Vec<Point> = u_inner.points.iter()
-            .map(|p| Point { x: p.x + 50.0, y: p.y + 50.0 })
+        let u_shifted: Vec<Point> = u_inner
+            .points
+            .iter()
+            .map(|p| Point {
+                x: p.x + 50.0,
+                y: p.y + 50.0,
+            })
             .collect();
-        let u_seg = PathSegment { points: u_shifted, closed: true };
+        let u_seg = PathSegment {
+            points: u_shifted,
+            closed: true,
+        };
         let concave_inner = make_obj_with_paths("u_inner", 50.0, 50.0, 10.0, 10.0, vec![u_seg]);
         let large_outer = make_obj("large_outer", 0.0, 0.0, 200.0, 200.0, None, None);
 
         let objs2 = vec![large_outer, concave_inner];
         let order2 = order_inner_first_nn(&objs2, 0.0, 0.0);
-        assert_eq!(order2[0], 1, "concave (U-shaped) inner must be detected inside large outer");
+        assert_eq!(
+            order2[0], 1,
+            "concave (U-shaped) inner must be detected inside large outer"
+        );
     }
 
     // ─── Test #6: equal depth band uses NN ────────────────────────────────────
@@ -884,12 +964,15 @@ mod tests {
     fn equal_depth_band_uses_nn() {
         // Two sibling objects at rank 0 (neither contains the other).
         // Head is nearer B → NN within the band should pick B first.
-        let a = make_obj("a", 0.0, 0.0, 10.0, 10.0, None, None);    // start at (0,0)
-        let b = make_obj("b", 200.0, 0.0, 10.0, 10.0, None, None);  // start at (200,0)
+        let a = make_obj("a", 0.0, 0.0, 10.0, 10.0, None, None); // start at (0,0)
+        let b = make_obj("b", 200.0, 0.0, 10.0, 10.0, None, None); // start at (200,0)
 
         // Head at (210,0): b is much nearer
         let order = order_inner_first_nn(&[a, b], 210.0, 0.0);
-        assert_eq!(order[0], 1, "head at (210,0): b (start 200,0) is nearer and same rank → b first");
+        assert_eq!(
+            order[0], 1,
+            "head at (210,0): b (start 200,0) is nearer and same rank → b first"
+        );
         assert_eq!(order[1], 0);
     }
 
@@ -898,9 +981,9 @@ mod tests {
     #[test]
     fn three_level_nesting() {
         // inner ⊂ middle ⊂ outer → expected order: [inner, middle, outer]
-        let outer  = make_obj("outer",  0.0,  0.0,  100.0, 100.0, None, None);
-        let middle = make_obj("middle", 10.0, 10.0,  80.0,  80.0, None, None);
-        let inner  = make_obj("inner",  30.0, 30.0,  40.0,  40.0, None, None);
+        let outer = make_obj("outer", 0.0, 0.0, 100.0, 100.0, None, None);
+        let middle = make_obj("middle", 10.0, 10.0, 80.0, 80.0, None, None);
+        let inner = make_obj("inner", 30.0, 30.0, 40.0, 40.0, None, None);
 
         // Objects presented in worst-case order (outer first)
         let objs = vec![outer, middle, inner]; // outer=0, middle=1, inner=2
@@ -967,11 +1050,17 @@ mod tests {
         // Layer 0 objects come first, then layer 1
         // (The F7 loop in gcode.rs appends these in sequence)
         let mut combined_ids: Vec<&str> = Vec::new();
-        for &i in &order0 { combined_ids.push(&layer0_objs[i].id); }
-        for &i in &order1 { combined_ids.push(&layer1_objs[i].id); }
+        for &i in &order0 {
+            combined_ids.push(&layer0_objs[i].id);
+        }
+        for &i in &order1 {
+            combined_ids.push(&layer1_objs[i].id);
+        }
 
-        assert_eq!(combined_ids[0], "l0_outer",
-            "layer 0 object must emit before layer 1 object regardless of proximity");
+        assert_eq!(
+            combined_ids[0], "l0_outer",
+            "layer 0 object must emit before layer 1 object regardless of proximity"
+        );
         assert_eq!(combined_ids[1], "l1_inner");
     }
 
@@ -988,11 +1077,11 @@ mod tests {
             Point { x: 0.0, y: 0.0 },
             Point { x: 10.0, y: 0.0 },
             Point { x: 10.0, y: 10.0 },
-            Point { x: 8.0,  y: 10.0 },
-            Point { x: 8.0,  y: 2.0 },
-            Point { x: 2.0,  y: 2.0 },
-            Point { x: 2.0,  y: 10.0 },
-            Point { x: 0.0,  y: 10.0 },
+            Point { x: 8.0, y: 10.0 },
+            Point { x: 8.0, y: 2.0 },
+            Point { x: 2.0, y: 2.0 },
+            Point { x: 2.0, y: 10.0 },
+            Point { x: 0.0, y: 10.0 },
         ];
 
         // Verify the centroid is outside (so the fallback fires)
@@ -1006,7 +1095,9 @@ mod tests {
             point_in_polygon(interior.x, interior.y, &u_pts),
             "guaranteed_interior_point must return a point strictly inside the U-shape; \
              centroid was {:?} (inside={centroid_inside}), fallback returned ({}, {})",
-            c, interior.x, interior.y
+            c,
+            interior.x,
+            interior.y
         );
     }
 
@@ -1032,14 +1123,26 @@ mod tests {
         // The upper horizontal boundary (y=2) is classified as "outside" by the
         // half-open rule (both vertical edges' upward-going side ends at y=2 exclusive).
         let on_top_edge = point_in_polygon(2.0, 2.0, &rect);
-        assert!(!on_top_edge, "upper boundary (y=2) must be outside per half-open rule");
+        assert!(
+            !on_top_edge,
+            "upper boundary (y=2) must be outside per half-open rule"
+        );
 
         // Strictly interior point
-        assert!(point_in_polygon(2.0, 1.0, &rect), "center point (y=1) must be inside");
+        assert!(
+            point_in_polygon(2.0, 1.0, &rect),
+            "center point (y=1) must be inside"
+        );
 
         // Points well outside
-        assert!(!point_in_polygon(5.0, 1.0, &rect), "right of rectangle must be outside");
-        assert!(!point_in_polygon(-1.0, 1.0, &rect), "left of rectangle must be outside");
+        assert!(
+            !point_in_polygon(5.0, 1.0, &rect),
+            "right of rectangle must be outside"
+        );
+        assert!(
+            !point_in_polygon(-1.0, 1.0, &rect),
+            "left of rectangle must be outside"
+        );
 
         // Diamond: vertices at (5,0), (10,5), (5,10), (0,5).
         // At y=5 there are exactly two vertices (0,5) and (10,5). The half-open rule
@@ -1052,14 +1155,29 @@ mod tests {
             Point { x: 0.0, y: 5.0 },
         ];
         // Geometric center: strictly inside
-        assert!(point_in_polygon(5.0, 5.0, &diamond), "center of diamond must be inside");
+        assert!(
+            point_in_polygon(5.0, 5.0, &diamond),
+            "center of diamond must be inside"
+        );
         // Outside
-        assert!(!point_in_polygon(15.0, 5.0, &diamond), "right of diamond must be outside");
-        assert!(!point_in_polygon(5.0, 11.0, &diamond), "above diamond must be outside");
+        assert!(
+            !point_in_polygon(15.0, 5.0, &diamond),
+            "right of diamond must be outside"
+        );
+        assert!(
+            !point_in_polygon(5.0, 11.0, &diamond),
+            "above diamond must be outside"
+        );
 
         // Strictly interior (non-center) to avoid vertex ambiguity
-        assert!(point_in_polygon(5.0, 3.0, &diamond), "lower-center of diamond must be inside");
-        assert!(point_in_polygon(5.0, 7.0, &diamond), "upper-center of diamond must be inside");
+        assert!(
+            point_in_polygon(5.0, 3.0, &diamond),
+            "lower-center of diamond must be inside"
+        );
+        assert!(
+            point_in_polygon(5.0, 7.0, &diamond),
+            "upper-center of diamond must be inside"
+        );
     }
 
     /// AABB pre-filter cycle-prevention: two partially-overlapping rectangles must not
@@ -1108,7 +1226,10 @@ mod tests {
         assert_eq!(ranks[1], 0, "B must have rank 0 (not considered inside A)");
 
         // NN from (0,0): A's start point (0,0) beats B's (20,20) — A comes first.
-        assert_eq!(order[0], 0, "A (nearest to origin) must be first in pure NN order");
+        assert_eq!(
+            order[0], 0,
+            "A (nearest to origin) must be first in pure NN order"
+        );
         assert_eq!(order[1], 1, "B must follow");
     }
 
@@ -1128,7 +1249,10 @@ mod tests {
     fn no_panic_empty_object_list() {
         let empty: Vec<CutObject> = vec![];
         assert_eq!(order_inner_first_nn(&empty, 0.0, 0.0), Vec::<usize>::new());
-        assert_eq!(optimize_cut_order_from(&empty, 0.0, 0.0), Vec::<usize>::new());
+        assert_eq!(
+            optimize_cut_order_from(&empty, 0.0, 0.0),
+            Vec::<usize>::new()
+        );
     }
 
     #[test]
@@ -1152,9 +1276,15 @@ mod tests {
     #[test]
     fn no_panic_degenerate_paths_zero_one_two_points() {
         // Empty path (0 points)
-        let empty_path = PathSegment { points: vec![], closed: true };
+        let empty_path = PathSegment {
+            points: vec![],
+            closed: true,
+        };
         // Single-point "contour"
-        let one_point_path = PathSegment { points: vec![Point { x: 5.0, y: 5.0 }], closed: true };
+        let one_point_path = PathSegment {
+            points: vec![Point { x: 5.0, y: 5.0 }],
+            closed: true,
+        };
         // Zero-length path: two coincident points
         let zero_len_path = PathSegment {
             points: vec![Point { x: 3.0, y: 3.0 }, Point { x: 3.0, y: 3.0 }],
@@ -1177,8 +1307,14 @@ mod tests {
         // must also survive without panicking or dropping a path.
         let mut mixed_paths = vec![
             make_rect_path(0.0, 0.0, 50.0, 50.0),
-            PathSegment { points: vec![], closed: true },
-            PathSegment { points: vec![Point { x: 1.0, y: 1.0 }], closed: true },
+            PathSegment {
+                points: vec![],
+                closed: true,
+            },
+            PathSegment {
+                points: vec![Point { x: 1.0, y: 1.0 }],
+                closed: true,
+            },
         ];
         order_paths_inner_first(&mut mixed_paths); // must not panic
         assert_eq!(mixed_paths.len(), 3, "no path should be dropped");
@@ -1245,21 +1381,43 @@ mod tests {
     /// double-cut. Assert the optimizer's output is exactly the input
     /// reordered -- no more, no fewer.
     fn assert_is_permutation(order: &[usize], n: usize) {
-        assert_eq!(order.len(), n, "output length must equal input length (n={n})");
+        assert_eq!(
+            order.len(),
+            n,
+            "output length must equal input length (n={n})"
+        );
         let mut seen = vec![false; n];
         for &i in order {
             assert!(i < n, "index {i} out of range for n={n}");
-            assert!(!seen[i], "index {i} appeared more than once in order={:?}", order);
+            assert!(
+                !seen[i],
+                "index {i} appeared more than once in order={:?}",
+                order
+            );
             seen[i] = true;
         }
-        assert!(seen.iter().all(|&s| s), "not every index appeared in order={:?}", order);
+        assert!(
+            seen.iter().all(|&s| s),
+            "not every index appeared in order={:?}",
+            order
+        );
     }
 
     #[test]
     fn permutation_property_across_hand_rolled_fixtures() {
         // (a) Flat list of non-overlapping siblings
         let flat: Vec<CutObject> = (0..15)
-            .map(|i| make_obj(&format!("flat_{i}"), (i as f64) * 30.0, 0.0, 10.0, 10.0, None, None))
+            .map(|i| {
+                make_obj(
+                    &format!("flat_{i}"),
+                    (i as f64) * 30.0,
+                    0.0,
+                    10.0,
+                    10.0,
+                    None,
+                    None,
+                )
+            })
             .collect();
         assert_is_permutation(&order_inner_first_nn(&flat, 0.0, 0.0), flat.len());
 
@@ -1281,7 +1439,10 @@ mod tests {
             5.0,
             0.0,
             0.0,
-            vec![PathSegment { points: vec![Point { x: 5.0, y: 5.0 }], closed: true }],
+            vec![PathSegment {
+                points: vec![Point { x: 5.0, y: 5.0 }],
+                closed: true,
+            }],
         );
         let mixed = vec![
             make_obj("m0", 0.0, 0.0, 100.0, 100.0, None, None),

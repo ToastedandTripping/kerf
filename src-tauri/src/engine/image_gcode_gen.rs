@@ -10,60 +10,66 @@ use base64::Engine;
 use image::imageops::FilterType;
 use serde::{Deserialize, Serialize};
 
-use crate::engine::dither::{DitherAlgorithm, dither_image};
+use crate::engine::dither::{dither_image, DitherAlgorithm};
 use crate::engine::gcode_gen::{GcodeResult, ScanMotion, RAPID_SPEED_MM_MIN};
 use crate::engine::limits;
-use crate::engine::mask_fill::{MaskScanParams, scan_mask_to_gcode};
+use crate::engine::mask_fill::{scan_mask_to_gcode, MaskScanParams};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageEngraveRequest {
-    pub image_data: String,     // base64 encoded (may include data:image/...;base64, prefix)
-    pub x: f64,                 // position mm
+    pub image_data: String, // base64 encoded (may include data:image/...;base64, prefix)
+    pub x: f64,             // position mm
     pub y: f64,
-    pub width: f64,             // size mm
+    pub width: f64, // size mm
     pub height: f64,
-    pub rotation: f64,          // degrees — applied as coordinate transform in G-code output
+    pub rotation: f64, // degrees — applied as coordinate transform in G-code output
     #[serde(default = "default_scale")]
-    pub scale_x: f64,           // 1.0 or -1.0 (mirror); applied as pixel buffer flip
+    pub scale_x: f64, // 1.0 or -1.0 (mirror); applied as pixel buffer flip
     #[serde(default = "default_scale")]
-    pub scale_y: f64,           // 1.0 or -1.0 (mirror); applied as pixel buffer flip
-    pub power: f64,             // 0-100
-    pub power_min: f64,         // 0-100
-    pub speed: f64,             // mm/min
+    pub scale_y: f64, // 1.0 or -1.0 (mirror); applied as pixel buffer flip
+    pub power: f64,    // 0-100
+    pub power_min: f64, // 0-100
+    pub speed: f64,    // mm/min
     pub passes: u32,
-    pub power_mode: String,     // "constant" or "variable"
-    pub interval: f64,          // mm (DPI = 25.4 / interval)
-    pub dither: String,         // algorithm name
-    pub overscan: f64,          // mm
+    pub power_mode: String, // "constant" or "variable"
+    pub interval: f64,      // mm (DPI = 25.4 / interval)
+    pub dither: String,     // algorithm name
+    pub overscan: f64,      // mm
     pub bidirectional: bool,
-    pub scanning_offset: f64,   // mm
-    pub brightness: f64,        // -100 to 100
-    pub contrast: f64,          // -100 to 100
-    pub gamma: f64,             // 0.1 to 5.0
+    pub scanning_offset: f64, // mm
+    pub brightness: f64,      // -100 to 100
+    pub contrast: f64,        // -100 to 100
+    pub gamma: f64,           // 0.1 to 5.0
     pub invert: bool,
-    pub workspace_height: f64,  // for Y-flip
+    pub workspace_height: f64, // for Y-flip
     #[serde(default)]
-    pub origin_top: bool,       // if true, Y=0 is at the top (no Y-flip needed)
+    pub origin_top: bool, // if true, Y=0 is at the top (no Y-flip needed)
     #[serde(default = "default_s_value_max")]
-    pub s_value_max: f64,       // GRBL $30 setting
+    pub s_value_max: f64, // GRBL $30 setting
     #[serde(default)]
-    pub power_curve: Option<Vec<(f64, f64)>>,  // (shade 0-255, power 0-100%) control points
+    pub power_curve: Option<Vec<(f64, f64)>>, // (shade 0-255, power 0-100%) control points
     #[serde(default)]
-    pub newsprint_cell_size: Option<u32>,  // Newsprint dither cell size (default 6)
+    pub newsprint_cell_size: Option<u32>, // Newsprint dither cell size (default 6)
     #[serde(default)]
-    pub newsprint_angle: Option<f64>,      // Newsprint dither angle (default 45)
+    pub newsprint_angle: Option<f64>, // Newsprint dither angle (default 45)
     #[serde(default)]
     pub remove_background: bool,
     #[serde(default = "default_bg_tolerance")]
     pub bg_tolerance: f64,
     #[serde(default)]
-    pub scan_motion: Option<ScanMotion>,  // Optional acceleration + rapid rate for gap optimization
+    pub scan_motion: Option<ScanMotion>, // Optional acceleration + rapid rate for gap optimization
 }
 
-fn default_s_value_max() -> f64 { 1000.0 }
-fn default_scale() -> f64 { 1.0 }
-fn default_bg_tolerance() -> f64 { 20.0 }
+fn default_s_value_max() -> f64 {
+    1000.0
+}
+fn default_scale() -> f64 {
+    1.0
+}
+fn default_bg_tolerance() -> f64 {
+    20.0
+}
 
 /// Preview dithered image: runs steps 1-5 (decode, grayscale, resize, adjust, power curve, dither)
 /// and returns the pixel buffer + dimensions. Used for the engrave preview dialog.
@@ -91,16 +97,25 @@ pub fn preview_dither(req: &ImageEngraveRequest) -> Result<(Vec<u8>, u32, u32), 
     };
 
     // 3. Resize to target DPI
-    let interval = limits::validated_interval(if req.interval > 0.0 { req.interval } else { 0.1 });
+    let interval = limits::validated_interval(if req.interval > 0.0 {
+        req.interval
+    } else {
+        0.1
+    });
     let target_w = (req.width / interval).round().max(1.0) as u32;
     let target_h = (req.height / interval).round().max(1.0) as u32;
-    limits::check_raster_pixels(target_w as usize, target_h as usize)
-        .map_err(|e| e.to_string())?;
+    limits::check_raster_pixels(target_w as usize, target_h as usize).map_err(|e| e.to_string())?;
     let resized = image::imageops::resize(&gray, target_w, target_h, FilterType::Lanczos3);
 
     // 4. Apply adjustments
     let mut pixels: Vec<u8> = resized.into_raw();
-    apply_adjustments(&mut pixels, req.brightness, req.contrast, req.gamma, req.invert);
+    apply_adjustments(
+        &mut pixels,
+        req.brightness,
+        req.contrast,
+        req.gamma,
+        req.invert,
+    );
 
     // 4.25. F5: Apply mirror transforms (pixel buffer flips)
     // scale_x < 0 → flip horizontally (reverse each row)
@@ -332,8 +347,13 @@ fn image_to_grbl(
     origin_top: bool,
 ) -> (f64, f64) {
     crate::engine::coords::to_grbl_coords(
-        x_img, y_img, cx, cy,
-        rotation_rad, origin_top, workspace_height,
+        x_img,
+        y_img,
+        cx,
+        cy,
+        rotation_rad,
+        origin_top,
+        workspace_height,
     )
 }
 
@@ -352,18 +372,25 @@ fn generate_scan_gcode(
     height: u32,
     is_grayscale: bool,
 ) -> Result<GcodeResult, String> {
-    let interval = limits::validated_interval(if req.interval > 0.0 { req.interval } else { 0.1 });
-    limits::check_raster_pixels(width as usize, height as usize)
-        .map_err(|e| e.to_string())?;
+    let interval = limits::validated_interval(if req.interval > 0.0 {
+        req.interval
+    } else {
+        0.1
+    });
+    limits::check_raster_pixels(width as usize, height as usize).map_err(|e| e.to_string())?;
     let s_max = (req.power / 100.0 * req.s_value_max).round();
     // W4: same cross-clamp as the vector path. Here the hazard is different but
     // the same class: grayscale interpolates each pixel between s_min and s_max
     // (mask_fill.rs:358), so s_min > s_max inverts the ramp AND pushes every
     // emitted S above the commanded power. Fixed at the one shared helper.
-    let s_min =
-        (super::gcode_gen::clamp_power_min(req.power, req.power_min) / 100.0 * req.s_value_max)
-            .round();
-    let power_cmd = if req.power_mode == "variable" || is_grayscale { "M4" } else { "M3" };
+    let s_min = (super::gcode_gen::clamp_power_min(req.power, req.power_min) / 100.0
+        * req.s_value_max)
+        .round();
+    let power_cmd = if req.power_mode == "variable" || is_grayscale {
+        "M4"
+    } else {
+        "M3"
+    };
     let rotation_rad = req.rotation.to_radians();
 
     // Build the shared scan params, wiring in grayscale pixels when applicable.
@@ -401,7 +428,10 @@ fn generate_scan_gcode(
         "G21 ; mm mode".to_string(),
         "G90 ; absolute positioning".to_string(),
         "M5 ; laser off".to_string(),
-        format!("; Image engrave: {}x{} px, interval {}mm", width, height, interval),
+        format!(
+            "; Image engrave: {}x{} px, interval {}mm",
+            width, height, interval
+        ),
         "; KERF:PREAMBLE_END".to_string(),
     ];
 
@@ -515,18 +545,17 @@ mod tests {
         // shade 255 -> power 0% -> output shade 255
         assert_eq!(lut[255], 255);
         // shade 128 -> ~50% power -> ~128
-        assert!((lut[128] as i32 - 128).abs() <= 1, "Expected ~128, got {}", lut[128]);
+        assert!(
+            (lut[128] as i32 - 128).abs() <= 1,
+            "Expected ~128, got {}",
+            lut[128]
+        );
     }
 
     #[test]
     fn power_curve_step_produces_binary() {
         // Step function: shade < 128 = no power, shade >= 128 = full power
-        let step_points = vec![
-            (0.0, 0.0),
-            (127.0, 0.0),
-            (128.0, 100.0),
-            (255.0, 100.0),
-        ];
+        let step_points = vec![(0.0, 0.0), (127.0, 0.0), (128.0, 100.0), (255.0, 100.0)];
         let lut = build_power_curve_lut(&step_points);
 
         // Low shades should map to low power -> high shade (white)
@@ -617,15 +646,20 @@ mod tests {
         let h = 2usize;
         let mut pixels = vec![255u8; w * h];
         // Row 0 and row 1: pixels 2, 3, 4 are gray (127)
-        pixels[2] = 127; pixels[3] = 127; pixels[4] = 127;
-        pixels[w + 2] = 127; pixels[w + 3] = 127; pixels[w + 4] = 127;
+        pixels[2] = 127;
+        pixels[3] = 127;
+        pixels[4] = 127;
+        pixels[w + 2] = 127;
+        pixels[w + 3] = 127;
+        pixels[w + 4] = 127;
 
         let result = generate_scan_gcode(&req, &pixels, w as u32, h as u32, true)
             .expect("generate_scan_gcode should succeed");
 
         let gcode = result.gcode;
         // Extract all G1 X coordinates
-        let x_values: Vec<f64> = gcode.lines()
+        let x_values: Vec<f64> = gcode
+            .lines()
             .filter(|l| l.starts_with("G1 X"))
             .filter_map(|l| {
                 l.split_whitespace()
@@ -634,7 +668,11 @@ mod tests {
             })
             .collect();
 
-        assert!(!x_values.is_empty(), "Expected G1 moves in gcode:\n{}", gcode);
+        assert!(
+            !x_values.is_empty(),
+            "Expected G1 moves in gcode:\n{}",
+            gcode
+        );
 
         // Row 0 (forward): first pixel X should be near 3.0 (run_start=2, i=0, +1 = index 3 * interval=1.0)
         // Row 1 (reverse): first pixel X should be near the RIGHT end of run.
@@ -689,8 +727,12 @@ mod tests {
         // Row 0 and row 1: pixels 2,3,4 are mid-gray (127); rest white (255).
         // find_grayscale_runs treats < 255 as a run → run (2, 5).
         let mut pixels = vec![255u8; w * h];
-        pixels[2] = 127; pixels[3] = 127; pixels[4] = 127;
-        pixels[w + 2] = 127; pixels[w + 3] = 127; pixels[w + 4] = 127;
+        pixels[2] = 127;
+        pixels[3] = 127;
+        pixels[4] = 127;
+        pixels[w + 2] = 127;
+        pixels[w + 3] = 127;
+        pixels[w + 4] = 127;
 
         let result = generate_scan_gcode(&req, &pixels, w as u32, h as u32, true)
             .expect("generate_scan_gcode should succeed");
@@ -698,7 +740,8 @@ mod tests {
         let gcode = &result.gcode;
 
         // Extract G1 engrave moves with S > 0 (skip S0 blanks)
-        let engrave_x: Vec<f64> = gcode.lines()
+        let engrave_x: Vec<f64> = gcode
+            .lines()
             .filter(|l| l.starts_with("G1 X"))
             .filter(|l| {
                 l.split_whitespace()
@@ -723,13 +766,15 @@ mod tests {
         // Forward row endpoint: X=5.0 (boundary at orig_start + 3 pixels)
         assert_eq!(
             engrave_x[0], 5.0,
-            "Forward row endpoint wrong; got {:.1}", engrave_x[0]
+            "Forward row endpoint wrong; got {:.1}",
+            engrave_x[0]
         );
 
         // Reverse row endpoint: X=2.0 (boundary at orig_end - 3 pixels)
         assert_eq!(
             engrave_x[1], 2.0,
-            "Reverse row endpoint wrong; got {:.1}", engrave_x[1]
+            "Reverse row endpoint wrong; got {:.1}",
+            engrave_x[1]
         );
     }
 
@@ -752,7 +797,8 @@ mod tests {
         // Y should be workspace_height - y_mm = 100 - 10.5 = 89.5
         assert!(
             gcode.contains("Y89.500"),
-            "Expected Y89.500 (100 - 10.5, half-interval centered); got:\n{}", gcode,
+            "Expected Y89.500 (100 - 10.5, half-interval centered); got:\n{}",
+            gcode,
         );
     }
 
@@ -761,7 +807,7 @@ mod tests {
     #[test]
     fn f5_rotation_changes_coordinates() {
         let mut req = base_req();
-        req.rotation = 90.0;  // 90 degrees
+        req.rotation = 90.0; // 90 degrees
         req.x = 0.0;
         req.y = 0.0;
         req.width = 10.0;
@@ -782,7 +828,8 @@ mod tests {
         // With 90° rotation the Y coords will be non-trivial (not 100.0).
         assert!(
             !gcode.contains(&format!("G1 X0.000 {}", unrotated_y)),
-            "Expected rotated coordinates, but got axis-aligned Y100; gcode:\n{}", gcode,
+            "Expected rotated coordinates, but got axis-aligned Y100; gcode:\n{}",
+            gcode,
         );
     }
 
@@ -812,18 +859,32 @@ mod tests {
             .expect("flipped: generate_scan_gcode should succeed");
 
         // Normal run should end at X≤5.0; flipped run should start at X≥5.0
-        let x_end_normal = result_normal.gcode.lines().rfind(|l| l.starts_with("G1 X"))
+        let x_end_normal = result_normal
+            .gcode
+            .lines()
+            .rfind(|l| l.starts_with("G1 X"))
             .and_then(|l| l.split_whitespace().find(|t| t.starts_with("X")))
             .and_then(|t| t[1..].parse::<f64>().ok())
             .unwrap_or(0.0);
 
-        let x_start_flipped = result_flipped.gcode.lines().find(|l| l.starts_with("G0 X"))
+        let x_start_flipped = result_flipped
+            .gcode
+            .lines()
+            .find(|l| l.starts_with("G0 X"))
             .and_then(|l| l.split_whitespace().find(|t| t.starts_with("X")))
             .and_then(|t| t[1..].parse::<f64>().ok())
             .unwrap_or(0.0);
 
-        assert!(x_end_normal <= 5.0, "normal run end X should be ≤5; got {}", x_end_normal);
-        assert!(x_start_flipped >= 5.0, "mirrored run start X should be ≥5; got {}", x_start_flipped);
+        assert!(
+            x_end_normal <= 5.0,
+            "normal run end X should be ≤5; got {}",
+            x_end_normal
+        );
+        assert!(
+            x_start_flipped >= 5.0,
+            "mirrored run start X should be ≥5; got {}",
+            x_start_flipped
+        );
     }
 
     /// F5: image_to_grbl with zero rotation is equivalent to direct Y-flip.
@@ -835,7 +896,11 @@ mod tests {
         // With zero rotation, should just apply Y-flip
         let (rx, ry) = image_to_grbl(100.0, 50.0, cx, cy, 0.0, workspace_height, false);
         assert!((rx - 100.0).abs() < 1e-9, "X should be unchanged: {}", rx);
-        assert!((ry - 250.0).abs() < 1e-9, "Y should be workspace_height - y = 250: {}", ry);
+        assert!(
+            (ry - 250.0).abs() < 1e-9,
+            "Y should be workspace_height - y = 250: {}",
+            ry
+        );
     }
 
     /// F5: image_to_grbl with origin_top skips Y-flip.
@@ -843,7 +908,11 @@ mod tests {
     fn f5_image_to_grbl_origin_top_negates_y() {
         let (rx, ry) = image_to_grbl(10.0, 20.0, 0.0, 0.0, 0.0, 100.0, true);
         assert!((rx - 10.0).abs() < 1e-9);
-        assert!((ry - (-20.0)).abs() < 1e-9, "origin_top: expected -y, got {}", ry);
+        assert!(
+            (ry - (-20.0)).abs() < 1e-9,
+            "origin_top: expected -y, got {}",
+            ry
+        );
     }
 
     // ─── F9: image G-code preamble ───────────────────────────────────────────
@@ -861,21 +930,34 @@ mod tests {
         let lines: Vec<&str> = gcode.lines().collect();
 
         // The first non-empty line must be G21
-        let first = lines.iter().find(|l| !l.is_empty() && !l.starts_with(";"))
-            .copied().unwrap_or("");
-        assert_eq!(first, "G21 ; mm mode",
-            "F9: expected G21 as first non-comment line; got '{first}'\nFull G-code:\n{gcode}");
+        let first = lines
+            .iter()
+            .find(|l| !l.is_empty() && !l.starts_with(";"))
+            .copied()
+            .unwrap_or("");
+        assert_eq!(
+            first, "G21 ; mm mode",
+            "F9: expected G21 as first non-comment line; got '{first}'\nFull G-code:\n{gcode}"
+        );
 
         // G90 and M5 must appear before the first G0/G1
-        let first_move_idx = lines.iter().position(|l| l.starts_with("G0 X") || l.starts_with("G1 X"));
+        let first_move_idx = lines
+            .iter()
+            .position(|l| l.starts_with("G0 X") || l.starts_with("G1 X"));
         let preamble_lines: Vec<&str> = match first_move_idx {
             Some(idx) => lines[..idx].to_vec(),
             None => lines.clone(),
         };
-        assert!(preamble_lines.iter().any(|l| l.starts_with("G90")),
-            "F9: expected G90 in preamble before first move; preamble:\n{}", preamble_lines.join("\n"));
-        assert!(preamble_lines.iter().any(|l| l.starts_with("M5")),
-            "F9: expected M5 in preamble before first move; preamble:\n{}", preamble_lines.join("\n"));
+        assert!(
+            preamble_lines.iter().any(|l| l.starts_with("G90")),
+            "F9: expected G90 in preamble before first move; preamble:\n{}",
+            preamble_lines.join("\n")
+        );
+        assert!(
+            preamble_lines.iter().any(|l| l.starts_with("M5")),
+            "F9: expected M5 in preamble before first move; preamble:\n{}",
+            preamble_lines.join("\n")
+        );
     }
 
     // ─── Fix 1: Alpha-aware compositing ─────────────────────────────────────
@@ -883,7 +965,7 @@ mod tests {
     /// Build a minimal PNG with RGBA data and base64-encode it for use in tests.
     /// `pixels` is a flat Vec of (R,G,B,A) tuples, one per pixel.
     fn make_rgba_png_base64(width: u32, height: u32, pixels: &[(u8, u8, u8, u8)]) -> String {
-        use image::{ImageBuffer, Rgba, ImageEncoder};
+        use image::{ImageBuffer, ImageEncoder, Rgba};
         let mut img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(width, height);
         for (i, &(r, g, b, a)) in pixels.iter().enumerate() {
             let x = (i as u32) % width;
@@ -895,7 +977,10 @@ mod tests {
             .write_image(img.as_raw(), width, height, image::ExtendedColorType::Rgba8)
             .unwrap();
         let bytes = buf.into_inner();
-        format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes))
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        )
     }
 
     #[test]
@@ -913,7 +998,11 @@ mod tests {
         assert_eq!(w, 1);
         assert_eq!(h, 1);
         // Transparent pixel must composite to white (255).
-        assert_eq!(pixels[0], 255, "Transparent pixel should become white (no-engrave), got {}", pixels[0]);
+        assert_eq!(
+            pixels[0], 255,
+            "Transparent pixel should become white (no-engrave), got {}",
+            pixels[0]
+        );
     }
 
     #[test]
@@ -928,7 +1017,11 @@ mod tests {
             ..base_req()
         };
         let (pixels, _, _) = preview_dither(&req).expect("preview_dither should succeed");
-        assert_eq!(pixels[0], 0, "Opaque black pixel should remain black, got {}", pixels[0]);
+        assert_eq!(
+            pixels[0], 0,
+            "Opaque black pixel should remain black, got {}",
+            pixels[0]
+        );
     }
 
     #[test]
@@ -943,7 +1036,11 @@ mod tests {
             ..base_req()
         };
         let (pixels, _, _) = preview_dither(&req).expect("preview_dither should succeed");
-        assert_eq!(pixels[0], 255, "Semi-transparent white on white should remain white, got {}", pixels[0]);
+        assert_eq!(
+            pixels[0], 255,
+            "Semi-transparent white on white should remain white, got {}",
+            pixels[0]
+        );
     }
 
     // ─── Fix 3: Background removal ──────────────────────────────────────────
@@ -955,11 +1052,15 @@ mod tests {
         // - White pixels (255) are near the bg_luma (255) → set to white (no change needed)
         // - Black pixel (0) is far from bg_luma → preserved
         let req = ImageEngraveRequest {
-            image_data: make_rgba_png_base64(3, 1, &[
-                (255, 255, 255, 255), // corner 0 — white bg
-                (0, 0, 0, 255),       // center — black foreground
-                (255, 255, 255, 255), // corner 1 — white bg
-            ]),
+            image_data: make_rgba_png_base64(
+                3,
+                1,
+                &[
+                    (255, 255, 255, 255), // corner 0 — white bg
+                    (0, 0, 0, 255),       // center — black foreground
+                    (255, 255, 255, 255), // corner 1 — white bg
+                ],
+            ),
             width: 3.0,
             height: 1.0,
             dither: "grayscale".to_string(),
@@ -971,10 +1072,22 @@ mod tests {
         assert_eq!(w, 3);
         assert_eq!(h, 1);
         // Corner pixels should be white (background removed)
-        assert_eq!(pixels[0], 255, "Left corner should be white (bg removed), got {}", pixels[0]);
-        assert_eq!(pixels[2], 255, "Right corner should be white (bg removed), got {}", pixels[2]);
+        assert_eq!(
+            pixels[0], 255,
+            "Left corner should be white (bg removed), got {}",
+            pixels[0]
+        );
+        assert_eq!(
+            pixels[2], 255,
+            "Right corner should be white (bg removed), got {}",
+            pixels[2]
+        );
         // Center pixel (far from bg) should NOT be white
-        assert!(pixels[1] < 200, "Center black pixel should be dark, got {}", pixels[1]);
+        assert!(
+            pixels[1] < 200,
+            "Center black pixel should be dark, got {}",
+            pixels[1]
+        );
     }
 
     #[test]
@@ -982,11 +1095,15 @@ mod tests {
         // When remove_background=false, the gray center pixel should not be whitened.
         // Use grayscale dither (pass-through) so the value is not binarized by error diffusion.
         let req = ImageEngraveRequest {
-            image_data: make_rgba_png_base64(3, 1, &[
-                (255, 255, 255, 255),
-                (128, 128, 128, 255),
-                (255, 255, 255, 255),
-            ]),
+            image_data: make_rgba_png_base64(
+                3,
+                1,
+                &[
+                    (255, 255, 255, 255),
+                    (128, 128, 128, 255),
+                    (255, 255, 255, 255),
+                ],
+            ),
             width: 3.0,
             height: 1.0,
             dither: "grayscale".to_string(),
@@ -997,8 +1114,11 @@ mod tests {
         let (pixels, _, _) = preview_dither(&req).expect("preview_dither should succeed");
         // Center gray pixel should still be ~128, not forced to white (255) by bg removal.
         // Grayscale dither is a pass-through, so the original luma (~128) is preserved.
-        assert!(pixels[1] < 200,
-            "Center gray pixel should not be whitened when bg removal disabled, got {}", pixels[1]);
+        assert!(
+            pixels[1] < 200,
+            "Center gray pixel should not be whitened when bg removal disabled, got {}",
+            pixels[1]
+        );
     }
 
     /// Regression: after the mm/s → mm/min unit switch, the image-engrave time estimate must
@@ -1014,10 +1134,16 @@ mod tests {
         let t = estimate_simple_time(&100.0, &0.0, 6000.0 / 60.0);
         // At 6000 mm/min (100 mm/s), 100 mm of cutting takes ~1 second.
         // If the bug were present (speed passed as-is in mm/min), the result would be ~0.0167 s.
-        assert!(t > 0.5,
-            "estimate_simple_time returned {}s — expected ~1s; likely 60× too small (mm/min bug)", t);
-        assert!(t < 10.0,
-            "estimate_simple_time returned {}s — unexpectedly large; check unit handling", t);
+        assert!(
+            t > 0.5,
+            "estimate_simple_time returned {}s — expected ~1s; likely 60× too small (mm/min bug)",
+            t
+        );
+        assert!(
+            t < 10.0,
+            "estimate_simple_time returned {}s — unexpectedly large; check unit handling",
+            t
+        );
     }
 
     /// D1: preview_dither rejects requests that would produce oversized raster
@@ -1037,17 +1163,27 @@ mod tests {
         // 30000 * 30000 = 900M > 64M cap → must fail
         let req = ImageEngraveRequest {
             image_data: b64,
-            x: 0.0, y: 0.0,
-            width: 300.0, height: 300.0,
+            x: 0.0,
+            y: 0.0,
+            width: 300.0,
+            height: 300.0,
             rotation: 0.0,
-            scale_x: 1.0, scale_y: 1.0,
-            power: 50.0, power_min: 0.0,
-            speed: 1000.0, passes: 1,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            power: 50.0,
+            power_min: 0.0,
+            speed: 1000.0,
+            passes: 1,
             power_mode: "constant".to_string(),
             interval: 0.001, // triggers clamping + oversized check
             dither: "FloydSteinberg".to_string(),
-            overscan: 0.0, bidirectional: true, scanning_offset: 0.0,
-            brightness: 0.0, contrast: 0.0, gamma: 1.0, invert: false,
+            overscan: 0.0,
+            bidirectional: true,
+            scanning_offset: 0.0,
+            brightness: 0.0,
+            contrast: 0.0,
+            gamma: 1.0,
+            invert: false,
             workspace_height: 400.0,
             origin_top: false,
             s_value_max: 1000.0,
@@ -1060,9 +1196,15 @@ mod tests {
         };
 
         let result = preview_dither(&req);
-        assert!(result.is_err(), "preview_dither should reject oversized raster");
+        assert!(
+            result.is_err(),
+            "preview_dither should reject oversized raster"
+        );
         let err = result.unwrap_err();
-        assert!(err.contains("limit exceeded") || err.contains("raster size"),
-            "Error should mention limit, got: {}", err);
+        assert!(
+            err.contains("limit exceeded") || err.contains("raster size"),
+            "Error should mention limit, got: {}",
+            err
+        );
     }
 }

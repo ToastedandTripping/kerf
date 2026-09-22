@@ -12,13 +12,11 @@ let fontFacesInjected = false;
 function injectFontFaces() {
   if (fontFacesInjected) return;
   fontFacesInjected = true;
-  const css = BUNDLED_FONTS.map(
-    (f) => {
-      // Extract the primary family name from the cssFamily string (e.g. "'Open Sans', sans-serif" → "Open Sans")
-      const familyName = f.cssFamily.split(",")[0].trim().replace(/'/g, "");
-      return `@font-face { font-family: '${familyName}'; src: url('${f.file}') format('truetype'); font-weight: 400; font-style: normal; font-display: swap; }`;
-    }
-  ).join("\n");
+  const css = BUNDLED_FONTS.map((f) => {
+    // Extract the primary family name from the cssFamily string (e.g. "'Open Sans', sans-serif" → "Open Sans")
+    const familyName = f.cssFamily.split(",")[0].trim().replace(/'/g, "");
+    return `@font-face { font-family: '${familyName}'; src: url('${f.file}') format('truetype'); font-weight: 400; font-style: normal; font-display: swap; }`;
+  }).join("\n");
   const style = document.createElement("style");
   style.textContent = css;
   document.head.appendChild(style);
@@ -450,8 +448,14 @@ export function PropertiesPanel() {
                         flex: 1,
                         cursor: "pointer",
                         fontWeight: (obj.textAlign ?? "left") === a ? 700 : 400,
-                        background: (obj.textAlign ?? "left") === a ? "rgba(74, 144, 226, 0.2)" : inputStyle.background,
-                        border: (obj.textAlign ?? "left") === a ? "1px solid rgba(74, 144, 226, 0.5)" : "1px solid transparent",
+                        background:
+                          (obj.textAlign ?? "left") === a
+                            ? "rgba(74, 144, 226, 0.2)"
+                            : inputStyle.background,
+                        border:
+                          (obj.textAlign ?? "left") === a
+                            ? "1px solid rgba(74, 144, 226, 0.5)"
+                            : "1px solid transparent",
                         textAlign: "center",
                         padding: "2px 4px",
                         fontSize: "11px",
@@ -482,7 +486,9 @@ export function PropertiesPanel() {
                   }}
                 >
                   {BUNDLED_FONTS.map((f) => (
-                    <option key={f.key} value={f.key}>{f.label}</option>
+                    <option key={f.key} value={f.key}>
+                      {f.label}
+                    </option>
                   ))}
                 </select>
               </PropertyRow>

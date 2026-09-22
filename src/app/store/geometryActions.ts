@@ -33,10 +33,30 @@ export const BUNDLED_FONTS: ReadonlyArray<{
   cssFamily: string;
   label: string;
 }> = [
-  { key: "sans-serif", file: "/fonts/OpenSans-Regular.ttf", cssFamily: "'Open Sans', sans-serif", label: "Sans-serif (Open Sans)" },
-  { key: "serif", file: "/fonts/LibreBaskerville-Regular.ttf", cssFamily: "'Libre Baskerville', serif", label: "Serif (Libre Baskerville)" },
-  { key: "monospace", file: "/fonts/IBMPlexMono-Regular.ttf", cssFamily: "'IBM Plex Mono', monospace", label: "Monospace (IBM Plex Mono)" },
-  { key: "display", file: "/fonts/Pacifico-Regular.ttf", cssFamily: "'Pacifico', cursive", label: "Display (Pacifico)" },
+  {
+    key: "sans-serif",
+    file: "/fonts/OpenSans-Regular.ttf",
+    cssFamily: "'Open Sans', sans-serif",
+    label: "Sans-serif (Open Sans)",
+  },
+  {
+    key: "serif",
+    file: "/fonts/LibreBaskerville-Regular.ttf",
+    cssFamily: "'Libre Baskerville', serif",
+    label: "Serif (Libre Baskerville)",
+  },
+  {
+    key: "monospace",
+    file: "/fonts/IBMPlexMono-Regular.ttf",
+    cssFamily: "'IBM Plex Mono', monospace",
+    label: "Monospace (IBM Plex Mono)",
+  },
+  {
+    key: "display",
+    file: "/fonts/Pacifico-Regular.ttf",
+    cssFamily: "'Pacifico', cursive",
+    label: "Display (Pacifico)",
+  },
 ];
 
 /** Derived lookup: font key → .ttf path. */
@@ -44,9 +64,7 @@ const FONT_PATH_MAP: Record<string, string> = Object.fromEntries(
   BUNDLED_FONTS.map((f) => [f.key, f.file])
 );
 
-export async function loadFont(
-  fontFamily: string = "sans-serif"
-): Promise<opentype.Font> {
+export async function loadFont(fontFamily: string = "sans-serif"): Promise<opentype.Font> {
   const key = fontFamily in FONT_PATH_MAP ? fontFamily : "sans-serif";
   const cached = fontCache.get(key);
   if (cached) return cached;
@@ -243,7 +261,6 @@ export async function textObjectToPaths(obj: DesignObject): Promise<DesignObject
       xOffset += (glyph.advanceWidth || 0) * scale;
     }
   }
-
 
   return prepared;
 }

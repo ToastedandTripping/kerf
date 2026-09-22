@@ -32,9 +32,7 @@ export class SerialTraceRecorder {
   private onSend: ((command: string) => { responses: string[]; drained: string[] }) | null = null;
   private _jobEpoch = 0;
 
-  constructor(
-    onSend?: (command: string) => { responses: string[]; drained: string[] }
-  ) {
+  constructor(onSend?: (command: string) => { responses: string[]; drained: string[] }) {
     this.onSend = onSend || null;
   }
 
@@ -138,10 +136,7 @@ export class SerialTraceRecorder {
    * Wait until a command with the given name appears in the recorder.
    * Rejects with timeout if it doesn't arrive within timeoutMs.
    */
-  async waitUntilInvoked(
-    commandName: string,
-    options?: { timeoutMs?: number }
-  ): Promise<number> {
+  async waitUntilInvoked(commandName: string, options?: { timeoutMs?: number }): Promise<number> {
     const timeoutMs = options?.timeoutMs ?? 5000;
     const startTime = Date.now();
 
@@ -151,9 +146,7 @@ export class SerialTraceRecorder {
       await new Promise((r) => setTimeout(r, 10));
     }
 
-    const recordSummary = this.records
-      .map((r, i) => `${i}: ${r.command}`)
-      .join("; ");
+    const recordSummary = this.records.map((r, i) => `${i}: ${r.command}`).join("; ");
     throw new Error(
       `Timeout waiting for "${commandName}" (${timeoutMs}ms). Recorded: ${recordSummary}`
     );
@@ -265,7 +258,9 @@ export class SerialTraceRecorder {
       try {
         await Promise.race([
           Promise.all(this.startedJobPromises),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("Job cleanup timeout")), 1000)),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("Job cleanup timeout")), 1000)
+          ),
         ]);
       } catch {
         // Ignore cleanup errors

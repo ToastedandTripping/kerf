@@ -32,7 +32,11 @@ pub(crate) fn to_grbl_coords(
     } else {
         (x_img, y_img)
     };
-    let gy = if origin_top { -ry } else { workspace_height - ry };
+    let gy = if origin_top {
+        -ry
+    } else {
+        workspace_height - ry
+    };
     (rx, gy)
 }
 
@@ -60,8 +64,13 @@ mod tests {
         // dx=5, dy=0 -> rx=5+0-0=5, ry=5+5+0=10
         // Then Y-flip: 100 - 10 = 90
         let (x, y) = to_grbl_coords(
-            10.0, 5.0, 5.0, 5.0,
-            std::f64::consts::FRAC_PI_2, false, 100.0,
+            10.0,
+            5.0,
+            5.0,
+            5.0,
+            std::f64::consts::FRAC_PI_2,
+            false,
+            100.0,
         );
         assert!((x - 5.0).abs() < 1e-6, "x={x}");
         assert!((y - 90.0).abs() < 1e-6, "y={y}");
@@ -75,8 +84,13 @@ mod tests {
         // ry = 2 + 2*0.7071 = 3.4142
         // Y-flip: 200 - 3.4142 = 196.5858
         let (x, y) = to_grbl_coords(
-            6.0, 2.0, 4.0, 2.0,
-            std::f64::consts::FRAC_PI_4, false, 200.0,
+            6.0,
+            2.0,
+            4.0,
+            2.0,
+            std::f64::consts::FRAC_PI_4,
+            false,
+            200.0,
         );
         assert!((x - 5.4142).abs() < 0.001, "x={x}");
         assert!((y - 196.5858).abs() < 0.001, "y={y}");

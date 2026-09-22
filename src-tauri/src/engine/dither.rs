@@ -7,13 +7,13 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum DitherAlgorithm {
     Threshold,
-    Ordered,        // Bayer 4x4 matrix
+    Ordered, // Bayer 4x4 matrix
     FloydSteinberg,
-    Jarvis,         // Jarvis-Judice-Ninke
+    Jarvis, // Jarvis-Judice-Ninke
     Stucki,
     Atkinson,
-    Grayscale,      // No dithering - pass-through for variable power (M4)
-    Newsprint { cell_size: usize, angle: f64 },  // Halftone dots with configurable params
+    Grayscale, // No dithering - pass-through for variable power (M4)
+    Newsprint { cell_size: usize, angle: f64 }, // Halftone dots with configurable params
 }
 
 impl DitherAlgorithm {
@@ -44,10 +44,10 @@ impl DitherAlgorithm {
 
 /// Bayer 4x4 ordered dithering matrix (normalized to 0-255 range)
 const BAYER_4X4: [[u8; 4]; 4] = [
-    [  0, 128,  32, 160],
-    [192,  64, 224,  96],
-    [ 48, 176,  16, 144],
-    [240, 112, 208,  80],
+    [0, 128, 32, 160],
+    [192, 64, 224, 96],
+    [48, 176, 16, 144],
+    [240, 112, 208, 80],
 ];
 
 /// Dither a grayscale image using the specified algorithm.
@@ -69,7 +69,10 @@ pub fn dither_image(
     if w * h != pixels.len() {
         return Err(format!(
             "dither_image: pixel buffer length {} does not match {}x{} = {}",
-            pixels.len(), w, h, w * h
+            pixels.len(),
+            w,
+            h,
+            w * h
         ));
     }
 
@@ -81,12 +84,17 @@ pub fn dither_image(
         DitherAlgorithm::Stucki => dither_stucki(pixels, w, h),
         DitherAlgorithm::Atkinson => dither_atkinson(pixels, w, h),
         DitherAlgorithm::Grayscale => pixels.to_vec(), // pass-through
-        DitherAlgorithm::Newsprint { cell_size, angle } => dither_newsprint(pixels, w, h, cell_size, angle),
+        DitherAlgorithm::Newsprint { cell_size, angle } => {
+            dither_newsprint(pixels, w, h, cell_size, angle)
+        }
     })
 }
 
 fn dither_threshold(pixels: &[u8], threshold: u8) -> Vec<u8> {
-    pixels.iter().map(|&p| if p > threshold { 255 } else { 0 }).collect()
+    pixels
+        .iter()
+        .map(|&p| if p > threshold { 255 } else { 0 })
+        .collect()
 }
 
 fn dither_ordered(pixels: &[u8], w: usize, h: usize) -> Vec<u8> {
@@ -104,7 +112,18 @@ fn dither_ordered(pixels: &[u8], w: usize, h: usize) -> Vec<u8> {
 /// Error diffusion helper: applies error to neighbor if in bounds
 #[inline]
 #[allow(clippy::too_many_arguments)]
-fn distribute_error(buffer: &mut [i16], w: usize, h: usize, x: usize, y: usize, dx: i32, dy: i32, error: i16, weight: i16, divisor: i16) {
+fn distribute_error(
+    buffer: &mut [i16],
+    w: usize,
+    h: usize,
+    x: usize,
+    y: usize,
+    dx: i32,
+    dy: i32,
+    error: i16,
+    weight: i16,
+    divisor: i16,
+) {
     let nx = x as i32 + dx;
     let ny = y as i32 + dy;
     if nx >= 0 && nx < w as i32 && ny >= 0 && ny < h as i32 {
@@ -239,8 +258,10 @@ fn dither_newsprint(pixels: &[u8], w: usize, h: usize, cell_size: usize, angle: 
             let img_cy = -cx_rot * sin_a + cy_rot * cos_a;
 
             // Check if cell center is within image bounds (with margin)
-            if img_cx < -(cell as f64) || img_cx > (w + cell) as f64
-                || img_cy < -(cell as f64) || img_cy > (h + cell) as f64
+            if img_cx < -(cell as f64)
+                || img_cx > (w + cell) as f64
+                || img_cy < -(cell as f64)
+                || img_cy > (h + cell) as f64
             {
                 gx += cell_i;
                 continue;
@@ -339,7 +360,10 @@ mod tests {
     fn newsprint_from_str() {
         assert_eq!(
             DitherAlgorithm::from_str("newsprint").unwrap(),
-            DitherAlgorithm::Newsprint { cell_size: 6, angle: 45.0 }
+            DitherAlgorithm::Newsprint {
+                cell_size: 6,
+                angle: 45.0
+            }
         );
     }
 
@@ -347,7 +371,10 @@ mod tests {
     fn newsprint_from_str_with_params() {
         assert_eq!(
             DitherAlgorithm::from_str("newsprint:10:30").unwrap(),
-            DitherAlgorithm::Newsprint { cell_size: 10, angle: 30.0 }
+            DitherAlgorithm::Newsprint {
+                cell_size: 10,
+                angle: 30.0
+            }
         );
     }
 
@@ -368,38 +395,87 @@ mod tests {
     #[test]
     fn newsprint_cell_size_affects_dot_count() {
         let pixels = vec![128u8; 100 * 100]; // mid-gray
-        let result_small = dither_image(&pixels, 100, 100,
-            DitherAlgorithm::Newsprint { cell_size: 4, angle: 45.0 }, 128).unwrap();
-        let result_large = dither_image(&pixels, 100, 100,
-            DitherAlgorithm::Newsprint { cell_size: 10, angle: 45.0 }, 128).unwrap();
+        let result_small = dither_image(
+            &pixels,
+            100,
+            100,
+            DitherAlgorithm::Newsprint {
+                cell_size: 4,
+                angle: 45.0,
+            },
+            128,
+        )
+        .unwrap();
+        let result_large = dither_image(
+            &pixels,
+            100,
+            100,
+            DitherAlgorithm::Newsprint {
+                cell_size: 10,
+                angle: 45.0,
+            },
+            128,
+        )
+        .unwrap();
         let black_small = result_small.iter().filter(|&&p| p == 0).count();
         let black_large = result_large.iter().filter(|&&p| p == 0).count();
         // Larger cell size = fewer but bigger dots; on mid-gray both should have some black,
         // but the dot counts should differ
-        assert!(black_small > 0 && black_large > 0,
-            "Both should have dots: small={}, large={}", black_small, black_large);
-        assert_ne!(black_small, black_large,
-            "Different cell sizes should produce different dot counts: small={}, large={}", black_small, black_large);
+        assert!(
+            black_small > 0 && black_large > 0,
+            "Both should have dots: small={}, large={}",
+            black_small,
+            black_large
+        );
+        assert_ne!(
+            black_small, black_large,
+            "Different cell sizes should produce different dot counts: small={}, large={}",
+            black_small, black_large
+        );
     }
 
     #[test]
     fn newsprint_uniform_white_stays_white() {
         let pixels = vec![255u8; 20 * 20];
-        let result = dither_image(&pixels, 20, 20,
-            DitherAlgorithm::Newsprint { cell_size: 6, angle: 45.0 }, 128).unwrap();
+        let result = dither_image(
+            &pixels,
+            20,
+            20,
+            DitherAlgorithm::Newsprint {
+                cell_size: 6,
+                angle: 45.0,
+            },
+            128,
+        )
+        .unwrap();
         assert_eq!(result.len(), 400);
         // Uniform white should produce all-white output (no dots)
-        assert!(result.iter().all(|&p| p == 255), "Expected all white pixels for uniform white input");
+        assert!(
+            result.iter().all(|&p| p == 255),
+            "Expected all white pixels for uniform white input"
+        );
     }
 
     #[test]
     fn newsprint_uniform_black_produces_dots() {
         let pixels = vec![0u8; 24 * 24];
-        let result = dither_image(&pixels, 24, 24,
-            DitherAlgorithm::Newsprint { cell_size: 6, angle: 45.0 }, 128).unwrap();
+        let result = dither_image(
+            &pixels,
+            24,
+            24,
+            DitherAlgorithm::Newsprint {
+                cell_size: 6,
+                angle: 45.0,
+            },
+            128,
+        )
+        .unwrap();
         assert_eq!(result.len(), 576);
         // Uniform black should produce a regular dot pattern (some black pixels)
         let black_count = result.iter().filter(|&&p| p == 0).count();
-        assert!(black_count > 0, "Expected some black pixels for uniform black input");
+        assert!(
+            black_count > 0,
+            "Expected some black pixels for uniform black input"
+        );
     }
 }

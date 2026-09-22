@@ -375,52 +375,45 @@ describe("jobStream.ts — Phase 2A streaming mode dispatch", () => {
 
   // ---- Cross-job safety (B3: session ownership) ----
   describe("Cross-job safety (B3 session ownership)", () => {
-    it(
-      "R4/R11: job B is refused while job A session is active",
-      async () => {
-        // B3 fix: beginJobSession blocks a second job while the first
-        // session is still active. Job A's late callback cannot corrupt
-        // job B because job B is never admitted.
+    it("R4/R11: job B is refused while job A session is active", async () => {
+      // B3 fix: beginJobSession blocks a second job while the first
+      // session is still active. Job A's late callback cannot corrupt
+      // job B because job B is never admitted.
 
-        localStorage.setItem("streamingMode", "buffered");
-        recorder = new SerialTraceRecorder();
-        recorder.defer("serial_stream_job");
-        // Use recorder which handles serial_job_begin/end natively.
-        mockInvoke.mockImplementation(recorder.handler);
+      localStorage.setItem("streamingMode", "buffered");
+      recorder = new SerialTraceRecorder();
+      recorder.defer("serial_stream_job");
+      // Use recorder which handles serial_job_begin/end natively.
+      mockInvoke.mockImplementation(recorder.handler);
 
-        // Start job A with a session
-        const sessionA = await beginJobSession("Job A");
-        expect(sessionA).not.toBeNull();
+      // Start job A with a session
+      const sessionA = await beginJobSession("Job A");
+      expect(sessionA).not.toBeNull();
 
-        useStore.setState({ jobRunning: true, jobProgress: 0 });
-        const jobA = streamJob("G1 X10 F500", {
-          label: "Job A",
-          session: sessionA!,
-        });
-        recorder.trackJobPromise(jobA);
+      useStore.setState({ jobRunning: true, jobProgress: 0 });
+      const jobA = streamJob("G1 X10 F500", {
+        label: "Job A",
+        session: sessionA!,
+      });
+      recorder.trackJobPromise(jobA);
 
-        // Wait for job A to invoke serial_stream_job
-        await recorder.waitUntilInvoked("serial_stream_job");
+      // Wait for job A to invoke serial_stream_job
+      await recorder.waitUntilInvoked("serial_stream_job");
 
-        // Attempt to start job B — should be refused (session A is active).
-        const sessionB = await beginJobSession("Job B");
-        expect(sessionB).toBeNull();
+      // Attempt to start job B — should be refused (session A is active).
+      const sessionB = await beginJobSession("Job B");
+      expect(sessionB).toBeNull();
 
-        // Verify console reports the block.
-        const consoleTexts = useStore
-          .getState()
-          .consoleLines.map((l) => l.text);
-        expect(
-          consoleTexts.some((t) => t.includes("Cannot start Job B"))
-        ).toBe(true);
+      // Verify console reports the block.
+      const consoleTexts = useStore.getState().consoleLines.map((l) => l.text);
+      expect(consoleTexts.some((t) => t.includes("Cannot start Job B"))).toBe(true);
 
-        // Release job A's invoke — cleanup is session-gated.
-        const jobAIndex = recorder.getRecordIndex("serial_stream_job");
-        recorder.releaseInvoke(jobAIndex, "complete");
+      // Release job A's invoke — cleanup is session-gated.
+      const jobAIndex = recorder.getRecordIndex("serial_stream_job");
+      recorder.releaseInvoke(jobAIndex, "complete");
 
-        const resultA = await jobA;
-        expect(resultA.endState).toBe("complete");
-      }
-    );
+      const resultA = await jobA;
+      expect(resultA.endState).toBe("complete");
+    });
   });
 });

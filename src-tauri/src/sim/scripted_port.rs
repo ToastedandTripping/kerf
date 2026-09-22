@@ -16,10 +16,10 @@
 //!   via Arc<Mutex>, matching the SimPort pattern.
 
 use serialport::{self, SerialPort};
+use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::collections::VecDeque;
 
 #[allow(dead_code)]
 /// A single step in the scripted read sequence.
@@ -108,7 +108,13 @@ impl ScriptedPort {
         for step in &script {
             if let ScriptStep::HoldUntilRelease { id } = step {
                 let (tx, rx) = std::sync::mpsc::channel();
-                holds.insert(*id, HoldPoint { release_tx: tx, release_rx: rx });
+                holds.insert(
+                    *id,
+                    HoldPoint {
+                        release_tx: tx,
+                        release_rx: rx,
+                    },
+                );
             }
         }
         Self {
@@ -155,7 +161,9 @@ impl ScriptedPort {
     /// to record events in the same ordered trace as port I/O.
     pub fn push_session_event(&self, name: &str) {
         let mut brain = self.brain.lock().unwrap();
-        brain.trace.push(TraceEvent::SessionEvent { name: name.to_string() });
+        brain.trace.push(TraceEvent::SessionEvent {
+            name: name.to_string(),
+        });
     }
 
     /// Get the shared brain Arc for wiring up session observers.
@@ -183,12 +191,12 @@ impl ScriptedPort {
 
 /// Make the brain's trace accessible for test assertions via a shared Arc.
 #[allow(dead_code)]
-pub fn make_session_observer(
-    brain: Arc<Mutex<Brain>>,
-) -> Box<dyn Fn(&str) + Send + Sync> {
+pub fn make_session_observer(brain: Arc<Mutex<Brain>>) -> Box<dyn Fn(&str) + Send + Sync> {
     Box::new(move |event: &str| {
         if let Ok(mut b) = brain.lock() {
-            b.trace.push(TraceEvent::SessionEvent { name: event.to_string() });
+            b.trace.push(TraceEvent::SessionEvent {
+                name: event.to_string(),
+            });
         }
     })
 }
@@ -224,7 +232,9 @@ impl Read for ScriptedPort {
                 }
                 Some(ScriptStep::HoldUntilRelease { id }) => {
                     // Record that the hold was reached.
-                    brain.trace.push(TraceEvent::HoldReached { id: id.to_string() });
+                    brain
+                        .trace
+                        .push(TraceEvent::HoldReached { id: id.to_string() });
                     // Clone the receiver out and drop the brain lock to prevent
                     // deadlocks with stop threads that also need the brain lock.
                     let hold_id = id.to_string();
@@ -254,9 +264,10 @@ impl Read for ScriptedPort {
                                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                                         // Poisoned — test is tearing down.
                                         drop(b);
-                                        return Err(io::Error::other(
-                                            format!("hold point '{}' poisoned (sender dropped)", hold_id),
-                                        ));
+                                        return Err(io::Error::other(format!(
+                                            "hold point '{}' poisoned (sender dropped)",
+                                            hold_id
+                                        )));
                                     }
                                 }
                             } else {
@@ -353,7 +364,9 @@ impl SerialPort for ScriptedPort {
 
     fn write_data_terminal_ready(&mut self, value: bool) -> serialport::Result<()> {
         let mut brain = self.brain.lock().unwrap();
-        brain.trace.push(TraceEvent::WriteDataTerminalReady { value });
+        brain
+            .trace
+            .push(TraceEvent::WriteDataTerminalReady { value });
         Ok(())
     }
 
@@ -380,7 +393,9 @@ impl SerialPort for ScriptedPort {
         for step in &brain.script {
             match step {
                 ScriptStep::Data(data) => queued += data.len() as u32,
-                ScriptStep::Timeout | ScriptStep::Error(_) | ScriptStep::HoldUntilRelease { .. } => break,
+                ScriptStep::Timeout
+                | ScriptStep::Error(_)
+                | ScriptStep::HoldUntilRelease { .. } => break,
             }
         }
         Ok(buffered + queued)
@@ -409,7 +424,6 @@ impl SerialPort for ScriptedPort {
         Ok(())
     }
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -3,10 +3,7 @@ use super::gcode_gen::Point;
 /// Offset a closed polygon inward by `distance`.
 /// Returns the offset ring, or None if the polygon collapses.
 /// Uses vertex-normal averaging with miter clamping for robust concave handling.
-pub fn offset_polygon_inward(
-    points: &[Point],
-    distance: f64,
-) -> Option<Vec<Point>> {
+pub fn offset_polygon_inward(points: &[Point], distance: f64) -> Option<Vec<Point>> {
     let n = points.len();
     if n < 3 || distance <= 0.0 {
         return Some(points.to_vec());
@@ -97,10 +94,7 @@ pub fn offset_polygon_inward(
 
 /// Generate concentric offset rings spiraling inward until the polygon collapses.
 /// Returns a Vec of rings (each ring is a closed polygon).
-pub fn generate_offset_rings(
-    points: &[Point],
-    interval: f64,
-) -> Vec<Vec<Point>> {
+pub fn generate_offset_rings(points: &[Point], interval: f64) -> Vec<Vec<Point>> {
     if points.len() < 3 || interval <= 0.0 {
         return vec![];
     }
@@ -166,8 +160,10 @@ fn remove_self_intersections(pts: &[Point]) -> Vec<Point> {
                 let j_next = (j + 1) % n;
 
                 if let Some((t, u, int_pt)) = segment_intersection(
-                    &current[i], &current[i_next],
-                    &current[j], &current[j_next],
+                    &current[i],
+                    &current[i_next],
+                    &current[j],
+                    &current[j_next],
                 ) {
                     if t > 1e-10 && t < 1.0 - 1e-10 && u > 1e-10 && u < 1.0 - 1e-10 {
                         // Build loop A: 0..=i, int_pt, j+1..end
@@ -215,8 +211,10 @@ fn remove_self_intersections(pts: &[Point]) -> Vec<Point> {
 
 /// Line segment intersection: returns (t, u, point) where t is parameter on seg1, u on seg2
 fn segment_intersection(
-    a1: &Point, a2: &Point,
-    b1: &Point, b2: &Point,
+    a1: &Point,
+    a2: &Point,
+    b1: &Point,
+    b2: &Point,
 ) -> Option<(f64, f64, Point)> {
     let dx_a = a2.x - a1.x;
     let dy_a = a2.y - a1.y;
@@ -235,10 +233,14 @@ fn segment_intersection(
     let u = (dx_ab * dy_a - dy_ab * dx_a) / denom;
 
     if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
-        Some((t, u, Point {
-            x: a1.x + t * dx_a,
-            y: a1.y + t * dy_a,
-        }))
+        Some((
+            t,
+            u,
+            Point {
+                x: a1.x + t * dx_a,
+                y: a1.y + t * dy_a,
+            },
+        ))
     } else {
         None
     }
@@ -275,7 +277,11 @@ mod tests {
         let pts = square(10.0);
         let rings = generate_offset_rings(&pts, 1.0);
         // 10mm square at 1mm interval: expect ~5-6 rings (10/2 = 5 offsets until center)
-        assert!(rings.len() >= 4 && rings.len() <= 7, "got {} rings", rings.len());
+        assert!(
+            rings.len() >= 4 && rings.len() <= 7,
+            "got {} rings",
+            rings.len()
+        );
     }
 
     #[test]
@@ -319,16 +325,22 @@ mod tests {
         for i in 0..n {
             let i_next = (i + 1) % n;
             for j in (i + 2)..n {
-                if j == n - 1 && i == 0 { continue; }
+                if j == n - 1 && i == 0 {
+                    continue;
+                }
                 let j_next = (j + 1) % n;
-                if let Some((t, u, _)) = segment_intersection(
-                    &ring[i], &ring[i_next],
-                    &ring[j], &ring[j_next],
-                ) {
+                if let Some((t, u, _)) =
+                    segment_intersection(&ring[i], &ring[i_next], &ring[j], &ring[j_next])
+                {
                     assert!(
                         t <= 1e-10 || t >= 1.0 - 1e-10 || u <= 1e-10 || u >= 1.0 - 1e-10,
                         "Found self-intersection at edges {}-{} and {}-{}: t={}, u={}",
-                        i, i_next, j, j_next, t, u
+                        i,
+                        i_next,
+                        j,
+                        j_next,
+                        t,
+                        u
                     );
                 }
             }
@@ -348,7 +360,12 @@ mod tests {
         if let Some(ring) = result {
             let area = signed_area(&ring).abs();
             // The offset should have collapsed or be much smaller
-            assert!(ring.len() < 3 || area < 1.0, "area={}, len={}", area, ring.len());
+            assert!(
+                ring.len() < 3 || area < 1.0,
+                "area={}, len={}",
+                area,
+                ring.len()
+            );
         }
     }
 }

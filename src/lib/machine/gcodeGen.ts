@@ -79,7 +79,7 @@ interface CutObject {
 /** Build layer settings for a CutObject from a Layer */
 function buildCutLayer(
   layer: Layer,
-  scanMotion?: { accelerationMmS2: number; rapidMmMin: number } | null,
+  scanMotion?: { accelerationMmS2: number; rapidMmMin: number } | null
 ): CutObject["layer"] {
   return {
     mode: layer.mode,
@@ -225,7 +225,7 @@ export { flattenObjects as flattenObjectsForTest };
 function toCutObjects(
   objects: DesignObject[],
   layers: Layer[],
-  scanMotion?: { accelerationMmS2: number; rapidMmMin: number } | null,
+  scanMotion?: { accelerationMmS2: number; rapidMmMin: number } | null
 ): { objects: CutObject[]; warnings: string[] } {
   const flat = flattenObjects(objects);
   // Sort by layer array position (cut sequence order).
@@ -904,15 +904,20 @@ export async function generateGcode(): Promise<GcodeResult> {
   // can flow through toCutObjects → buildCutLayer → CutLayer.scanMotion on the IPC wire.
   const scanAccel = Math.min(
     Number.isFinite(store.grblAccelX) && store.grblAccelX > 0 ? store.grblAccelX : Infinity,
-    Number.isFinite(store.grblAccelY) && store.grblAccelY > 0 ? store.grblAccelY : Infinity,
+    Number.isFinite(store.grblAccelY) && store.grblAccelY > 0 ? store.grblAccelY : Infinity
   );
   const scanRapid = Math.min(
-    Number.isFinite(store.grblMaxFeedRateX) && store.grblMaxFeedRateX > 0 ? store.grblMaxFeedRateX : Infinity,
-    Number.isFinite(store.grblMaxFeedRateY) && store.grblMaxFeedRateY > 0 ? store.grblMaxFeedRateY : Infinity,
+    Number.isFinite(store.grblMaxFeedRateX) && store.grblMaxFeedRateX > 0
+      ? store.grblMaxFeedRateX
+      : Infinity,
+    Number.isFinite(store.grblMaxFeedRateY) && store.grblMaxFeedRateY > 0
+      ? store.grblMaxFeedRateY
+      : Infinity
   );
-  const scanMotion = Number.isFinite(scanAccel) && scanAccel > 0 && Number.isFinite(scanRapid) && scanRapid > 0
-    ? { accelerationMmS2: scanAccel, rapidMmMin: scanRapid }
-    : null;
+  const scanMotion =
+    Number.isFinite(scanAccel) && scanAccel > 0 && Number.isFinite(scanRapid) && scanRapid > 0
+      ? { accelerationMmS2: scanAccel, rapidMmMin: scanRapid }
+      : null;
 
   const { objects: cutObjects, warnings } = toCutObjects(preprocessed, store.layers, scanMotion);
   warnings.push(...textConvertWarnings);
@@ -921,8 +926,8 @@ export async function generateGcode(): Promise<GcodeResult> {
   for (const obj of cutObjects) {
     const m = obj.layer.mode;
     if (m === "fill" || m === "fillLine" || m === "maskFill" || m === "offsetFill") {
-      const userOverscan = Number.isFinite(obj.layer.overscan) && obj.layer.overscan >= 0
-        ? obj.layer.overscan : 0;
+      const userOverscan =
+        Number.isFinite(obj.layer.overscan) && obj.layer.overscan >= 0 ? obj.layer.overscan : 0;
       obj.layer.overscan = Math.max(userOverscan, computeOverscan(obj.layer.speed, scanAccel));
     }
   }
@@ -1065,9 +1070,7 @@ export async function generateGcode(): Promise<GcodeResult> {
   // Collect one warning per affected layer; do not auto-route or change settings.
   {
     const flat = flattenObjects(store.objects);
-    const imageObjects = flat.filter(
-      (obj) => obj.type === "image" && obj.visible && obj.imageData
-    );
+    const imageObjects = flat.filter((obj) => obj.type === "image" && obj.visible && obj.imageData);
     const warnedLayers = new Set<number>();
     for (const obj of imageObjects) {
       const layer = store.layers.find((l) => l.index === obj.layerIndex) || store.layers[0];
@@ -1085,8 +1088,8 @@ export async function generateGcode(): Promise<GcodeResult> {
 
       store.addConsoleLine(
         `${imageCount} image(s) on layer "${layer.name}" (${layer.mode}) will engrave at ` +
-        `${layer.speed} mm/min, ${layer.passes} pass(es). ` +
-        `Consider using an Engrave/Fill layer or reviewing material settings for image work.`,
+          `${layer.speed} mm/min, ${layer.passes} pass(es). ` +
+          `Consider using an Engrave/Fill layer or reviewing material settings for image work.`,
         "warning"
       );
     }

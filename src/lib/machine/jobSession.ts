@@ -23,13 +23,7 @@ import { useStore } from "../../app/store";
 import { machineConnection } from "./connection";
 
 /** Outcome of a completed job session. */
-export type SessionOutcome =
-  | "complete"
-  | "cancelled"
-  | "aborted"
-  | "alarm"
-  | "error"
-  | "unknown";
+export type SessionOutcome = "complete" | "cancelled" | "aborted" | "alarm" | "error" | "unknown";
 
 /** The currently active session, or null. Module-level singleton. */
 let activeSession: JobSession | null = null;
@@ -48,19 +42,13 @@ export async function beginJobSession(label: string): Promise<JobSession | null>
   // Block if a previous session is still stopping/draining.
   if (stoppingPromise) {
     const store = useStore.getState();
-    store.addConsoleLine(
-      `Cannot start ${label}: previous job is still stopping`,
-      "error"
-    );
+    store.addConsoleLine(`Cannot start ${label}: previous job is still stopping`, "error");
     return null;
   }
 
   if (activeSession) {
     const store = useStore.getState();
-    store.addConsoleLine(
-      `Cannot start ${label}: another job is active`,
-      "error"
-    );
+    store.addConsoleLine(`Cannot start ${label}: another job is active`, "error");
     return null;
   }
 
@@ -70,10 +58,7 @@ export async function beginJobSession(label: string): Promise<JobSession | null>
     jobId = await invoke<number>("serial_job_begin");
   } catch (e) {
     const store = useStore.getState();
-    store.addConsoleLine(
-      `Cannot start ${label}: ${String(e)}`,
-      "error"
-    );
+    store.addConsoleLine(`Cannot start ${label}: ${String(e)}`, "error");
     return null;
   }
 

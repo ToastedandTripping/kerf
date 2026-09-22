@@ -129,7 +129,8 @@ export function buildTracedPathObjects(
         fill: null,
         // W1 fix: only use SVG fill as stroke for color traces. Binary mode
         // always emits #000000/#ffffff which would override the layer color.
-        stroke: (pathFill && pathFill !== "#000000" && pathFill !== "#ffffff") ? pathFill : layerColor,
+        stroke:
+          pathFill && pathFill !== "#000000" && pathFill !== "#ffffff" ? pathFill : layerColor,
         strokeWidth: 1,
         opacity: 1,
         points: scaledPoints,
@@ -534,7 +535,12 @@ export function ImageTraceDialog({ open, onClose }: Props) {
         heightPx: result.heightPx,
       });
       setZoomIndex(
-        computeFitZoomIndex(PREVIEW_CONTAINER_W, PREVIEW_CONTAINER_H, result.widthPx, result.heightPx)
+        computeFitZoomIndex(
+          PREVIEW_CONTAINER_W,
+          PREVIEW_CONTAINER_H,
+          result.widthPx,
+          result.heightPx
+        )
       );
     } catch (e) {
       if (gen !== generationRef.current) return;
@@ -549,7 +555,9 @@ export function ImageTraceDialog({ open, onClose }: Props) {
     setCommitting(true);
     try {
       // Reuse cached full-res result if available, otherwise trace at full resolution
-      const result = fullResPreview ?? await invoke<TraceResult>("trace_image_command", { params: buildParams(1.0) });
+      const result =
+        fullResPreview ??
+        (await invoke<TraceResult>("trace_image_command", { params: buildParams(1.0) }));
       const store = useStore.getState();
       const layerColor = store.layers[effectiveLayerIndex]?.color || "#4a90e2";
       const imageName = selectedImage.name || selectedImage.id;
@@ -741,7 +749,9 @@ export function ImageTraceDialog({ open, onClose }: Props) {
 
         {/* Color count slider (only in color mode) */}
         {mode === "color" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "12px" }}>
+          <div
+            style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "12px" }}
+          >
             {sliderRow("Colors", colorCount, 2, 32, 1, setColorCount)}
           </div>
         )}
@@ -792,23 +802,25 @@ export function ImageTraceDialog({ open, onClose }: Props) {
             </label>
           )}
           {/* N1 fix: trace transparency is ignored in color mode — hide it */}
-          {mode !== "color" && <label
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "4px",
-              cursor: "pointer",
-              fontSize: "11px",
-              color: "var(--text-secondary)",
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={traceTransparency}
-              onChange={(e) => setTraceTransparency(e.target.checked)}
-            />
-            Trace transparency
-          </label>}
+          {mode !== "color" && (
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "4px",
+                cursor: "pointer",
+                fontSize: "11px",
+                color: "var(--text-secondary)",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={traceTransparency}
+                onChange={(e) => setTraceTransparency(e.target.checked)}
+              />
+              Trace transparency
+            </label>
+          )}
         </div>
 
         {/* Fix 4: Layer selector */}
@@ -948,7 +960,11 @@ export function ImageTraceDialog({ open, onClose }: Props) {
             style={{
               background: fullResPreview ? "var(--accent-warm)" : "var(--bg-input)",
               border: "1px solid " + (fullResPreview ? "var(--accent-warm)" : "var(--border)"),
-              color: fullResPreview ? "#fff" : (!preview || fullResLoading ? "var(--text-muted)" : "var(--text-secondary)"),
+              color: fullResPreview
+                ? "#fff"
+                : !preview || fullResLoading
+                  ? "var(--text-muted)"
+                  : "var(--text-secondary)",
               padding: "4px 10px",
               borderRadius: "var(--radius-sm)",
               cursor: !preview || fullResLoading ? "default" : "pointer",

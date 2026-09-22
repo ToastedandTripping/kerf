@@ -1,8 +1,8 @@
 use base64::Engine;
 use image::{GenericImageView, GrayImage, Luma};
 use imageproc::contrast::adaptive_threshold;
-use imageproc::morphology::{close, open};
 use imageproc::distance_transform::Norm;
+use imageproc::morphology::{close, open};
 use serde::{Deserialize, Serialize};
 use visioncortex::PathSimplifyMode;
 
@@ -53,13 +53,11 @@ pub fn trace_image(params: TraceParams) -> Result<TraceResult, String> {
         .decode(base64_data)
         .map_err(|e| format!("Base64 decode error: {}", e))?;
 
-    let img = image::load_from_memory(&bytes)
-        .map_err(|e| format!("Image decode error: {}", e))?;
+    let img = image::load_from_memory(&bytes).map_err(|e| format!("Image decode error: {}", e))?;
 
     let (orig_w, orig_h) = img.dimensions();
 
-    limits::check_trace_pixels(orig_w as usize, orig_h as usize)
-        .map_err(|e| e.to_string())?;
+    limits::check_trace_pixels(orig_w as usize, orig_h as usize).map_err(|e| e.to_string())?;
 
     let img = if params.preview_scale < 1.0 {
         let new_w = ((orig_w as f32) * params.preview_scale).max(1.0) as u32;
@@ -144,7 +142,7 @@ pub fn trace_image(params: TraceParams) -> Result<TraceResult, String> {
                 false
             } else {
                 let binary_count = gray.pixels().filter(|p| p[0] < 20 || p[0] > 235).count();
-                binary_count * 10 >= total * 9  // >90%
+                binary_count * 10 >= total * 9 // >90%
             }
         };
 
@@ -156,58 +154,76 @@ pub fn trace_image(params: TraceParams) -> Result<TraceResult, String> {
             // alpha > 128 → foreground (black=0), otherwise background (white=255)
             GrayImage::from_fn(w, h, |x, y| {
                 let alpha = rgba.get_pixel(x, y)[3];
-                let is_fg = if params.invert { alpha <= 128 } else { alpha > 128 };
+                let is_fg = if params.invert {
+                    alpha <= 128
+                } else {
+                    alpha > 128
+                };
                 Luma([if is_fg { 0 } else { 255 }])
             })
-        } else { match params.mode.as_str() {
-            "sketch" => {
-                let low = (params.threshold as f32 * 0.25).max(1.0);
-                let high = params.threshold as f32;
-                let edges = imageproc::edges::canny(&gray, low, high);
-                let mut bin = GrayImage::new(w, h);
-                for (x, y, pixel) in edges.enumerate_pixels() {
-                    let val = if params.invert { 255 - pixel[0] } else { pixel[0] };
-                    bin.put_pixel(x, y, Luma([if val > 0 { 0 } else { 255 }]));
-                }
-                bin
-            }
-            _ => {
-                if params.use_adaptive_threshold && !is_near_binary {
-                    // Adaptive threshold: good for photos/gradients.
-                    // Skipped for near-binary images — adaptive halos degrade clean edges.
-                    let block = params.adaptive_block_size.max(3) | 1;
-                    let adapted = adaptive_threshold(&gray, block);
+        } else {
+            match params.mode.as_str() {
+                "sketch" => {
+                    let low = (params.threshold as f32 * 0.25).max(1.0);
+                    let high = params.threshold as f32;
+                    let edges = imageproc::edges::canny(&gray, low, high);
                     let mut bin = GrayImage::new(w, h);
-                    for (x, y, pixel) in adapted.enumerate_pixels() {
-                        let is_fg = if params.invert { pixel[0] > 0 } else { pixel[0] == 0 };
-                        bin.put_pixel(x, y, Luma([if is_fg { 0 } else { 255 }]));
-                    }
-                    bin
-                } else if is_near_binary {
-                    // Fix 5: Binary image auto-threshold — use simple midpoint (128)
-                    // for near-binary input regardless of use_adaptive_threshold setting.
-                    // Avoids adaptive halos on clean black-on-transparent PNGs.
-                    let mut bin = GrayImage::new(w, h);
-                    for (x, y, pixel) in gray.enumerate_pixels() {
-                        let is_fg = if params.invert { pixel[0] >= 128 } else { pixel[0] < 128 };
-                        bin.put_pixel(x, y, Luma([if is_fg { 0 } else { 255 }]));
-                    }
-                    bin
-                } else {
-                    // Dual-threshold brightness range
-                    let lo = params.threshold_low;
-                    let hi = params.threshold;
-                    let mut bin = GrayImage::new(w, h);
-                    for (x, y, pixel) in gray.enumerate_pixels() {
-                        let v = pixel[0];
-                        let in_range = v >= lo && v <= hi;
-                        let is_fg = if params.invert { !in_range } else { in_range };
-                        bin.put_pixel(x, y, Luma([if is_fg { 0 } else { 255 }]));
+                    for (x, y, pixel) in edges.enumerate_pixels() {
+                        let val = if params.invert {
+                            255 - pixel[0]
+                        } else {
+                            pixel[0]
+                        };
+                        bin.put_pixel(x, y, Luma([if val > 0 { 0 } else { 255 }]));
                     }
                     bin
                 }
+                _ => {
+                    if params.use_adaptive_threshold && !is_near_binary {
+                        // Adaptive threshold: good for photos/gradients.
+                        // Skipped for near-binary images — adaptive halos degrade clean edges.
+                        let block = params.adaptive_block_size.max(3) | 1;
+                        let adapted = adaptive_threshold(&gray, block);
+                        let mut bin = GrayImage::new(w, h);
+                        for (x, y, pixel) in adapted.enumerate_pixels() {
+                            let is_fg = if params.invert {
+                                pixel[0] > 0
+                            } else {
+                                pixel[0] == 0
+                            };
+                            bin.put_pixel(x, y, Luma([if is_fg { 0 } else { 255 }]));
+                        }
+                        bin
+                    } else if is_near_binary {
+                        // Fix 5: Binary image auto-threshold — use simple midpoint (128)
+                        // for near-binary input regardless of use_adaptive_threshold setting.
+                        // Avoids adaptive halos on clean black-on-transparent PNGs.
+                        let mut bin = GrayImage::new(w, h);
+                        for (x, y, pixel) in gray.enumerate_pixels() {
+                            let is_fg = if params.invert {
+                                pixel[0] >= 128
+                            } else {
+                                pixel[0] < 128
+                            };
+                            bin.put_pixel(x, y, Luma([if is_fg { 0 } else { 255 }]));
+                        }
+                        bin
+                    } else {
+                        // Dual-threshold brightness range
+                        let lo = params.threshold_low;
+                        let hi = params.threshold;
+                        let mut bin = GrayImage::new(w, h);
+                        for (x, y, pixel) in gray.enumerate_pixels() {
+                            let v = pixel[0];
+                            let in_range = v >= lo && v <= hi;
+                            let is_fg = if params.invert { !in_range } else { in_range };
+                            bin.put_pixel(x, y, Luma([if is_fg { 0 } else { 255 }]));
+                        }
+                        bin
+                    }
+                }
             }
-        } }; // closes else { match ... }
+        }; // closes else { match ... }
 
         // Step 4: Morphological cleanup
         let binary = if params.morph_radius > 0 {
@@ -231,7 +247,9 @@ pub fn trace_image(params: TraceParams) -> Result<TraceResult, String> {
         // (critic FAIL fix §A, locked by test sketch_mode_guard_no_fill_small_holes).
         // Exception: when trace_transparency=true, binarization always takes the alpha-mask branch
         // (not Canny) regardless of params.mode, so hole-fill is safe and should run.
-        let binary = if params.filter_speckle > 0 && (params.mode != "sketch" || params.trace_transparency) {
+        let binary = if params.filter_speckle > 0
+            && (params.mode != "sketch" || params.trace_transparency)
+        {
             fill_small_holes(&binary, hole_min_area)
         } else {
             binary
@@ -272,9 +290,11 @@ pub fn trace_image(params: TraceParams) -> Result<TraceResult, String> {
     // Replaces the broken SVG string-length heuristic. Uses scale-normalized
     // ignore_area_scaled so the same physical features are filtered at any preview_scale.
     let filtered_paths: Vec<_> = if params.ignore_area > 1 {
-        svg_file.paths.into_iter().filter(|p| {
-            compound_outer_area(&p.path) >= ignore_area_scaled as f64
-        }).collect()
+        svg_file
+            .paths
+            .into_iter()
+            .filter(|p| compound_outer_area(&p.path) >= ignore_area_scaled as f64)
+            .collect()
     } else {
         svg_file.paths
     };
@@ -291,7 +311,9 @@ pub fn trace_image(params: TraceParams) -> Result<TraceResult, String> {
         w, h
     ));
     for path in &filtered_paths {
-        let (d, offset) = path.path.to_svg_string(true, visioncortex::PointF64::default(), None);
+        let (d, offset) = path
+            .path
+            .to_svg_string(true, visioncortex::PointF64::default(), None);
         svg.push_str(&format!(
             "<path d=\"{}\" fill=\"{}\" transform=\"translate({},{})\"/>\n",
             d,
@@ -335,14 +357,26 @@ fn remove_small_components(binary: &GrayImage, min_area: u32) -> GrayImage {
                 let mut stack = vec![(x, y)];
                 while let Some((cx, cy)) = stack.pop() {
                     let ci = (cy * w + cx) as usize;
-                    if labels[ci] != 0 { continue; }
-                    if binary.get_pixel(cx, cy)[0] != 0 { continue; }
+                    if labels[ci] != 0 {
+                        continue;
+                    }
+                    if binary.get_pixel(cx, cy)[0] != 0 {
+                        continue;
+                    }
                     labels[ci] = label_count;
                     size += 1;
-                    if cx > 0 { stack.push((cx - 1, cy)); }
-                    if cx + 1 < w { stack.push((cx + 1, cy)); }
-                    if cy > 0 { stack.push((cx, cy - 1)); }
-                    if cy + 1 < h { stack.push((cx, cy + 1)); }
+                    if cx > 0 {
+                        stack.push((cx - 1, cy));
+                    }
+                    if cx + 1 < w {
+                        stack.push((cx + 1, cy));
+                    }
+                    if cy > 0 {
+                        stack.push((cx, cy - 1));
+                    }
+                    if cy + 1 < h {
+                        stack.push((cx, cy + 1));
+                    }
                 }
                 label_sizes.push(size);
             }
@@ -368,7 +402,9 @@ fn remove_small_components(binary: &GrayImage, min_area: u32) -> GrayImage {
 
 /// Shoelace area for a PointI32 polygon. Absolute value; handles repeated last-point.
 fn shoelace_i32(points: &[visioncortex::PointI32]) -> f64 {
-    if points.len() < 3 { return 0.0; }
+    if points.len() < 3 {
+        return 0.0;
+    }
     let n = points.len();
     let mut area = 0.0f64;
     for i in 0..n {
@@ -381,7 +417,9 @@ fn shoelace_i32(points: &[visioncortex::PointI32]) -> f64 {
 
 /// Shoelace area for a PointF64 polygon.
 fn shoelace_f64(points: &[visioncortex::PointF64]) -> f64 {
-    if points.len() < 3 { return 0.0; }
+    if points.len() < 3 {
+        return 0.0;
+    }
     let n = points.len();
     let mut area = 0.0f64;
     for i in 0..n {
@@ -474,14 +512,26 @@ fn fill_small_holes(binary: &GrayImage, hole_min_area: u64) -> GrayImage {
                 let mut fill_stack = vec![(x, y)];
                 while let Some((cx, cy)) = fill_stack.pop() {
                     let ci = (cy * w + cx) as usize;
-                    if labels[ci] != 0 { continue; }
-                    if binary.get_pixel(cx, cy)[0] != 255 || exterior[ci] { continue; }
+                    if labels[ci] != 0 {
+                        continue;
+                    }
+                    if binary.get_pixel(cx, cy)[0] != 255 || exterior[ci] {
+                        continue;
+                    }
                     labels[ci] = label_count;
                     size += 1;
-                    if cx > 0 { fill_stack.push((cx - 1, cy)); }
-                    if cx + 1 < w { fill_stack.push((cx + 1, cy)); }
-                    if cy > 0 { fill_stack.push((cx, cy - 1)); }
-                    if cy + 1 < h { fill_stack.push((cx, cy + 1)); }
+                    if cx > 0 {
+                        fill_stack.push((cx - 1, cy));
+                    }
+                    if cx + 1 < w {
+                        fill_stack.push((cx + 1, cy));
+                    }
+                    if cy > 0 {
+                        fill_stack.push((cx, cy - 1));
+                    }
+                    if cy + 1 < h {
+                        fill_stack.push((cx, cy + 1));
+                    }
                 }
                 label_sizes.push(size);
             }
@@ -508,7 +558,7 @@ mod tests {
 
     /// Build a minimal RGBA PNG, base64-encode it, and return with data URI prefix.
     fn make_rgba_png_b64(width: u32, height: u32, pixels: &[(u8, u8, u8, u8)]) -> String {
-        use image::{ImageBuffer, Rgba, ImageEncoder};
+        use image::{ImageBuffer, ImageEncoder, Rgba};
         let mut img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(width, height);
         for (i, &(r, g, b, a)) in pixels.iter().enumerate() {
             let x = (i as u32) % width;
@@ -520,7 +570,10 @@ mod tests {
             .write_image(img.as_raw(), width, height, image::ExtendedColorType::Rgba8)
             .unwrap();
         let bytes = buf.into_inner();
-        format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes))
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        )
     }
 
     fn base_params(image_data: String) -> TraceParams {
@@ -567,10 +620,16 @@ mod tests {
         };
         let result = trace_image(params).expect("trace should succeed");
         // Should produce at least one path (the opaque block boundary)
-        assert!(result.path_count >= 1,
-            "Trace transparency should produce at least 1 path, got {}", result.path_count);
+        assert!(
+            result.path_count >= 1,
+            "Trace transparency should produce at least 1 path, got {}",
+            result.path_count
+        );
         // SVG should contain a path element
-        assert!(result.svg.contains("<path"), "SVG should contain path elements");
+        assert!(
+            result.svg.contains("<path"),
+            "SVG should contain path elements"
+        );
     }
 
     #[test]
@@ -589,8 +648,11 @@ mod tests {
         };
         let result = trace_image(params).expect("trace should succeed");
         // Fully transparent → no foreground → 0 paths (or very small noise filtered out)
-        assert_eq!(result.path_count, 0,
-            "Fully transparent image should produce 0 paths, got {}", result.path_count);
+        assert_eq!(
+            result.path_count, 0,
+            "Fully transparent image should produce 0 paths, got {}",
+            result.path_count
+        );
     }
 
     #[test]
@@ -624,11 +686,15 @@ mod tests {
         let result_alpha = trace_image(params_alpha).expect("trace should succeed");
 
         // Without alpha tracing: all-white image → 0 paths (no dark pixels to trace)
-        assert_eq!(result_no_alpha.path_count, 0,
-            "All-white image without alpha tracing should produce 0 paths");
+        assert_eq!(
+            result_no_alpha.path_count, 0,
+            "All-white image without alpha tracing should produce 0 paths"
+        );
         // With alpha tracing: first two pixels are opaque → should produce foreground paths
-        assert!(result_alpha.path_count >= 1,
-            "Alpha-based tracing of opaque pixels should produce at least 1 path");
+        assert!(
+            result_alpha.path_count >= 1,
+            "Alpha-based tracing of opaque pixels should produce at least 1 path"
+        );
     }
 
     // ─── Fix 5: Binary auto-threshold ───────────────────────────────────────
@@ -656,9 +722,11 @@ mod tests {
             ..base_params(String::new())
         };
         let result_adaptive = trace_image(params_adaptive).expect("trace should succeed");
-        assert!(result_adaptive.path_count >= 1,
+        assert!(
+            result_adaptive.path_count >= 1,
             "Near-binary image with adaptive threshold enabled should still trace: got {} paths",
-            result_adaptive.path_count);
+            result_adaptive.path_count
+        );
 
         // Without adaptive threshold — should also work via binary path
         let params_simple = TraceParams {
@@ -667,9 +735,11 @@ mod tests {
             ..base_params(String::new())
         };
         let result_simple = trace_image(params_simple).expect("trace should succeed");
-        assert!(result_simple.path_count >= 1,
+        assert!(
+            result_simple.path_count >= 1,
             "Near-binary image without adaptive threshold should trace: got {} paths",
-            result_simple.path_count);
+            result_simple.path_count
+        );
     }
 
     #[test]
@@ -692,7 +762,10 @@ mod tests {
             ..base_params(String::new())
         };
         let result = trace_image(params);
-        assert!(result.is_ok(), "Non-binary gradient image should trace without error");
+        assert!(
+            result.is_ok(),
+            "Non-binary gradient image should trace without error"
+        );
     }
 
     // ─── Fix 4: Preprocessing + spline mode ─────────────────────────────────
@@ -713,12 +786,15 @@ mod tests {
         let image_data = make_rgba_png_b64(w, h, &pixels);
         let params = TraceParams {
             image_data,
-            smoothness: 1.2,   // > 0.5 → spline mode
+            smoothness: 1.2, // > 0.5 → spline mode
             ..base_params(String::new())
         };
         let result = trace_image(params).expect("trace should succeed");
         assert!(result.path_count >= 1, "Should trace at least 1 path");
-        assert!(result.svg.starts_with("<?xml"), "Output should be valid SVG");
+        assert!(
+            result.svg.starts_with("<?xml"),
+            "Output should be valid SVG"
+        );
     }
 
     // ─── New: fill_small_holes unit (Test 1) ─────────────────────────────────
@@ -764,18 +840,38 @@ mod tests {
         // Pinhole (14,14)-(15,15) should be filled black
         for y in 14..16u32 {
             for x in 14..16u32 {
-                assert_eq!(result.get_pixel(x, y)[0], 0u8,
-                    "pinhole pixel ({},{}) should be filled black", x, y);
+                assert_eq!(
+                    result.get_pixel(x, y)[0],
+                    0u8,
+                    "pinhole pixel ({},{}) should be filled black",
+                    x,
+                    y
+                );
             }
         }
         // Counter (4,4)-(9,9) should remain white
-        assert_eq!(result.get_pixel(6, 6)[0], 255u8,
-            "counter interior should stay white (area 36 >= threshold 16)");
+        assert_eq!(
+            result.get_pixel(6, 6)[0],
+            255u8,
+            "counter interior should stay white (area 36 >= threshold 16)"
+        );
         // Exterior border should remain white
-        assert_eq!(result.get_pixel(0, 0)[0], 255u8, "exterior corner should stay white");
-        assert_eq!(result.get_pixel(29, 29)[0], 255u8, "exterior corner should stay white");
+        assert_eq!(
+            result.get_pixel(0, 0)[0],
+            255u8,
+            "exterior corner should stay white"
+        );
+        assert_eq!(
+            result.get_pixel(29, 29)[0],
+            255u8,
+            "exterior corner should stay white"
+        );
         // Foreground black pixels outside holes should remain black
-        assert_eq!(result.get_pixel(20, 20)[0], 0u8, "foreground pixel should stay black");
+        assert_eq!(
+            result.get_pixel(20, 20)[0],
+            0u8,
+            "foreground pixel should stay black"
+        );
     }
 
     // ─── New: E2E pinhole trace (Test 2) ─────────────────────────────────────
@@ -809,9 +905,13 @@ mod tests {
         let result = trace_image(params).expect("trace should succeed");
         // With fill_small_holes: pinhole gone → single outer path → Z count == 1
         let z_count = result.svg.matches("Z ").count();
-        assert_eq!(z_count, 1,
+        assert_eq!(
+            z_count,
+            1,
             "Pinhole should be filled; expected 1 Z in SVG d, got {} (SVG: {})",
-            z_count, &result.svg[..result.svg.len().min(400)]);
+            z_count,
+            &result.svg[..result.svg.len().min(400)]
+        );
 
         // Control: filter_speckle=0 → fill_small_holes NOT called → pinhole survives
         let params_control = TraceParams {
@@ -821,9 +921,11 @@ mod tests {
         };
         let control = trace_image(params_control).expect("control trace should succeed");
         let z_count_control = control.svg.matches("Z ").count();
-        assert_eq!(z_count_control, 2,
+        assert_eq!(
+            z_count_control, 2,
             "Without hole-fill: pinhole survives as hole subpath → 2 Z expected, got {}",
-            z_count_control);
+            z_count_control
+        );
     }
 
     // ─── New: Counter preservation (Test 3) ──────────────────────────────────
@@ -857,9 +959,13 @@ mod tests {
         let result = trace_image(params).expect("trace should succeed");
         // Counter preserved → compound path with outer + hole → Z count == 2
         let z_count = result.svg.matches("Z ").count();
-        assert_eq!(z_count, 2,
+        assert_eq!(
+            z_count,
+            2,
             "Counter (64px) should be preserved as hole subpath; expected 2 Z, got {} (SVG: {})",
-            z_count, &result.svg[..result.svg.len().min(400)]);
+            z_count,
+            &result.svg[..result.svg.len().min(400)]
+        );
     }
 
     // ─── New: Scale parity (Test 4) ──────────────────────────────────────────
@@ -892,19 +998,23 @@ mod tests {
             filter_speckle: 4,
             preview_scale: 1.0,
             ..base_params(String::new())
-        }).expect("full-res trace should succeed");
+        })
+        .expect("full-res trace should succeed");
 
         let result_quarter = trace_image(TraceParams {
             image_data,
             filter_speckle: 4,
             preview_scale: 0.25,
             ..base_params(String::new())
-        }).expect("quarter-res trace should succeed");
+        })
+        .expect("quarter-res trace should succeed");
 
-        assert_eq!(result_full.path_count, result_quarter.path_count,
+        assert_eq!(
+            result_full.path_count, result_quarter.path_count,
             "Scale-normalized preview should give same path_count as full res: \
              s=1.0 → {}, s=0.25 → {}",
-            result_full.path_count, result_quarter.path_count);
+            result_full.path_count, result_quarter.path_count
+        );
     }
 
     // ─── W1 fix: ignore_area_scaled floor ────────────────────────────────────
@@ -915,20 +1025,35 @@ mod tests {
         // Without the .max(1) floor this would be 0, silently disabling both
         // remove_small_components (Step 5) and the shoelace output filter (Step 8).
         // This test FAILs against the unfloored version (which returns 0).
-        assert_eq!(scale_ignore_area(5, 0.25), 1,
-            "ignore_area=5 at s=0.25 must be floored to 1 (not 0)");
+        assert_eq!(
+            scale_ignore_area(5, 0.25),
+            1,
+            "ignore_area=5 at s=0.25 must be floored to 1 (not 0)"
+        );
 
         // Nearby values also round to 0 without the floor.
-        assert_eq!(scale_ignore_area(1, 0.25), 1,
-            "ignore_area=1 at s=0.25 must be floored to 1");
-        assert_eq!(scale_ignore_area(3, 0.25), 1,
-            "ignore_area=3 at s=0.25 (3*0.0625=0.1875→0) must be floored to 1");
+        assert_eq!(
+            scale_ignore_area(1, 0.25),
+            1,
+            "ignore_area=1 at s=0.25 must be floored to 1"
+        );
+        assert_eq!(
+            scale_ignore_area(3, 0.25),
+            1,
+            "ignore_area=3 at s=0.25 (3*0.0625=0.1875→0) must be floored to 1"
+        );
 
         // At full scale the value passes through unchanged.
-        assert_eq!(scale_ignore_area(5, 1.0), 5,
-            "ignore_area=5 at s=1.0 should be 5");
-        assert_eq!(scale_ignore_area(20, 0.5), 5,
-            "ignore_area=20 at s=0.5 (20*0.25=5.0) should be 5");
+        assert_eq!(
+            scale_ignore_area(5, 1.0),
+            5,
+            "ignore_area=5 at s=1.0 should be 5"
+        );
+        assert_eq!(
+            scale_ignore_area(20, 0.5),
+            5,
+            "ignore_area=20 at s=0.5 (20*0.25=5.0) should be 5"
+        );
 
         // Behavioral: at preview_scale=0.25 with ignore_area=5, filtering is active.
         // A tiny 2x2 speck in a 40x40 image (area 4px at full res → ~0.25px at quarter
@@ -955,19 +1080,22 @@ mod tests {
             preview_scale: 0.25,
             filter_speckle: 2,
             ..base_params(String::new())
-        }).expect("trace at s=0.25 with ignore_area=5 should not panic");
+        })
+        .expect("trace at s=0.25 with ignore_area=5 should not panic");
 
         // The large square must survive (its area >> ignore_area_scaled=1).
-        assert!(result.path_count >= 1,
+        assert!(
+            result.path_count >= 1,
             "Large foreground square must survive at s=0.25 ignore_area=5; got {}",
-            result.path_count);
+            result.path_count
+        );
     }
 
     // ─── New: Area helper + Spline variant + empty guard (Test 5) ────────────
 
     #[test]
     fn compound_outer_area_shoelace_and_variants() {
-        use visioncortex::{CompoundPath, PathI32, PathF64, PointI32, PointF64, Spline};
+        use visioncortex::{CompoundPath, PathF64, PathI32, PointF64, PointI32, Spline};
 
         // PathI32: 10x10 square → area ≈ 100
         let mut cp_i32 = CompoundPath::new();
@@ -979,8 +1107,11 @@ mod tests {
         pi32.add(PointI32 { x: 0, y: 0 }); // repeated last point
         cp_i32.add_path_i32(pi32);
         let area_i32 = compound_outer_area(&cp_i32);
-        assert!((area_i32 - 100.0).abs() < 1.0,
-            "10x10 PathI32 shoelace should be ≈100, got {}", area_i32);
+        assert!(
+            (area_i32 - 100.0).abs() < 1.0,
+            "10x10 PathI32 shoelace should be ≈100, got {}",
+            area_i32
+        );
 
         // PathF64: 2x2 square → area ≈ 4
         let mut cp_f64 = CompoundPath::new();
@@ -991,13 +1122,19 @@ mod tests {
         pf64.add(PointF64 { x: 0.0, y: 2.0 });
         cp_f64.add_path_f64(pf64);
         let area_f64 = compound_outer_area(&cp_f64);
-        assert!((area_f64 - 4.0).abs() < 0.01,
-            "2x2 PathF64 shoelace should be ≈4, got {}", area_f64);
+        assert!(
+            (area_f64 - 4.0).abs() < 0.01,
+            "2x2 PathF64 shoelace should be ≈4, got {}",
+            area_f64
+        );
 
         // Output filter: 10x10 cluster kept (area 100 ≥ threshold 50), 2x2 dropped (4 < 50)
         // (Structural assertion: area_i32 ≥ 50 and area_f64 < 50)
         assert!(area_i32 >= 50.0, "10x10 should pass ignore_area=50 filter");
-        assert!(area_f64 < 50.0, "2x2 should be dropped by ignore_area=50 filter");
+        assert!(
+            area_f64 < 50.0,
+            "2x2 should be dropped by ignore_area=50 filter"
+        );
 
         // Spline variant: valid 1-curve bezier (4 points) → non-zero area, no panic
         let mut spline = Spline::new(PointF64 { x: 0.0, y: 0.0 });
@@ -1010,12 +1147,19 @@ mod tests {
         cp_spline.add_spline(spline);
         let area_spline = compound_outer_area(&cp_spline);
         // Spline control points approximate the area; just verify no panic and positive
-        assert!(area_spline >= 0.0, "Spline area should be non-negative (got {})", area_spline);
+        assert!(
+            area_spline >= 0.0,
+            "Spline area should be non-negative (got {})",
+            area_spline
+        );
 
         // Empty CompoundPath → 0.0, not panic (critic must-fix §B)
         let empty = CompoundPath::new();
-        assert_eq!(compound_outer_area(&empty), 0.0,
-            "Empty CompoundPath should return 0.0");
+        assert_eq!(
+            compound_outer_area(&empty),
+            0.0,
+            "Empty CompoundPath should return 0.0"
+        );
     }
 
     // ─── New: Contour-count (Test 6) ─────────────────────────────────────────
@@ -1048,9 +1192,11 @@ mod tests {
         };
         let result = trace_image(params).expect("trace should succeed");
         // 1 cluster × 2 subpaths (outer + counter hole) → path_count == 2
-        assert_eq!(result.path_count, 2,
+        assert_eq!(
+            result.path_count, 2,
             "Ring with counter should give path_count=2 (outer + hole); got {}",
-            result.path_count);
+            result.path_count
+        );
     }
 
     // ─── New: Sketch-mode guard (Test 7) ─────────────────────────────────────
@@ -1082,19 +1228,29 @@ mod tests {
             for x in 0..bw {
                 // Thin black ring at rows 3-16 / cols 3-16; interior and exterior white
                 let on_ring = (y == 3 || y == 16 || x == 3 || x == 16)
-                              && (3..=16).contains(&x) && (3..=16).contains(&y);
+                    && (3..=16).contains(&x)
+                    && (3..=16).contains(&y);
                 canny_binary.put_pixel(x, y, Luma([if on_ring { 0u8 } else { 255u8 }]));
             }
         }
         // Interior: rows 4-15, cols 4-15 = 12x12 = 144px white
         // fill_small_holes with hole_min_area=200 > 144 → fills interior
         let filled = fill_small_holes(&canny_binary, 200);
-        assert_eq!(filled.get_pixel(10, 10)[0], 0u8,
-            "Part A: fill_small_holes should fill the enclosed interior (pixel at 10,10)");
-        assert_eq!(filled.get_pixel(0, 0)[0], 255u8,
-            "Part A: exterior should remain white");
-        assert_eq!(canny_binary.get_pixel(10, 10)[0], 255u8,
-            "Part A: original binary has white interior — fill_small_holes has real effect");
+        assert_eq!(
+            filled.get_pixel(10, 10)[0],
+            0u8,
+            "Part A: fill_small_holes should fill the enclosed interior (pixel at 10,10)"
+        );
+        assert_eq!(
+            filled.get_pixel(0, 0)[0],
+            255u8,
+            "Part A: exterior should remain white"
+        );
+        assert_eq!(
+            canny_binary.get_pixel(10, 10)[0],
+            255u8,
+            "Part A: original binary has white interior — fill_small_holes has real effect"
+        );
 
         // Part C: standard mode fills 2x2 pinhole (guard is ON for non-sketch)
         let w = 25u32;
@@ -1118,11 +1274,14 @@ mod tests {
             mode: "standard".to_string(),
             filter_speckle: 4,
             ..base_params(String::new())
-        }).expect("standard mode trace should succeed");
+        })
+        .expect("standard mode trace should succeed");
         let std_z = std_result.svg.matches("Z ").count();
-        assert_eq!(std_z, 1,
+        assert_eq!(
+            std_z, 1,
             "Part C: standard mode with filter_speckle=4 should fill pinhole → Z=1, got {}",
-            std_z);
+            std_z
+        );
 
         // Sketch mode: fill_small_holes NOT called (guard) → trace completes without panic
         let sketch_result = trace_image(TraceParams {
@@ -1130,10 +1289,13 @@ mod tests {
             mode: "sketch".to_string(),
             filter_speckle: 4,
             ..base_params(String::new())
-        }).expect("sketch mode trace must not panic (guard prevents fill_small_holes)");
+        })
+        .expect("sketch mode trace must not panic (guard prevents fill_small_holes)");
         // Sketch mode uses Canny — just verify it produced valid SVG (not a blank crash)
-        assert!(sketch_result.svg.starts_with("<?xml"),
-            "Part C: sketch mode should return valid SVG");
+        assert!(
+            sketch_result.svg.starts_with("<?xml"),
+            "Part C: sketch mode should return valid SVG"
+        );
     }
 
     // ─── Color tracing ───────────────────────────────────────────────────
@@ -1163,8 +1325,10 @@ mod tests {
         let result = trace_image(params).expect("color trace should succeed");
         assert!(result.path_count >= 1, "Color trace should produce paths");
         // SVG should contain fill attributes with actual colors (not just #000000)
-        assert!(result.svg.contains("fill=\""),
-            "Color trace SVG should contain fill attributes");
+        assert!(
+            result.svg.contains("fill=\""),
+            "Color trace SVG should contain fill attributes"
+        );
         // Should have at least 2 distinct fill colors for red/blue halves
         let mut colors = std::collections::HashSet::new();
         for segment in result.svg.split("fill=\"") {
@@ -1174,8 +1338,11 @@ mod tests {
         }
         // Remove empty string from split artifact
         colors.remove("");
-        assert!(colors.len() >= 2,
-            "Color trace should produce at least 2 distinct colors, got {:?}", colors);
+        assert!(
+            colors.len() >= 2,
+            "Color trace should produce at least 2 distinct colors, got {:?}",
+            colors
+        );
     }
 
     #[test]
@@ -1202,11 +1369,16 @@ mod tests {
         for segment in result.svg.split("fill=\"") {
             if let Some(end) = segment.find('"') {
                 let c = segment[..end].to_lowercase();
-                if !c.is_empty() { colors.insert(c); }
+                if !c.is_empty() {
+                    colors.insert(c);
+                }
             }
         }
-        assert!(colors.len() <= 2,
-            "Binary trace should produce at most 2 colors, got {:?}", colors);
+        assert!(
+            colors.len() <= 2,
+            "Binary trace should produce at most 2 colors, got {:?}",
+            colors
+        );
     }
 
     /// D2: trace_image rejects images exceeding MAX_TRACE_PIXELS.
@@ -1235,7 +1407,10 @@ mod tests {
         let result = trace_image(params);
         assert!(result.is_err(), "trace_image should reject oversized input");
         let err = result.unwrap_err();
-        assert!(err.contains("limit exceeded") || err.contains("trace size"),
-            "Error should mention trace limit, got: {}", err);
+        assert!(
+            err.contains("limit exceeded") || err.contains("trace size"),
+            "Error should mention trace limit, got: {}",
+            err
+        );
     }
 }

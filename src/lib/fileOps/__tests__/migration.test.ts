@@ -857,10 +857,7 @@ describe("powerMode preservation: saved layers survive DEFAULT_LAYERS default fl
       formatVersion: 4,
       name: "UntouchedOverlayV4",
       objects: [],
-      layers: [
-        { ...DEFAULT_LAYERS[0], mode: "fillLine" as const },
-        ...DEFAULT_LAYERS.slice(1),
-      ],
+      layers: [{ ...DEFAULT_LAYERS[0], mode: "fillLine" as const }, ...DEFAULT_LAYERS.slice(1)],
       camera: { x: 0, y: 0, zoom: 1 },
       workspaceWidth: 500,
       workspaceHeight: 300,
@@ -936,7 +933,8 @@ describe("powerMode preservation: saved layers survive DEFAULT_LAYERS default fl
       .map((l) => l.text);
     expect(
       errors.some(
-        (t) => t.includes(String(KERF_FORMAT_VERSION + 1)) && t.includes(String(KERF_FORMAT_VERSION))
+        (t) =>
+          t.includes(String(KERF_FORMAT_VERSION + 1)) && t.includes(String(KERF_FORMAT_VERSION))
       )
     ).toBe(true);
   });

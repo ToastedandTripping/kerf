@@ -225,15 +225,29 @@ pub fn run_pump<R: BufRead, P: ProbeWriter>(
                 }
                 lines.push(line);
                 match class {
-                    LineClass::Ok => return Ok(PumpOutput { lines, terminal: PumpTerminal::Ok }),
+                    LineClass::Ok => {
+                        return Ok(PumpOutput {
+                            lines,
+                            terminal: PumpTerminal::Ok,
+                        })
+                    }
                     LineClass::Error => {
-                        return Ok(PumpOutput { lines, terminal: PumpTerminal::Error })
+                        return Ok(PumpOutput {
+                            lines,
+                            terminal: PumpTerminal::Error,
+                        })
                     }
                     LineClass::Alarm => {
-                        return Ok(PumpOutput { lines, terminal: PumpTerminal::Alarm })
+                        return Ok(PumpOutput {
+                            lines,
+                            terminal: PumpTerminal::Alarm,
+                        })
                     }
                     LineClass::Banner => {
-                        return Ok(PumpOutput { lines, terminal: PumpTerminal::Banner })
+                        return Ok(PumpOutput {
+                            lines,
+                            terminal: PumpTerminal::Banner,
+                        })
                     }
                     // Status reports, [MSG:] and unrecognized lines are not terminals.
                     LineClass::Status | LineClass::Msg | LineClass::Other => {
@@ -456,7 +470,10 @@ pub enum BufferedPumpOutcome {
     /// The abort flag was set (cooperative cancel, NOT e-stop).
     Cancelled,
     /// A GRBL `error:N` response was received.
-    Error { line_index: usize, error_text: String },
+    Error {
+        line_index: usize,
+        error_text: String,
+    },
     /// A GRBL `ALARM:N` was received.
     Alarm { alarm_text: String },
     /// A reset banner was received (the job was aborted externally, e.g.
@@ -546,7 +563,9 @@ pub fn run_buffered_pump<R: BufRead, W: Write + ProbeWriter>(
                 .map_err(|e| PumpFailure::Disconnected(format!("flush failed: {}", e)))?;
 
             rx_budget_used += wire_bytes;
-            in_flight.push_back(InFlightLine { rx_bytes: wire_bytes });
+            in_flight.push_back(InFlightLine {
+                rx_bytes: wire_bytes,
+            });
 
             // Throttled progress event
             let now = Instant::now();
@@ -706,7 +725,11 @@ mod tests {
 
     impl ScriptReader {
         fn new(steps: Vec<Step>) -> Self {
-            Self { steps: steps.into(), current: Vec::new(), pos: 0 }
+            Self {
+                steps: steps.into(),
+                current: Vec::new(),
+                pos: 0,
+            }
         }
     }
 
@@ -781,7 +804,14 @@ mod tests {
         let mut reader = ScriptReader::new(steps);
         let mut probe = CountingProbe::new();
         let mut pending = Vec::new();
-        let result = run_pump(&mut reader, &mut probe, &mut pending, ticks, idle_stall_ticks, None);
+        let result = run_pump(
+            &mut reader,
+            &mut probe,
+            &mut pending,
+            ticks,
+            idle_stall_ticks,
+            None,
+        );
         (result, probe.probes, pending)
     }
 
@@ -789,7 +819,12 @@ mod tests {
     #[test]
     fn delayed_ok_after_timeout_ticks() {
         let (result, probes, _) = pump(
-            vec![Step::Timeout, Step::Timeout, Step::Timeout, Step::Data(b"ok\n")],
+            vec![
+                Step::Timeout,
+                Step::Timeout,
+                Step::Timeout,
+                Step::Data(b"ok\n"),
+            ],
             DEFAULT_LIVENESS_TICKS,
         );
         let out = result.unwrap();
@@ -847,7 +882,13 @@ mod tests {
     #[test]
     fn liveness_expiry_on_total_silence() {
         let (result, probes, _) = pump(
-            vec![Step::Timeout, Step::Timeout, Step::Timeout, Step::Timeout, Step::Timeout],
+            vec![
+                Step::Timeout,
+                Step::Timeout,
+                Step::Timeout,
+                Step::Timeout,
+                Step::Timeout,
+            ],
             3,
         );
         match result {
@@ -884,7 +925,10 @@ mod tests {
         );
         let out = result.unwrap();
         assert_eq!(out.terminal, PumpTerminal::Ok);
-        assert_eq!(out.lines, vec!["<Idle|MPos:1.000,2.000,0.000|FS:0,0>", "ok"]);
+        assert_eq!(
+            out.lines,
+            vec!["<Idle|MPos:1.000,2.000,0.000|FS:0,0>", "ok"]
+        );
     }
 
     // Partial bytes mid-line reset the liveness counter (the link is alive).
@@ -927,7 +971,15 @@ mod tests {
 
         // The NEXT command's pump sees only its own fresh ack — zero misattribution.
         let mut probe = CountingProbe::new();
-        let out = run_pump(&mut reader, &mut probe, &mut pending, 5, DEFAULT_IDLE_STALL_TICKS, None).unwrap();
+        let out = run_pump(
+            &mut reader,
+            &mut probe,
+            &mut pending,
+            5,
+            DEFAULT_IDLE_STALL_TICKS,
+            None,
+        )
+        .unwrap();
         assert_eq!(out.terminal, PumpTerminal::Ok);
         assert_eq!(out.lines, vec!["ok"]);
     }
@@ -954,9 +1006,12 @@ mod tests {
         )]);
         let mut probe = CountingProbe::new();
         let mut pending = Vec::new();
-        let read = read_status_bounded(&mut reader, &mut probe, &mut pending, STATUS_MAX_TICKS)
-            .unwrap();
-        assert_eq!(read.status.as_deref(), Some("<Alarm|MPos:0.000,0.000,0.000>"));
+        let read =
+            read_status_bounded(&mut reader, &mut probe, &mut pending, STATUS_MAX_TICKS).unwrap();
+        assert_eq!(
+            read.status.as_deref(),
+            Some("<Alarm|MPos:0.000,0.000,0.000>")
+        );
         assert_eq!(read.surfaced, vec!["ALARM:3"]); // alarm surfaces, never swallowed
         assert_eq!(read.dropped, vec!["Grbl 1.1h ['$' for help]"]);
         assert_eq!(probe.probes, 1);
@@ -974,8 +1029,8 @@ mod tests {
         ]);
         let mut probe = CountingProbe::new();
         let mut pending = Vec::new();
-        let read = read_status_bounded(&mut reader, &mut probe, &mut pending, STATUS_MAX_TICKS)
-            .unwrap();
+        let read =
+            read_status_bounded(&mut reader, &mut probe, &mut pending, STATUS_MAX_TICKS).unwrap();
         assert_eq!(read.status, None);
         assert_eq!(read.surfaced, vec!["[MSG:Check Door]"]);
         // Initial probe + one rewrite after the first tick.
@@ -995,7 +1050,15 @@ mod tests {
         let mut pending = Vec::new();
 
         // Line 1
-        let out = run_pump(&mut reader, &mut probe, &mut pending, 60, DEFAULT_IDLE_STALL_TICKS, None).unwrap();
+        let out = run_pump(
+            &mut reader,
+            &mut probe,
+            &mut pending,
+            60,
+            DEFAULT_IDLE_STALL_TICKS,
+            None,
+        )
+        .unwrap();
         assert_eq!(out.terminal, PumpTerminal::Ok);
         assert_eq!(out.lines.len(), 1, "no empty-ack advance");
 
@@ -1011,7 +1074,15 @@ mod tests {
         steps.push(Step::Timeout);
         steps.push(Step::Data(b"k\n"));
         let mut reader = ScriptReader::new(steps);
-        let out = run_pump(&mut reader, &mut probe, &mut pending, 60, DEFAULT_IDLE_STALL_TICKS, None).unwrap();
+        let out = run_pump(
+            &mut reader,
+            &mut probe,
+            &mut pending,
+            60,
+            DEFAULT_IDLE_STALL_TICKS,
+            None,
+        )
+        .unwrap();
         assert_eq!(out.terminal, PumpTerminal::Ok);
         assert_eq!(out.lines.last().map(String::as_str), Some("ok"));
         assert_eq!(
@@ -1027,17 +1098,41 @@ mod tests {
             // Stale debris that lands AFTER the banner (post-reset MSG + delayed junk)
             Step::Data(b"[MSG:'$H'|'$X' to unlock]\nok\n"),
         ]);
-        let out = run_pump(&mut reader, &mut probe, &mut pending, 60, DEFAULT_IDLE_STALL_TICKS, None).unwrap();
-        assert_eq!(out.terminal, PumpTerminal::Banner, "reset banner = aborted, never acked");
+        let out = run_pump(
+            &mut reader,
+            &mut probe,
+            &mut pending,
+            60,
+            DEFAULT_IDLE_STALL_TICKS,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            out.terminal,
+            PumpTerminal::Banner,
+            "reset banner = aborted, never acked"
+        );
 
         // Line 4: the drain consumes the leftover debris before the next write …
         let outcome = drain_classified(&mut reader, &mut pending);
         assert_eq!(outcome.surfaced, vec!["[MSG:'$H'|'$X' to unlock]"]);
-        assert_eq!(outcome.dropped, vec!["ok"], "stale ack drained, not attributed");
+        assert_eq!(
+            outcome.dropped,
+            vec!["ok"],
+            "stale ack drained, not attributed"
+        );
 
         // … so the fresh command attributes only its own ack.
         let mut reader = ScriptReader::new(vec![Step::Data(b"ok\n")]);
-        let out = run_pump(&mut reader, &mut probe, &mut pending, 60, DEFAULT_IDLE_STALL_TICKS, None).unwrap();
+        let out = run_pump(
+            &mut reader,
+            &mut probe,
+            &mut pending,
+            60,
+            DEFAULT_IDLE_STALL_TICKS,
+            None,
+        )
+        .unwrap();
         assert_eq!(out.terminal, PumpTerminal::Ok);
         assert_eq!(out.lines, vec!["ok"]);
     }
@@ -1080,7 +1175,10 @@ mod tests {
                     "error message should mention Idle wedge: {msg}"
                 );
             }
-            Ok(out) => panic!("expected Disconnected stall, got Ok with terminal {:?}", out.terminal),
+            Ok(out) => panic!(
+                "expected Disconnected stall, got Ok with terminal {:?}",
+                out.terminal
+            ),
             Err(PumpFailure::Io(e)) => panic!("expected Disconnected stall, got Io error: {e}"),
         }
     }
@@ -1091,7 +1189,10 @@ mod tests {
     fn pump_ceiling_triggers_on_non_terminal_flood() {
         // Pin the constant value so changing MAX_PUMP_LINES requires updating
         // this test — the ceiling is a safety parameter, not a tunable.
-        assert_eq!(MAX_PUMP_LINES, 1000, "MAX_PUMP_LINES value changed — update this test");
+        assert_eq!(
+            MAX_PUMP_LINES, 1000,
+            "MAX_PUMP_LINES value changed — update this test"
+        );
 
         // Build 1005 [MSG:junk] lines (hardcoded, not derived from the constant).
         // This breaks if MAX_PUMP_LINES is raised above 1005.
@@ -1131,7 +1232,11 @@ mod tests {
             3, // stall threshold — must NOT fire on Run state
         );
         let out = result.expect("pump should complete Ok after Run replies");
-        assert_eq!(out.terminal, PumpTerminal::Ok, "Run replies must not trigger stall");
+        assert_eq!(
+            out.terminal,
+            PumpTerminal::Ok,
+            "Run replies must not trigger stall"
+        );
         assert_eq!(out.lines.last().map(String::as_str), Some("ok"));
         assert_eq!(
             out.lines.iter().filter(|l| l.starts_with("<Run")).count(),
@@ -1153,10 +1258,16 @@ mod tests {
 
     impl ScriptWriter {
         fn new() -> Self {
-            Self { written: Vec::new(), fail: false }
+            Self {
+                written: Vec::new(),
+                fail: false,
+            }
         }
         fn new_failing() -> Self {
-            Self { written: Vec::new(), fail: true }
+            Self {
+                written: Vec::new(),
+                fail: true,
+            }
         }
     }
 
@@ -1191,7 +1302,11 @@ mod tests {
         steps: Vec<Step>,
         config: &BufferedPumpConfig,
         abort: &AtomicBool,
-    ) -> (Result<BufferedPumpOutcome, PumpFailure>, Vec<BufferedPumpEvent>, ScriptWriter) {
+    ) -> (
+        Result<BufferedPumpOutcome, PumpFailure>,
+        Vec<BufferedPumpEvent>,
+        ScriptWriter,
+    ) {
         let mut reader = ScriptReader::new(steps);
         let mut writer = ScriptWriter::new();
         let mut pending = Vec::new();
@@ -1231,8 +1346,14 @@ mod tests {
             &abort,
         );
         assert_eq!(result.unwrap(), BufferedPumpOutcome::Complete);
-        let sent_count = events.iter().filter(|e| matches!(e, BufferedPumpEvent::LineSent { .. })).count();
-        assert!(sent_count >= 3, "expected at least 3 LineSent events, got {sent_count}");
+        let sent_count = events
+            .iter()
+            .filter(|e| matches!(e, BufferedPumpEvent::LineSent { .. }))
+            .count();
+        assert!(
+            sent_count >= 3,
+            "expected at least 3 LineSent events, got {sent_count}"
+        );
     }
 
     // BP2: RX budget tracking — lines wait when budget full, resume after ok
@@ -1289,8 +1410,14 @@ mod tests {
         );
         assert_eq!(result.unwrap(), BufferedPumpOutcome::Complete);
         // Verify we got status reports
-        let status_count = events.iter().filter(|e| matches!(e, BufferedPumpEvent::StatusReport(_))).count();
-        assert!(status_count >= 2, "expected at least 2 status reports, got {status_count}");
+        let status_count = events
+            .iter()
+            .filter(|e| matches!(e, BufferedPumpEvent::StatusReport(_)))
+            .count();
+        assert!(
+            status_count >= 2,
+            "expected at least 2 status reports, got {status_count}"
+        );
     }
 
     // BP4: Abort — AtomicBool set → Cancelled
@@ -1298,12 +1425,8 @@ mod tests {
     fn buffered_pump_abort_flag() {
         let abort = AtomicBool::new(true); // pre-set
         let config = BufferedPumpConfig::default();
-        let (result, _, _) = buffered_pump_helper(
-            &["G1 X10 F500"],
-            vec![Step::Timeout],
-            &config,
-            &abort,
-        );
+        let (result, _, _) =
+            buffered_pump_helper(&["G1 X10 F500"], vec![Step::Timeout], &config, &abort);
         assert_eq!(result.unwrap(), BufferedPumpOutcome::Cancelled);
     }
 
@@ -1424,7 +1547,10 @@ mod tests {
         );
         match result {
             Err(PumpFailure::Disconnected(msg)) => {
-                assert!(msg.contains("write failed") || msg.contains("flush"), "got: {msg}");
+                assert!(
+                    msg.contains("write failed") || msg.contains("flush"),
+                    "got: {msg}"
+                );
             }
             other => panic!("expected Disconnected from write failure, got {other:?}"),
         }
@@ -1443,7 +1569,13 @@ mod tests {
         };
         // 5 lines, but only 2 fit at a time. Acks must interleave.
         let (result, _, writer) = buffered_pump_helper(
-            &["G1 X1 F500", "G1 X2 F500", "G1 X3 F500", "G1 X4 F500", "G1 X5 F500"],
+            &[
+                "G1 X1 F500",
+                "G1 X2 F500",
+                "G1 X3 F500",
+                "G1 X4 F500",
+                "G1 X5 F500",
+            ],
             vec![
                 // After 2 lines sent, need acks before more
                 Step::Data(b"ok\n"),
@@ -1459,7 +1591,10 @@ mod tests {
         // All 5 lines written
         let written = String::from_utf8_lossy(&writer.written);
         for i in 1..=5 {
-            assert!(written.contains(&format!("G1 X{i} F500\n")), "line {i} written");
+            assert!(
+                written.contains(&format!("G1 X{i} F500\n")),
+                "line {i} written"
+            );
         }
     }
 
@@ -1480,7 +1615,10 @@ mod tests {
             &abort,
         );
         match result.unwrap() {
-            BufferedPumpOutcome::Error { line_index, error_text } => {
+            BufferedPumpOutcome::Error {
+                line_index,
+                error_text,
+            } => {
                 assert_eq!(line_index, 0);
                 assert!(error_text.contains("RX budget"), "got: {error_text}");
             }

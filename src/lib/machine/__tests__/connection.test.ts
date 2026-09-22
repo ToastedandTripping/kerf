@@ -116,9 +116,7 @@ describe("connection.ts (TN3)", () => {
   // TN3a — GRBL status-report regex parsing
   describe("pollStatus — status regex", () => {
     it("parses <Idle|MPos:1.000,2.000,0.000> and updates store", async () => {
-      mockInvoke.mockResolvedValueOnce(
-        makeStatusOutcome("<Idle|MPos:1.000,2.000,0.000|FS:0,0>")
-      );
+      mockInvoke.mockResolvedValueOnce(makeStatusOutcome("<Idle|MPos:1.000,2.000,0.000|FS:0,0>"));
       await machineConnection.pollStatus();
 
       const state = useStore.getState();
@@ -127,9 +125,7 @@ describe("connection.ts (TN3)", () => {
     });
 
     it("parses <Run|MPos:5.500,3.250,0.000> and sets run state", async () => {
-      mockInvoke.mockResolvedValueOnce(
-        makeStatusOutcome("<Run|MPos:5.500,3.250,0.000|FS:100,0>")
-      );
+      mockInvoke.mockResolvedValueOnce(makeStatusOutcome("<Run|MPos:5.500,3.250,0.000|FS:100,0>"));
       await machineConnection.pollStatus();
 
       const state = useStore.getState();
@@ -139,9 +135,7 @@ describe("connection.ts (TN3)", () => {
     });
 
     it("handles NoResponse without crashing", async () => {
-      mockInvoke.mockResolvedValueOnce(
-        makeStatusOutcome("", [], { noResponse: true })
-      );
+      mockInvoke.mockResolvedValueOnce(makeStatusOutcome("", [], { noResponse: true }));
       await expect(machineConnection.pollStatus()).resolves.toBeUndefined();
       // State should not change from idle
       expect(useStore.getState().machineState).toBe("idle");
@@ -265,9 +259,7 @@ describe("connection.ts (TN3)", () => {
       // The Ok-typed empty sentinel means "a pump holds the lock" (e.g. a 30s
       // $H). Three of them within 750ms must NOT disconnect — that would abort
       // the homing cycle the skip exists to tolerate.
-      mockInvoke.mockResolvedValue(
-        makeStatusOutcome("", [], { busy: true })
-      );
+      mockInvoke.mockResolvedValue(makeStatusOutcome("", [], { busy: true }));
       await machineConnection.pollStatus();
       await machineConnection.pollStatus();
       await machineConnection.pollStatus();
@@ -278,9 +270,7 @@ describe("connection.ts (TN3)", () => {
       mockInvoke.mockReset();
       mockInvoke.mockRejectedValueOnce(new Error("x"));
       mockInvoke.mockRejectedValueOnce(new Error("x"));
-      mockInvoke.mockResolvedValueOnce(
-        makeStatusOutcome("", [], { busy: true })
-      );
+      mockInvoke.mockResolvedValueOnce(makeStatusOutcome("", [], { busy: true }));
       mockInvoke.mockRejectedValueOnce(new Error("x"));
       mockInvoke.mockRejectedValueOnce(new Error("x"));
       for (let i = 0; i < 5; i++) await machineConnection.pollStatus();
@@ -521,27 +511,23 @@ describe("connection.ts (TN3)", () => {
       await machineConnection.emergencyStop();
 
       expect(useStore.getState().machineState).toBe("alarm");
-      expect(
-        consoleTexts().some((t) => t.includes("Beam state unqualified"))
-      ).toBe(true);
+      expect(consoleTexts().some((t) => t.includes("Beam state unqualified"))).toBe(true);
     });
 
     it("sends NO bytes from TS — no 0x21, no 0x18, no M5", async () => {
       const calls: string[] = [];
-      mockInvoke.mockImplementation(
-        async (cmd: string) => {
-          calls.push(cmd);
-          if (cmd === "serial_stop") {
-            return {
-              outcome: "confirmed",
-              epochBefore: 1,
-              epochAfter: 2,
-              messages: ["STOP: 0x18 sent"],
-            };
-          }
-          return undefined;
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        calls.push(cmd);
+        if (cmd === "serial_stop") {
+          return {
+            outcome: "confirmed",
+            epochBefore: 1,
+            epochAfter: 2,
+            messages: ["STOP: 0x18 sent"],
+          };
         }
-      );
+        return undefined;
+      });
 
       await machineConnection.emergencyStop();
 
@@ -554,21 +540,19 @@ describe("connection.ts (TN3)", () => {
   describe("disconnect — A2 beam-on safety", () => {
     it("fires emergencyStop (serial_stop) before teardown when a job is running", async () => {
       const calls: string[] = [];
-      mockInvoke.mockImplementation(
-        async (cmd: string) => {
-          calls.push(cmd);
-          if (cmd === "serial_stop") {
-            return {
-              outcome: "confirmed",
-              epochBefore: 1,
-              epochAfter: 2,
-              messages: ["STOP: 0x18 sent"],
-            };
-          }
-          if (cmd === "serial_disconnect") return undefined;
-          return undefined;
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        calls.push(cmd);
+        if (cmd === "serial_stop") {
+          return {
+            outcome: "confirmed",
+            epochBefore: 1,
+            epochAfter: 2,
+            messages: ["STOP: 0x18 sent"],
+          };
         }
-      );
+        if (cmd === "serial_disconnect") return undefined;
+        return undefined;
+      });
 
       useStore.setState({ jobRunning: true, machineState: "run" });
       await machineConnection.disconnect();

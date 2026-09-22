@@ -281,8 +281,7 @@ describe("machineStatus.ts — B2b status consumer", () => {
   describe("isRunLike", () => {
     it("run is run-like", () => expect(isRunLike("run")).toBe(true));
     it("idle is not run-like", () => expect(isRunLike("idle")).toBe(false));
-    it("hold is run-like", () =>
-      expect(isRunLike({ hold: { substate: null } })).toBe(true));
+    it("hold is run-like", () => expect(isRunLike({ hold: { substate: null } })).toBe(true));
     it("alarm is not run-like", () => expect(isRunLike("alarm")).toBe(false));
   });
 
@@ -323,11 +322,7 @@ describe("machineStatus.ts — B2b status consumer", () => {
   // ---- Fixture consumption: B2a's nativeStatus.json ----
   describe("fixture consumption", () => {
     it("deserializes and consumes B2a's nativeStatus.json fixture", () => {
-      const fixturePath = path.join(
-        __dirname,
-        "fixtures",
-        "nativeStatus.json"
-      );
+      const fixturePath = path.join(__dirname, "fixtures", "nativeStatus.json");
       const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf-8"));
       const outcome: StatusOutcome = fixture.statusOutcome;
 

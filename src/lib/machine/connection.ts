@@ -375,7 +375,7 @@ export const machineConnection = {
           ) {
             console.warn(
               `Spindle speed dropped to 0 during active job (was ${prevSpindleSpeed}). ` +
-              `Laser may have stopped firing.`
+                `Laser may have stopped firing.`
             );
             store.addConsoleLine(
               "WARNING: Spindle speed dropped to 0 during active job — laser may have stopped firing",

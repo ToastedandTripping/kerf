@@ -99,10 +99,12 @@ export function exportSvgContent(): string {
               .replace(/&/g, "&amp;")
               .replace(/</g, "&lt;")
               .replace(/>/g, "&gt;");
-            const anchorX = align === "center" ? t.x + t.width / 2 : align === "right" ? t.x + t.width : t.x;
+            const anchorX =
+              align === "center" ? t.x + t.width / 2 : align === "right" ? t.x + t.width : t.x;
             elements += `  <text x="${anchorX}" y="${textY}" font-size="${fs}" font-family="${ff}" fill="${textFill}" text-anchor="${anchor}"${opacity}${rotTransform}>${escaped}</text>\n`;
           } else {
-            const anchorX = align === "center" ? t.x + t.width / 2 : align === "right" ? t.x + t.width : t.x;
+            const anchorX =
+              align === "center" ? t.x + t.width / 2 : align === "right" ? t.x + t.width : t.x;
             elements += `  <text x="${anchorX}" y="${t.y + fs}" font-size="${fs}" font-family="${ff}" fill="${textFill}" text-anchor="${anchor}"${opacity}${rotTransform}>\n`;
             for (let li = 0; li < lines.length; li++) {
               const escaped = lines[li]

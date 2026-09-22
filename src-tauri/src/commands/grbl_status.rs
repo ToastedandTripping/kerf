@@ -28,10 +28,14 @@ use std::time::Instant;
 pub enum MachineState {
     Idle,
     Run,
-    Hold { substate: Option<u8> },
+    Hold {
+        substate: Option<u8>,
+    },
     Jog,
     Home,
-    Door { substate: Option<u8> },
+    Door {
+        substate: Option<u8>,
+    },
     Alarm,
     Check,
     Sleep,
@@ -282,8 +286,7 @@ mod tests {
 
     #[test]
     fn parse_run_wpos_with_accessory() {
-        let snap =
-            parse_status_frame("<Run|WPos:10.5,20.3,0.0|FS:500,1000|A:SFM>", 2, 5).unwrap();
+        let snap = parse_status_frame("<Run|WPos:10.5,20.3,0.0|FS:500,1000|A:SFM>", 2, 5).unwrap();
         assert_eq!(snap.state, MachineState::Run);
         assert_eq!(snap.position_kind, Some(PositionKind::WPos));
         assert_eq!(snap.feed, Some(500.0));
@@ -294,12 +297,7 @@ mod tests {
     #[test]
     fn parse_hold_substate() {
         let snap = parse_status_frame("<Hold:0|MPos:0,0,0|FS:0,0>", 1, 1).unwrap();
-        assert_eq!(
-            snap.state,
-            MachineState::Hold {
-                substate: Some(0)
-            }
-        );
+        assert_eq!(snap.state, MachineState::Hold { substate: Some(0) });
         assert!(snap.state.is_run_like());
         assert!(!snap.state.is_idle());
     }
@@ -307,12 +305,7 @@ mod tests {
     #[test]
     fn parse_door_substate() {
         let snap = parse_status_frame("<Door:1|MPos:0,0,0>", 1, 1).unwrap();
-        assert_eq!(
-            snap.state,
-            MachineState::Door {
-                substate: Some(1)
-            }
-        );
+        assert_eq!(snap.state, MachineState::Door { substate: Some(1) });
         assert!(snap.state.is_run_like());
     }
 
@@ -347,9 +340,12 @@ mod tests {
 
     #[test]
     fn out_of_order_fields() {
-        let snap =
-            parse_status_frame("<Run|FS:500,800|A:S|MPos:1.0,2.0,3.0|WCO:0.5,0.5,0.0>", 1, 1)
-                .unwrap();
+        let snap = parse_status_frame(
+            "<Run|FS:500,800|A:S|MPos:1.0,2.0,3.0|WCO:0.5,0.5,0.0>",
+            1,
+            1,
+        )
+        .unwrap();
         assert_eq!(snap.state, MachineState::Run);
         assert_eq!(snap.position, Some([1.0, 2.0, 3.0]));
         assert_eq!(snap.wco, Some([0.5, 0.5, 0.0]));
@@ -359,8 +355,7 @@ mod tests {
 
     #[test]
     fn unknown_fields_retained() {
-        let snap =
-            parse_status_frame("<Idle|MPos:0,0,0|FutureField:abc|FS:0,0>", 1, 1).unwrap();
+        let snap = parse_status_frame("<Idle|MPos:0,0,0|FutureField:abc|FS:0,0>", 1, 1).unwrap();
         assert_eq!(snap.unknown_fields, vec!["FutureField:abc"]);
     }
 
@@ -391,7 +386,10 @@ mod tests {
         // The raw string contains characters after `>`.
         let result = parse_status_frame("<Idle|MPos:0,0,0>ALARM:1", 1, 1);
         // strip_suffix('>') looks for '>' at the end. "...>ALARM:1" does not end with '>'.
-        assert!(result.is_none(), "fused frame must not parse as valid status");
+        assert!(
+            result.is_none(),
+            "fused frame must not parse as valid status"
+        );
     }
 
     #[test]

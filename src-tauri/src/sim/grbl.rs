@@ -527,7 +527,9 @@ impl GrblBrain {
     fn dispatch_motion_line(&mut self, len: usize) {
         if self.planner.len() < self.config.planner_depth {
             self.rx_used = self.rx_used.saturating_sub(len);
-            self.planner.push_back(PlannerEntry { remaining_ticks: self.config.line_ticks });
+            self.planner.push_back(PlannerEntry {
+                remaining_ticks: self.config.line_ticks,
+            });
             self.accept_ok();
             if self.state == MachineState::Idle {
                 self.state = MachineState::Run;
@@ -652,9 +654,13 @@ impl GrblBrain {
     /// promoted.
     fn try_promote_pending(&mut self) {
         while self.planner.len() < self.config.planner_depth {
-            let Some(pending) = self.pending_lines.pop_front() else { break };
+            let Some(pending) = self.pending_lines.pop_front() else {
+                break;
+            };
             self.rx_used = self.rx_used.saturating_sub(pending.len);
-            self.planner.push_back(PlannerEntry { remaining_ticks: self.config.line_ticks });
+            self.planner.push_back(PlannerEntry {
+                remaining_ticks: self.config.line_ticks,
+            });
             self.accept_ok();
             if self.state == MachineState::Idle {
                 self.state = MachineState::Run;
@@ -708,7 +714,9 @@ pub struct SimPort {
 
 impl SimPort {
     pub fn new(config: SimConfig) -> Self {
-        Self { brain: Arc::new(Mutex::new(GrblBrain::new(config))) }
+        Self {
+            brain: Arc::new(Mutex::new(GrblBrain::new(config))),
+        }
     }
 
     pub fn overflow_count(&self) -> usize {
@@ -716,7 +724,11 @@ impl SimPort {
     }
 
     pub fn hold_invariant_violations(&self) -> Vec<String> {
-        self.brain.lock().unwrap().hold_invariant_violations().to_vec()
+        self.brain
+            .lock()
+            .unwrap()
+            .hold_invariant_violations()
+            .to_vec()
     }
 
     pub fn rx_used(&self) -> usize {
@@ -900,7 +912,9 @@ impl SerialPort for SimPort {
         Ok(())
     }
     fn try_clone(&self) -> serialport::Result<Box<dyn SerialPort>> {
-        Ok(Box::new(SimPort { brain: self.brain.clone() }))
+        Ok(Box::new(SimPort {
+            brain: self.brain.clone(),
+        }))
     }
     fn set_break(&self) -> serialport::Result<()> {
         Ok(())
@@ -969,7 +983,11 @@ mod tests {
 
     #[test]
     fn line_gets_ok_on_planner_accept_not_on_execution_completion() {
-        let config = SimConfig { planner_depth: 15, line_ticks: 50, ..SimConfig::default() };
+        let config = SimConfig {
+            planner_depth: 15,
+            line_ticks: 50,
+            ..SimConfig::default()
+        };
         let mut port = SimPort::new(config);
         let _ = read_line_blocking(&mut port, 5); // discard banner
 
@@ -983,7 +1001,11 @@ mod tests {
 
     #[test]
     fn rx_buffer_fills_when_planner_full_and_drains_as_it_executes() {
-        let config = SimConfig { planner_depth: 1, line_ticks: 2, ..SimConfig::default() };
+        let config = SimConfig {
+            planner_depth: 1,
+            line_ticks: 2,
+            ..SimConfig::default()
+        };
         let mut port = SimPort::new(config);
         let _ = read_line_blocking(&mut port, 5); // banner
 
@@ -998,14 +1020,22 @@ mod tests {
         // buffer — this IS the backpressure the two-stage model exists to
         // produce.
         assert_eq!(port.pending_len(), 1, "second line waits for planner room");
-        assert_eq!(port.rx_used(), second.len(), "its bytes occupy the RX buffer");
+        assert_eq!(
+            port.rx_used(),
+            second.len(),
+            "its bytes occupy the RX buffer"
+        );
 
         // Advance ticks until the first entry finishes executing and the
         // second line is promoted.
         let ok2 = read_line_blocking(&mut port, 10).expect("ok for the promoted line");
         assert_eq!(ok2, "ok");
         assert_eq!(port.pending_len(), 0);
-        assert_eq!(port.rx_used(), 0, "RX buffer drains once the line is promoted");
+        assert_eq!(
+            port.rx_used(),
+            0,
+            "RX buffer drains once the line is promoted"
+        );
     }
 
     #[test]
@@ -1028,7 +1058,10 @@ mod tests {
         port.write_all(b"G1X1Y1\n").unwrap(); // 7 bytes — fits the budget
         assert_eq!(port.overflow_count(), 0);
         port.write_all(b"G1X2Y2\n").unwrap(); // pushes well past the budget
-        assert!(port.overflow_count() > 0, "must overflow the tiny RX budget");
+        assert!(
+            port.overflow_count() > 0,
+            "must overflow the tiny RX budget"
+        );
     }
 
     #[test]
@@ -1038,8 +1071,14 @@ mod tests {
 
         port.write_all(b"?").unwrap();
         let status = read_line_blocking(&mut port, 5).expect("status report");
-        assert!(status.starts_with('<') && status.ends_with('>'), "got: {status}");
-        assert!(status.contains("Idle"), "expected Idle state, got: {status}");
+        assert!(
+            status.starts_with('<') && status.ends_with('>'),
+            "got: {status}"
+        );
+        assert!(
+            status.contains("Idle"),
+            "expected Idle state, got: {status}"
+        );
         assert!(status.contains("MPos:"), "got: {status}");
     }
 
@@ -1057,7 +1096,10 @@ mod tests {
 
     #[test]
     fn dollar_x_clears_alarm() {
-        let config = SimConfig { initial_state: MachineState::Alarm, ..SimConfig::default() };
+        let config = SimConfig {
+            initial_state: MachineState::Alarm,
+            ..SimConfig::default()
+        };
         let mut port = SimPort::new(config);
         let _ = read_line_blocking(&mut port, 5); // banner fires even booting into Alarm
         assert_eq!(port.machine_state(), MachineState::Alarm);
@@ -1070,7 +1112,10 @@ mod tests {
 
     #[test]
     fn homing_mutes_status_probe_then_completes_with_deferred_ok() {
-        let config = SimConfig { homing_ticks: 3, ..SimConfig::default() };
+        let config = SimConfig {
+            homing_ticks: 3,
+            ..SimConfig::default()
+        };
         let mut port = SimPort::new(config);
         let _ = read_line_blocking(&mut port, 5); // banner
 
@@ -1079,7 +1124,11 @@ mod tests {
 
         // `?` during the muted window must produce nothing.
         port.write_all(b"?").unwrap();
-        assert_eq!(port.outbound_len(), 0, "status probe must be muted during homing");
+        assert_eq!(
+            port.outbound_len(),
+            0,
+            "status probe must be muted during homing"
+        );
 
         let ok = read_line_blocking(&mut port, 10).expect("deferred ok after homing completes");
         assert_eq!(ok, "ok");
@@ -1235,7 +1284,10 @@ mod tests {
         // Resume
         port.write_all(b"~").unwrap();
         // spindle_on stays false -- resume doesn't re-enable the spindle
-        assert!(!port.spindle_energized(), "resume does not re-energize spindle");
+        assert!(
+            !port.spindle_energized(),
+            "resume does not re-energize spindle"
+        );
     }
 
     // P5 Finding 7: semicolon comments must be stripped before M-code scanning.
@@ -1283,7 +1335,8 @@ mod tests {
 
         send_line(&mut port, "M5 ; laser off");
         assert_eq!(
-            port.hold_invariant_violations().len(), 1,
+            port.hold_invariant_violations().len(),
+            1,
             "Real M5 before semicolon comment must trip the invariant"
         );
     }

@@ -16,7 +16,9 @@
 
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Transform};
 
-use crate::engine::gcode_gen::{CutObject, GcodeMove, GcodeResult, PathSegment, ScanMotion, RAPID_SPEED_MM_MIN};
+use crate::engine::gcode_gen::{
+    CutObject, GcodeMove, GcodeResult, PathSegment, ScanMotion, RAPID_SPEED_MM_MIN,
+};
 use crate::engine::image_gcode_gen::{estimate_simple_time, find_binary_runs, find_grayscale_runs};
 use crate::engine::limits;
 
@@ -198,14 +200,20 @@ pub fn scan_mask_to_gcode<'a>(
     if pixels.len() < expected {
         return Err(format!(
             "pixels length {} is less than mask dimensions {}x{} = {}",
-            pixels.len(), w, h, expected
+            pixels.len(),
+            w,
+            h,
+            expected
         ));
     }
     if let Some(gray) = params.grayscale_pixels {
         if gray.len() != expected {
             return Err(format!(
                 "grayscale_pixels length {} does not match mask dimensions {}x{} = {}",
-                gray.len(), w, h, expected
+                gray.len(),
+                w,
+                h,
+                expected
             ));
         }
     }
@@ -218,7 +226,11 @@ pub fn scan_mask_to_gcode<'a>(
     let mut cur_x = 0.0_f64;
     let mut cur_y = 0.0_f64;
 
-    let interval = if params.interval > 0.0 { params.interval } else { 0.1 };
+    let interval = if params.interval > 0.0 {
+        params.interval
+    } else {
+        0.1
+    };
     let overscan = params.overscan.max(0.0);
     let is_grayscale = params.grayscale_pixels.is_some();
 
@@ -230,8 +242,13 @@ pub fn scan_mask_to_gcode<'a>(
     // Inner Y-flip closure: delegates to the shared coords::to_grbl_coords helper.
     let to_grbl = |x_img: f64, y_img: f64| -> (f64, f64) {
         crate::engine::coords::to_grbl_coords(
-            x_img, y_img, cx, cy,
-            params.rotation_rad, params.origin_top, params.workspace_height,
+            x_img,
+            y_img,
+            cx,
+            cy,
+            params.rotation_rad,
+            params.origin_top,
+            params.workspace_height,
         )
     };
 
@@ -267,8 +284,12 @@ pub fn scan_mask_to_gcode<'a>(
     /// X is always explicit. S is always explicit.
     fn emit_g1(
         lines: &mut Vec<String>,
-        x: f64, y: f64, speed: f64, s: i64,
-        modal_f: &mut Option<f64>, modal_y: &mut String,
+        x: f64,
+        y: f64,
+        speed: f64,
+        s: i64,
+        modal_f: &mut Option<f64>,
+        modal_y: &mut String,
     ) {
         let y_str = format!("{:.3}", y);
         let f_part = if *modal_f != Some(speed) {
@@ -287,15 +308,17 @@ pub fn scan_mask_to_gcode<'a>(
     }
 
     // Pre-compute row_has_content for fast skip on sparse masks
-    let row_has_content: Vec<bool> = (0..h).map(|row| {
-        let row_start = row * w;
-        let row_pixels = &pixels[row_start..row_start + w];
-        if is_grayscale {
-            row_pixels.iter().any(|&p| p < 255)
-        } else {
-            row_pixels.contains(&0) // 0 = filled pixel
-        }
-    }).collect();
+    let row_has_content: Vec<bool> = (0..h)
+        .map(|row| {
+            let row_start = row * w;
+            let row_pixels = &pixels[row_start..row_start + w];
+            if is_grayscale {
+                row_pixels.iter().any(|&p| p < 255)
+            } else {
+                row_pixels.contains(&0) // 0 = filled pixel
+            }
+        })
+        .collect();
 
     for pass in 0..params.passes {
         if params.passes > 1 {
@@ -341,16 +364,21 @@ pub fn scan_mask_to_gcode<'a>(
             // For grayscale mode, carry the original (start, end) for pixel indexing.
             // For binary mode, swap start/end for reverse direction.
             let ordered_runs: Vec<OrderedRun> = if forward {
-                runs.iter().map(|&(s, e)| (s, e, if is_grayscale { Some((s, e)) } else { None })).collect()
+                runs.iter()
+                    .map(|&(s, e)| (s, e, if is_grayscale { Some((s, e)) } else { None }))
+                    .collect()
             } else {
-                runs.iter().rev().map(|&(s, e)| {
-                    // Swap run endpoints so x_start > x_end (rightward to leftward)
-                    if is_grayscale {
-                        (e, s, Some((s, e))) // (e, s) for position; (s, e) = original pixel bounds
-                    } else {
-                        (e, s, None)
-                    }
-                }).collect()
+                runs.iter()
+                    .rev()
+                    .map(|&(s, e)| {
+                        // Swap run endpoints so x_start > x_end (rightward to leftward)
+                        if is_grayscale {
+                            (e, s, Some((s, e))) // (e, s) for position; (s, e) = original pixel bounds
+                        } else {
+                            (e, s, None)
+                        }
+                    })
+                    .collect()
             };
 
             // ── Continuous per-row sweep ──────────────────────────────────────────
@@ -360,7 +388,11 @@ pub fn scan_mask_to_gcode<'a>(
             // Gaps between runs are G1+S0 at engrave speed — NO G0, NO M5 mid-row.
             // M5 is NOT emitted within a row; $32=1 G0-suppression handles rapid safety.
 
-            let offset = if !forward { params.scanning_offset } else { 0.0 };
+            let offset = if !forward {
+                params.scanning_offset
+            } else {
+                0.0
+            };
 
             // Resolve workspace coordinates for the first run's entry boundary and the
             // last run's exit boundary. For reversed rows, ordered_runs endpoints are
@@ -370,10 +402,10 @@ pub fn scan_mask_to_gcode<'a>(
             //   reversed → first_run_start = right col of rightmost run (swapped)
             //              last_run_end    = left col of leftmost run (swapped)
             let (first_run_start, _, _) = ordered_runs[0];
-            let (_, last_run_end, _)    = ordered_runs[ordered_runs.len() - 1];
+            let (_, last_run_end, _) = ordered_runs[ordered_runs.len() - 1];
 
             let first_entry_img = params.origin_x + first_run_start as f64 * interval + offset;
-            let last_exit_img   = params.origin_x + last_run_end as f64 * interval + offset;
+            let last_exit_img = params.origin_x + last_run_end as f64 * interval + offset;
 
             let (first_entry_x, row_gy) = if has_rotation {
                 to_grbl(first_entry_img, y_mm)
@@ -409,7 +441,11 @@ pub fn scan_mask_to_gcode<'a>(
             let (lead_in_x, lead_in_y) = if has_rotation {
                 to_grbl(lead_in_img, y_mm)
             } else {
-                let li_x = if forward { first_entry_x - overscan } else { first_entry_x + overscan };
+                let li_x = if forward {
+                    first_entry_x - overscan
+                } else {
+                    first_entry_x + overscan
+                };
                 (li_x, row_gy)
             };
 
@@ -421,19 +457,32 @@ pub fn scan_mask_to_gcode<'a>(
             // Reset modal Y after G0 (new row positioning).
             modal_y_str = format!("{:.3}", lead_in_y);
             moves.push(GcodeMove {
-                x: lead_in_x, y: lead_in_y,
-                move_type: "rapid".to_string(), speed: RAPID_SPEED_MM_MIN, power: 0.0,
+                x: lead_in_x,
+                y: lead_in_y,
+                move_type: "rapid".to_string(),
+                speed: RAPID_SPEED_MM_MIN,
+                power: 0.0,
             });
 
             // Accel overscan: G1 from lead-in to first run entry boundary, laser off.
             if overscan > 0.0 {
                 travel_distance += overscan;
                 total_distance += overscan;
-                emit_g1(&mut lines, first_entry_x, row_gy, params.speed_mm_min, 0,
-                    &mut modal_f, &mut modal_y_str);
+                emit_g1(
+                    &mut lines,
+                    first_entry_x,
+                    row_gy,
+                    params.speed_mm_min,
+                    0,
+                    &mut modal_f,
+                    &mut modal_y_str,
+                );
                 moves.push(GcodeMove {
-                    x: first_entry_x, y: row_gy,
-                    move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0,
+                    x: first_entry_x,
+                    y: row_gy,
+                    move_type: "rapid".to_string(),
+                    speed: params.speed_mm_min,
+                    power: 0.0,
                 });
             }
 
@@ -448,7 +497,7 @@ pub fn scan_mask_to_gcode<'a>(
 
             for (run_idx, (run_start, run_end, orig_bounds)) in ordered_runs.iter().enumerate() {
                 let x_start_img = params.origin_x + *run_start as f64 * interval + offset;
-                let x_end_img   = params.origin_x + *run_end as f64 * interval + offset;
+                let x_end_img = params.origin_x + *run_end as f64 * interval + offset;
 
                 // P2-A Fix #1: compute full (x, y) in machine coords for both run
                 // endpoints. Gap detection uses 2D distance; gap transit targets the
@@ -469,7 +518,8 @@ pub fn scan_mask_to_gcode<'a>(
                 // a three-segment rapid profile if eligible (decel ramp, rapid center, accel ramp).
                 // P2-A Fix #1: use 2D Euclidean distance so rotated gaps (where runs stack
                 // at the same machine X but differ in Y) are properly detected.
-                let gap_dist_2d = ((x_start - row_cur_x).powi(2) + (y_start - row_cur_y).powi(2)).sqrt();
+                let gap_dist_2d =
+                    ((x_start - row_cur_x).powi(2) + (y_start - row_cur_y).powi(2)).sqrt();
                 if run_idx > 0 && gap_dist_2d > 1e-6 {
                     // Check if rapid-gap optimization is applicable
                     let (use_rapid, _savings_pct) = is_rapid_gap_eligible(
@@ -482,9 +532,10 @@ pub fn scan_mask_to_gcode<'a>(
                     if let (true, Some(sm)) = (use_rapid, params.scan_motion.as_ref()) {
                         // Three-segment rapid gap: decel ramp + rapid center + accel ramp
                         let v_mm_s = params.speed_mm_min / 60.0;
-                        let d = params.overscan.max(
-                            1.2 * v_mm_s * v_mm_s / (2.0 * sm.acceleration_mm_s2)
-                        ).max(0.5);
+                        let d = params
+                            .overscan
+                            .max(1.2 * v_mm_s * v_mm_s / (2.0 * sm.acceleration_mm_s2))
+                            .max(0.5);
 
                         // Direction: +1 for forward, -1 for reverse
                         let direction = if forward { 1.0 } else { -1.0 };
@@ -509,41 +560,74 @@ pub fn scan_mask_to_gcode<'a>(
 
                         // Serialize check: reject if three-decimal formatting collapses center segment
                         let exit_str = format!("{:.3}:{:.3}", exit_to_ramp.0, exit_to_ramp.1);
-                        let entry_str = format!("{:.3}:{:.3}", entry_from_ramp.0, entry_from_ramp.1);
+                        let entry_str =
+                            format!("{:.3}:{:.3}", entry_from_ramp.0, entry_from_ramp.1);
                         let collapsed = exit_str == entry_str;
 
                         if !collapsed {
                             // Decel ramp: G1 S0 from current to exit_to_ramp
-                            let ramp_dist = ((exit_to_ramp.0 - row_cur_x).powi(2) + (exit_to_ramp.1 - row_cur_y).powi(2)).sqrt();
+                            let ramp_dist = ((exit_to_ramp.0 - row_cur_x).powi(2)
+                                + (exit_to_ramp.1 - row_cur_y).powi(2))
+                            .sqrt();
                             travel_distance += ramp_dist;
                             total_distance += ramp_dist;
-                            emit_g1(&mut lines, exit_to_ramp.0, exit_to_ramp.1, params.speed_mm_min, 0,
-                                &mut modal_f, &mut modal_y_str);
+                            emit_g1(
+                                &mut lines,
+                                exit_to_ramp.0,
+                                exit_to_ramp.1,
+                                params.speed_mm_min,
+                                0,
+                                &mut modal_f,
+                                &mut modal_y_str,
+                            );
                             moves.push(GcodeMove {
-                                x: exit_to_ramp.0, y: exit_to_ramp.1,
-                                move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0,
+                                x: exit_to_ramp.0,
+                                y: exit_to_ramp.1,
+                                move_type: "rapid".to_string(),
+                                speed: params.speed_mm_min,
+                                power: 0.0,
                             });
 
                             // Rapid center: G0 S0 to entry_from_ramp
-                            let rapid_dist = ((entry_from_ramp.0 - exit_to_ramp.0).powi(2) + (entry_from_ramp.1 - exit_to_ramp.1).powi(2)).sqrt();
+                            let rapid_dist = ((entry_from_ramp.0 - exit_to_ramp.0).powi(2)
+                                + (entry_from_ramp.1 - exit_to_ramp.1).powi(2))
+                            .sqrt();
                             travel_distance += rapid_dist;
                             total_distance += rapid_dist;
-                            lines.push(format!("G0 X{:.3} Y{:.3} S0", entry_from_ramp.0, entry_from_ramp.1));
+                            lines.push(format!(
+                                "G0 X{:.3} Y{:.3} S0",
+                                entry_from_ramp.0, entry_from_ramp.1
+                            ));
                             modal_y_str = format!("{:.3}", entry_from_ramp.1);
                             moves.push(GcodeMove {
-                                x: entry_from_ramp.0, y: entry_from_ramp.1,
-                                move_type: "rapid".to_string(), speed: sm.rapid_mm_min, power: 0.0,
+                                x: entry_from_ramp.0,
+                                y: entry_from_ramp.1,
+                                move_type: "rapid".to_string(),
+                                speed: sm.rapid_mm_min,
+                                power: 0.0,
                             });
 
                             // Accel ramp: G1 S0 from entry_from_ramp to x_start
-                            let accel_dist = ((x_start - entry_from_ramp.0).powi(2) + (y_start - entry_from_ramp.1).powi(2)).sqrt();
+                            let accel_dist = ((x_start - entry_from_ramp.0).powi(2)
+                                + (y_start - entry_from_ramp.1).powi(2))
+                            .sqrt();
                             travel_distance += accel_dist;
                             total_distance += accel_dist;
-                            emit_g1(&mut lines, x_start, y_start, params.speed_mm_min, 0,
-                                &mut modal_f, &mut modal_y_str);
+                            emit_g1(
+                                &mut lines,
+                                x_start,
+                                y_start,
+                                params.speed_mm_min,
+                                0,
+                                &mut modal_f,
+                                &mut modal_y_str,
+                            );
                             moves.push(GcodeMove {
-                                x: x_start, y: y_start,
-                                move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0,
+                                x: x_start,
+                                y: y_start,
+                                move_type: "rapid".to_string(),
+                                speed: params.speed_mm_min,
+                                power: 0.0,
                             });
 
                             row_cur_x = x_start;
@@ -552,11 +636,21 @@ pub fn scan_mask_to_gcode<'a>(
                             // Serialization collapsed: fall back to continuous G1 S0
                             travel_distance += gap_dist_2d;
                             total_distance += gap_dist_2d;
-                            emit_g1(&mut lines, x_start, y_start, params.speed_mm_min, 0,
-                                &mut modal_f, &mut modal_y_str);
+                            emit_g1(
+                                &mut lines,
+                                x_start,
+                                y_start,
+                                params.speed_mm_min,
+                                0,
+                                &mut modal_f,
+                                &mut modal_y_str,
+                            );
                             moves.push(GcodeMove {
-                                x: x_start, y: y_start,
-                                move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0,
+                                x: x_start,
+                                y: y_start,
+                                move_type: "rapid".to_string(),
+                                speed: params.speed_mm_min,
+                                power: 0.0,
                             });
                             row_cur_x = x_start;
                             row_cur_y = y_start;
@@ -565,11 +659,21 @@ pub fn scan_mask_to_gcode<'a>(
                         // Ineligible or no metadata: continuous G1 S0
                         travel_distance += gap_dist_2d;
                         total_distance += gap_dist_2d;
-                        emit_g1(&mut lines, x_start, y_start, params.speed_mm_min, 0,
-                            &mut modal_f, &mut modal_y_str);
+                        emit_g1(
+                            &mut lines,
+                            x_start,
+                            y_start,
+                            params.speed_mm_min,
+                            0,
+                            &mut modal_f,
+                            &mut modal_y_str,
+                        );
                         moves.push(GcodeMove {
-                            x: x_start, y: y_start,
-                            move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0,
+                            x: x_start,
+                            y: y_start,
+                            move_type: "rapid".to_string(),
+                            speed: params.speed_mm_min,
+                            power: 0.0,
                         });
                         row_cur_x = x_start;
                         row_cur_y = y_start;
@@ -594,11 +698,14 @@ pub fn scan_mask_to_gcode<'a>(
 
                         // Build ordered S tokens matching the scan direction
                         let s_tokens: Vec<i64> = if run_forward {
-                            run_pixel_slice.iter()
+                            run_pixel_slice
+                                .iter()
                                 .map(|&p| compute_s_token(p, params.s_min, params.s_max))
                                 .collect()
                         } else {
-                            run_pixel_slice.iter().rev()
+                            run_pixel_slice
+                                .iter()
+                                .rev()
                                 .map(|&p| compute_s_token(p, params.s_min, params.s_max))
                                 .collect()
                         };
@@ -620,7 +727,9 @@ pub fn scan_mask_to_gcode<'a>(
                             let px_img = if run_forward {
                                 params.origin_x + (*orig_start + seg_end) as f64 * interval + offset
                             } else {
-                                params.origin_x + (*orig_end as i64 - seg_end as i64).max(0) as f64 * interval + offset
+                                params.origin_x
+                                    + (*orig_end as i64 - seg_end as i64).max(0) as f64 * interval
+                                    + offset
                             };
 
                             let (px, py) = if has_rotation {
@@ -634,21 +743,41 @@ pub fn scan_mask_to_gcode<'a>(
                                 // Powered segment
                                 cut_distance += seg_dist;
                                 total_distance += seg_dist;
-                                emit_g1(&mut lines, px, py, params.speed_mm_min, current_s,
-                                    &mut modal_f, &mut modal_y_str);
+                                emit_g1(
+                                    &mut lines,
+                                    px,
+                                    py,
+                                    params.speed_mm_min,
+                                    current_s,
+                                    &mut modal_f,
+                                    &mut modal_y_str,
+                                );
                                 moves.push(GcodeMove {
-                                    x: px, y: py,
-                                    move_type: "engrave".to_string(), speed: params.speed_mm_min, power: current_s as f64,
+                                    x: px,
+                                    y: py,
+                                    move_type: "engrave".to_string(),
+                                    speed: params.speed_mm_min,
+                                    power: current_s as f64,
                                 });
                             } else {
                                 // S0 gap boundary: unpowered travel at engrave speed
                                 travel_distance += seg_dist;
                                 total_distance += seg_dist;
-                                emit_g1(&mut lines, px, py, params.speed_mm_min, 0,
-                                    &mut modal_f, &mut modal_y_str);
+                                emit_g1(
+                                    &mut lines,
+                                    px,
+                                    py,
+                                    params.speed_mm_min,
+                                    0,
+                                    &mut modal_f,
+                                    &mut modal_y_str,
+                                );
                                 moves.push(GcodeMove {
-                                    x: px, y: py,
-                                    move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0,
+                                    x: px,
+                                    y: py,
+                                    move_type: "rapid".to_string(),
+                                    speed: params.speed_mm_min,
+                                    power: 0.0,
                                 });
                             }
 
@@ -665,11 +794,21 @@ pub fn scan_mask_to_gcode<'a>(
                     let scan_dist = ((x_end - x_start).powi(2) + (gy_end - y_start).powi(2)).sqrt();
                     cut_distance += scan_dist;
                     total_distance += scan_dist;
-                    emit_g1(&mut lines, x_end, gy_end, params.speed_mm_min, params.s_max as i64,
-                        &mut modal_f, &mut modal_y_str);
+                    emit_g1(
+                        &mut lines,
+                        x_end,
+                        gy_end,
+                        params.speed_mm_min,
+                        params.s_max as i64,
+                        &mut modal_f,
+                        &mut modal_y_str,
+                    );
                     moves.push(GcodeMove {
-                        x: x_end, y: gy_end,
-                        move_type: "engrave".to_string(), speed: params.speed_mm_min, power: params.s_max,
+                        x: x_end,
+                        y: gy_end,
+                        move_type: "engrave".to_string(),
+                        speed: params.speed_mm_min,
+                        power: params.s_max,
                     });
                     row_cur_x = x_end;
                     row_cur_y = gy_end;
@@ -681,20 +820,38 @@ pub fn scan_mask_to_gcode<'a>(
             // forward:  tail = last_exit + overscan (rightward past rightmost run)
             // reversed: tail = last_exit − overscan (leftward past leftmost run)
             if overscan > 0.0 {
-                let tail_img = if forward { last_exit_img + overscan } else { last_exit_img - overscan };
+                let tail_img = if forward {
+                    last_exit_img + overscan
+                } else {
+                    last_exit_img - overscan
+                };
                 let (os_tail_x, os_tail_y) = if has_rotation {
                     to_grbl(tail_img, y_mm)
                 } else {
-                    let tail_x = if forward { last_exit_x + overscan } else { last_exit_x - overscan };
+                    let tail_x = if forward {
+                        last_exit_x + overscan
+                    } else {
+                        last_exit_x - overscan
+                    };
                     (tail_x, row_gy)
                 };
                 travel_distance += overscan;
                 total_distance += overscan;
-                emit_g1(&mut lines, os_tail_x, os_tail_y, params.speed_mm_min, 0,
-                    &mut modal_f, &mut modal_y_str);
+                emit_g1(
+                    &mut lines,
+                    os_tail_x,
+                    os_tail_y,
+                    params.speed_mm_min,
+                    0,
+                    &mut modal_f,
+                    &mut modal_y_str,
+                );
                 moves.push(GcodeMove {
-                    x: os_tail_x, y: os_tail_y,
-                    move_type: "rapid".to_string(), speed: params.speed_mm_min, power: 0.0,
+                    x: os_tail_x,
+                    y: os_tail_y,
+                    move_type: "rapid".to_string(),
+                    speed: params.speed_mm_min,
+                    power: 0.0,
                 });
                 cur_x = os_tail_x;
                 cur_y = os_tail_y;
@@ -717,7 +874,11 @@ pub fn scan_mask_to_gcode<'a>(
         total_distance,
         cut_distance,
         travel_distance,
-        estimated_time_secs: estimate_simple_time(&cut_distance, &travel_distance, params.speed_mm_min / 60.0),
+        estimated_time_secs: estimate_simple_time(
+            &cut_distance,
+            &travel_distance,
+            params.speed_mm_min / 60.0,
+        ),
         line_count: lines.len(),
     })
 }
@@ -746,9 +907,7 @@ pub fn fill_compound_mask(
         return Err("maskFill: object has no paths".to_string());
     }
 
-    let interval = limits::validated_interval(
-        if interval > 0.0 { interval } else { 0.1 }
-    );
+    let interval = limits::validated_interval(if interval > 0.0 { interval } else { 0.1 });
 
     // Compute union bbox of all contours in obj.paths.
     // The object's x/y/width/height is already the axis-aligned union bbox of all
@@ -804,7 +963,13 @@ pub fn fill_compound_mask(
     paint.set_color_rgba8(0, 0, 0, 255); // opaque black for filled pixels
     paint.anti_alias = false; // binary mask — no AA fringe
 
-    pixmap.fill_path(&path, &paint, FillRule::EvenOdd, Transform::identity(), None);
+    pixmap.fill_path(
+        &path,
+        &paint,
+        FillRule::EvenOdd,
+        Transform::identity(),
+        None,
+    );
 
     // Convert RGBA pixmap to binary plane: alpha >= FILLED_ALPHA_THRESHOLD → 0 (filled), else 255 (bg).
     // Data layout: RGBA, 4 bytes per pixel. Alpha is at byte index 3.
@@ -812,7 +977,11 @@ pub fn fill_compound_mask(
     let mut pixels: Vec<u8> = (0..mask_w * mask_h)
         .map(|i| {
             let alpha = raw[i * 4 + 3];
-            if alpha >= FILLED_ALPHA_THRESHOLD { 0 } else { 255 }
+            if alpha >= FILLED_ALPHA_THRESHOLD {
+                0
+            } else {
+                255
+            }
         })
         .collect();
 
@@ -833,14 +1002,28 @@ pub fn fill_compound_mask(
             build_subcontour_dilated(&mut pb2, seg, bbox_x, bbox_y, interval);
         }
         if let Some(dilated_path) = pb2.finish() {
-            let mut pixmap2 = Pixmap::new(mask_w as u32, mask_h as u32)
-                .ok_or_else(|| format!("maskFill: cannot allocate dilated {}x{} pixmap", mask_w, mask_h))?;
-            pixmap2.fill_path(&dilated_path, &paint, FillRule::EvenOdd, Transform::identity(), None);
+            let mut pixmap2 = Pixmap::new(mask_w as u32, mask_h as u32).ok_or_else(|| {
+                format!(
+                    "maskFill: cannot allocate dilated {}x{} pixmap",
+                    mask_w, mask_h
+                )
+            })?;
+            pixmap2.fill_path(
+                &dilated_path,
+                &paint,
+                FillRule::EvenOdd,
+                Transform::identity(),
+                None,
+            );
             let raw2 = pixmap2.data();
             pixels = (0..mask_w * mask_h)
                 .map(|i| {
                     let alpha = raw2[i * 4 + 3];
-                    if alpha >= FILLED_ALPHA_THRESHOLD { 0 } else { 255 }
+                    if alpha >= FILLED_ALPHA_THRESHOLD {
+                        0
+                    } else {
+                        255
+                    }
                 })
                 .collect();
         }
@@ -913,12 +1096,10 @@ fn build_subcontour_dilated(
         return;
     }
 
-    let to_col = |pt: &crate::engine::gcode_gen::Point| -> f32 {
-        ((pt.x - bbox_x) / interval) as f32
-    };
-    let to_row = |pt: &crate::engine::gcode_gen::Point| -> f32 {
-        ((pt.y - bbox_y) / interval) as f32
-    };
+    let to_col =
+        |pt: &crate::engine::gcode_gen::Point| -> f32 { ((pt.x - bbox_x) / interval) as f32 };
+    let to_row =
+        |pt: &crate::engine::gcode_gen::Point| -> f32 { ((pt.y - bbox_y) / interval) as f32 };
 
     // Compute the pixel-space Y centroid and min/max
     let rows: Vec<f32> = seg.points.iter().map(to_row).collect();
@@ -934,14 +1115,17 @@ fn build_subcontour_dilated(
     // center-coincident points stay at their original row -- acceptable
     // because they lie between points that ARE expanded, so the contour
     // still covers more area than the undilated version.
-    let dilated_rows: Vec<f32> = rows.iter().map(|&r| {
-        let d = r - row_center;
-        if d.abs() < 1e-6 {
-            r // center-coincident: no expansion direction available
-        } else {
-            row_center + d.signum() * (d.abs() + 0.5)
-        }
-    }).collect();
+    let dilated_rows: Vec<f32> = rows
+        .iter()
+        .map(|&r| {
+            let d = r - row_center;
+            if d.abs() < 1e-6 {
+                r // center-coincident: no expansion direction available
+            } else {
+                row_center + d.signum() * (d.abs() + 0.5)
+            }
+        })
+        .collect();
 
     // If all points collapsed to the same row (degenerate), use the
     // alternating +0.5/-0.5 expansion to create a 1-pixel-tall strip.
@@ -963,7 +1147,11 @@ fn build_subcontour_dilated(
         let col = to_col(pt);
         let row = if all_same {
             // Alternate top/bottom for degenerate contours
-            if i < half { row_center - 0.5 } else { row_center + 0.5 }
+            if i < half {
+                row_center - 0.5
+            } else {
+                row_center + 0.5
+            }
         } else {
             dilated_rows[i + 1]
         };
@@ -1010,20 +1198,29 @@ mod tests {
         pb.line_to(3.0, 7.0);
         pb.close();
 
-        let path = pb.finish().expect("Phase 0 probe: PathBuilder should produce a valid path");
+        let path = pb
+            .finish()
+            .expect("Phase 0 probe: PathBuilder should produce a valid path");
 
         let mut pixmap = Pixmap::new(10, 10).expect("Phase 0 probe: Pixmap allocation failed");
         let mut paint = Paint::default();
         paint.set_color_rgba8(0, 0, 0, 255);
         paint.anti_alias = false;
 
-        pixmap.fill_path(&path, &paint, FillRule::EvenOdd, Transform::identity(), None);
+        pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::EvenOdd,
+            Transform::identity(),
+            None,
+        );
 
         // Center pixel (5,5) — inside the inner square — should be BACKGROUND (alpha=0)
         // because it's been crossed by 2 edges (outer + inner), parity = 0.
         let center_px = pixmap.pixel(5, 5).expect("pixel(5,5) should be in bounds");
         assert_eq!(
-            center_px.alpha(), 0,
+            center_px.alpha(),
+            0,
             "FAIL-FAST GATE FAILED: center of inner square (5,5) should be background (alpha=0) \
              under EvenOdd, but got alpha={}. The even-odd rule is NOT applying globally \
              across subcontours — the architecture collapses. Fall back to two-render XOR.",
@@ -1034,7 +1231,8 @@ mod tests {
         // because it's been crossed by 1 edge (outer only), parity = 1.
         let wall_px = pixmap.pixel(1, 5).expect("pixel(1,5) should be in bounds");
         assert_eq!(
-            wall_px.alpha(), 255,
+            wall_px.alpha(),
+            255,
             "Phase 0 probe: wall pixel (1,5) should be filled (alpha=255), got alpha={}",
             wall_px.alpha()
         );
@@ -1079,7 +1277,8 @@ mod tests {
         let result = scan_mask_to_gcode(&pixels, 10, 1, &params).expect("should succeed");
         assert!(
             result.gcode.contains("Y89.500"),
-            "Expected Y89.500 (100 - 10.5, half-interval centered), got:\n{}", result.gcode
+            "Expected Y89.500 (100 - 10.5, half-interval centered), got:\n{}",
+            result.gcode
         );
     }
 
@@ -1096,13 +1295,19 @@ mod tests {
         let h = 2usize;
         let mut pixels = vec![255u8; w * h];
         // Row 0 and row 1: pixels 2-4 filled (indices 2,3,4)
-        pixels[2] = 0; pixels[3] = 0; pixels[4] = 0;
-        pixels[w + 2] = 0; pixels[w + 3] = 0; pixels[w + 4] = 0;
+        pixels[2] = 0;
+        pixels[3] = 0;
+        pixels[4] = 0;
+        pixels[w + 2] = 0;
+        pixels[w + 3] = 0;
+        pixels[w + 4] = 0;
 
         let result = scan_mask_to_gcode(&pixels, w, h, &params).expect("should succeed");
 
         // Extract all G1 X coordinates from the gcode
-        let x_vals: Vec<f64> = result.gcode.lines()
+        let x_vals: Vec<f64> = result
+            .gcode
+            .lines()
             .filter(|l| l.starts_with("G1 X"))
             .filter_map(|l| {
                 l.split_whitespace()
@@ -1111,7 +1316,11 @@ mod tests {
             })
             .collect();
 
-        assert!(!x_vals.is_empty(), "Expected G1 moves; gcode:\n{}", result.gcode);
+        assert!(
+            !x_vals.is_empty(),
+            "Expected G1 moves; gcode:\n{}",
+            result.gcode
+        );
 
         // The reverse row should have at least one X ≥ 4.0 (right end of run)
         let has_high_x = x_vals.iter().any(|&x| x >= 4.0);
@@ -1138,13 +1347,21 @@ mod tests {
 
         // Mask: only pixels 2,3,4 are filled in each row (0=filled, 255=background)
         let mut mask_pixels = vec![255u8; w * h];
-        mask_pixels[2] = 0; mask_pixels[3] = 0; mask_pixels[4] = 0;   // row 0
-        mask_pixels[w + 2] = 0; mask_pixels[w + 3] = 0; mask_pixels[w + 4] = 0; // row 1
+        mask_pixels[2] = 0;
+        mask_pixels[3] = 0;
+        mask_pixels[4] = 0; // row 0
+        mask_pixels[w + 2] = 0;
+        mask_pixels[w + 3] = 0;
+        mask_pixels[w + 4] = 0; // row 1
 
         // Grayscale data: mid-gray (127) at positions 2,3,4 → S > 0; rest white (255) → S=0
         let mut gray_pixels = vec![255u8; w * h];
-        gray_pixels[2] = 127; gray_pixels[3] = 127; gray_pixels[4] = 127;
-        gray_pixels[w + 2] = 127; gray_pixels[w + 3] = 127; gray_pixels[w + 4] = 127;
+        gray_pixels[2] = 127;
+        gray_pixels[3] = 127;
+        gray_pixels[4] = 127;
+        gray_pixels[w + 2] = 127;
+        gray_pixels[w + 3] = 127;
+        gray_pixels[w + 4] = 127;
 
         let mut params = base_scan_params();
         params.bidirectional = true;
@@ -1154,7 +1371,9 @@ mod tests {
         let result = scan_mask_to_gcode(&mask_pixels, w, h, &params).expect("should succeed");
 
         // Extract G1 moves with S > 0 (engrave moves, not S0 blanks)
-        let engrave_x: Vec<f64> = result.gcode.lines()
+        let engrave_x: Vec<f64> = result
+            .gcode
+            .lines()
             .filter(|l| l.starts_with("G1 X"))
             .filter(|l| {
                 l.split_whitespace()
@@ -1180,20 +1399,23 @@ mod tests {
         // Forward row: endpoint X = 5.0 (boundary at orig_start + 3 pixels)
         assert_eq!(
             engrave_x[0], 5.0,
-            "Forward row endpoint wrong; got {:.1}", engrave_x[0]
+            "Forward row endpoint wrong; got {:.1}",
+            engrave_x[0]
         );
 
         // Reverse row: endpoint X = 2.0 (boundary at orig_end - 3 pixels)
         assert_eq!(
             engrave_x[1], 2.0,
-            "Reverse row endpoint wrong (compression endpoint); got {:.1}", engrave_x[1]
+            "Reverse row endpoint wrong (compression endpoint); got {:.1}",
+            engrave_x[1]
         );
 
         // Verify the total powered coverage is correct: 3 pixels * interval per row = 3mm each
         // Total cut_distance should be 6mm (3 * 2 rows)
         assert!(
             (result.cut_distance - 6.0).abs() < 0.01,
-            "cut_distance should be 6.0 (3px * 1mm * 2 rows); got {}", result.cut_distance
+            "cut_distance should be 6.0 (3px * 1mm * 2 rows); got {}",
+            result.cut_distance
         );
     }
 
@@ -1240,10 +1462,16 @@ mod tests {
         // Row 0: pixels 0-3 filled; Row 1: pixels 4-7 filled;
         // Row 2: pixels 1-5 filled; Row 3: pixels 2-6 filled
         let mut pixels = vec![255u8; w * h];
-        pixels[..4].fill(0);                      // row 0
-        for i in 4..8 { pixels[w + i] = 0; }      // row 1
-        for i in 1..6 { pixels[2 * w + i] = 0; }  // row 2
-        for i in 2..7 { pixels[3 * w + i] = 0; }  // row 3
+        pixels[..4].fill(0); // row 0
+        for i in 4..8 {
+            pixels[w + i] = 0;
+        } // row 1
+        for i in 1..6 {
+            pixels[2 * w + i] = 0;
+        } // row 2
+        for i in 2..7 {
+            pixels[3 * w + i] = 0;
+        } // row 3
 
         let result = scan_mask_to_gcode(&pixels, w, h, &params).expect("should succeed");
 
@@ -1271,16 +1499,21 @@ G1 X1.525 Y198.354 S1000\n\
 G1 X0.818 Y199.061 S0";
 
         assert_eq!(
-            result.gcode.trim(), expected.trim(),
+            result.gcode.trim(),
+            expected.trim(),
             "Golden snapshot mismatch — scan-loop output changed.\n\
              If intentional, regenerate by temporarily adding panic!(\"{{}}\", result.gcode)\n\
              after scan_mask_to_gcode and running with `-- --nocapture`.\n\n\
-             Actual:\n{}", result.gcode
+             Actual:\n{}",
+            result.gcode
         );
 
         // Structural sanity (belt-and-suspenders, not load-bearing — snapshot covers these)
         assert!(result.cut_distance > 0.0, "Expected positive cut distance");
-        assert!(result.estimated_time_secs > 0.0, "Expected positive time estimate");
+        assert!(
+            result.estimated_time_secs > 0.0,
+            "Expected positive time estimate"
+        );
     }
 
     // ─── Phase 2: fill_compound_mask tests ────────────────────────────────────
@@ -1357,7 +1590,8 @@ G1 X0.818 Y199.061 S0";
         let inner = make_square_seg(3.0, 3.0, 7.0, 7.0);
         let obj = make_obj("o", vec![outer, inner], 0.0, 0.0, 10.0, 10.0);
 
-        let (pixels, w, _h, _ox, _oy) = fill_compound_mask(&obj, 1.0).expect("fill_compound_mask should succeed");
+        let (pixels, w, _h, _ox, _oy) =
+            fill_compound_mask(&obj, 1.0).expect("fill_compound_mask should succeed");
 
         // Pixel at counter center: col=5, row=5
         // Must be background (255 = no engrave)
@@ -1365,7 +1599,8 @@ G1 X0.818 Y199.061 S0";
         assert_eq!(
             center, 255,
             "Counter center (col=5,row=5) must be background (255), got {}; \
-             even-odd is not emptying the counter", center
+             even-odd is not emptying the counter",
+            center
         );
 
         // Pixel in the wall (col=1,row=5) must be filled (0 = engrave)
@@ -1373,7 +1608,8 @@ G1 X0.818 Y199.061 S0";
         assert_eq!(
             wall, 0,
             "Wall pixel (col=1,row=5) must be filled (0), got {}; \
-             the outer fill is not rasterizing", wall
+             the outer fill is not rasterizing",
+            wall
         );
     }
 
@@ -1394,16 +1630,29 @@ G1 X0.818 Y199.061 S0";
         let bar = make_square_seg(0.0, 4.0, 10.0, 6.0);
         let obj = make_obj("H", vec![left, right, bar], 0.0, 0.0, 10.0, 10.0);
 
-        let (pixels, _w, _h, _ox, _oy) = fill_compound_mask(&obj, 1.0).expect("fill_compound_mask should succeed");
+        let (pixels, _w, _h, _ox, _oy) =
+            fill_compound_mask(&obj, 1.0).expect("fill_compound_mask should succeed");
 
         // Row 0 (y=0..1): left stroke pixels (col 0,1) should be filled; right (col 8,9) filled; center not
         let row0_left = pixels[0]; // col 0, row 0
         let row0_right = pixels[9]; // col 9, row 0
         let row0_center = pixels[5]; // col 5, row 0 (gap)
 
-        assert_eq!(row0_left, 0, "Left stroke (col=0,row=0) must be filled, got {}", row0_left);
-        assert_eq!(row0_right, 0, "Right stroke (col=9,row=0) must be filled, got {}", row0_right);
-        assert_eq!(row0_center, 255, "Center gap (col=5,row=0) must be background, got {}", row0_center);
+        assert_eq!(
+            row0_left, 0,
+            "Left stroke (col=0,row=0) must be filled, got {}",
+            row0_left
+        );
+        assert_eq!(
+            row0_right, 0,
+            "Right stroke (col=9,row=0) must be filled, got {}",
+            row0_right
+        );
+        assert_eq!(
+            row0_center, 255,
+            "Center gap (col=5,row=0) must be background, got {}",
+            row0_center
+        );
     }
 
     /// Phase 2: "N" shape — both diagonal strokes must produce scan runs.
@@ -1418,15 +1667,24 @@ G1 X0.818 Y199.061 S0";
         let diag = make_square_seg(0.0, 0.0, 10.0, 3.0);
         let obj = make_obj("N", vec![left, right, diag], 0.0, 0.0, 10.0, 10.0);
 
-        let (pixels, w, _h, _ox, _oy) = fill_compound_mask(&obj, 1.0).expect("fill_compound_mask should succeed");
+        let (pixels, w, _h, _ox, _oy) =
+            fill_compound_mask(&obj, 1.0).expect("fill_compound_mask should succeed");
 
         // Left stroke must be filled in its column
         let left_mid = pixels[5 * w];
-        assert_eq!(left_mid, 0, "N left stroke (col=0,row=5) must be filled, got {}", left_mid);
+        assert_eq!(
+            left_mid, 0,
+            "N left stroke (col=0,row=5) must be filled, got {}",
+            left_mid
+        );
 
         // Right stroke must be filled in its column
         let right_mid = pixels[5 * w + 9];
-        assert_eq!(right_mid, 0, "N right stroke (col=9,row=5) must be filled, got {}", right_mid);
+        assert_eq!(
+            right_mid, 0,
+            "N right stroke (col=9,row=5) must be filled, got {}",
+            right_mid
+        );
     }
 
     /// Phase 2: rectangle (single path) must still produce scan runs.
@@ -1436,7 +1694,8 @@ G1 X0.818 Y199.061 S0";
         let rect = make_square_seg(0.0, 0.0, 5.0, 5.0);
         let obj = make_obj("rect", vec![rect], 0.0, 0.0, 5.0, 5.0);
 
-        let (pixels, w, h, _ox, _oy) = fill_compound_mask(&obj, 1.0).expect("fill_compound_mask should succeed");
+        let (pixels, w, h, _ox, _oy) =
+            fill_compound_mask(&obj, 1.0).expect("fill_compound_mask should succeed");
 
         // All interior pixels should be filled (0)
         let mut filled_count = 0;
@@ -1447,7 +1706,10 @@ G1 X0.818 Y199.061 S0";
                 }
             }
         }
-        assert!(filled_count > 0, "Rectangle mask must have filled pixels, got none");
+        assert!(
+            filled_count > 0,
+            "Rectangle mask must have filled pixels, got none"
+        );
     }
 
     /// Phase 2: overlapping rects — even-odd makes the overlap count as background
@@ -1459,7 +1721,8 @@ G1 X0.818 Y199.061 S0";
         let sq2 = make_square_seg(4.0, 4.0, 10.0, 10.0);
         let obj = make_obj("overlap", vec![sq1, sq2], 0.0, 0.0, 10.0, 10.0);
 
-        let (pixels, w, _h, _ox, _oy) = fill_compound_mask(&obj, 1.0).expect("fill_compound_mask should succeed");
+        let (pixels, w, _h, _ox, _oy) =
+            fill_compound_mask(&obj, 1.0).expect("fill_compound_mask should succeed");
 
         // Overlap center (col=5, row=5): under even-odd this is parity 2 = background.
         // Note: this is DIFFERENT from the "desired" behavior for glyphs where the
@@ -1499,7 +1762,8 @@ G1 X0.818 Y199.061 S0";
         // bbox: x=0, y=0, w=10, h=0.3
         let obj = make_obj("thin", vec![thin_stroke], 0.0, 0.0, 10.0, 0.3);
 
-        let (pixels, w, h, _ox, _oy) = fill_compound_mask(&obj, 1.0).expect("fill_compound_mask should succeed");
+        let (pixels, w, h, _ox, _oy) =
+            fill_compound_mask(&obj, 1.0).expect("fill_compound_mask should succeed");
 
         // With the min-1-row policy, at least one pixel must be filled
         let any_filled = pixels.contains(&0);
@@ -1575,7 +1839,8 @@ G1 X0.818 Y199.061 S0";
                 // That's acceptable — the key assertion is it doesn't panic.
                 assert!(
                     e.contains("degenerate bbox"),
-                    "Unexpected error from fill_compound_mask: {}", e
+                    "Unexpected error from fill_compound_mask: {}",
+                    e
                 );
             }
         }
@@ -1659,11 +1924,16 @@ G1 X0.818 Y199.061 S0";
         // Un-rotated: every X/Y lands on a 1mm grid (all integers).
         // Rotated by 30°: coordinates involve cos(30°)≈0.866 and sin(30°)=0.5 →
         // fractional values that are not multiples of 0.001 rounding to whole numbers.
-        let engrave_lines: Vec<&str> = result_bottom.gcode.lines()
+        let engrave_lines: Vec<&str> = result_bottom
+            .gcode
+            .lines()
             .filter(|l| l.starts_with("G1 X") && l.contains("S1000"))
             .collect();
-        assert!(!engrave_lines.is_empty(),
-            "Expected engrave moves (S1000); gcode:\n{}", result_bottom.gcode);
+        assert!(
+            !engrave_lines.is_empty(),
+            "Expected engrave moves (S1000); gcode:\n{}",
+            result_bottom.gcode
+        );
 
         // At least one G1 engrave coordinate must be non-integer (rotation applied)
         let any_fractional = engrave_lines.iter().any(|line| {
@@ -1692,16 +1962,20 @@ G1 X0.818 Y199.061 S0";
         //   GRBL Y (origin_top=false, ws_h=200): 200 - (-1.464) = 201.464
         // The first G0 rapid in the output should be near this X value.
         // We allow ±2mm tolerance for run boundary (first pixel of first run may not be col=0).
-        let first_rapid = result_bottom.gcode.lines()
+        let first_rapid = result_bottom
+            .gcode
+            .lines()
             .find(|l| l.starts_with("G0 X"))
             .unwrap_or("");
-        let first_rapid_x = first_rapid.split_whitespace()
+        let first_rapid_x = first_rapid
+            .split_whitespace()
             .find(|t| t.starts_with("X"))
             .and_then(|t| t[1..].parse::<f64>().ok())
             .unwrap_or(f64::NAN);
         assert!(
             first_rapid_x.is_finite(),
-            "First rapid move must have a finite X; gcode:\n{}", result_bottom.gcode
+            "First rapid move must have a finite X; gcode:\n{}",
+            result_bottom.gcode
         );
         // X should be in the rotated range — not an axis-aligned integer
         assert!(
@@ -1729,10 +2003,13 @@ G1 X0.818 Y199.061 S0";
 
         // origin_top=true: Y = -ry (negated). For row 0 rotated:
         //   ry = -1.464 → Y = -(-1.464) = 1.464 (positive, not 201.464)
-        let first_rapid_top = result_top.gcode.lines()
+        let first_rapid_top = result_top
+            .gcode
+            .lines()
             .find(|l| l.starts_with("G0 X"))
             .unwrap_or("");
-        let first_rapid_y_top = first_rapid_top.split_whitespace()
+        let first_rapid_y_top = first_rapid_top
+            .split_whitespace()
             .find(|t| t.starts_with("Y"))
             .and_then(|t| t[1..].parse::<f64>().ok())
             .unwrap_or(f64::NAN);
@@ -1781,8 +2058,8 @@ G1 X0.818 Y199.061 S0";
         let h = 3usize;
         let pixels = vec![0u8; w * h]; // all black = all filled
 
-        let result = scan_mask_to_gcode(&pixels, w, h, &params)
-            .expect("M4 maskFill scan should succeed");
+        let result =
+            scan_mask_to_gcode(&pixels, w, h, &params).expect("M4 maskFill scan should succeed");
 
         let lines: Vec<&str> = result.gcode.lines().collect();
 
@@ -1812,7 +2089,8 @@ G1 X0.818 Y199.061 S0";
         assert!(
             m4_line.contains("S0"),
             "Mode hoist must emit M4 S0 (not nonzero S); got: {}\nG-code:\n{}",
-            m4_line, result.gcode
+            m4_line,
+            result.gcode
         );
 
         // 3. NO M5 within the output (continuous-sweep: laser held off by S0, not M5)
@@ -1838,7 +2116,9 @@ G1 X0.818 Y199.061 S0";
         assert!(
             m4_pos < first_g0_pos,
             "M4 S0 must appear before the first G0 (mode hoist); M4 at {}, G0 at {}\nG-code:\n{}",
-            m4_pos, first_g0_pos, result.gcode
+            m4_pos,
+            first_g0_pos,
+            result.gcode
         );
 
         // 6. Every G0 carries explicit S0
@@ -1847,7 +2127,8 @@ G1 X0.818 Y199.061 S0";
                 assert!(
                     line.contains("S0"),
                     "Every G0 must carry explicit S0; got: {}\nG-code:\n{}",
-                    line, result.gcode
+                    line,
+                    result.gcode
                 );
             }
         }
@@ -1871,22 +2152,29 @@ G1 X0.818 Y199.061 S0";
         let h = 2usize;
         let pixels = vec![0u8; w * h]; // all filled
 
-        let result = scan_mask_to_gcode(&pixels, w, h, &params)
-            .expect("M3 maskFill scan should succeed");
+        let result =
+            scan_mask_to_gcode(&pixels, w, h, &params).expect("M3 maskFill scan should succeed");
 
         assert!(
             result.gcode.contains("M3 S0"),
-            "M3 (constant-power) maskFill must emit M3 S0 (mode hoist); gcode:\n{}", result.gcode
+            "M3 (constant-power) maskFill must emit M3 S0 (mode hoist); gcode:\n{}",
+            result.gcode
         );
         // Exactly one M3 (mode hoist, not per-row)
-        let m3_count = result.gcode.lines().filter(|l| l.starts_with("M3 ")).count();
+        let m3_count = result
+            .gcode
+            .lines()
+            .filter(|l| l.starts_with("M3 "))
+            .count();
         assert_eq!(
             m3_count, 1,
-            "Mode hoist: exactly one M3 S0 for the invocation; found {}; gcode:\n{}", m3_count, result.gcode
+            "Mode hoist: exactly one M3 S0 for the invocation; found {}; gcode:\n{}",
+            m3_count, result.gcode
         );
         assert!(
             !result.gcode.contains("M4 "),
-            "M3 (constant-power) maskFill must NOT emit M4 commands; gcode:\n{}", result.gcode
+            "M3 (constant-power) maskFill must NOT emit M4 commands; gcode:\n{}",
+            result.gcode
         );
     }
 
@@ -1930,8 +2218,12 @@ G1 X0.818 Y199.061 S0";
         // Row 0: runs at cols [1,4) and [6,9), gap at [4,6).
         //   find_binary_runs expects 0=filled, 255=background.
         let mut pixels = vec![255u8; w * h];
-        pixels[1] = 0; pixels[2] = 0; pixels[3] = 0; // run A
-        pixels[6] = 0; pixels[7] = 0; pixels[8] = 0; // run B
+        pixels[1] = 0;
+        pixels[2] = 0;
+        pixels[3] = 0; // run A
+        pixels[6] = 0;
+        pixels[7] = 0;
+        pixels[8] = 0; // run B
 
         let result = scan_mask_to_gcode(&pixels, w, h, &params)
             .expect("two-run single-row scan should succeed");
@@ -1939,12 +2231,19 @@ G1 X0.818 Y199.061 S0";
         let lines: Vec<&str> = result.gcode.lines().collect();
 
         // 1. Exactly ONE G0 for this single engraved row.
-        let g0_lines: Vec<&str> = lines.iter().filter(|l| l.starts_with("G0 ")).copied().collect();
+        let g0_lines: Vec<&str> = lines
+            .iter()
+            .filter(|l| l.starts_with("G0 "))
+            .copied()
+            .collect();
         assert_eq!(
-            g0_lines.len(), 1,
+            g0_lines.len(),
+            1,
             "Continuous-sweep: single row with two runs must produce exactly 1 G0 (not 2).\n\
              Found {} G0 lines: {:?}\nFull G-code:\n{}",
-            g0_lines.len(), g0_lines, result.gcode
+            g0_lines.len(),
+            g0_lines,
+            result.gcode
         );
 
         // 2. ZERO M5 commands — laser held off by S0 on G1, not M5.
@@ -1958,19 +2257,28 @@ G1 X0.818 Y199.061 S0";
 
         // 3. The gap between the two runs must be a G1+S0 (not a G0).
         //    Find the two S=s_max engrave moves and verify what comes between them.
-        let engrave_indices: Vec<usize> = lines.iter().enumerate()
-            .filter(|(_, l)| l.starts_with("G1 ") && l.contains(&format!("S{}", params.s_max as u64)))
+        let engrave_indices: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| {
+                l.starts_with("G1 ") && l.contains(&format!("S{}", params.s_max as u64))
+            })
             .map(|(i, _)| i)
             .collect();
         assert_eq!(
-            engrave_indices.len(), 2,
+            engrave_indices.len(),
+            2,
             "Expected 2 G1 engrave moves (one per run); found {}: {:?}\nFull G-code:\n{}",
-            engrave_indices.len(), engrave_indices, result.gcode
+            engrave_indices.len(),
+            engrave_indices,
+            result.gcode
         );
 
         // Between the two engrave moves there must be at least one G1+S0 (gap transit).
         let between = &lines[engrave_indices[0] + 1..engrave_indices[1]];
-        let has_g1_s0_gap = between.iter().any(|l| l.starts_with("G1 ") && l.contains("S0"));
+        let has_g1_s0_gap = between
+            .iter()
+            .any(|l| l.starts_with("G1 ") && l.contains("S0"));
         assert!(
             has_g1_s0_gap,
             "Gap between runs must be a G1+S0 move (continuous speed, laser off).\n\
@@ -2014,8 +2322,12 @@ G1 X0.818 Y199.061 S0";
         let h = 1usize;
         let mut pixels = vec![255u8; w * h];
         // Two runs with a gap: pixels 0-2 filled, 7-9 filled
-        pixels[0] = 0; pixels[1] = 0; pixels[2] = 0;
-        pixels[7] = 0; pixels[8] = 0; pixels[9] = 0;
+        pixels[0] = 0;
+        pixels[1] = 0;
+        pixels[2] = 0;
+        pixels[7] = 0;
+        pixels[8] = 0;
+        pixels[9] = 0;
 
         let result = scan_mask_to_gcode(&pixels, w, h, &params).expect("should succeed");
 
@@ -2035,32 +2347,43 @@ G1 X0.818 Y199.061 S0";
         // The laser burned straight through the gap.
 
         let all_lines: Vec<&str> = result.gcode.lines().collect();
-        let engrave_indices: Vec<usize> = all_lines.iter().enumerate()
+        let engrave_indices: Vec<usize> = all_lines
+            .iter()
+            .enumerate()
             .filter(|(_, l)| l.starts_with("G1 ") && l.contains("S1000"))
             .map(|(i, _)| i)
             .collect();
-        assert!(engrave_indices.len() >= 2,
-            "Expected at least 2 engrave moves; gcode:\n{}", result.gcode);
+        assert!(
+            engrave_indices.len() >= 2,
+            "Expected at least 2 engrave moves; gcode:\n{}",
+            result.gcode
+        );
 
         // Between the two engrave moves there must be a G1+S0 gap transit
         let between = &all_lines[engrave_indices[0] + 1..engrave_indices[1]];
-        let gap_transit = between.iter().find(|l| l.starts_with("G1 ") && l.contains("S0"));
+        let gap_transit = between
+            .iter()
+            .find(|l| l.starts_with("G1 ") && l.contains("S0"));
         assert!(
             gap_transit.is_some(),
             "Gap between runs must have a G1+S0 transit (2D gap check).\n\
              Lines between engrave moves: {:?}\nFull G-code:\n{}",
-            between, result.gcode
+            between,
+            result.gcode
         );
 
         // The gap transit Y must match to_grbl(7.0, 0.0) = 97.5, not row_gy = 104.5
-        let gap_y: f64 = gap_transit.unwrap().split_whitespace()
+        let gap_y: f64 = gap_transit
+            .unwrap()
+            .split_whitespace()
             .find(|t| t.starts_with("Y"))
             .and_then(|t| t[1..].parse::<f64>().ok())
             .expect("gap transit should have a Y coordinate");
         assert!(
             (gap_y - 97.5).abs() < 0.1,
             "Gap transit Y should be 97.5 (to_grbl of run 2 start), got {gap_y:.3}.\n\
-             Full gcode:\n{}", result.gcode
+             Full gcode:\n{}",
+            result.gcode
         );
     }
 
@@ -2094,17 +2417,23 @@ G1 X0.818 Y199.061 S0";
 
         // Parse the G0 lead-in and the following G1 S0 accel line
         let lines: Vec<&str> = result.gcode.lines().collect();
-        let g0_line = lines.iter().find(|l| l.starts_with("G0 "))
+        let g0_line = lines
+            .iter()
+            .find(|l| l.starts_with("G0 "))
             .expect("Expected a G0 lead-in line");
-        let g1_s0_line = lines.iter().find(|l| l.starts_with("G1 ") && l.contains("S0"))
+        let g1_s0_line = lines
+            .iter()
+            .find(|l| l.starts_with("G1 ") && l.contains("S0"))
             .expect("Expected a G1 S0 accel line");
 
         let parse_xy = |line: &str| -> (f64, f64) {
-            let x = line.split_whitespace()
+            let x = line
+                .split_whitespace()
                 .find(|t| t.starts_with("X"))
                 .and_then(|t| t[1..].parse::<f64>().ok())
                 .unwrap();
-            let y = line.split_whitespace()
+            let y = line
+                .split_whitespace()
                 .find(|t| t.starts_with("Y"))
                 .and_then(|t| t[1..].parse::<f64>().ok())
                 .unwrap();
@@ -2128,7 +2457,8 @@ G1 X0.818 Y199.061 S0";
              under 45deg rotation. A zero dy means the lead-in is machine-X only \
              (not along the rotated scan direction).\n\
              G0: ({g0_x:.3}, {g0_y:.3}), G1 S0: ({g1_x:.3}, {g1_y:.3})\n\
-             Full gcode:\n{}", result.gcode
+             Full gcode:\n{}",
+            result.gcode
         );
     }
 
@@ -2159,7 +2489,9 @@ G1 X0.818 Y199.061 S0";
 
         // Parse the row Y from the G0 positioning move (modal Y means the engrave
         // G1 may omit Y when it matches the G0's value).
-        let row_y: f64 = result.gcode.lines()
+        let row_y: f64 = result
+            .gcode
+            .lines()
             .filter(|l| l.starts_with("G0 "))
             .filter_map(|l| {
                 l.split_whitespace()
@@ -2174,7 +2506,8 @@ G1 X0.818 Y199.061 S0";
             (row_y - 89.0).abs() < 0.01,
             "Scan line Y should be 89.0 (pixel center, not edge). Got {row_y:.3}.\n\
              Before fix: Y=90.0 (pixel edge). After fix: Y=89.0 (pixel center).\n\
-             Full gcode:\n{}", result.gcode
+             Full gcode:\n{}",
+            result.gcode
         );
     }
 
@@ -2206,10 +2539,16 @@ G1 X0.818 Y199.061 S0";
         };
 
         let result = scan_mask_to_gcode(&pixels, w, h, &params);
-        assert!(result.is_err(), "scan_mask_to_gcode should reject short pixels buffer");
+        assert!(
+            result.is_err(),
+            "scan_mask_to_gcode should reject short pixels buffer"
+        );
         let err = result.unwrap_err();
-        assert!(err.contains("pixels length"),
-            "Error should mention pixels length, got: {}", err);
+        assert!(
+            err.contains("pixels length"),
+            "Error should mention pixels length, got: {}",
+            err
+        );
     }
 
     // ─── Modal interpreter ──────────────────────────────────────────────────
@@ -2264,20 +2603,34 @@ G1 X0.818 Y199.061 S0";
             // G0/G1 lines
             let is_g0 = line.starts_with("G0");
             let is_g1 = line.starts_with("G1");
-            if !is_g0 && !is_g1 { continue; }
+            if !is_g0 && !is_g1 {
+                continue;
+            }
 
-            if is_g0 { cur_g = 0; }
-            if is_g1 { cur_g = 1; }
+            if is_g0 {
+                cur_g = 0;
+            }
+            if is_g1 {
+                cur_g = 1;
+            }
 
             for token in line.split_whitespace() {
                 if let Some(rest) = token.strip_prefix('X') {
-                    if let Ok(v) = rest.parse::<f64>() { cur_x = v; }
+                    if let Ok(v) = rest.parse::<f64>() {
+                        cur_x = v;
+                    }
                 } else if let Some(rest) = token.strip_prefix('Y') {
-                    if let Ok(v) = rest.parse::<f64>() { cur_y = v; }
+                    if let Ok(v) = rest.parse::<f64>() {
+                        cur_y = v;
+                    }
                 } else if let Some(rest) = token.strip_prefix('F') {
-                    if let Ok(v) = rest.parse::<f64>() { cur_f = v; }
+                    if let Ok(v) = rest.parse::<f64>() {
+                        cur_f = v;
+                    }
                 } else if let Some(rest) = token.strip_prefix('S') {
-                    if let Ok(v) = rest.parse::<f64>() { cur_s = v.round() as i64; }
+                    if let Ok(v) = rest.parse::<f64>() {
+                        cur_s = v.round() as i64;
+                    }
                 }
             }
 
@@ -2311,7 +2664,9 @@ G1 X0.818 Y199.061 S0";
         let result = scan_mask_to_gcode(&mask_pixels, w, h, &params).expect("should succeed");
 
         // Count powered G1 moves (S > 0)
-        let powered_count = result.gcode.lines()
+        let powered_count = result
+            .gcode
+            .lines()
             .filter(|l| l.starts_with("G1 "))
             .filter(|l| {
                 l.split_whitespace()
@@ -2321,11 +2676,18 @@ G1 X0.818 Y199.061 S0";
                     .unwrap_or(false)
             })
             .count();
-        assert_eq!(powered_count, 1, "100 equal-S pixels should merge into 1 segment; got {}\ngcode:\n{}", powered_count, result.gcode);
+        assert_eq!(
+            powered_count, 1,
+            "100 equal-S pixels should merge into 1 segment; got {}\ngcode:\n{}",
+            powered_count, result.gcode
+        );
 
         // Verify powered distance is 100mm
-        assert!((result.cut_distance - 100.0).abs() < 0.01,
-            "cut_distance should be 100mm; got {}", result.cut_distance);
+        assert!(
+            (result.cut_distance - 100.0).abs() < 0.01,
+            "cut_distance should be 100mm; got {}",
+            result.cut_distance
+        );
     }
 
     /// F2: alternating S values do not merge.
@@ -2334,7 +2696,7 @@ G1 X0.818 Y199.061 S0";
         let w = 6usize;
         let h = 1usize;
         let mask_pixels = vec![0u8; w * h]; // all filled
-        // Alternating: 100, 200, 100, 200, 100, 200 — different S tokens
+                                            // Alternating: 100, 200, 100, 200, 100, 200 — different S tokens
         let gray_pixels = vec![100u8, 200, 100, 200, 100, 200];
 
         let mut params = base_scan_params();
@@ -2346,7 +2708,9 @@ G1 X0.818 Y199.061 S0";
 
         let result = scan_mask_to_gcode(&mask_pixels, w, h, &params).expect("should succeed");
 
-        let powered_count = result.gcode.lines()
+        let powered_count = result
+            .gcode
+            .lines()
             .filter(|l| l.starts_with("G1 "))
             .filter(|l| {
                 l.split_whitespace()
@@ -2356,7 +2720,11 @@ G1 X0.818 Y199.061 S0";
                     .unwrap_or(false)
             })
             .count();
-        assert_eq!(powered_count, 6, "6 alternating pixels should produce 6 segments; got {}\ngcode:\n{}", powered_count, result.gcode);
+        assert_eq!(
+            powered_count, 6,
+            "6 alternating pixels should produce 6 segments; got {}\ngcode:\n{}",
+            powered_count, result.gcode
+        );
     }
 
     /// F2: distinct shades that format to the same S token DO merge.
@@ -2380,7 +2748,9 @@ G1 X0.818 Y199.061 S0";
 
         let result = scan_mask_to_gcode(&mask_pixels, w, h, &params).expect("should succeed");
 
-        let powered_count = result.gcode.lines()
+        let powered_count = result
+            .gcode
+            .lines()
             .filter(|l| l.starts_with("G1 "))
             .filter(|l| {
                 l.split_whitespace()
@@ -2390,7 +2760,11 @@ G1 X0.818 Y199.061 S0";
                     .unwrap_or(false)
             })
             .count();
-        assert_eq!(powered_count, 1, "4 identical pixels should merge into 1; got {}", powered_count);
+        assert_eq!(
+            powered_count, 1,
+            "4 identical pixels should merge into 1; got {}",
+            powered_count
+        );
     }
 
     /// F2: S0-rounding grayscale pixels are gap boundaries, not powered S0.
@@ -2423,7 +2797,9 @@ G1 X0.818 Y199.061 S0";
         // S tokens: 0→S2, 0→S2, 254→S0, 254→S0, 0→S2, 0→S2
         // S0 pixels should become gap boundaries (unpowered).
         // Expected segments: S2(2px), S0(2px gap), S2(2px) = 2 powered + 1 gap
-        let powered_count = result.gcode.lines()
+        let powered_count = result
+            .gcode
+            .lines()
             .filter(|l| l.starts_with("G1 "))
             .filter(|l| {
                 l.split_whitespace()
@@ -2433,7 +2809,11 @@ G1 X0.818 Y199.061 S0";
                     .unwrap_or(false)
             })
             .count();
-        assert_eq!(powered_count, 2, "S0 gap should split into 2 powered segments; got {}\ngcode:\n{}", powered_count, result.gcode);
+        assert_eq!(
+            powered_count, 2,
+            "S0 gap should split into 2 powered segments; got {}\ngcode:\n{}",
+            powered_count, result.gcode
+        );
     }
 
     /// Modal interpreter: verify mode hoist, modal F, and S0 safety across fragment boundaries.
@@ -2467,13 +2847,20 @@ G1 X0.818 Y199.061 S0";
         // 3. F must be set (3000) on all G1 moves (modal, inherited from first)
         for m in &moves {
             if m.g == 1 {
-                assert_eq!(m.f, 3000.0, "F must be 3000 on all G1 moves; got F={} at X={:.3}", m.f, m.x);
+                assert_eq!(
+                    m.f, 3000.0,
+                    "F must be 3000 on all G1 moves; got F={} at X={:.3}",
+                    m.f, m.x
+                );
             }
         }
 
         // 4. Mode should never go empty (no M5 in scanner output)
         for m in &moves {
-            assert!(!m.mode.is_empty(), "mode must not be empty (no M5 in scanner)");
+            assert!(
+                !m.mode.is_empty(),
+                "mode must not be empty (no M5 in scanner)"
+            );
         }
     }
 
@@ -2489,9 +2876,13 @@ G1 X0.818 Y199.061 S0";
 
         assert!(
             !result.gcode.contains("M3") && !result.gcode.contains("M4"),
-            "Empty scan must not emit any mode command; gcode:\n{}", result.gcode
+            "Empty scan must not emit any mode command; gcode:\n{}",
+            result.gcode
         );
-        assert!(result.gcode.is_empty(), "Empty scan should produce no output");
+        assert!(
+            result.gcode.is_empty(),
+            "Empty scan should produce no output"
+        );
     }
 
     /// Compression with multiple passes: mode hoisted once, not per-pass.
@@ -2509,8 +2900,16 @@ G1 X0.818 Y199.061 S0";
 
         let result = scan_mask_to_gcode(&mask_pixels, w, h, &params).expect("should succeed");
 
-        let m3_count = result.gcode.lines().filter(|l| l.starts_with("M3 ")).count();
-        assert_eq!(m3_count, 1, "M3 S0 should appear once across 3 passes; got {}\ngcode:\n{}", m3_count, result.gcode);
+        let m3_count = result
+            .gcode
+            .lines()
+            .filter(|l| l.starts_with("M3 "))
+            .count();
+        assert_eq!(
+            m3_count, 1,
+            "M3 S0 should appear once across 3 passes; got {}\ngcode:\n{}",
+            m3_count, result.gcode
+        );
     }
 
     /// Compression with reverse row, rotation, offset, nonzero minimum power.
@@ -2535,7 +2934,9 @@ G1 X0.818 Y199.061 S0";
         let result = scan_mask_to_gcode(&mask_pixels, w, h, &params).expect("should succeed");
 
         // All pixels same shade → 1 powered segment per row = 2 total
-        let powered_count = result.gcode.lines()
+        let powered_count = result
+            .gcode
+            .lines()
             .filter(|l| l.starts_with("G1 "))
             .filter(|l| {
                 l.split_whitespace()
@@ -2545,14 +2946,23 @@ G1 X0.818 Y199.061 S0";
                     .unwrap_or(false)
             })
             .count();
-        assert_eq!(powered_count, 2, "2 rows of uniform gray should give 2 powered segments; got {}\ngcode:\n{}", powered_count, result.gcode);
+        assert_eq!(
+            powered_count, 2,
+            "2 rows of uniform gray should give 2 powered segments; got {}\ngcode:\n{}",
+            powered_count, result.gcode
+        );
 
         // Verify powered distance: 6 pixels * interval per row * 2 rows = 12mm
-        assert!((result.cut_distance - 12.0).abs() < 0.01,
-            "cut_distance should be 12.0; got {}", result.cut_distance);
+        assert!(
+            (result.cut_distance - 12.0).abs() < 0.01,
+            "cut_distance should be 12.0; got {}",
+            result.cut_distance
+        );
 
         // Verify S value includes s_min: (255-128)/255 = 0.498 → S = 100 + 0.498*900 = 548
-        let s_val = result.gcode.lines()
+        let s_val = result
+            .gcode
+            .lines()
             .filter(|l| l.starts_with("G1 "))
             .filter_map(|l| {
                 l.split_whitespace()
@@ -2561,7 +2971,11 @@ G1 X0.818 Y199.061 S0";
             })
             .find(|&s| s > 0)
             .expect("should have a powered S value");
-        assert_eq!(s_val, 548, "S value for pixel 128 with s_min=100, s_max=1000 should be 548; got {}", s_val);
+        assert_eq!(
+            s_val, 548,
+            "S value for pixel 128 with s_min=100, s_max=1000 should be 548; got {}",
+            s_val
+        );
     }
 
     /// Zero-overscan rows: G0 still carries S0.
@@ -2580,8 +2994,11 @@ G1 X0.818 Y199.061 S0";
 
         for line in result.gcode.lines() {
             if line.starts_with("G0 ") {
-                assert!(line.contains("S0"),
-                    "G0 must carry S0 even with zero overscan; got: {}", line);
+                assert!(
+                    line.contains("S0"),
+                    "G0 must carry S0 even with zero overscan; got: {}",
+                    line
+                );
             }
         }
     }
@@ -2594,8 +3011,12 @@ G1 X0.818 Y199.061 S0";
         let w = 100usize;
         let h = 1usize;
         let mut pixels = vec![255u8; w * h];
-        pixels[5] = 0; pixels[6] = 0; pixels[7] = 0;
-        pixels[70] = 0; pixels[71] = 0; pixels[72] = 0;
+        pixels[5] = 0;
+        pixels[6] = 0;
+        pixels[7] = 0;
+        pixels[70] = 0;
+        pixels[71] = 0;
+        pixels[72] = 0;
 
         let mut params = base_scan_params();
         params.width_mm = 100.0;
@@ -2605,13 +3026,15 @@ G1 X0.818 Y199.061 S0";
         params.speed_mm_min = 1200.0;
         params.scan_motion = None;
 
-        let result = scan_mask_to_gcode(&pixels, w, h, &params)
-            .expect("scan should succeed");
+        let result = scan_mask_to_gcode(&pixels, w, h, &params).expect("scan should succeed");
         let lines: Vec<&str> = result.gcode.lines().collect();
 
         let g0_count = lines.iter().filter(|l| l.starts_with("G0 ")).count();
-        assert_eq!(g0_count, 1, "Without scan_motion, only ONE G0 (row lead-in). Got {}\n{}",
-            g0_count, result.gcode);
+        assert_eq!(
+            g0_count, 1,
+            "Without scan_motion, only ONE G0 (row lead-in). Got {}\n{}",
+            g0_count, result.gcode
+        );
     }
 
     /// With scan_motion where rapid ≤ engraving speed, gaps stay continuous G1 S0.
@@ -2620,8 +3043,12 @@ G1 X0.818 Y199.061 S0";
         let w = 100usize;
         let h = 1usize;
         let mut pixels = vec![255u8; w * h];
-        pixels[5] = 0; pixels[6] = 0; pixels[7] = 0;
-        pixels[70] = 0; pixels[71] = 0; pixels[72] = 0;
+        pixels[5] = 0;
+        pixels[6] = 0;
+        pixels[7] = 0;
+        pixels[70] = 0;
+        pixels[71] = 0;
+        pixels[72] = 0;
 
         let mut params = base_scan_params();
         params.width_mm = 100.0;
@@ -2634,13 +3061,15 @@ G1 X0.818 Y199.061 S0";
             rapid_mm_min: 3000.0,
         });
 
-        let result = scan_mask_to_gcode(&pixels, w, h, &params)
-            .expect("scan should succeed");
+        let result = scan_mask_to_gcode(&pixels, w, h, &params).expect("scan should succeed");
         let lines: Vec<&str> = result.gcode.lines().collect();
 
         let g0_count = lines.iter().filter(|l| l.starts_with("G0 ")).count();
-        assert_eq!(g0_count, 1, "Rapid ≤ feed → only ONE G0 (row lead-in). Got {}\n{}",
-            g0_count, result.gcode);
+        assert_eq!(
+            g0_count, 1,
+            "Rapid ≤ feed → only ONE G0 (row lead-in). Got {}\n{}",
+            g0_count, result.gcode
+        );
     }
 
     /// With valid scan_motion and a wide gap, the scanner emits a three-segment
@@ -2651,8 +3080,12 @@ G1 X0.818 Y199.061 S0";
         let h = 1usize;
         let mut pixels = vec![255u8; w * h];
         // Run A at cols 5-7, Run B at cols 70-72 → 63mm gap
-        pixels[5] = 0; pixels[6] = 0; pixels[7] = 0;
-        pixels[70] = 0; pixels[71] = 0; pixels[72] = 0;
+        pixels[5] = 0;
+        pixels[6] = 0;
+        pixels[7] = 0;
+        pixels[70] = 0;
+        pixels[71] = 0;
+        pixels[72] = 0;
 
         let mut params = base_scan_params();
         params.width_mm = 100.0;
@@ -2665,31 +3098,45 @@ G1 X0.818 Y199.061 S0";
             rapid_mm_min: 8000.0,
         });
 
-        let result = scan_mask_to_gcode(&pixels, w, h, &params)
-            .expect("scan should succeed");
+        let result = scan_mask_to_gcode(&pixels, w, h, &params).expect("scan should succeed");
         let lines: Vec<&str> = result.gcode.lines().collect();
 
         // Find the engrave moves (S1000)
-        let engrave_indices: Vec<usize> = lines.iter().enumerate()
+        let engrave_indices: Vec<usize> = lines
+            .iter()
+            .enumerate()
             .filter(|(_, l)| l.starts_with("G1 ") && l.contains("S1000"))
             .map(|(i, _)| i)
             .collect();
-        assert_eq!(engrave_indices.len(), 2,
-            "Expected 2 engrave moves; got {}\n{}", engrave_indices.len(), result.gcode);
+        assert_eq!(
+            engrave_indices.len(),
+            2,
+            "Expected 2 engrave moves; got {}\n{}",
+            engrave_indices.len(),
+            result.gcode
+        );
 
         // Between the two engrave moves, there should be a G0 (the rapid center).
         let between = &lines[engrave_indices[0] + 1..engrave_indices[1]];
         let g0_in_gap: Vec<&&str> = between.iter().filter(|l| l.starts_with("G0 ")).collect();
-        assert_eq!(g0_in_gap.len(), 1,
+        assert_eq!(
+            g0_in_gap.len(),
+            1,
             "Eligible gap should have exactly 1 G0 (rapid center).\nBetween: {:?}\nFull:\n{}",
-            between, result.gcode);
+            between,
+            result.gcode
+        );
 
         // The G0 must carry S0
-        assert!(g0_in_gap[0].contains("S0"),
-            "Rapid center G0 must carry S0; got: {}", g0_in_gap[0]);
+        assert!(
+            g0_in_gap[0].contains("S0"),
+            "Rapid center G0 must carry S0; got: {}",
+            g0_in_gap[0]
+        );
 
         // G1 S0 ramps should bracket the G0
-        let g1_s0_in_gap: Vec<&&str> = between.iter()
+        let g1_s0_in_gap: Vec<&&str> = between
+            .iter()
             .filter(|l| l.starts_with("G1 ") && l.contains("S0"))
             .collect();
         assert!(g1_s0_in_gap.len() >= 2,
@@ -2697,10 +3144,14 @@ G1 X0.818 Y199.061 S0";
             between, result.gcode);
 
         // No M5 or M3/M4 toggles in the gap
-        let mode_in_gap = between.iter().any(|l|
-            l.starts_with("M3") || l.starts_with("M4") || l.starts_with("M5"));
-        assert!(!mode_in_gap,
-            "No M3/M4/M5 toggles allowed in gap.\nBetween: {:?}", between);
+        let mode_in_gap = between
+            .iter()
+            .any(|l| l.starts_with("M3") || l.starts_with("M4") || l.starts_with("M5"));
+        assert!(
+            !mode_in_gap,
+            "No M3/M4/M5 toggles allowed in gap.\nBetween: {:?}",
+            between
+        );
     }
 
     /// A gap smaller than 2*d should NOT trigger rapid optimization.
@@ -2710,8 +3161,12 @@ G1 X0.818 Y199.061 S0";
         let h = 1usize;
         let mut pixels = vec![255u8; w * h];
         // Run A at cols 5-7, Run B at cols 9-11 → only 2mm gap
-        pixels[5] = 0; pixels[6] = 0; pixels[7] = 0;
-        pixels[9] = 0; pixels[10] = 0; pixels[11] = 0;
+        pixels[5] = 0;
+        pixels[6] = 0;
+        pixels[7] = 0;
+        pixels[9] = 0;
+        pixels[10] = 0;
+        pixels[11] = 0;
 
         let mut params = base_scan_params();
         params.width_mm = 20.0;
@@ -2724,24 +3179,31 @@ G1 X0.818 Y199.061 S0";
             rapid_mm_min: 8000.0,
         });
 
-        let result = scan_mask_to_gcode(&pixels, w, h, &params)
-            .expect("scan should succeed");
+        let result = scan_mask_to_gcode(&pixels, w, h, &params).expect("scan should succeed");
         let lines: Vec<&str> = result.gcode.lines().collect();
 
         // Find engrave moves
-        let engrave_indices: Vec<usize> = lines.iter().enumerate()
+        let engrave_indices: Vec<usize> = lines
+            .iter()
+            .enumerate()
             .filter(|(_, l)| l.starts_with("G1 ") && l.contains("S1000"))
             .map(|(i, _)| i)
             .collect();
-        assert_eq!(engrave_indices.len(), 2,
-            "Expected 2 engrave moves; got {}", engrave_indices.len());
+        assert_eq!(
+            engrave_indices.len(),
+            2,
+            "Expected 2 engrave moves; got {}",
+            engrave_indices.len()
+        );
 
         // Between the engrave moves, NO G0 (gap too small for rapid)
         let between = &lines[engrave_indices[0] + 1..engrave_indices[1]];
         let g0_in_gap = between.iter().any(|l| l.starts_with("G0 "));
-        assert!(!g0_in_gap,
+        assert!(
+            !g0_in_gap,
             "Small gap should NOT have rapid G0.\nBetween: {:?}\nFull:\n{}",
-            between, result.gcode);
+            between, result.gcode
+        );
     }
 
     /// is_rapid_gap_eligible unit tests for the eligibility function directly.
@@ -2767,7 +3229,11 @@ G1 X0.818 Y199.061 S0";
         // Valid, large gap → eligible
         let (ok, savings) = is_rapid_gap_eligible(50.0, 1200.0, 0.5, &sm_valid);
         assert!(ok, "50mm gap at 1200mm/min should be eligible");
-        assert!(savings >= 10.0, "savings should be ≥10%; got {:.1}%", savings);
+        assert!(
+            savings >= 10.0,
+            "savings should be ≥10%; got {:.1}%",
+            savings
+        );
 
         // Valid, tiny gap → ineligible
         let (ok, _) = is_rapid_gap_eligible(1.0, 1200.0, 0.5, &sm_valid);

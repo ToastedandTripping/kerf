@@ -169,10 +169,7 @@ impl SerialSession {
         }
         if let Some(ep) = epoch {
             // Check epoch against admitted job
-            let admitted = self
-                .admitted_job
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let admitted = self.admitted_job.lock().unwrap_or_else(|e| e.into_inner());
             if *admitted != Some(ep) {
                 return Err(format!(
                     "epoch mismatch: expected {:?}, got {}",
@@ -254,7 +251,10 @@ impl<'a> StopGuard<'a> {
     /// flight (the caller should join instead).
     pub(crate) fn begin(flag: &'a AtomicBool) -> Option<Self> {
         // If already true, another stop is in the observation phase.
-        if flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+        if flag
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
             Some(Self { flag })
         } else {
             None
@@ -317,7 +317,10 @@ mod tests {
         let json = serde_json::to_string_pretty(&result).unwrap();
         let parsed: StopResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, parsed);
-        assert!(json.contains("\"outcome\": \"submittedUnconfirmed\""), "json: {json}");
+        assert!(
+            json.contains("\"outcome\": \"submittedUnconfirmed\""),
+            "json: {json}"
+        );
         assert!(json.contains("\"inFlightWrite\""), "json: {json}");
     }
 

@@ -118,7 +118,10 @@ function mockSerial(onSend: (command: string) => { responses: string[]; drained:
         outcome: "confirmed",
         epochBefore: 1,
         epochAfter: 2,
-        messages: ["STOP: 0x18 sent", "STOP: reset confirmed. Controller reset confirmed. Beam state unqualified — verify visually."],
+        messages: [
+          "STOP: 0x18 sent",
+          "STOP: reset confirmed. Controller reset confirmed. Beam state unqualified — verify visually.",
+        ],
       };
     }
 
@@ -127,26 +130,42 @@ function mockSerial(onSend: (command: string) => { responses: string[]; drained:
       _mockSeq++;
       if (_mockHoldActive) {
         return {
-          status: "<Hold:0|MPos:0.000,0.000,0.000|FS:0,0>", events: [],
+          status: "<Hold:0|MPos:0.000,0.000,0.000|FS:0,0>",
+          events: [],
           kind: "report",
           snapshot: {
-            epoch: 1, seq: _mockSeq, state: { hold: { substate: 0 } },
-            positionKind: "MPos", position: [0, 0, 0],
-            wco: null, feed: 0, spindle: 0,
-            accessory: "Unknown", units: "Unknown",
-            raw: "<Hold:0|MPos:0.000,0.000,0.000|FS:0,0>", unknownFields: [],
+            epoch: 1,
+            seq: _mockSeq,
+            state: { hold: { substate: 0 } },
+            positionKind: "MPos",
+            position: [0, 0, 0],
+            wco: null,
+            feed: 0,
+            spindle: 0,
+            accessory: "Unknown",
+            units: "Unknown",
+            raw: "<Hold:0|MPos:0.000,0.000,0.000|FS:0,0>",
+            unknownFields: [],
           },
         };
       }
       return {
-        status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [],
+        status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>",
+        events: [],
         kind: "report",
         snapshot: {
-          epoch: 1, seq: _mockSeq, state: "idle",
-          positionKind: "MPos", position: [0, 0, 0],
-          wco: null, feed: 0, spindle: 0,
-          accessory: "Unknown", units: "Unknown",
-          raw: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", unknownFields: [],
+          epoch: 1,
+          seq: _mockSeq,
+          state: "idle",
+          positionKind: "MPos",
+          position: [0, 0, 0],
+          wco: null,
+          feed: 0,
+          spindle: 0,
+          accessory: "Unknown",
+          units: "Unknown",
+          raw: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>",
+          unknownFields: [],
         },
       };
     }
@@ -315,38 +334,51 @@ describe("MachinePanel job loop (F13/F17)", () => {
   it("STOP click dispatches emergencyStop via serial_stop (0x18 only, no 0x21, no M5)", async () => {
     mockSerial(() => ({ responses: ["ok"], drained: [] }));
     // serial_stop is invoked directly by emergencyStop — mock it
-    mockInvoke.mockImplementation(async (cmd: string, args?: { command?: string; byte?: number }) => {
-      if (cmd === "serial_stop") {
-        return {
-          outcome: "confirmed",
-          epochBefore: 1,
-          epochAfter: 2,
-          messages: ["STOP: 0x18 sent", "STOP: reset confirmed. Controller reset confirmed. Beam state unqualified — verify visually."],
-        };
-      }
-      if (cmd === "serial_send_byte") {
-        recorder.handler(cmd, args);
+    mockInvoke.mockImplementation(
+      async (cmd: string, args?: { command?: string; byte?: number }) => {
+        if (cmd === "serial_stop") {
+          return {
+            outcome: "confirmed",
+            epochBefore: 1,
+            epochAfter: 2,
+            messages: [
+              "STOP: 0x18 sent",
+              "STOP: reset confirmed. Controller reset confirmed. Beam state unqualified — verify visually.",
+            ],
+          };
+        }
+        if (cmd === "serial_send_byte") {
+          recorder.handler(cmd, args);
+          return undefined;
+        }
+        if (cmd === "serial_send") {
+          return recorder.handler(cmd, args);
+        }
+        if (cmd === "serial_get_status") {
+          _mockSeq++;
+          return {
+            status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>",
+            events: [],
+            kind: "report",
+            snapshot: {
+              epoch: 1,
+              seq: _mockSeq,
+              state: "idle",
+              positionKind: "MPos",
+              position: [0, 0, 0],
+              wco: null,
+              feed: 0,
+              spindle: 0,
+              accessory: "Unknown",
+              units: "Unknown",
+              raw: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>",
+              unknownFields: [],
+            },
+          };
+        }
         return undefined;
       }
-      if (cmd === "serial_send") {
-        return recorder.handler(cmd, args);
-      }
-      if (cmd === "serial_get_status") {
-        _mockSeq++;
-        return {
-          status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [],
-          kind: "report",
-          snapshot: {
-            epoch: 1, seq: _mockSeq, state: "idle",
-            positionKind: "MPos", position: [0, 0, 0],
-            wco: null, feed: 0, spindle: 0,
-            accessory: "Unknown", units: "Unknown",
-            raw: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", unknownFields: [],
-          },
-        };
-      }
-      return undefined;
-    });
+    );
 
     useStore.setState({ jobRunning: true }); // Simulate a running job
     const { getByText } = render(<JobActionBar />);
@@ -716,7 +748,12 @@ describe("pauseJob becomes stop / resumeJob contract (B4)", () => {
   it("PAUSE button routes through pauseJob (stop, not hold)", async () => {
     mockInvoke.mockImplementation(async (cmd: string) => {
       if (cmd === "serial_stop") {
-        return { outcome: "confirmed", epochBefore: 1, epochAfter: 2, messages: ["STOP: 0x18 sent"] };
+        return {
+          outcome: "confirmed",
+          epochBefore: 1,
+          epochAfter: 2,
+          messages: ["STOP: 0x18 sent"],
+        };
       }
       return undefined;
     });
@@ -778,8 +815,6 @@ describe("emergencyStop — native stop contract (B4)", () => {
     await machineConnection.emergencyStop();
 
     expect(useStore.getState().machineState).toBe("alarm");
-    expect(
-      consoleTexts().some((t) => t.includes("Beam state unqualified"))
-    ).toBe(true);
+    expect(consoleTexts().some((t) => t.includes("Beam state unqualified"))).toBe(true);
   });
 });
