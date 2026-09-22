@@ -1535,6 +1535,37 @@ mod tests {
         assert!(!inner.connected.load(Ordering::SeqCst));
     }
 
+    // ─── B2a: Status Contract ──────────────────────────────────────────────
+
+    /// B2a mutant 2: NoResponse must NOT be reported as Busy. When the command
+    /// lock is available and the bounded read expires without a `<…>` report,
+    /// the result is NoResponse (we tried and got nothing), not Busy (we couldn't try).
+    #[test]
+    fn b2a_no_response_is_not_busy() {
+        let port: Box<dyn SerialPort> = Box::new(MockPort::new());
+        let reader_port: Box<dyn SerialPort> = Box::new(MockPort::new());
+        let inner = SerialInner {
+            command: Mutex::new(Some(CommandChannel {
+                writer: port,
+                reader: BufReader::new(reader_port),
+                pending: Vec::new(),
+            })),
+            realtime: Mutex::new(Some(Box::new(MockPort::new()) as Box<dyn SerialPort>)),
+            connected: AtomicBool::new(true),
+            pump_in_flight: AtomicBool::new(false),
+            job_abort: AtomicBool::new(false),
+            session: SerialSession::default(),
+        };
+        inner.session.epoch.store(1, Ordering::SeqCst);
+
+        let outcome = serial_get_status_inner(&inner).unwrap();
+        assert_eq!(
+            outcome.kind, StatusKind::NoResponse,
+            "bounded read expiry must report NoResponse, not Busy"
+        );
+        assert!(outcome.status.is_empty());
+    }
+
     // ─── Batch 0.1 invariant pins ──────────────────────────────────────────
 
     /// PIN 2: status body uses try_lock, not lock — calling it while the
