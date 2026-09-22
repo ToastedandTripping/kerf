@@ -1,24 +1,34 @@
 //! Serial / GRBL command layer.
 //!
-//! LOCK INVARIANTS (Fortification W1a — F13):
-//! - `SerialInner.command` guards the line-protocol channel (writes + THE persistent
-//!   reader). A read pump may legitimately hold it for MINUTES (planner backpressure).
-//! - `SerialInner.realtime` guards a `try_clone`'d handle used ONLY for single-byte
-//!   real-time writes (`!`, `~`, `0x18`, `?`). **Real-time writes must never wait on
-//!   the command lock** — that is the whole point of the split: e-stop bytes reach
-//!   the wire while a line is in flight. Never acquire `realtime` while holding
-//!   `command` (disconnect acquires them strictly in sequence, realtime first,
-//!   released before command).
+//! ## Lock-order table
+//!
+//! | Order | Lock / guard | Held by | Duration |
+//! |-------|--------------|---------|----------|
+//! | leaf  | `session.admitted_job` | `serial_job_begin`, `serial_job_end`, `serial_stop_inner` | Microseconds (check+set) |
+//! | leaf  | `session.last_stop` | `serial_stop_inner` (result write), joiner (result read) | Microseconds |
+//! | leaf  | `session.observer` | test setup, session event emission | Microseconds |
+//! | 2     | `realtime` | `send_byte_inner`, `serial_stop_inner` (for `0x18`), `disconnect_inner_with_job` | Microseconds (one byte + flush) |
+//! | 3     | `command` | `serial_send_inner`, `serial_stream_job_inner`, `serial_connect_inner`, `disconnect_inner_with_job` | Seconds to minutes (pump duration) |
+//!
+//! **Invariants:**
+//! - **Connect is the one nesting exception:** `serial_connect_inner` acquires
+//!   `command` (order 3) then `realtime` (order 2) in one block to install both
+//!   handles atomically. Nothing ever holds `realtime` and waits on `command`,
+//!   so no cycle exists.
+//! - Never acquire `command` while holding `admitted_job`.
+//! - `realtime` and `admitted_job` are independent — may be held in either order.
+//! - The stop operation takes `admitted_job` (to close admission), then `realtime`
+//!   (to send `0x18`). It never takes `command`. After `0x18`, the stop may
+//!   `try_lock` `command` (never wait) for a banner read in per-line/idle mode.
+//! - Event-send failure from inside the pump (which holds `command`) sets
+//!   `job_abort` atomically via the mapping closure and returns `Cancelled`.
+//!   The *wrapper* then calls `serial_stop_inner` after releasing `command`.
+//! - `pump_in_flight` is the RAII guard's view (a pump body is executing).
+//!   Disconnect reads it to decide whether to send `0x18` before taking `command`.
 //! - Every command is `async` and does its blocking work inside `spawn_blocking`
-//!   so a minutes-long pump can never freeze the Tauri event loop (matching the
-//!   gcode.rs pattern). `SerialInner` is Arc-wrapped because `spawn_blocking`'s
-//!   `'static` closures cannot capture `State<'_, _>`. No mutex guard is ever held
-//!   across an await point (locks are taken only inside the blocking closures).
-//! - `pump_in_flight` is the SOLE gate for disconnect's pre-lock soft reset (Rust
-//!   cannot see the frontend's jobRunning): set inside the command lock immediately
-//!   before a pump starts, cleared by an RAII guard so no panic/early-return path
-//!   can leak it (a leaked flag would make every clean disconnect fire `0x18`,
-//!   wiping volatile G92 work origins).
+//!   so a minutes-long pump can never freeze the Tauri event loop.
+//! - `SerialSession` tracks connection epoch, job phase, submission permits, and
+//!   the stop operation. See `serial_session.rs` for the full design.
 
 use serde::{Deserialize, Serialize};
 use serialport::{self, SerialPort};
@@ -31,6 +41,10 @@ use tauri::{ipc::Channel, State};
 use super::serial_pump::{
     self, BufferedPumpConfig, BufferedPumpEvent, BufferedPumpOutcome, ProbeWriter, PumpFailure,
     PumpReader, DEFAULT_LIVENESS_TICKS, STATUS_MAX_TICKS,
+};
+use super::serial_session::{
+    self, SerialSession, StopGuard, StopResult, PHASE_ACTIVE, PHASE_DISCONNECTED, PHASE_IDLE,
+    PHASE_STOPPING, PHASE_UNKNOWN,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +96,7 @@ pub struct SerialInner {
     connected: AtomicBool,
     pump_in_flight: AtomicBool,
     job_abort: AtomicBool,
+    pub(crate) session: SerialSession,
 }
 
 impl Default for SerialInner {
@@ -92,6 +107,7 @@ impl Default for SerialInner {
             connected: AtomicBool::new(false),
             pump_in_flight: AtomicBool::new(false),
             job_abort: AtomicBool::new(false),
+            session: SerialSession::default(),
         }
     }
 }
@@ -219,13 +235,16 @@ pub(crate) fn drain_startup_banner(channel: &mut CommandChannel) -> String {
     startup
 }
 
-/// Connect body: extracted for testability with injected sleeper.
+/// Connect body: extracted for testability with injected sleeper and port factory.
 /// `sleeper` is `&dyn Fn(Duration)` so tests can pass no-op sleepers.
+/// `open_port` is the port factory — production passes `serialport::new().open()`,
+/// tests pass a factory returning `ScriptedPort`.
 pub(crate) fn serial_connect_inner(
     inner: &SerialInner,
     port_name: &str,
     baud_rate: u32,
     sleeper: &dyn Fn(Duration),
+    open_port: &dyn Fn(&str, u32) -> Result<Box<dyn SerialPort>, serialport::Error>,
 ) -> Result<String, String> {
     // P1-C: already-connected guard — if a connection is live, disconnect
     // first to prevent resource leaks. This handles rapid reconnect or
@@ -234,9 +253,7 @@ pub(crate) fn serial_connect_inner(
         let _ = disconnect_inner(inner);
     }
 
-    let mut port = serialport::new(port_name, baud_rate)
-        .timeout(Duration::from_millis(1000))
-        .open()
+    let mut port = open_port(port_name, baud_rate)
         .map_err(|e| format!("Failed to open port '{}': {}", port_name, e))?;
 
     // Hardware-reset the GRBL controller via DTR toggle. Arduino boards
@@ -291,6 +308,12 @@ pub(crate) fn serial_connect_inner(
     }
     inner.connected.store(true, Ordering::SeqCst);
 
+    // Session lifecycle: increment epoch and set phase to idle.
+    // This happens after handle install, inside the scope where both
+    // guards were just released, so the new epoch is visible to all callers.
+    inner.session.increment_epoch();
+    inner.session.set_idle();
+
     if banner.trim().is_empty() {
         Ok(format!("Connected to {} at {} baud", port_name, baud_rate))
     } else {
@@ -307,7 +330,11 @@ pub async fn serial_connect(
 ) -> Result<String, String> {
     let inner = state.0.clone();
     tokio::task::spawn_blocking(move || {
-        serial_connect_inner(&inner, &port_name, baud_rate, &std::thread::sleep)
+        serial_connect_inner(&inner, &port_name, baud_rate, &std::thread::sleep, &|name, baud| {
+            serialport::new(name, baud)
+                .timeout(Duration::from_millis(1000))
+                .open()
+        })
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
@@ -341,37 +368,62 @@ pub(crate) fn disconnect_inner(inner: &SerialInner) -> Result<(), String> {
     disconnect_inner_with_job(inner, false)
 }
 
-/// Disconnect body. The realtime `0x18` happens BEFORE any wait on the command
-/// lock (pinned by `disconnect_aborts_in_flight_pump_via_realtime_reset`), and
-/// ONLY when a pump is in flight OR `job_active` is true (defense-in-depth for
-/// A2: disconnect beam-on). Clean idle disconnect still skips the reset
-/// (pinned by `clean_disconnect_sends_no_reset`).
+/// Disconnect body. Routes through `serial_stop_inner` when a job is active
+/// (phase == active || pump_in_flight || job_active). Clean idle disconnect
+/// skips the reset (pinned by `clean_disconnect_sends_no_reset`).
+///
+/// The realtime `0x18` happens BEFORE any wait on the command lock (pinned by
+/// `disconnect_aborts_in_flight_pump_via_realtime_reset`).
 pub(crate) fn disconnect_inner_with_job(inner: &SerialInner, job_active: bool) -> Result<(), String> {
-    if inner.pump_in_flight.load(Ordering::SeqCst) || job_active {
-        if let Ok(mut rt) = inner.realtime.lock() {
-            if let Some(port) = rt.as_mut() {
-                let _ = port.write_all(&[0x18]);
-                let _ = port.flush();
-            }
-        }
+    let phase = inner.session.phase.load(Ordering::SeqCst);
+    let needs_stop = inner.pump_in_flight.load(Ordering::SeqCst)
+        || job_active
+        || phase == PHASE_ACTIVE;
+
+    if needs_stop {
+        // Route through the stop operation for the 0x18 + admission closure.
+        let _ = serial_stop_inner(inner, &std::thread::sleep);
     }
-    *inner
-        .command
-        .lock()
-        .map_err(|e| format!("Lock failed: {}", e))? = None;
-    *inner
-        .realtime
-        .lock()
-        .map_err(|e| format!("Lock failed: {}", e))? = None;
+
+    // Teardown: None both handles in one nested block.
+    {
+        *inner
+            .command
+            .lock()
+            .map_err(|e| format!("Lock failed: {}", e))? = None;
+        *inner
+            .realtime
+            .lock()
+            .map_err(|e| format!("Lock failed: {}", e))? = None;
+    }
     inner.connected.store(false, Ordering::SeqCst);
+
+    // Phase unknown resets to disconnected on teardown.
+    let current_phase = inner.session.phase.load(Ordering::SeqCst);
+    if current_phase == PHASE_UNKNOWN || current_phase != PHASE_DISCONNECTED {
+        inner.session.set_disconnected();
+    }
+    inner.session.increment_epoch();
     Ok(())
 }
 
 /// Send body: extracted for testability.
+///
+/// `job_epoch`: When `Some(epoch)`, the send calls `session.try_permit_begin(epoch)`
+/// before writing — the same phase+generation protocol the buffered pump uses.
+/// When `None` (console command, `$H`), no permit check.
 pub(crate) fn serial_send_inner(
     inner: &SerialInner,
     command: &str,
+    job_epoch: Option<u64>,
 ) -> Result<SendOutcome, String> {
+    // Permit check before taking the command lock (for per-line jobs).
+    let g0 = if let Some(epoch) = job_epoch {
+        Some(inner.session.try_permit_begin(Some(epoch))?)
+    } else {
+        None
+    };
+
     let mut guard = inner
         .command
         .lock()
@@ -401,6 +453,13 @@ pub(crate) fn serial_send_inner(
         .flush()
         .map_err(|e| format!("Flush error: {}", e))?;
 
+    // Post-write permit check: detect if a stop happened during the write.
+    if let Some(g0_val) = g0 {
+        if let Err(msg) = inner.session.try_permit_end(g0_val) {
+            return Err(format!("permit expired: {}", msg));
+        }
+    }
+
     match serial_pump::run_pump(
         &mut channel.reader,
         &mut channel.writer,
@@ -427,7 +486,7 @@ pub async fn serial_send(
     command: String,
 ) -> Result<SendOutcome, String> {
     let inner = state.0.clone();
-    tokio::task::spawn_blocking(move || serial_send_inner(&inner, &command))
+    tokio::task::spawn_blocking(move || serial_send_inner(&inner, &command, None))
         .await
         .map_err(|e| format!("Task join error: {}", e))?
 }
@@ -531,11 +590,13 @@ pub enum JobEvent {
 }
 
 /// Stream body: extracted for testability with injected event sink.
-/// `on_event` is `&dyn Fn(JobEvent)` so tests can record events without a Channel.
+/// `on_event` returns `Result<(), String>` — on `Err`, the pump sets `job_abort`
+/// and returns `Cancelled`; the wrapper calls `serial_stop_inner` after releasing
+/// `command`.
 pub(crate) fn serial_stream_job_inner(
     inner: &SerialInner,
     gcode: &str,
-    on_event: &dyn Fn(JobEvent),
+    on_event: &dyn Fn(JobEvent) -> Result<(), String>,
 ) -> Result<String, String> {
     // Reset the abort flag at the start of every job.
     inner.job_abort.store(false, Ordering::SeqCst);
@@ -554,7 +615,7 @@ pub(crate) fn serial_stream_job_inner(
         eprintln!("[serial] stream job drained: {}", line);
     }
     for line in &drain.surfaced {
-        on_event(JobEvent::Console { text: line.clone() });
+        let _ = on_event(JobEvent::Console { text: line.clone() });
     }
 
     // Write $32=1
@@ -595,7 +656,7 @@ pub(crate) fn serial_stream_job_inner(
         .collect();
 
     if lines.is_empty() {
-        on_event(JobEvent::Finished {
+        let _ = on_event(JobEvent::Finished {
             outcome: "complete".to_string(),
         });
         return Ok("complete".to_string());
@@ -604,7 +665,7 @@ pub(crate) fn serial_stream_job_inner(
     // Drain again before the buffered pump starts.
     let drain = serial_pump::drain_classified(&mut cmd_channel.reader, &mut cmd_channel.pending);
     for line in &drain.surfaced {
-        on_event(JobEvent::Console { text: line.clone() });
+        let _ = on_event(JobEvent::Console { text: line.clone() });
     }
 
     let config = BufferedPumpConfig::default();
@@ -617,23 +678,47 @@ pub(crate) fn serial_stream_job_inner(
         &config,
         &inner.job_abort,
         &|event| {
-            match event {
+            let job_event = match event {
                 BufferedPumpEvent::LineSent { line_index, total } => {
-                    on_event(JobEvent::Progress { line_index, total });
+                    JobEvent::Progress { line_index, total }
                 }
                 BufferedPumpEvent::ConsoleMessage(text) => {
-                    on_event(JobEvent::Console { text });
+                    JobEvent::Console { text }
                 }
                 BufferedPumpEvent::StatusReport(report) => {
-                    on_event(JobEvent::Status { report });
+                    JobEvent::Status { report }
                 }
+            };
+            if let Err(e) = on_event(job_event) {
+                // Event-sink failure: set abort + sink_failed atomically.
+                // The wrapper calls serial_stop_inner after releasing command.
+                inner.job_abort.store(true, Ordering::SeqCst);
+                inner.session.sink_failed.store(true, Ordering::SeqCst);
+                eprintln!("[serial] event sink failed: {}", e);
             }
         },
     );
 
+    // Drop the command lock before potentially calling stop.
+    drop(_flight);
+    drop(guard);
+
+    // If sink failed, call stop after releasing command (lock-order invariant).
+    let sink_failed = inner.session.sink_failed.load(Ordering::SeqCst);
+    if sink_failed {
+        inner.session.sink_failed.store(false, Ordering::SeqCst);
+        let _ = serial_stop_inner(inner, &std::thread::sleep);
+    }
+
     let outcome_str = match &result {
         Ok(BufferedPumpOutcome::Complete) => "complete".to_string(),
-        Ok(BufferedPumpOutcome::Cancelled) => "cancelled".to_string(),
+        Ok(BufferedPumpOutcome::Cancelled) => {
+            if sink_failed {
+                "cancelled (event sink failed)".to_string()
+            } else {
+                "cancelled".to_string()
+            }
+        }
         Ok(BufferedPumpOutcome::Error { error_text, .. }) => format!("error: {}", error_text),
         Ok(BufferedPumpOutcome::Alarm { alarm_text }) => format!("alarm: {}", alarm_text),
         Ok(BufferedPumpOutcome::Aborted) => "aborted".to_string(),
@@ -642,7 +727,9 @@ pub(crate) fn serial_stream_job_inner(
         Err(PumpFailure::Io(msg)) => format!("io error: {}", msg),
     };
 
-    on_event(JobEvent::Finished {
+    // Finished event uses a fresh lock acquisition (we already released it).
+    // Ignore failures — the channel may be gone.
+    let _ = on_event(JobEvent::Finished {
         outcome: outcome_str.clone(),
     });
 
@@ -671,22 +758,284 @@ pub async fn serial_stream_job(
     let inner = state.0.clone();
     tokio::task::spawn_blocking(move || {
         serial_stream_job_inner(&inner, &gcode, &|event| {
-            if let Err(e) = channel.send(event) {
-                eprintln!("[serial] channel.send failed: {e}");
-            }
+            channel
+                .send(event)
+                .map_err(|e| format!("channel.send failed: {e}"))
         })
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
 }
 
-/// Cooperative cancel for a buffered streaming job. Sets the abort flag which
-/// the pump checks on each iteration. This is NOT the e-stop path — that uses
-/// `serial_send_byte(0x18)` via the realtime lock.
+/// Abort a running job: routes through `serial_stop_inner` which sets `job_abort`
+/// AND sends `0x18` via the stop operation. No caller should ever set `job_abort`
+/// without also sending `0x18`.
 #[tauri::command]
 pub async fn serial_abort_job(state: State<'_, SerialState>) -> Result<(), String> {
-    state.0.job_abort.store(true, Ordering::SeqCst);
+    let inner = state.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let _ = serial_stop_inner(&inner, &std::thread::sleep);
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Stop operation + per-line admission (B1)
+// ---------------------------------------------------------------------------
+
+/// The native stop command. Takes a `sleeper` parameter so tests can inject a
+/// fast clock for the 3s bound.
+///
+/// The stop takes no epoch precondition. `0x18` is idempotent and realtime;
+/// nothing about a stale epoch makes the reset byte less correct.
+///
+/// See `serial_session.rs` for the full concurrency design.
+pub(crate) fn serial_stop_inner(
+    inner: &SerialInner,
+    sleeper: &dyn Fn(Duration),
+) -> StopResult {
+    let session = &inner.session;
+    let epoch_before = session.epoch.load(Ordering::SeqCst);
+
+    // Step 1: RAII guard + single-flight observation.
+    let _guard = match StopGuard::begin(&session.stop_in_flight) {
+        Some(g) => g,
+        None => {
+            // Another stop is in the observation phase. Join it: poll until
+            // stop_in_flight clears, then read last_stop.
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            while session.stop_in_flight.load(Ordering::SeqCst)
+                && std::time::Instant::now() < deadline
+            {
+                sleeper(Duration::from_millis(50));
+            }
+            let result = session
+                .last_stop
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
+            return result.unwrap_or(StopResult::SubmittedUnconfirmed {
+                epoch: epoch_before,
+                in_flight_write: false,
+                messages: vec![
+                    "STOP: joined existing stop operation. Beam state unqualified — verify visually."
+                        .to_string(),
+                ],
+            });
+        }
+    };
+
+    // Step 2: Close admission.
+    {
+        let mut aj = session
+            .admitted_job
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        session.phase.store(PHASE_STOPPING, Ordering::SeqCst);
+        *aj = None;
+    }
+    // Then increment permit_generation (phase before gen — SeqCst).
+    session.permit_generation.fetch_add(1, Ordering::SeqCst);
+    session.emit("admission_closed");
+
+    // Step 3: Set cooperative abort.
+    inner.job_abort.store(true, Ordering::SeqCst);
+
+    // Step 4: Emit session event.
+    session.emit("stop_requested");
+
+    // Step 5: Send 0x18. Take realtime lock, write, retry once on failure.
+    let send_result = {
+        let mut rt = match inner.realtime.lock() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        };
+        if let Some(port) = rt.as_mut() {
+            match port.write_all(&[0x18]) {
+                Ok(()) => {
+                    let _ = port.flush();
+                    Ok(())
+                }
+                Err(_first_err) => {
+                    // Retry once (the A6 fix).
+                    match port.write_all(&[0x18]) {
+                        Ok(()) => {
+                            let _ = port.flush();
+                            Ok(())
+                        }
+                        Err(e) => Err(format!("{}", e)),
+                    }
+                }
+            }
+        } else {
+            Err("not connected".to_string())
+        }
+    };
+
+    if let Err(error) = send_result {
+        let result = StopResult::SubmissionFailed {
+            epoch: epoch_before,
+            error: error.clone(),
+            messages: vec![format!(
+                "STOP failed: could not send reset. Use the machine's physical emergency stop. Beam state unqualified."
+            )],
+        };
+        session.phase.store(PHASE_UNKNOWN, Ordering::SeqCst);
+        *session
+            .last_stop
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(result.clone());
+        // _guard drops here, clearing stop_in_flight
+        return result;
+    }
+
+    session.emit("permit_invalidated");
+
+    // Step 6: Wait for banner (retry loop within 3s deadline).
+    session.banner_observed.store(false, Ordering::SeqCst);
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+
+    while std::time::Instant::now() < deadline {
+        // Check if another body already observed the banner.
+        if session.banner_observed.load(Ordering::SeqCst) {
+            break;
+        }
+        // Try to take the command lock for a bounded read.
+        if let Ok(mut guard) = inner.command.try_lock() {
+            if let Some(channel) = guard.as_mut() {
+                // Bounded read: look for a Banner line.
+                let mut read_buf = Vec::new();
+                match channel.reader.read_until(b'\n', &mut read_buf) {
+                    Ok(n) if n > 0 => {
+                        let line = String::from_utf8_lossy(&read_buf).trim().to_string();
+                        if serial_pump::classify_line(&line) == serial_pump::LineClass::Banner {
+                            session.banner_observed.store(true, Ordering::SeqCst);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        sleeper(Duration::from_millis(50));
+    }
+
+    let result = if session.banner_observed.load(Ordering::SeqCst) {
+        // Confirmed: reset banner observed.
+        session.banner_observed.store(false, Ordering::SeqCst);
+        let epoch_after = session.increment_epoch();
+        session.set_idle();
+        session.emit("banner_observed");
+        StopResult::Confirmed {
+            epoch_before,
+            epoch_after,
+            messages: vec![
+                "STOP: 0x18 sent".to_string(),
+                "STOP: reset confirmed. Controller reset confirmed. Beam state unqualified — verify visually.".to_string(),
+            ],
+        }
+    } else {
+        // Unconfirmed: banner not observed within deadline.
+        session.phase.store(PHASE_UNKNOWN, Ordering::SeqCst);
+        StopResult::SubmittedUnconfirmed {
+            epoch: epoch_before,
+            in_flight_write: false,
+            messages: vec![
+                "STOP: 0x18 sent".to_string(),
+                "STOP: unconfirmed — use the machine's physical stop before reconnecting. Beam state unqualified — verify visually.".to_string(),
+            ],
+        }
+    };
+
+    *session
+        .last_stop
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(result.clone());
+
+    // _guard drops here, clearing stop_in_flight
+    result
+}
+
+/// Tauri command: stop the machine. Sends `0x18` immediately per DECISIONS.md
+/// (2026-09-20): no feed hold, no M5, no ack wait.
+#[tauri::command]
+pub async fn serial_stop(
+    state: State<'_, SerialState>,
+) -> Result<StopResult, String> {
+    let inner = state.0.clone();
+    tokio::task::spawn_blocking(move || {
+        Ok(serial_stop_inner(&inner, &std::thread::sleep))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// Begin a per-line job: set phase to active, store epoch in admitted_job,
+/// return the epoch as job id. Fails if phase is not idle.
+pub(crate) fn serial_job_begin_inner(inner: &SerialInner) -> Result<u64, String> {
+    let session = &inner.session;
+    let mut aj = session
+        .admitted_job
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let current_phase = session.phase.load(Ordering::SeqCst);
+    if current_phase != PHASE_IDLE {
+        return Err(format!(
+            "cannot begin job: session not idle (phase={})",
+            serial_session::phase_name(current_phase)
+        ));
+    }
+
+    let epoch = session.epoch.load(Ordering::SeqCst);
+    session.phase.store(PHASE_ACTIVE, Ordering::SeqCst);
+    *aj = Some(epoch);
+    inner.job_abort.store(false, Ordering::SeqCst);
+    Ok(epoch)
+}
+
+/// End a per-line job: set phase to idle, clear admitted_job.
+/// Fails if the epoch doesn't match (stale).
+pub(crate) fn serial_job_end_inner(inner: &SerialInner, job_id: u64) -> Result<(), String> {
+    let session = &inner.session;
+    let mut aj = session
+        .admitted_job
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    if *aj != Some(job_id) {
+        return Err(format!(
+            "job end epoch mismatch: expected {:?}, got {}",
+            *aj, job_id
+        ));
+    }
+
+    session.phase.store(PHASE_IDLE, Ordering::SeqCst);
+    *aj = None;
+    Ok(())
+}
+
+/// Tauri command: begin a per-line job.
+#[tauri::command]
+pub async fn serial_job_begin(state: State<'_, SerialState>) -> Result<u64, String> {
+    let inner = state.0.clone();
+    tokio::task::spawn_blocking(move || serial_job_begin_inner(&inner))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// Tauri command: end a per-line job.
+#[tauri::command]
+pub async fn serial_job_end(
+    state: State<'_, SerialState>,
+    job_id: u64,
+) -> Result<(), String> {
+    let inner = state.0.clone();
+    tokio::task::spawn_blocking(move || serial_job_end_inner(&inner, job_id))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
 }
 
 // ---------------------------------------------------------------------------
@@ -820,6 +1169,7 @@ mod tests {
             connected: AtomicBool::new(true),
             pump_in_flight: AtomicBool::new(true),
             job_abort: AtomicBool::new(false),
+            session: SerialSession::default(),
         });
 
         // Simulate an in-flight pump: hold the command lock for the whole test.
@@ -853,9 +1203,12 @@ mod tests {
             connected: AtomicBool::new(true),
             pump_in_flight: AtomicBool::new(true),
             job_abort: AtomicBool::new(false),
+            session: SerialSession::default(),
         });
 
         // Simulate an in-flight pump holding the command lock.
+        // Set session phase to active so disconnect routes through stop.
+        inner.session.phase.store(PHASE_ACTIVE, Ordering::SeqCst);
         let command_guard = inner.command.lock().unwrap();
 
         let inner2 = inner.clone();
@@ -893,6 +1246,7 @@ mod tests {
             connected: AtomicBool::new(true),
             pump_in_flight: AtomicBool::new(false),
             job_abort: AtomicBool::new(false),
+            session: SerialSession::default(),
         };
 
         disconnect_inner(&inner).unwrap();
@@ -1037,6 +1391,7 @@ mod tests {
             connected: AtomicBool::new(true),
             pump_in_flight: AtomicBool::new(false), // pump NOT in flight
             job_abort: AtomicBool::new(false),
+            session: SerialSession::default(),
         };
 
         // job_active=true should still trigger the reset
@@ -1062,6 +1417,7 @@ mod tests {
             connected: AtomicBool::new(true),
             pump_in_flight: AtomicBool::new(false),
             job_abort: AtomicBool::new(false),
+            session: SerialSession::default(),
         };
 
         disconnect_inner_with_job(&inner, false).unwrap();
@@ -1093,6 +1449,7 @@ mod tests {
             connected: AtomicBool::new(true),
             pump_in_flight: AtomicBool::new(true),
             job_abort: AtomicBool::new(false),
+            session: SerialSession::default(),
         });
 
         let _guard = inner.command.lock().unwrap();
@@ -1185,11 +1542,12 @@ mod tests {
             connected: AtomicBool::new(true),
             pump_in_flight: AtomicBool::new(false),
             job_abort: AtomicBool::new(false),
+            session: SerialSession::default(),
         });
 
         let inner2 = inner.clone();
         let _send_handle = thread::spawn(move || {
-            let _ = serial_send_inner(&inner2, "G0 X10");
+            let _ = serial_send_inner(&inner2, "G0 X10", None);
         });
 
         thread::sleep(Duration::from_millis(50));
@@ -1220,12 +1578,13 @@ mod tests {
             connected: AtomicBool::new(true),
             pump_in_flight: AtomicBool::new(false),
             job_abort: AtomicBool::new(false),
+            session: SerialSession::default(),
         };
 
         let result = serial_stream_job_inner(
             &inner,
             "G0 X10\nG1 X20 F1000 S500\n",
-            &|_evt| {},
+            &|_evt| Ok(()),
         );
 
         assert!(result.is_err(), "stream should fail (MockPort returns no ack for $32=1)");
@@ -1253,6 +1612,7 @@ mod tests {
             connected: AtomicBool::new(true),
             pump_in_flight: AtomicBool::new(false),
             job_abort: AtomicBool::new(false),
+            session: SerialSession::default(),
         };
 
         // Simulate the guard: if connected, disconnect first
@@ -1551,6 +1911,7 @@ mod sim_integration {
             connected: AtomicBool::new(true),
             pump_in_flight: AtomicBool::new(true),
             job_abort: AtomicBool::new(false),
+            session: SerialSession::default(),
         });
 
         // Simulate an in-flight pump: hold the command lock for the whole test.
@@ -1613,6 +1974,7 @@ mod sim_integration {
             connected: AtomicBool::new(true),
             pump_in_flight: AtomicBool::new(true),
             job_abort: AtomicBool::new(false),
+            session: SerialSession::default(),
         });
 
         // Hold the command lock — standing in for the wedged pump.

@@ -6,3 +6,4 @@ pub mod image_trace;
 pub mod power;
 pub mod serial;
 pub mod serial_pump;
+pub mod serial_session;
