@@ -1,0 +1,30 @@
+{
+  "variants": [
+    {
+      "outcome": "confirmed",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "messages": [
+        "STOP: 0x18 sent",
+        "STOP: reset confirmed. Controller reset confirmed. Beam state unqualified — verify visually."
+      ]
+    },
+    {
+      "outcome": "submittedUnconfirmed",
+      "epoch": 3,
+      "inFlightWrite": false,
+      "messages": [
+        "STOP: 0x18 sent",
+        "STOP: unconfirmed — use the machine's physical stop before reconnecting. Beam state unqualified — verify visually."
+      ]
+    },
+    {
+      "outcome": "submissionFailed",
+      "epoch": 4,
+      "error": "write failed",
+      "messages": [
+        "STOP failed: could not send reset. Use the machine's physical emergency stop. Beam state unqualified."
+      ]
+    }
+  ]
+}
