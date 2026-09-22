@@ -30,6 +30,7 @@ export class SerialTraceRecorder {
   private channelHandlers = new Map<string, ((event: unknown) => void) | null>();
   private startedJobPromises: Promise<unknown>[] = [];
   private onSend: ((command: string) => { responses: string[]; drained: string[] }) | null = null;
+  private _jobEpoch = 0;
 
   constructor(
     onSend?: (command: string) => { responses: string[]; drained: string[] }
@@ -77,11 +78,12 @@ export class SerialTraceRecorder {
       return result;
     }
 
-    // Capture serial_stream_job channel for event delivery
+    // Capture serial_stream_job channel for event delivery.
+    // Use the record's actual index (length - 1, since it was just pushed).
     if (cmd === "serial_stream_job") {
       const channelArg = args?.channel as any;
       if (channelArg) {
-        this.channelHandlers.set(`stream_${this.records.length}`, channelArg.onmessage);
+        this.channelHandlers.set(`stream_${this.records.length - 1}`, channelArg.onmessage);
       }
     }
 
@@ -110,6 +112,20 @@ export class SerialTraceRecorder {
       record.result = { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
       resolverPair.resolve(record.result);
       return record.result;
+    }
+
+    // B3: backend job lifecycle commands.
+    if (cmd === "serial_job_begin") {
+      const jobId = ++this._jobEpoch;
+      record.result = jobId;
+      resolverPair.resolve(jobId);
+      return jobId;
+    }
+
+    if (cmd === "serial_job_end") {
+      record.result = undefined;
+      resolverPair.resolve(undefined);
+      return undefined;
     }
 
     // Generic default: resolve to undefined

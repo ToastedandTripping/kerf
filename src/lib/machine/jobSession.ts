@@ -243,6 +243,14 @@ export class JobSession {
 }
 
 /**
+ * Test-only: reset module state. Not imported in production code.
+ */
+export function _testResetJobSession(): void {
+  activeSession = null;
+  stoppingPromise = null;
+}
+
+/**
  * Stop the active session. Called by the STOP button handler.
  * Cancels drain waits, detaches old callbacks, blocks new jobs until
  * the old session settles and the controller confirms off/idle.
