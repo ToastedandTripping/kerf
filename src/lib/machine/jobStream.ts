@@ -96,7 +96,7 @@ export interface StreamJobOptions {
 }
 
 export interface StreamJobResult {
-  endState: "complete" | "cancelled" | "aborted" | "alarm" | "error";
+  endState: "complete" | "cancelled" | "aborted" | "alarm" | "error" | "unknown";
   portDisconnected: boolean;
 }
 
@@ -203,11 +203,10 @@ async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise
       if (session) {
         const drainResult = await session.drain(!!opts.waitForIdle);
         if (drainResult === "unknown") {
-          // 30s drain timeout: "unknown" state. Session retains protection.
-          // endState stays "complete" in the return value but the session
-          // remains active (jobRunning=true, keep-awake held).
-          // The caller (JobActionBar) will see the session's unknown state.
-          endState = "complete"; // transmit succeeded; drain timed out
+          // 30s drain timeout: "unknown" state. Session retains protection
+          // (jobRunning stays true, keep-awake held). Razor W1: must NOT
+          // map to "complete" — that releases protection prematurely.
+          endState = "unknown";
         } else if (drainResult === "alarm") {
           endState = "alarm";
           store.addConsoleLine(
@@ -301,11 +300,7 @@ async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise
   // B3: when a session owns this stream, the session handles cleanup.
   // Otherwise, legacy direct cleanup.
   if (session) {
-    await session.end(endState === "complete" ? "complete"
-      : endState === "alarm" ? "alarm"
-      : endState === "cancelled" ? "cancelled"
-      : endState === "aborted" ? "aborted"
-      : "error");
+    await session.end(endState as "complete" | "cancelled" | "aborted" | "alarm" | "error" | "unknown");
   } else {
     store.setJobRunning(false);
     store.setJobProgress(0);
@@ -401,6 +396,8 @@ export async function streamJob(gcode: string, opts: StreamJobOptions): Promise<
       const drainResult = await session.drain(!!opts.waitForIdle);
       if (drainResult === "unknown") {
         // Drain timeout: session retains protection; don't announce complete.
+        // Razor W1: must map to "unknown", not leave as "complete".
+        endState = "unknown";
       } else if (drainResult === "alarm") {
         endState = "alarm";
         store.addConsoleLine(
@@ -469,11 +466,7 @@ export async function streamJob(gcode: string, opts: StreamJobOptions): Promise<
 
   // B3: when a session owns this stream, the session handles cleanup.
   if (session) {
-    await session.end(endState === "complete" ? "complete"
-      : endState === "alarm" ? "alarm"
-      : endState === "cancelled" ? "cancelled"
-      : endState === "aborted" ? "aborted"
-      : "error");
+    await session.end(endState as "complete" | "cancelled" | "aborted" | "alarm" | "error" | "unknown");
   } else {
     store.setJobRunning(false);
     store.setJobProgress(0);

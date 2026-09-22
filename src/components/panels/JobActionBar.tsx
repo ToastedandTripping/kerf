@@ -108,9 +108,11 @@ export function JobActionBar() {
   }
 
   async function handleStop() {
-    // B3: cancel the active session first (wakes drain waits),
-    // then run the emergency stop sequence.
-    await stopActiveSession();
+    // B3: cancel the active session (wakes drain waits) but do NOT await
+    // it before the emergency stop — awaiting session.settled creates a
+    // circular dependency in buffered mode (Razor C1). The pre-B3 order
+    // (setJobRunning false, then emergencyStop) is safety-critical.
+    stopActiveSession(); // fire-and-forget: session settles after e-stop
     setJobRunning(false);
     await machineConnection.emergencyStop();
   }
