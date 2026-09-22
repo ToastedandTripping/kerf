@@ -16,6 +16,7 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { useStore } from "../../app/store";
 import { machineConnection } from "./connection";
+import type { JobSession } from "./jobSession";
 
 /**
  * pauseJob — feed hold only.
@@ -87,6 +88,11 @@ export interface StreamJobOptions {
   /** When true, wait up to 30s for machine to reach Idle after the last line
    *  acks (head is still decelerating at last-ack time). START-only. */
   waitForIdle?: boolean;
+
+  /** B3: job session that owns this stream. When provided, the session gates
+   *  progress/cleanup and handles draining. Callbacks that don't match the
+   *  session's jobId are discarded (cross-job safety). */
+  session?: JobSession;
 }
 
 export interface StreamJobResult {
@@ -140,14 +146,19 @@ interface JobEvent {
  */
 async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise<StreamJobResult> {
   const store = useStore.getState();
+  const session = opts.session;
 
   const channel = new Channel<JobEvent>();
 
   channel.onmessage = (event: JobEvent) => {
+    // B3: discard callbacks that don't belong to this session.
+    if (session && session.cancelled) return;
     const s = useStore.getState();
     switch (event.type) {
       case "progress":
         if (event.total && event.total > 0) {
+          // B3: progress yields a finite sent-lines percentage.
+          // 100% does NOT release ownership — draining does that.
           s.setJobProgress((event.lineIndex! + 1) / event.total);
         }
         break;
@@ -187,7 +198,29 @@ async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise
 
     if (outcome.startsWith("complete")) {
       endState = "complete";
-      if (opts.waitForIdle) {
+      // B3: when a session owns this stream, drain through the session.
+      // The session handles idle-wait and timeout-to-unknown.
+      if (session) {
+        const drainResult = await session.drain(!!opts.waitForIdle);
+        if (drainResult === "unknown") {
+          // 30s drain timeout: "unknown" state. Session retains protection.
+          // endState stays "complete" in the return value but the session
+          // remains active (jobRunning=true, keep-awake held).
+          // The caller (JobActionBar) will see the session's unknown state.
+          endState = "complete"; // transmit succeeded; drain timed out
+        } else if (drainResult === "alarm") {
+          endState = "alarm";
+          store.addConsoleLine(
+            `${opts.label} stopped -- machine alarm (laser already off; unlock to continue)`,
+            "error"
+          );
+        } else if (drainResult === "cancelled") {
+          endState = "cancelled";
+          store.addConsoleLine(`${opts.label} cancelled`, "info");
+        } else {
+          store.addConsoleLine(`${opts.label} complete`, "info");
+        }
+      } else if (opts.waitForIdle) {
         const IDLE_TIMEOUT_MS = 30000;
         const IDLE_POLL_MS = 200;
         const idleDeadline = Date.now() + IDLE_TIMEOUT_MS;
@@ -265,8 +298,18 @@ async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise
     }
   }
 
-  store.setJobRunning(false);
-  store.setJobProgress(0);
+  // B3: when a session owns this stream, the session handles cleanup.
+  // Otherwise, legacy direct cleanup.
+  if (session) {
+    await session.end(endState === "complete" ? "complete"
+      : endState === "alarm" ? "alarm"
+      : endState === "cancelled" ? "cancelled"
+      : endState === "aborted" ? "aborted"
+      : "error");
+  } else {
+    store.setJobRunning(false);
+    store.setJobProgress(0);
+  }
 
   if (portDisconnected) {
     try {
@@ -350,9 +393,27 @@ export async function streamJob(gcode: string, opts: StreamJobOptions): Promise<
   }
 
   // -- Post-loop handling --
+  const session = opts.session;
 
   if (endState === "complete") {
-    if (opts.waitForIdle) {
+    // B3: when a session owns this stream, drain through the session.
+    if (session) {
+      const drainResult = await session.drain(!!opts.waitForIdle);
+      if (drainResult === "unknown") {
+        // Drain timeout: session retains protection; don't announce complete.
+      } else if (drainResult === "alarm") {
+        endState = "alarm";
+        store.addConsoleLine(
+          `${opts.label} stopped -- machine alarm (laser already off; unlock to continue)`,
+          "error"
+        );
+      } else if (drainResult === "cancelled") {
+        endState = "cancelled";
+        store.addConsoleLine(`${opts.label} cancelled`, "info");
+      } else {
+        store.addConsoleLine(`${opts.label} complete`, "info");
+      }
+    } else if (opts.waitForIdle) {
       // F19: after last ack, wait for machine to actually reach Idle before
       // re-enabling START -- head is still decelerating at last-ack time.
       const IDLE_TIMEOUT_MS = 30000;
@@ -406,8 +467,17 @@ export async function streamJob(gcode: string, opts: StreamJobOptions): Promise<
     store.addConsoleLine(`${opts.label} aborted`, "error");
   }
 
-  store.setJobRunning(false);
-  store.setJobProgress(0);
+  // B3: when a session owns this stream, the session handles cleanup.
+  if (session) {
+    await session.end(endState === "complete" ? "complete"
+      : endState === "alarm" ? "alarm"
+      : endState === "cancelled" ? "cancelled"
+      : endState === "aborted" ? "aborted"
+      : "error");
+  } else {
+    store.setJobRunning(false);
+    store.setJobProgress(0);
+  }
 
   // Tear down the serial port on disconnect so a subsequent reconnect
   // (which now sends 0x18) doesn't fail with "port busy". Runs AFTER the

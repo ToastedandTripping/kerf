@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { useStore } from "../../app/store";
 import { streamJob } from "../../lib/machine/jobStream";
+import { beginJobSession } from "../../lib/machine/jobSession";
 import { gcodeExtents, isWithinBounds } from "../../lib/machine/canStartJob";
 import { useEscapeClose } from "../../lib/hooks/useEscapeClose";
 import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
@@ -405,15 +406,18 @@ export function MaterialTestDialog({ open, onClose }: Props) {
         return; // dialog stays open
       }
       const lines = gcode.split("\n").filter((l) => l.trim() && !l.startsWith(";"));
+      // B3: acquire a job session for material test.
+      const session = await beginJobSession("Material test");
+      if (!session) return;
       state.addConsoleLine(`Sending material test (${lines.length} commands)...`, "info");
       state.setJobRunning(true);
       state.setJobProgress(0);
-      streamJob(gcode, { label: "Material test" }); // fire-and-forget: dialog closes
+      streamJob(gcode, { label: "Material test", session }); // fire-and-forget: dialog closes
       onClose();
     }
   }
 
-  function handleFrame() {
+  async function handleFrame() {
     const state = useStore.getState();
     if (!state.machineConnected) {
       state.addConsoleLine("Machine not connected", "error");
@@ -434,10 +438,13 @@ export function MaterialTestDialog({ open, onClose }: Props) {
       return; // dialog stays open
     }
     const lines = gcode.split("\n").filter((l) => l.trim() && !l.startsWith(";"));
+    // B3: acquire a job session for material test frame.
+    const session = await beginJobSession("Frame");
+    if (!session) return;
     state.addConsoleLine(`Sending frame (${lines.length} commands)...`, "info");
     state.setJobRunning(true);
     state.setJobProgress(0);
-    streamJob(gcode, { label: "Frame" }); // fire-and-forget: dialog closes
+    streamJob(gcode, { label: "Frame", session }); // fire-and-forget: dialog closes
     onClose();
   }
 
