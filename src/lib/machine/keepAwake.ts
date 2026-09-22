@@ -6,10 +6,10 @@
  * inhibitor, and on true→false to release it.
  *
  * ## Coverage
- * The `jobRunning` flag is set by BOTH the main job loop (MachinePanel.tsx)
- * AND the material-test grid (MaterialTestDialog.tsx), so this single subscription
- * covers both job types automatically. If either writer is ever split into a
- * separate flag, keep-awake coverage for that path must be re-wired explicitly.
+ * The `jobRunning` flag is set by JobActionBar via jobStream, so this single
+ * subscription covers all job types automatically. If the writer is ever split
+ * into separate flags, keep-awake coverage for those paths must be re-wired
+ * explicitly.
  *
  * ## Failure policy
  * A power-assertion failure (e.g. headless Linux without a D-Bus session) must
@@ -22,7 +22,7 @@
  *
  * ## React Error 185 note
  * This module does NOT use `useStore(selector)` inside a React component. It uses
- * the vanilla `useStore.subscribe` API (identical to the pattern at connection.ts:118)
+ * the vanilla `useStore.subscribe` API (identical to the pattern at connection.ts:155)
  * which subscribes to the full state and extracts the scalar. No new object or
  * array is returned — no re-render loop risk.
  */
