@@ -478,4 +478,125 @@ mod tests {
             "Expected some black pixels for uniform black input"
         );
     }
+
+    // Characterization tests for error-diffusion dithering algorithms
+    // Each uses an 8x8 horizontal gradient (0-255 left-to-right) to verify
+    // the algorithm's output is stable and kernel weights are correct.
+
+    #[test]
+    fn dither_ordered_gradient_characterization() {
+        // 8x8 horizontal gradient: left=0 (black), right=255 (white)
+        let mut pixels = vec![0u8; 8 * 8];
+        for y in 0..8 {
+            for x in 0..8 {
+                pixels[y * 8 + x] = (x as u8) * 36; // 0, 36, 72, ..., 252
+            }
+        }
+        let result = dither_image(&pixels, 8, 8, DitherAlgorithm::Ordered, 128).unwrap();
+        assert_eq!(result.len(), 64);
+        // Ordered dithering with Bayer 4x4 should produce a checkerboard-like pattern
+        // Pin exact output to catch kernel matrix changes:
+        let expected = [
+            0, 0, 255, 0, 255, 255, 255, 255, 0, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 0, 255, 255,
+            255, 255, 0, 0, 0, 255, 0, 255, 255, 255, 0, 0, 255, 0, 255, 255, 255, 255, 0, 0, 0,
+            255, 0, 255, 0, 255, 0, 0, 255, 0, 255, 255, 255, 255, 0, 0, 0, 255, 0, 255, 255, 255,
+        ];
+        assert_eq!(
+            result, expected,
+            "Ordered dithering output changed; kernel matrix may have been modified"
+        );
+    }
+
+    #[test]
+    fn dither_floyd_steinberg_gradient_characterization() {
+        // 8x8 horizontal gradient
+        let mut pixels = vec![0u8; 8 * 8];
+        for y in 0..8 {
+            for x in 0..8 {
+                pixels[y * 8 + x] = (x as u8) * 36; // 0, 36, 72, ..., 252
+            }
+        }
+        let result = dither_image(&pixels, 8, 8, DitherAlgorithm::FloydSteinberg, 128).unwrap();
+        assert_eq!(result.len(), 64);
+        // Floyd-Steinberg diffuses error to 4 neighbors with kernel [7, 3, 5, 1] / 16
+        // Pin exact output to catch kernel weight changes:
+        let expected = [
+            0, 0, 0, 255, 0, 255, 255, 255, 0, 0, 0, 255, 0, 255, 255, 255, 0, 0, 0, 255, 0, 255,
+            255, 255, 0, 0, 255, 0, 255, 255, 0, 255, 0, 0, 0, 255, 0, 255, 255, 255, 0, 0, 0, 255,
+            0, 255, 255, 255, 0, 0, 0, 255, 0, 255, 255, 255, 0, 0, 255, 0, 255, 0, 255, 255,
+        ];
+        assert_eq!(
+            result, expected,
+            "Floyd-Steinberg output changed; kernel weights [7/16, 3/16, 5/16, 1/16] may have been modified"
+        );
+    }
+
+    #[test]
+    fn dither_jarvis_gradient_characterization() {
+        // 8x8 horizontal gradient
+        let mut pixels = vec![0u8; 8 * 8];
+        for y in 0..8 {
+            for x in 0..8 {
+                pixels[y * 8 + x] = (x as u8) * 36; // 0, 36, 72, ..., 252
+            }
+        }
+        let result = dither_image(&pixels, 8, 8, DitherAlgorithm::Jarvis, 128).unwrap();
+        assert_eq!(result.len(), 64);
+        // Jarvis (Jarvis-Judice-Ninke) diffuses error across a 5x3 kernel with divisor 48
+        let expected = [
+            0, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 255,
+            255, 255, 0, 0, 0, 255, 255, 0, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 0,
+            0, 255, 255, 255, 0, 0, 255, 0, 255, 255, 255, 255, 0, 0, 0, 255, 0, 255, 255, 255,
+        ];
+        assert_eq!(
+            result, expected,
+            "Jarvis output changed; kernel weights or divisor 48 may have been modified"
+        );
+    }
+
+    #[test]
+    fn dither_stucki_gradient_characterization() {
+        // 8x8 horizontal gradient
+        let mut pixels = vec![0u8; 8 * 8];
+        for y in 0..8 {
+            for x in 0..8 {
+                pixels[y * 8 + x] = (x as u8) * 36; // 0, 36, 72, ..., 252
+            }
+        }
+        let result = dither_image(&pixels, 8, 8, DitherAlgorithm::Stucki, 128).unwrap();
+        assert_eq!(result.len(), 64);
+        // Stucki kernel with divisor 42
+        let expected = [
+            0, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 255, 0, 255, 255, 255, 0, 0, 0, 255, 255, 0,
+            255, 255, 0, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 255, 0, 255, 255, 255, 0, 0, 255, 0,
+            255, 255, 255, 255, 0, 0, 0, 255, 0, 255, 255, 255, 0, 0, 0, 0, 255, 0, 255, 255,
+        ];
+        assert_eq!(
+            result, expected,
+            "Stucki output changed; kernel weights or divisor 42 may have been modified"
+        );
+    }
+
+    #[test]
+    fn dither_atkinson_gradient_characterization() {
+        // 8x8 horizontal gradient
+        let mut pixels = vec![0u8; 8 * 8];
+        for y in 0..8 {
+            for x in 0..8 {
+                pixels[y * 8 + x] = (x as u8) * 36; // 0, 36, 72, ..., 252
+            }
+        }
+        let result = dither_image(&pixels, 8, 8, DitherAlgorithm::Atkinson, 128).unwrap();
+        assert_eq!(result.len(), 64);
+        // Atkinson: 6 neighbors with weight 1/8 each (discards 2/8 for higher contrast)
+        let expected = [
+            0, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 255, 255, 0, 255, 255, 0, 0, 0, 0, 255, 255,
+            255, 255, 0, 0, 0, 255, 0, 255, 255, 255, 0, 0, 0, 255, 0, 255, 255, 255, 0, 0, 0, 255,
+            255, 255, 255, 255, 0, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 0, 255, 0, 255, 255,
+        ];
+        assert_eq!(
+            result, expected,
+            "Atkinson output changed; kernel weights 1/8 or divisor logic may have been modified"
+        );
+    }
 }
