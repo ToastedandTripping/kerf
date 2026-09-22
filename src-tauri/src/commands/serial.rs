@@ -1899,6 +1899,44 @@ mod tests {
         assert!(inner.session.try_permit_end(g0).is_err());
     }
 
+    /// Mutant 4: RED if phase is not set to STOPPING during the stop operation.
+    /// Uses the session observer to capture the phase at the moment admission closes.
+    #[test]
+    fn b1_stop_phase_transitions_to_stopping() {
+        let inner = Arc::new(SerialInner {
+            command: Mutex::new(None),
+            realtime: Mutex::new(Some(Box::new(MockPort::new()) as Box<dyn SerialPort>)),
+            connected: AtomicBool::new(true),
+            pump_in_flight: AtomicBool::new(false),
+            job_abort: AtomicBool::new(false),
+            session: SerialSession::default(),
+        });
+
+        inner.session.epoch.store(1, Ordering::SeqCst);
+        inner.session.phase.store(PHASE_ACTIVE, Ordering::SeqCst);
+        *inner.session.admitted_job.lock().unwrap() = Some(1);
+
+        // Wire up an observer that captures the phase when "admission_closed" fires.
+        let phase_at_admission_closed = Arc::new(Mutex::new(None::<u8>));
+        let phase_capture = phase_at_admission_closed.clone();
+        let inner_ref = inner.clone();
+        *inner.session.observer.lock().unwrap() = Some(Box::new(move |event: &str| {
+            if event == "admission_closed" {
+                let phase = inner_ref.session.phase.load(Ordering::SeqCst);
+                *phase_capture.lock().unwrap() = Some(phase);
+            }
+        }));
+
+        let _ = serial_stop_inner(&inner, &|_| {});
+
+        let captured = phase_at_admission_closed.lock().unwrap();
+        assert_eq!(
+            *captured,
+            Some(PHASE_STOPPING),
+            "phase must be STOPPING at the moment admission closes"
+        );
+    }
+
     /// Mutant: stop on idle controller is harmless (no panic, returns a result).
     #[test]
     fn b1_stop_on_idle_is_harmless() {
