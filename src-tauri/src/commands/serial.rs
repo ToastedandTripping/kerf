@@ -879,6 +879,10 @@ pub(crate) fn serial_stop_inner(
     // Step 4: Emit session event.
     session.emit("stop_requested");
 
+    // Clear banner_observed BEFORE sending 0x18 so no race exists between
+    // the send and another body's observation (W1 fix).
+    session.banner_observed.store(false, Ordering::SeqCst);
+
     // Step 5: Send 0x18. Take realtime lock, write, retry once on failure.
     let send_result = {
         let mut rt = match inner.realtime.lock() {
@@ -927,7 +931,8 @@ pub(crate) fn serial_stop_inner(
     session.emit("permit_invalidated");
 
     // Step 6: Wait for banner (retry loop within 3s deadline).
-    session.banner_observed.store(false, Ordering::SeqCst);
+    // banner_observed was cleared BEFORE the 0x18 send (step 5 preamble) so
+    // no race exists between the send and the observation.
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
 
     while std::time::Instant::now() < deadline {
@@ -1770,36 +1775,10 @@ mod tests {
         }
     }
 
-    /// Mutant 6: event-sink failure sets job_abort and sink_failed.
-    #[test]
-    fn b1_event_sink_failure_triggers_abort() {
-        let inner = SerialInner {
-            command: Mutex::new(Some(CommandChannel {
-                writer: Box::new(MockPort::new()),
-                reader: BufReader::new(Box::new(MockPort::new()) as Box<dyn SerialPort>),
-                pending: Vec::new(),
-            })),
-            realtime: Mutex::new(Some(Box::new(MockPort::new()) as Box<dyn SerialPort>)),
-            connected: AtomicBool::new(true),
-            pump_in_flight: AtomicBool::new(false),
-            job_abort: AtomicBool::new(false),
-            session: SerialSession::default(),
-        };
-
-        // Stream with a failing event sink
-        let _result = serial_stream_job_inner(
-            &inner,
-            "G0 X10\n",
-            &|_evt| Err("sink gone".to_string()),
-        );
-
-        // The stream should have set job_abort during the $32=1 pump.
-        // Since MockPort returns TimedOut, the pump will fail, but the
-        // on_event for drain.surfaced events uses let _ = (ignores), and
-        // the $32=1 pump never calls on_event, so sink_failed may not be set
-        // here. This is the correct behavior — sink failure only triggers
-        // during the buffered pump callback.
-    }
+    // W2: b1_event_sink_failure_triggers_abort removed — zero assertions,
+    // the sink-failure path doesn't trigger via MockPort ($32=1 pump fails
+    // before the buffered pump callback ever fires). m6 is killed by
+    // b1_stop_closes_admission_and_invalidates_permits.
 
     /// Connect with port factory: verifies the port factory parameter works.
     #[test]
