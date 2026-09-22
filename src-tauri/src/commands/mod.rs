@@ -2,6 +2,7 @@
 // No custom commands needed -- the plugin respects capability scopes.
 
 pub mod gcode;
+pub mod grbl_status;
 pub mod image_trace;
 pub mod power;
 pub mod serial;

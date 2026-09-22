@@ -30,6 +30,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Mutex;
 
+use super::grbl_status::GrblSnapshot;
+
 /// Phase of the serial session.
 pub const PHASE_DISCONNECTED: u8 = 0;
 pub const PHASE_IDLE: u8 = 1;
@@ -102,6 +104,11 @@ pub struct SerialSession {
     /// Set when an event-sink failure caused the stop (so the wrapper can
     /// distinguish sink failure from user cancel).
     pub(crate) sink_failed: AtomicBool,
+    /// Monotonic status snapshot sequence counter.
+    pub(crate) snapshot_seq: AtomicU64,
+    /// Last parsed status snapshot. Leaf lock — never held while waiting on
+    /// anything (lock-order table: leaf, alongside admitted_job/last_stop/observer).
+    pub(crate) snapshot: Mutex<Option<GrblSnapshot>>,
 }
 
 impl Default for SerialSession {
@@ -116,6 +123,8 @@ impl Default for SerialSession {
             last_stop: Mutex::new(None),
             observer: Mutex::new(None),
             sink_failed: AtomicBool::new(false),
+            snapshot_seq: AtomicU64::new(0),
+            snapshot: Mutex::new(None),
         }
     }
 }
@@ -188,6 +197,38 @@ impl SerialSession {
     /// Transition to idle phase (from connect or confirmed stop).
     pub(crate) fn set_idle(&self) {
         self.phase.store(PHASE_IDLE, Ordering::SeqCst);
+    }
+
+    /// Publish a parsed status snapshot. Enforces monotonic `(epoch, seq)`:
+    /// a snapshot with a stale epoch or lower seq is silently dropped.
+    /// `lock_epoch` is the epoch captured when the command lock was acquired
+    /// (not the current epoch — prevents post-stop snapshots carrying pre-stop epochs).
+    pub(crate) fn publish_snapshot(&self, raw: &str, lock_epoch: u64) {
+        let seq = self.snapshot_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        if let Some(parsed) = super::grbl_status::parse_status_frame(raw, lock_epoch, seq) {
+            let mut guard = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+            // Monotonic: reject if epoch regressed or (same epoch, lower seq).
+            if let Some(ref existing) = *guard {
+                if lock_epoch < existing.epoch
+                    || (lock_epoch == existing.epoch && seq <= existing.seq)
+                {
+                    return;
+                }
+            }
+            *guard = Some(parsed);
+        }
+    }
+
+    /// Invalidate the snapshot (on stop or disconnect). The next reader sees None.
+    pub(crate) fn invalidate_snapshot(&self) {
+        let mut guard = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = None;
+    }
+
+    /// Read the current snapshot (if any). Returns a clone.
+    pub(crate) fn read_snapshot(&self) -> Option<GrblSnapshot> {
+        let guard = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        guard.clone()
     }
 
     /// Transition to disconnected phase and reset state.
