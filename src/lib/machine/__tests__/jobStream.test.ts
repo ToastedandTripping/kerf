@@ -192,20 +192,14 @@ describe("jobStream.ts — Phase 2A streaming mode dispatch", () => {
   describe("Job session draining (B3)", () => {
     it("drain timeout returns unknown, not complete", async () => {
       // Mutant 2: if 30s expiry returns "complete" instead of "unknown", this fails.
-      // We test with waitForIdle=false (brief 5s timeout) to keep test fast,
-      // where the controller stays in Run and never reaches Idle.
-      // For the brief drain, the fallback returns "complete" for non-cutting
-      // paths — so we test the FULL drain path by calling drain(true) directly
-      // but cancelling after a short delay to prove the mechanism works.
+      vi.useFakeTimers();
 
-      // Better approach: test that a session in the full 30s drain never
-      // returns "complete" by cancelling it — the "cancelled" return proves
-      // the drain was active and didn't early-return "complete."
       recorder = new SerialTraceRecorder();
       mockInvoke.mockImplementation(async (cmd: string, args?: any) => {
         if (cmd === "serial_job_begin") return 1;
         if (cmd === "serial_job_end") return undefined;
         if (cmd === "serial_get_status") {
+          // Always return Run — never Idle — to trigger drain timeout.
           return {
             status: "<Run|MPos:0.000,0.000,0.000|FS:1000,0>",
             events: [],
@@ -216,20 +210,23 @@ describe("jobStream.ts — Phase 2A streaming mode dispatch", () => {
 
       const session = await beginJobSession("Test");
       expect(session).not.toBeNull();
+      useStore.setState({ jobRunning: true, jobProgress: 0 });
 
-      // Start drain in background (would take 30s to timeout).
+      // Start drain in background.
       const drainPromise = session!.drain(true);
 
-      // Cancel after 500ms — if drain had returned "complete" immediately
-      // (the mutant), this cancel would be a no-op and result would be "complete."
-      await new Promise((r) => setTimeout(r, 500));
-      session!.cancel();
+      // Advance past the 30s drain timeout.
+      await vi.advanceTimersByTimeAsync(35000);
 
       const result = await drainPromise;
-      // Must be "cancelled" (drain was waiting, got cancelled).
-      // If the mutant returned "complete" immediately, cancel would be
-      // too late and result would be "complete."
-      expect(result).toBe("cancelled");
+      // Must be "unknown", NOT "complete".
+      expect(result).toBe("unknown");
+
+      // Verify console warning about drain timeout.
+      const consoleTexts = useStore.getState().consoleLines.map((l) => l.text);
+      expect(consoleTexts.some((t) => t.includes("drain timeout"))).toBe(true);
+
+      vi.useRealTimers();
     });
 
     it("auxiliary jobs (FRAME) go through session draining", async () => {
