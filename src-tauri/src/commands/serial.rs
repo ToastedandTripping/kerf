@@ -463,13 +463,26 @@ pub(crate) fn serial_send_inner(
         }
     }
 
-    match serial_pump::run_pump(
+    let pump_result = serial_pump::run_pump(
         &mut channel.reader,
         &mut channel.writer,
         &mut channel.pending,
         DEFAULT_LIVENESS_TICKS,
         serial_pump::DEFAULT_IDLE_STALL_TICKS,
-    ) {
+    );
+
+    // Banner publication: if the pump saw Banner while a stop is in flight,
+    // publish the observation.
+    if let Ok(ref out) = pump_result {
+        if out.terminal == serial_pump::PumpTerminal::Banner
+            && inner.session.stop_in_flight.load(Ordering::SeqCst)
+        {
+            inner.session.banner_observed.store(true, Ordering::SeqCst);
+            inner.session.emit("banner_observed");
+        }
+    }
+
+    match pump_result {
         Ok(out) => Ok(SendOutcome {
             responses: out.lines,
             drained: drain.surfaced,
@@ -541,6 +554,14 @@ pub(crate) fn serial_get_status_inner(inner: &SerialInner) -> Result<StatusOutco
     )?;
     for line in &read.dropped {
         eprintln!("[serial] status junk-skip: {}", line);
+        // Banner publication: if a Banner was encountered during status polling
+        // while a stop is in flight, publish the observation.
+        if serial_pump::classify_line(line) == serial_pump::LineClass::Banner
+            && inner.session.stop_in_flight.load(Ordering::SeqCst)
+        {
+            inner.session.banner_observed.store(true, Ordering::SeqCst);
+            inner.session.emit("banner_observed");
+        }
     }
     Ok(StatusOutcome {
         status: read.status.unwrap_or_default(),
@@ -711,6 +732,15 @@ pub(crate) fn serial_stream_job_inner(
     if sink_failed {
         inner.session.sink_failed.store(false, Ordering::SeqCst);
         let _ = serial_stop_inner(inner, &std::thread::sleep);
+    }
+
+    // Banner publication: if the pump saw Banner (Aborted) while a stop is
+    // in flight, publish the observation so the stop's retry loop can see it.
+    if matches!(&result, Ok(BufferedPumpOutcome::Aborted))
+        && inner.session.stop_in_flight.load(Ordering::SeqCst)
+    {
+        inner.session.banner_observed.store(true, Ordering::SeqCst);
+        inner.session.emit("banner_observed");
     }
 
     let outcome_str = match &result {
