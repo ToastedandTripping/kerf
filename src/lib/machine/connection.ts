@@ -1,6 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../app/store";
 import { sortPortsByPriority } from "./knownDevices";
+import {
+  consumeStatusOutcome,
+  resetStatusConsumer,
+  machineStateToStore,
+  type GrblSnapshot,
+} from "./machineStatus";
 
 interface PortInfo {
   name: string;
@@ -19,12 +25,14 @@ interface SendOutcome {
   drained: string[];
 }
 
-/** Mirror of Rust `StatusOutcome`: `status` is `""` when the command lock was
- * busy (a pump is mid-line) or the bounded read expired — an Ok-typed sentinel,
- * not a failure. `events` carries ALARM/[MSG:] lines skipped on the way. */
+/** Mirror of Rust `StatusOutcome` (B2a extended). `kind` and `snapshot` are
+ * additive — `status` and `events` remain for backward compatibility.
+ * `status` is `""` when the command lock was busy or the bounded read expired. */
 interface StatusOutcome {
   status: string;
   events: string[];
+  kind: "Report" | "Busy" | "NoResponse" | "TransportError";
+  snapshot: GrblSnapshot | null;
 }
 
 /** Surface an unsolicited protocol line (drained debris or status junk-skip)
@@ -57,9 +65,8 @@ let unsubscribeJobRunning: (() => void) | null = null;
 let consecutivePollFailures = 0;
 
 /** Track previous spindle speed for drop-to-zero diagnostic.
- *  When state is Run and spindle drops from >0 to 0, something caused the
- *  laser to stop firing mid-job. This is diagnostic data for the separate
- *  "laser stops firing" symptom — not an interlock, just a console warning. */
+ *  Managed by the snapshot consumer now; this variable is retained for
+ *  the send() in-pump position-only path (which doesn't go through the consumer). */
 let prevSpindleSpeed: number | null = null;
 
 /** A7: in-flight connect promise for re-entrancy coalescing. If a connect()
@@ -119,6 +126,9 @@ export const machineConnection = {
         // Reset spindle-drop diagnostic state so a stale value from a previous
         // connection doesn't produce a spurious warning on the first poll.
         prevSpindleSpeed = null;
+        // B2b: reset the snapshot consumer's epoch/seq watermark so stale
+        // snapshots from a previous connection are not silently accepted.
+        resetStatusConsumer();
         // NOTE: machineState is set below after a real status query (companion fix
         // for BUG 3). We set "idle" here as a safe initial value so the UI is never
         // left in "disconnected" while the status query is in-flight.
@@ -167,23 +177,16 @@ export const machineConnection = {
         // 250ms poll fires. This closes the window where the UI shows "idle" while
         // the machine is actually locked.
         try {
-          const initStatus = await this.getStatusReport();
-          if (initStatus) {
-            const initMatch = initStatus.match(/<(\w+(?::\d+)?)\|/);
-            if (initMatch) {
-              const rawState = initMatch[1].toLowerCase().split(":")[0] as
-                | "idle"
-                | "run"
-                | "hold"
-                | "alarm"
-                | "door";
-              store.setMachineState(rawState);
-              if (rawState === "alarm") {
-                store.addConsoleLine(
-                  "Machine is in ALARM state — Home ($H) or Unlock ($X) before starting a job.",
-                  "warning"
-                );
-              }
+          const initOutcome = await invoke<StatusOutcome>("serial_get_status");
+          for (const e of initOutcome.events) surfaceUnsolicited(e);
+          if (initOutcome.snapshot) {
+            consumeStatusOutcome(initOutcome);
+            const storeState = machineStateToStore(initOutcome.snapshot.state);
+            if (storeState === "alarm") {
+              store.addConsoleLine(
+                "Machine is in ALARM state — Home ($H) or Unlock ($X) before starting a job.",
+                "warning"
+              );
             }
           }
         } catch {
@@ -254,6 +257,7 @@ export const machineConnection = {
       await invoke("serial_disconnect", { jobActive: needsEstop });
       store.setMachineConnected(false);
       store.setMachineState("disconnected");
+      resetStatusConsumer();
       store.addConsoleLine("Disconnected", "info");
     } catch (e) {
       console.error("Disconnect error:", e);
@@ -326,9 +330,6 @@ export const machineConnection = {
   async pollStatus(): Promise<void> {
     const store = useStore.getState();
     // F19: guard against stacking — if disconnected, clear the interval and bail.
-    // This prevents intervals leaking when a serial error triggers disconnect()
-    // before the next poll fires (e.g. 3-strike path clears the interval, but
-    // an unexpected disconnect path may not reach disconnect() immediately).
     if (!store.machineConnected) {
       if (statusPollInterval) {
         clearInterval(statusPollInterval);
@@ -339,55 +340,44 @@ export const machineConnection = {
     if (jobPollingSuspended) return;
 
     try {
-      const status = await this.getStatusReport();
+      const outcome = await invoke<StatusOutcome>("serial_get_status");
       // Busy/none sentinel included: the strike counter RESETS on it — the
       // command lock being held (e.g. a 30s $H pump) proves the port path is
       // alive; a genuinely dead port surfaces as a write failure (rejection).
       consecutivePollFailures = 0;
-      if (!status) return;
-      // F19: Parse GRBL status — handles MPos and WPos ($10=0 machines), and
-      // Hold:n / Door:n substates. Map substates to their parent for the UI.
-      const match = status.match(/<(\w+(?::\d+)?)\|[MW]Pos:([-\d.]+),([-\d.]+),([-\d.]+)/);
-      if (match) {
-        const rawState = match[1].toLowerCase();
-        // Map Hold:n → "hold", Door:n → "door" (any substate collapses to parent)
-        const baseState = rawState.split(":")[0] as "idle" | "run" | "hold" | "alarm" | "door";
-        store.setMachineState(baseState);
-        store.setMachinePosition({
-          x: parseFloat(match[2]),
-          y: parseFloat(match[3]),
-          z: parseFloat(match[4]),
-        });
-      }
-      // Parse WCO if present (Workstream B — warn-only, never block)
-      const wcoMatch = status.match(/WCO:([-\d.]+),([-\d.]+)/);
-      if (wcoMatch) {
-        store.setWorkCoordOffset({ x: parseFloat(wcoMatch[1]), y: parseFloat(wcoMatch[2]) });
-      }
-      // Parse FS: field for spindle-drop diagnostic. FS:feed,spindle appears
-      // in GRBL 1.1 status reports. Track the spindle speed and warn when it
-      // drops to 0 during an active Run — diagnostic for the "laser stops
-      // firing" symptom (root cause TBD, this captures the data).
-      const fsMatch = status.match(/FS:([-\d.]+),([-\d.]+)/);
-      if (fsMatch) {
-        const currentSpindle = parseFloat(fsMatch[2]);
-        if (
-          match &&
-          match[1].toLowerCase().startsWith("run") &&
-          prevSpindleSpeed !== null &&
-          prevSpindleSpeed > 0 &&
-          currentSpindle === 0
-        ) {
-          console.warn(
-            `Spindle speed dropped to 0 during active job (was ${prevSpindleSpeed}). ` +
-            `Laser may have stopped firing.`
-          );
-          store.addConsoleLine(
-            "WARNING: Spindle speed dropped to 0 during active job — laser may have stopped firing",
-            "warning"
-          );
+
+      // B2b: delegate to the validated snapshot consumer. It handles:
+      // - Monotonic epoch/seq rejection
+      // - State/position/WCO/spindle/feed/accessory writes to the store
+      // - Event surfacing (ALARM, MSG)
+      // - Nonfinite value rejection
+      const accepted = consumeStatusOutcome(outcome);
+
+      // Spindle-drop diagnostic: warn on drop-to-zero during active Run.
+      // The consumer writes spindleSpeed to the store; we check it here
+      // because the diagnostic is connection-level, not consumer-level.
+      if (accepted && outcome.snapshot) {
+        const snap = outcome.snapshot;
+        const currentSpindle = snap.spindle;
+        if (currentSpindle !== null && Number.isFinite(currentSpindle)) {
+          const snapState = snap.state;
+          if (
+            snapState === "Run" &&
+            prevSpindleSpeed !== null &&
+            prevSpindleSpeed > 0 &&
+            currentSpindle === 0
+          ) {
+            console.warn(
+              `Spindle speed dropped to 0 during active job (was ${prevSpindleSpeed}). ` +
+              `Laser may have stopped firing.`
+            );
+            store.addConsoleLine(
+              "WARNING: Spindle speed dropped to 0 during active job — laser may have stopped firing",
+              "warning"
+            );
+          }
+          prevSpindleSpeed = currentSpindle;
         }
-        prevSpindleSpeed = currentSpindle;
       }
     } catch {
       consecutivePollFailures++;

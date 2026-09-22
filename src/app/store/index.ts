@@ -612,6 +612,16 @@ export const useStore = create<AppState>((set, get) => ({
   workCoordOffset: { x: 0, y: 0 },
   setWorkCoordOffset: (offset) => set({ workCoordOffset: offset }),
 
+  // B2b: snapshot-derived fields
+  positionKind: null,
+  setPositionKind: (kind) => set({ positionKind: kind }),
+  spindleSpeed: 0,
+  setSpindleSpeed: (v) => set({ spindleSpeed: v }),
+  feedRate: 0,
+  setFeedRate: (v) => set({ feedRate: v }),
+  accessoryFlags: null,
+  setAccessoryFlags: (v) => set({ accessoryFlags: v }),
+
   // Workstream E: workspace verification
   workspaceVerified: false,
   setWorkspaceVerified: (v) => set({ workspaceVerified: v }),
