@@ -74,7 +74,7 @@ export function applyMatrix2x3(
  * @param groupRot group.transform.rotation (degrees)
  * @returns { x, y, rotation } for the flattened/composed child transform
  */
-export function composeGroupChildTransform(
+function composeGroupChildTransform(
   childX: number,
   childY: number,
   childW: number,
@@ -790,7 +790,7 @@ export function offsetRingByDistance(
  * @param t               object transform (x, y, width, height, rotation degrees)
  * @param rotateOffset    world-mm distance above the top-center for the rotate handle
  */
-export interface OrientedHandles {
+interface OrientedHandles {
   nw: { x: number; y: number };
   n: { x: number; y: number };
   ne: { x: number; y: number };

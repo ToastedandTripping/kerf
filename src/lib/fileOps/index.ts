@@ -157,7 +157,7 @@ async function checkUnsavedChanges(): Promise<boolean> {
  * overlay (format version 4) — and this function handles only the files
  * written before that was true.
  */
-export function materialiseMissingLineOverlays(project: KerfProject): void {
+function materialiseMissingLineOverlays(project: KerfProject): void {
   if (!Array.isArray(project.layers)) return;
   for (const layer of project.layers) {
     if (!layer || layer.mode !== "fillLine") continue;

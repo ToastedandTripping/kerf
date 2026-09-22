@@ -59,7 +59,7 @@ export async function startAutoSave(intervalMs: number = 60000): Promise<void> {
   }, intervalMs);
 }
 
-export function stopAutoSave(): void {
+function stopAutoSave(): void {
   if (autoSaveInterval) {
     clearInterval(autoSaveInterval);
     autoSaveInterval = null;

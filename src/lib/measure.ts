@@ -5,12 +5,12 @@
 
 import type { DesignObject } from "../app/types";
 
-export interface MeasurePoint {
+interface MeasurePoint {
   x: number;
   y: number;
 }
 
-export interface SnapPoint {
+interface SnapPoint {
   x: number;
   y: number;
   kind: "corner" | "center" | "rim";
