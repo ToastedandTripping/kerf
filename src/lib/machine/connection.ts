@@ -513,125 +513,48 @@ export const machineConnection = {
   },
 
   /**
-   * Emergency stop — F13 resequenced (safety-critical).
+   * Emergency stop — invokes B1's native `serial_stop` (2026-09-20 DECISIONS ruling).
    *
-   * Sequence: `!` → ~100ms settle → `0x18` → bounded re-poll → conditional M5.
-   * The OLD order (`!` → M5 → `0x18`) deadlocks under the read pump: feed hold
-   * freezes the planner, the in-flight line's `ok` never arrives, M5 queues on
-   * the command lock forever, `0x18` never sends — laser stays on under
-   * M3/$32=0. Both bytes go via the REALTIME handle so they reach the wire
-   * while a pump holds the command lock; the reset banner terminates the pump.
+   * `serial_stop` sends `0x18` immediately: no feed hold, no M5, no ack wait.
+   * The Rust side handles single-flight coalescing, cooperative abort, session
+   * bookkeeping, and banner observation. This TS wrapper surfaces the result
+   * messages to the console and updates the store.
    *
-   * M5 fires ONLY when the re-poll RETURNED an actual non-alarm `<…>` report.
-   * Busy sentinel, no report, or alarm ⇒ skip it: the reset already
-   * de-energized the laser at firmware level, and M5 into a post-reset alarm
-   * earns a confusing error:9. Never key this off store.machineState — it is
-   * stale ("idle") during jobs because polling is suspended.
+   * The old sequence (`!` → settle → `0x18` → re-poll → conditional M5) is
+   * deleted per the ruling: "Abort sends 0x18 immediately — no feed hold,
+   * no M5, no ack wait."
    */
   async emergencyStop(): Promise<void> {
     const store = useStore.getState();
     store.addConsoleLine("Emergency stop initiated", "warning");
 
-    // F16: track whether the stop bytes were actually sent. If both writes fail,
-    // the port is dead — set alarm state and report honestly instead of logging
-    // "Emergency stop complete" when nothing reached the machine.
-    let feedHoldSent = false;
-    let resetSent = false;
-
-    // 1. Feed hold -- bring motion to a controlled stop first (resetting during
-    //    active motion makes ALARM:3 + lost position the routine outcome).
     try {
-      await invoke("serial_send_byte", { byte: 0x21 });
-      feedHoldSent = true;
-    } catch {
-      /* continue regardless */
-    }
+      const result = await invoke<{
+        outcome: string;
+        messages: string[];
+        epochBefore?: number;
+        epochAfter?: number;
+        epoch?: number;
+        error?: string;
+      }>("serial_stop");
 
-    // 2. Deceleration settle.
-    await new Promise((r) => setTimeout(r, 100));
+      // Surface every message from the native stop. All messages carry
+      // "Beam state unqualified" per the Rust side — honest about what
+      // the TS layer cannot know.
+      for (const msg of result.messages) {
+        const isError = result.outcome === "submissionFailed";
+        store.addConsoleLine(msg, isError ? "error" : "warning");
+      }
 
-    // 3. Soft reset -- de-energizes the laser at firmware level and aborts any
-    //    in-flight pump (banner terminal frees the command lock).
-    try {
-      await invoke("serial_send_byte", { byte: 0x18 });
-      resetSent = true;
-    } catch {
-      /* continue regardless */
-    }
-
-    // F16: if neither byte was delivered, the port is gone — go to alarm state.
-    if (!feedHoldSent && !resetSent) {
+      if (result.outcome === "submissionFailed") {
+        store.setMachineState("alarm");
+      }
+    } catch (e) {
+      // invoke rejected — Tauri IPC failure, port already gone, etc.
       store.setMachineState("alarm");
       store.addConsoleLine(
-        "E-stop send failed — port may be disconnected. Machine state unknown — treat as unsafe.",
+        `E-stop send failed: ${String(e)}. Beam state unqualified — use the machine's physical stop.`,
         "error"
-      );
-      return;
-    }
-
-    // A6 fix: if feed hold succeeded but reset failed, retry 0x18 once.
-    // A partial e-stop (hold without reset) leaves the machine frozen in Hold
-    // with the laser potentially still on — the reset is the critical byte.
-    if (feedHoldSent && !resetSent) {
-      try {
-        await invoke("serial_send_byte", { byte: 0x18 });
-        resetSent = true;
-      } catch {
-        // Retry also failed — the port is dying. Set alarm and report honestly.
-        store.setMachineState("alarm");
-        store.addConsoleLine(
-          "E-stop incomplete — feed hold sent but soft reset failed after retry. Beam may still be on — treat as unsafe.",
-          "error"
-        );
-        return;
-      }
-    }
-
-    // 4. Let GRBL's reboot window pass (it drops RX bytes while resetting),
-    //    then re-poll. Bounded in Rust -- can never hang mid-emergency.
-    await new Promise((r) => setTimeout(r, 200));
-    let report = "";
-    try {
-      report = await this.getStatusReport();
-    } catch {
-      /* port may be gone */
-    }
-
-    // Refresh DRO/state from the fresh post-reset report, if any.
-    // F19: accept both MPos and WPos to support $10=0 machines.
-    const match = report.match(/<(\w+(?::\d+)?)\|[MW]Pos:([-\d.]+),([-\d.]+),([-\d.]+)/);
-    if (match) {
-      const rawState = match[1].toLowerCase();
-      store.setMachineState(rawState.split(":")[0] as "idle" | "run" | "hold" | "alarm" | "door");
-      store.setMachinePosition({
-        x: parseFloat(match[2]),
-        y: parseFloat(match[3]),
-        z: parseFloat(match[4]),
-      });
-    }
-
-    // 5. Conditional M5, keyed ONLY off the returned report.
-    // A6 fix: narrowed from `!== "alarm"` to `=== "idle" || === "run"` so
-    // a line M5 is NEVER sent into Hold or Door state (same F13 hazard —
-    // line commands queue but don't execute in Hold/Door).
-    const reportedState = report.match(/^<(\w+)/)?.[1]?.toLowerCase();
-    if (reportedState === "idle" || reportedState === "run") {
-      try {
-        await this.send("M5");
-      } catch {
-        /* port may be gone */
-      }
-      store.addConsoleLine("Emergency stop complete", "warning");
-    } else if (reportedState === "alarm") {
-      // Expected aftermath of a mid-motion reset; the alarm panel takes over.
-      store.addConsoleLine(
-        "Machine in alarm after stop -- laser off, unlock to continue",
-        "warning"
-      );
-    } else {
-      store.addConsoleLine(
-        "Emergency stop complete -- machine reset, laser de-energized",
-        "warning"
       );
     }
   },

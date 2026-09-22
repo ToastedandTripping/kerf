@@ -19,53 +19,28 @@ import { machineConnection } from "./connection";
 import type { JobSession } from "./jobSession";
 
 /**
- * pauseJob — feed hold only.
+ * pauseJob — becomes STOP per DECISIONS.md rulings.
  *
- * With $32=1 enforced at job start (canStartJob gate), the firmware
- * automatically stops the spindle at hold-complete. No 0x9E toggle needed.
+ * "Pause is hold-only, and becomes stop wherever a dark hold has not been
+ * observed on hardware." + "Hardware evidence for this program is status-only;
+ * optical shutdown cannot be qualified." = hold cannot be qualified = pause is
+ * stop.
  *
- * History: the previous version sent 0x9E (spindle-stop-override) after hold.
- * Probe 2026-09-14 proved 0x9E is a TOGGLE — the firmware already stops the
- * spindle, so 0x9E RE-ARMED the beam. DECISIONS.md: "0x9E is a TOGGLE and
- * GRBL already stops the laser itself at hold-complete — Kerf's pause volley
- * re-arms the beam."
- *
- * The Hold:0 poll is retained as informational logging — it confirms the
- * machine reached full hold, which is useful diagnostic data.
+ * The old feed-hold + Hold:0 poll is deleted. Its Rust side
+ * (serial_get_status's try_lock) returned the empty sentinel for as long as
+ * the pump held the command lock — it could never succeed during a job. It
+ * always timed out at 3s and would have fired 0x9E (the pause re-arm defect).
  */
 export async function pauseJob(): Promise<void> {
-  await machineConnection.feedHold();
+  const store = useStore.getState();
+  store.addConsoleLine(
+    "Paused jobs cannot resume until a dark hold is qualified on hardware; the job has been stopped.",
+    "warning"
+  );
 
-  const HOLD_POLL_MS = 50;
-  const HOLD_TIMEOUT_MS = 3000;
-  const deadline = Date.now() + HOLD_TIMEOUT_MS;
-  let reachedHold0 = false;
-
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, HOLD_POLL_MS));
-    try {
-      const report = await machineConnection.getStatusReport();
-      if (report && /^<Hold:0/i.test(report)) {
-        reachedHold0 = true;
-        break;
-      }
-      if (report && /^<Hold\|/i.test(report)) {
-        reachedHold0 = true;
-        break;
-      }
-    } catch {
-      break;
-    }
-  }
-
-  if (!reachedHold0) {
-    useStore
-      .getState()
-      .addConsoleLine(
-        "WARNING: Machine did not reach full Hold within 3s",
-        "warning"
-      );
-  }
+  // Route through the shared stop — same path as STOP button and error abort.
+  store.setJobRunning(false);
+  await machineConnection.emergencyStop();
 }
 
 /**
@@ -280,18 +255,14 @@ async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise
     }
   }
 
-  // Safety volley: ensure laser is off on non-complete, non-alarm outcomes.
-  // ALARM excluded: GRBL is already locked and the volley earns error:9.
-  // SKIPPED when jobRunning is already false -- the user pressed STOP and
-  // emergencyStop ran its own sequence; a second M5+0x18 would be redundant.
+  // Safety: on non-complete, non-alarm outcomes, route through one shared
+  // emergencyStop (B1's native stop). ALARM excluded: GRBL is already locked.
+  // SKIPPED when jobRunning is already false — the user pressed STOP and
+  // emergencyStop already ran; duplicate stops are harmless (B1 single-flight)
+  // but pointless.
   if (endState !== "complete" && endState !== "alarm" && useStore.getState().jobRunning) {
     try {
-      await machineConnection.send("M5");
-    } catch {
-      /* port may be gone */
-    }
-    try {
-      await machineConnection.softReset();
+      await machineConnection.emergencyStop();
     } catch {
       /* port may be gone */
     }
@@ -446,17 +417,11 @@ export async function streamJob(gcode: string, opts: StreamJobOptions): Promise<
       "error"
     );
   } else {
-    // Safety volley: ensure laser is off. SKIPPED when jobRunning is already
-    // false -- the user pressed STOP and emergencyStop ran its own sequence;
-    // a second M5+0x18 would push another reset banner into the buffer.
+    // Safety: route through one shared emergencyStop (B1's native stop).
+    // SKIPPED when jobRunning is already false — STOP already ran.
     if (useStore.getState().jobRunning) {
       try {
-        await machineConnection.send("M5");
-      } catch {
-        /* port may be gone */
-      }
-      try {
-        await machineConnection.softReset();
+        await machineConnection.emergencyStop();
       } catch {
         /* port may be gone */
       }

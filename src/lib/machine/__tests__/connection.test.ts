@@ -451,118 +451,133 @@ describe("connection.ts (TN3)", () => {
     });
   });
 
-  // TN3d — e-stop sequencing, REWRITTEN for the F13 protocol redesign.
-  // OLD order (! → M5 → 0x18) deadlocks under the read pump: M5 queues on the
-  // command lock held by the in-flight line, 0x18 never sends, laser stays on.
-  describe("emergencyStop sequencing (new contract)", () => {
-    function mockEStop(rawStatus: string) {
+  // TN3d — e-stop sequencing, REWRITTEN for the 2026-09-20 DECISIONS ruling:
+  // "Abort sends 0x18 immediately — no feed hold, no M5, no ack wait."
+  // emergencyStop now invokes B1's serial_stop. No TS-side bytes at all.
+  describe("emergencyStop sequencing (native stop contract)", () => {
+    it("invokes serial_stop and surfaces confirmed messages", async () => {
+      mockInvoke.mockResolvedValueOnce({
+        outcome: "confirmed",
+        epochBefore: 1,
+        epochAfter: 2,
+        messages: [
+          "STOP: 0x18 sent",
+          "STOP: reset confirmed. Controller reset confirmed. Beam state unqualified — verify visually.",
+        ],
+      });
+
+      await machineConnection.emergencyStop();
+
+      expect(mockInvoke).toHaveBeenCalledWith("serial_stop");
+      expect(consoleTexts()).toContain("Emergency stop initiated");
+      expect(consoleTexts()).toContain("STOP: 0x18 sent");
+      expect(consoleTexts()).toContain(
+        "STOP: reset confirmed. Controller reset confirmed. Beam state unqualified — verify visually."
+      );
+    });
+
+    it("sets alarm state on submissionFailed outcome", async () => {
+      mockInvoke.mockResolvedValueOnce({
+        outcome: "submissionFailed",
+        epoch: 1,
+        error: "not connected",
+        messages: [
+          "STOP failed: could not send reset. Use the machine's physical emergency stop. Beam state unqualified.",
+        ],
+      });
+
+      await machineConnection.emergencyStop();
+
+      expect(useStore.getState().machineState).toBe("alarm");
+      expect(consoleTexts()).toContain(
+        "STOP failed: could not send reset. Use the machine's physical emergency stop. Beam state unqualified."
+      );
+    });
+
+    it("surfaces unconfirmed messages as warnings", async () => {
+      mockInvoke.mockResolvedValueOnce({
+        outcome: "submittedUnconfirmed",
+        epoch: 1,
+        inFlightWrite: false,
+        messages: [
+          "STOP: 0x18 sent",
+          "STOP: unconfirmed — use the machine's physical stop before reconnecting. Beam state unqualified — verify visually.",
+        ],
+      });
+
+      await machineConnection.emergencyStop();
+
+      expect(consoleTexts()).toContain("STOP: 0x18 sent");
+      expect(consoleTexts()).toContain(
+        "STOP: unconfirmed — use the machine's physical stop before reconnecting. Beam state unqualified — verify visually."
+      );
+      // Not submissionFailed, so state is NOT forced to alarm
+      expect(useStore.getState().machineState).not.toBe("alarm");
+    });
+
+    it("sets alarm and surfaces error when invoke rejects (IPC failure)", async () => {
+      mockInvoke.mockRejectedValueOnce(new Error("IPC channel closed"));
+
+      await machineConnection.emergencyStop();
+
+      expect(useStore.getState().machineState).toBe("alarm");
+      expect(
+        consoleTexts().some((t) => t.includes("Beam state unqualified"))
+      ).toBe(true);
+    });
+
+    it("sends NO bytes from TS — no 0x21, no 0x18, no M5", async () => {
       const calls: string[] = [];
       mockInvoke.mockImplementation(
-        async (cmd: string, args?: { byte?: number; command?: string }) => {
-          if (cmd === "serial_send_byte") {
-            calls.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
-            return;
-          }
-          if (cmd === "serial_send") {
-            calls.push(`send(${args?.command ?? "?"})`);
-            return { responses: ["ok"], drained: [] };
-          }
-          if (cmd === "serial_get_status") {
-            calls.push("status");
-            // e-stop getStatusReport returns raw StatusOutcome — the e-stop path
-            // does NOT go through the snapshot consumer (it's in emergencyStop,
-            // which does its own regex parsing). Return the old shape for compat.
-            return rawStatus
-              ? makeStatusOutcome(rawStatus)
-              : makeStatusOutcome("", [], { noResponse: true });
+        async (cmd: string) => {
+          calls.push(cmd);
+          if (cmd === "serial_stop") {
+            return {
+              outcome: "confirmed",
+              epochBefore: 1,
+              epochAfter: 2,
+              messages: ["STOP: 0x18 sent"],
+            };
           }
           return undefined;
         }
       );
-      return calls;
-    }
 
-    it("pins ! → settle → 0x18 → bounded re-poll → M5 on a non-alarm report", async () => {
-      vi.useFakeTimers();
-      const calls = mockEStop("<Idle|MPos:0.000,0.000,0.000|FS:0,0>");
+      await machineConnection.emergencyStop();
 
-      const stopPromise = machineConnection.emergencyStop();
-      await vi.runAllTimersAsync();
-      await stopPromise;
-
-      expect(calls).toEqual(["byte(21)", "byte(18)", "status", "send(M5)"]);
-      expect(consoleTexts()).toContain("Emergency stop complete");
-    });
-
-    it("skips M5 and surfaces honest guidance when the re-poll shows alarm", async () => {
-      vi.useFakeTimers();
-      const calls = mockEStop("<Alarm|MPos:0.000,0.000,0.000|FS:0,0>");
-
-      const stopPromise = machineConnection.emergencyStop();
-      await vi.runAllTimersAsync();
-      await stopPromise;
-
-      // M5 into a post-reset alarm earns the confusing error:9 — never sent.
-      expect(calls).toEqual(["byte(21)", "byte(18)", "status"]);
-      expect(consoleTexts()).toContain(
-        "Machine in alarm after stop -- laser off, unlock to continue"
-      );
-      // The alarm panel keys off machineState — refreshed from the report.
-      expect(useStore.getState().machineState).toBe("alarm");
-    });
-
-    it("skips M5 when the re-poll returns the busy/none sentinel (race branch)", async () => {
-      vi.useFakeTimers();
-      const calls = mockEStop("");
-
-      const stopPromise = machineConnection.emergencyStop();
-      await vi.runAllTimersAsync();
-      await stopPromise;
-
-      // No report ⇒ no M5 decision basis ⇒ skip (reset already de-energized
-      // the laser); NEVER fall back to store.machineState (stale during jobs).
-      expect(calls).toEqual(["byte(21)", "byte(18)", "status"]);
-      expect(consoleTexts()).toContain(
-        "Emergency stop complete -- machine reset, laser de-energized"
-      );
+      // Only serial_stop — no serial_send_byte, no serial_send, no serial_get_status
+      expect(calls).toEqual(["serial_stop"]);
     });
   });
 
   // ---- A2: disconnect beam-on safety ----
   describe("disconnect — A2 beam-on safety", () => {
-    it("fires emergencyStop before teardown when a job is running", async () => {
-      vi.useFakeTimers();
+    it("fires emergencyStop (serial_stop) before teardown when a job is running", async () => {
       const calls: string[] = [];
       mockInvoke.mockImplementation(
-        async (cmd: string, args?: { byte?: number; command?: string }) => {
-          if (cmd === "serial_send_byte") {
-            calls.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
-            return;
+        async (cmd: string) => {
+          calls.push(cmd);
+          if (cmd === "serial_stop") {
+            return {
+              outcome: "confirmed",
+              epochBefore: 1,
+              epochAfter: 2,
+              messages: ["STOP: 0x18 sent"],
+            };
           }
-          if (cmd === "serial_send") {
-            calls.push(`send(${args?.command ?? "?"})`);
-            return { responses: ["ok"], drained: [] };
-          }
-          if (cmd === "serial_get_status") {
-            calls.push("status");
-            return makeStatusOutcome("<Idle|MPos:0.000,0.000,0.000|FS:0,0>");
-          }
-          if (cmd === "serial_disconnect") {
-            calls.push("disconnect");
-            return undefined;
-          }
+          if (cmd === "serial_disconnect") return undefined;
           return undefined;
         }
       );
 
       useStore.setState({ jobRunning: true, machineState: "run" });
-      const disconnectPromise = machineConnection.disconnect();
-      await vi.runAllTimersAsync();
-      await disconnectPromise;
+      await machineConnection.disconnect();
 
-      // E-stop sequence must fire BEFORE serial_disconnect
-      expect(calls.indexOf("byte(21)")).toBeLessThan(calls.indexOf("disconnect"));
-      expect(calls.indexOf("byte(18)")).toBeLessThan(calls.indexOf("disconnect"));
+      // serial_stop must fire BEFORE serial_disconnect
+      const stopIdx = calls.indexOf("serial_stop");
+      const disconnectIdx = calls.indexOf("serial_disconnect");
+      expect(stopIdx).toBeGreaterThanOrEqual(0);
+      expect(disconnectIdx).toBeGreaterThan(stopIdx);
       // jobRunning must be false after disconnect
       expect(useStore.getState().jobRunning).toBe(false);
       expect(useStore.getState().machineConnected).toBe(false);
@@ -579,37 +594,33 @@ describe("connection.ts (TN3)", () => {
       useStore.setState({ jobRunning: false, machineState: "idle" });
       await machineConnection.disconnect();
 
-      // No e-stop bytes sent — only the teardown
-      expect(calls).not.toContain("serial_send_byte");
+      // No serial_stop — only the teardown
+      expect(calls).not.toContain("serial_stop");
       expect(calls).toContain("serial_disconnect");
       expect(useStore.getState().machineConnected).toBe(false);
     });
 
     it("fires emergencyStop when machine is in hold state (even if jobRunning is false)", async () => {
-      vi.useFakeTimers();
       const calls: string[] = [];
-      mockInvoke.mockImplementation(async (cmd: string, args?: { byte?: number }) => {
-        if (cmd === "serial_send_byte") {
-          calls.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
-          return;
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        calls.push(cmd);
+        if (cmd === "serial_stop") {
+          return {
+            outcome: "confirmed",
+            epochBefore: 1,
+            epochAfter: 2,
+            messages: ["STOP: 0x18 sent"],
+          };
         }
-        if (cmd === "serial_get_status")
-          return makeStatusOutcome("<Idle|MPos:0.000,0.000,0.000|FS:0,0>");
-        if (cmd === "serial_send") return { responses: ["ok"], drained: [] };
-        if (cmd === "serial_disconnect") {
-          calls.push("disconnect");
-          return undefined;
-        }
+        if (cmd === "serial_disconnect") return undefined;
         return undefined;
       });
 
       useStore.setState({ jobRunning: false, machineState: "hold" });
-      const disconnectPromise = machineConnection.disconnect();
-      await vi.runAllTimersAsync();
-      await disconnectPromise;
+      await machineConnection.disconnect();
 
       // E-stop fires even when jobRunning is false (machine is in hold)
-      expect(calls.some((c) => c.startsWith("byte("))).toBe(true);
+      expect(calls).toContain("serial_stop");
     });
   });
 
@@ -621,31 +632,26 @@ describe("connection.ts (TN3)", () => {
       recorder = new SerialTraceRecorder(onSend);
       mockInvoke.mockImplementation(recorder.handler);
 
-      // Simulate emergencyStop sequence: 0x21, (sleep 100ms), 0x18, (sleep 200ms), status, M5
-      await recorder.handler("serial_send_byte", { byte: 0x21 });
-      await vi.advanceTimersByTimeAsync(100);
+      // Simulate a generic byte+send sequence for recorder verification
       await recorder.handler("serial_send_byte", { byte: 0x18 });
       await vi.advanceTimersByTimeAsync(200);
       await recorder.handler("serial_get_status", {});
-      await recorder.handler("serial_send", { command: "M5" });
+      await recorder.handler("serial_send", { command: "$$" });
 
       // Verify order: all records in sequence
       const records = recorder.allRecords();
-      expect(records.length).toBeGreaterThanOrEqual(4);
+      expect(records.length).toBeGreaterThanOrEqual(3);
       expect(records[0].command).toBe("serial_send_byte");
-      expect(records[0].args.byte).toBe(0x21);
-      expect(records[1].command).toBe("serial_send_byte");
-      expect(records[1].args.byte).toBe(0x18);
-      expect(records[2].command).toBe("serial_get_status");
-      expect(records[3].command).toBe("serial_send");
-      expect(records[3].args.command).toBe("M5");
+      expect(records[0].args.byte).toBe(0x18);
+      expect(records[1].command).toBe("serial_get_status");
+      expect(records[2].command).toBe("serial_send");
+      expect(records[2].args.command).toBe("$$");
 
       // Derived views must preserve the same order
       const bytes = recorder.sentBytes();
-      expect(bytes[0]).toBe(0x21);
-      expect(bytes[1]).toBe(0x18);
+      expect(bytes[0]).toBe(0x18);
       const commands = recorder.sentCommands();
-      expect(commands.some((c) => c === "M5")).toBe(true);
+      expect(commands.some((c) => c === "$$")).toBe(true);
 
       vi.useRealTimers();
     });
