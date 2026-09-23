@@ -56,10 +56,12 @@ Kerf compensation expands holes without accounting for which side is waste, and 
 ## Engineering pins
 
 ### The Phase 2 abort order is safety-critical and must never contain an ack-awaited write
-*2026-07-05*
+*2026-07-05, reversed 2026-09-22*
 
 safety-critical abort order (`!` → ~100ms settle → realtime `0x18` → conditional M5 —
 never an ack-awaited write in between, that recreates the F13 deadlock).
+
+~~The abort sequence ! then ~100ms settle then realtime 0x18 then conditional M5.~~ **Reversed, per Lee, 2026-09-22:** Superseded by Lee's 2026-09-20 ruling (Abort sends 0x18 immediately — no feed hold, no M5, no ack wait). The prohibition on any ack-awaited write in the abort path stands; the hold-first sequence and the M5 do not. Implemented by the Phase 1 stop spine (serial_stop), merged 2026-09-22.
 
 ### `$32=1` is hard-gated at job_start and `streamingMode` defaults to `perLine`
 *2026-07-05, amended 2026-09-10*
@@ -73,9 +75,11 @@ never an ack-awaited write in between, that recreates the F13 deadlock).
 **Amended, Lee, 2026-09-10:** The `$32=1` half of this entry describes behaviour the code has never had. Verified against the tree 2026-09-10: `gcodeGen.ts:888` is a console warning, not a gate, and it fires only when the job contains a fill or raster layer — so a cut-only job, a Frame, or a material test can run with `$32=0` and no warning at all. The Rust buffered streaming path does gate on it (`serial.rs:552`), but `perLine` is the default and has no gate anywhere. This entry has been asserting a completeness that does not exist, and this session's first remediation plan trusted it and was failed by its critic for doing so. The `streamingMode` defaults to `perLine` half of the entry stands. Making the gate real is plan batches 2.1 and 2.2.
 
 ### Every abort routes through one shared stop operation, whose feed hold is conditional on verified laser-off behaviour.
-*2026-09-10, Lee*
+*2026-09-10, Lee, reversed 2026-09-22*
 
 A narrow reorder of the two job-abort sites was rejected: it would have fixed one path and left manual STOP, writer cancellation and completion inconsistent with it, duplicating the stop policy a third time. The plan critic also established that delegating blindly to emergencyStop is unsafe, because that function opens with a feed hold whose laser-off behaviour depends on $32=1, which nothing enforces. So the shared operation skips the hold wherever the darkening behaviour is unverified. The single strongest reason for one shared stop: every abort must remain able to request a reset when the line channel cannot answer, which is exactly the state the known wedge produces.
+
+~~The shared stop operation opens with a feed hold wherever laser-off behaviour under that hold has been verified.~~ **Reversed, per Lee, 2026-09-22:** Superseded by Lee's 2026-09-20 ruling: the shared stop sends 0x18 immediately with no feed hold in any case. The single shared stop operation stands and is serial_stop, which every abort and emergency path now calls.
 
 ### START refuses to run until laser mode and power scale are written and read back matching.
 *2026-09-10, Lee*
