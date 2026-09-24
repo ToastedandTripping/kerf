@@ -90,6 +90,11 @@ pub(crate) struct Brain {
     trace: Vec<TraceEvent>,
     /// Hold-point channels keyed by id.
     holds: std::collections::HashMap<&'static str, HoldPoint>,
+    /// Pending write hold: the next `write()` from this role parks on this id.
+    write_hold: Option<(HandleRole, &'static str)>,
+    /// Write-failure fault: (role, n, count). That role's `write()` calls
+    /// after the n-th (counted from when the fault was set) return an error.
+    write_fail: Option<(HandleRole, usize, usize)>,
 }
 
 #[allow(dead_code)]
@@ -124,6 +129,8 @@ impl ScriptedPort {
                 data_offset: 0,
                 trace: Vec::new(),
                 holds,
+                write_hold: None,
+                write_fail: None,
             })),
             role: HandleRole::Reader,
         }
@@ -147,6 +154,65 @@ impl ScriptedPort {
             .and_then(|m| m.into_inner().ok())
             .map(|b| b.trace)
             .unwrap_or_default()
+    }
+
+    /// A new handle on the same brain with the given role (writer, reader and
+    /// realtime handles of one connection share one ordered trace).
+    pub fn clone_with_role(&self, role: HandleRole) -> ScriptedPort {
+        ScriptedPort {
+            brain: Arc::clone(&self.brain),
+            role,
+        }
+    }
+
+    /// Test-only fault: the NEXT `write()` from `role` parks until
+    /// `release_hold(id)`. The brain lock is not held while parked (same
+    /// pattern as the read hold). A `HoldReached` event is traced at park
+    /// time; **the `Write` event is recorded at release, never at park time**,
+    /// so the trace orders the write where it actually reached the port.
+    pub fn hold_next_write(&self, role: HandleRole, id: &'static str) {
+        let mut brain = self.brain.lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        brain.holds.insert(
+            id,
+            HoldPoint {
+                release_tx: tx,
+                release_rx: rx,
+            },
+        );
+        brain.write_hold = Some((role, id));
+    }
+
+    /// Test-only fault: `role`'s `write()` calls after the n-th (counted from
+    /// now) return an I/O error. **Only `write()` calls are counted; `flush()`
+    /// is never counted.** A failed write is not recorded as a `Write` event.
+    pub fn fail_writes_after(&self, role: HandleRole, n: usize) {
+        self.brain.lock().unwrap().write_fail = Some((role, n, 0));
+    }
+
+    /// Clear both write faults.
+    pub fn clear_write_faults(&self) {
+        let mut brain = self.brain.lock().unwrap();
+        brain.write_fail = None;
+        brain.write_hold = None;
+    }
+
+    /// Append read steps to the script (e.g. a second banner for a later stop).
+    pub fn push_script(&self, steps: Vec<ScriptStep>) {
+        let mut brain = self.brain.lock().unwrap();
+        for step in steps {
+            if let ScriptStep::HoldUntilRelease { id } = step {
+                let (tx, rx) = std::sync::mpsc::channel();
+                brain.holds.insert(
+                    id,
+                    HoldPoint {
+                        release_tx: tx,
+                        release_rx: rx,
+                    },
+                );
+            }
+            brain.script.push_back(step);
+        }
     }
 
     /// Release a named hold point, allowing the blocked read to proceed.
@@ -291,6 +357,46 @@ impl Read for ScriptedPort {
 impl Write for ScriptedPort {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let mut brain = self.brain.lock().unwrap();
+        let role = self.role;
+        if let Some((fail_role, n, count)) = brain.write_fail.as_mut() {
+            if *fail_role == role {
+                *count += 1;
+                if *count > *n {
+                    return Err(io::Error::other("scripted write failure"));
+                }
+            }
+        }
+        if let Some((hold_role, id)) = brain.write_hold {
+            if hold_role == role {
+                brain.write_hold = None;
+                brain
+                    .trace
+                    .push(TraceEvent::HoldReached { id: id.to_string() });
+                drop(brain);
+                loop {
+                    let b = self.brain.lock().unwrap();
+                    let released = match b.holds.get(id) {
+                        Some(h) => match h.release_rx.try_recv() {
+                            Ok(()) => true,
+                            Err(std::sync::mpsc::TryRecvError::Empty) => false,
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                return Err(io::Error::other("write hold poisoned"))
+                            }
+                        },
+                        None => true,
+                    };
+                    drop(b);
+                    if released {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                brain = self.brain.lock().unwrap();
+                brain
+                    .trace
+                    .push(TraceEvent::HoldReleased { id: id.to_string() });
+            }
+        }
         brain.trace.push(TraceEvent::Write {
             role: self.role,
             data: buf.to_vec(),
@@ -474,6 +580,58 @@ mod tests {
 
         let trace = port.trace();
         assert_eq!(trace.len(), 3); // write, flush, read data
+    }
+
+    /// Self-test: a held write is recorded at RELEASE, never at park time.
+    #[test]
+    fn rf15_write_hold_records_write_at_release() {
+        let base = ScriptedPort::new(vec![]);
+        let mut writer = base.clone_with_role(HandleRole::Writer);
+        base.hold_next_write(HandleRole::Writer, "line");
+        let h = std::thread::spawn(move || writer.write_all(b"G1 X1\n").unwrap());
+        // Wait for the park.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !base
+            .trace()
+            .iter()
+            .any(|e| matches!(e, TraceEvent::HoldReached { id } if id == "line"))
+        {
+            assert!(std::time::Instant::now() < deadline, "write never parked");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            !base
+                .trace()
+                .iter()
+                .any(|e| matches!(e, TraceEvent::Write { .. })),
+            "a parked write must not be in the trace yet"
+        );
+        base.release_hold("line");
+        h.join().unwrap();
+        let trace = base.trace();
+        let released = trace
+            .iter()
+            .position(|e| matches!(e, TraceEvent::HoldReleased { .. }))
+            .unwrap();
+        let write = trace
+            .iter()
+            .position(|e| matches!(e, TraceEvent::Write { .. }))
+            .unwrap();
+        assert!(write > released, "Write must follow HoldReleased");
+    }
+
+    /// Self-test: only write() calls count toward fail_writes_after.
+    #[test]
+    fn rf15_fail_writes_after_counts_writes_only() {
+        let base = ScriptedPort::new(vec![]);
+        let mut rt = base.clone_with_role(HandleRole::Realtime);
+        base.fail_writes_after(HandleRole::Realtime, 1);
+        assert!(rt.write(&[0x18]).is_ok());
+        assert!(rt.flush().is_ok());
+        assert!(rt.flush().is_ok());
+        assert!(rt.write(&[0x18]).is_err());
+        base.clear_write_faults();
+        assert!(rt.write(&[0x18]).is_ok());
     }
 
     #[test]

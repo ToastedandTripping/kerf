@@ -481,6 +481,39 @@ pub enum BufferedPumpOutcome {
     Aborted,
     /// The port is dead (liveness expiry, EOF, or idle stall).
     Disconnected(String),
+    /// The submission gate refused line `line_index`. `in_flight == false`:
+    /// refused BEFORE the write (nothing written). `in_flight == true`: the
+    /// line was written and the gate's post-write check found admission had
+    /// closed during the write; the caller must re-send the reset.
+    Refused {
+        line_index: usize,
+        in_flight: bool,
+        reason: String,
+    },
+}
+
+/// Per-line submission gate for the buffered pump. Keeps the pump
+/// session-agnostic: `serial.rs` implements it over the admission fence.
+pub trait SubmissionGate {
+    /// Called before each line's write. `Ok(g0)` permits the write.
+    fn begin(&self) -> Result<u64, String>;
+    /// Called after each line's flush with the `g0` from `begin`. `Err` means
+    /// admission closed while the line was being written.
+    fn end(&self, g0: u64) -> Result<(), String>;
+}
+
+/// Always-open gate for pump tests that do not exercise admission.
+#[cfg(test)]
+pub struct OpenGate;
+
+#[cfg(test)]
+impl SubmissionGate for OpenGate {
+    fn begin(&self) -> Result<u64, String> {
+        Ok(0)
+    }
+    fn end(&self, _g0: u64) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// A writer that also supports the `?` probe byte. In production this is
@@ -508,6 +541,7 @@ pub fn run_buffered_pump<R: BufRead, W: Write + ProbeWriter>(
     pending: &mut Vec<u8>,
     config: &BufferedPumpConfig,
     abort: &AtomicBool,
+    gate: &dyn SubmissionGate,
     on_event: &dyn Fn(BufferedPumpEvent),
 ) -> Result<BufferedPumpOutcome, PumpFailure> {
     // Pre-validation: reject any line that would exceed the RX budget.
@@ -552,6 +586,19 @@ pub fn run_buffered_pump<R: BufRead, W: Write + ProbeWriter>(
                 break; // buffer full, wait for acks
             }
 
+            // RF-15: per-line admission check, after the abort check and
+            // before the write. Independent of the shared `abort` flag.
+            let g0 = match gate.begin() {
+                Ok(g0) => g0,
+                Err(reason) => {
+                    return Ok(BufferedPumpOutcome::Refused {
+                        line_index: send_cursor,
+                        in_flight: false,
+                        reason,
+                    })
+                }
+            };
+
             // Write line + newline
             let mut cmd = line.clone();
             cmd.push('\n');
@@ -561,6 +608,15 @@ pub fn run_buffered_pump<R: BufRead, W: Write + ProbeWriter>(
             writer
                 .flush()
                 .map_err(|e| PumpFailure::Disconnected(format!("flush failed: {}", e)))?;
+
+            // RF-15: post-write detection — admission closed during the write.
+            if let Err(reason) = gate.end(g0) {
+                return Ok(BufferedPumpOutcome::Refused {
+                    line_index: send_cursor,
+                    in_flight: true,
+                    reason,
+                });
+            }
 
             rx_budget_used += wire_bytes;
             in_flight.push_back(InFlightLine {
@@ -1320,6 +1376,7 @@ mod tests {
             &mut pending,
             config,
             abort,
+            &OpenGate,
             &|e| events.lock().unwrap().push(e),
         );
         (result, events.into_inner().unwrap(), writer)
@@ -1543,6 +1600,7 @@ mod tests {
             &mut pending,
             &config,
             &abort,
+            &OpenGate,
             &|_| {},
         );
         match result {
