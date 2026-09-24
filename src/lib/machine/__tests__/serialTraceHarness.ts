@@ -93,25 +93,18 @@ export class SerialTraceRecorder {
     return null;
   }
 
-  /** Apply a refusal string's side effects on the model and the record. */
+  /** Apply a refusal string's side effects on the record. The backend's
+   *  only refusal is `refused: not-admitted:`, which writes nothing. */
   private noteRefusalString(record: InvokeRecord, value: unknown): void {
     if (typeof value !== "string" || !value.startsWith("refused:")) return;
-    if (value.startsWith("refused: in-flight-unreset:")) {
-      this.fencePhase = "unknown";
-      this.fenceAdmitted = null;
-      record.wrote = true;
-    } else if (value.startsWith("refused: in-flight:")) {
-      record.wrote = true;
-    } else {
-      record.wrote = false;
-    }
+    record.wrote = false;
   }
 
   /** Settle a job-line record under the fence model. */
   private settleFenced(record: InvokeRecord, result: unknown): void {
     // A result that is itself a backend refusal (e.g. buffered
-    // `Ok("refused: in-flight…")`) is the backend's answer: the line reached
-    // the port before admission closed, so the model does not re-evaluate it.
+    // `Ok("refused: not-admitted: …")`) is the backend's answer, so the model
+    // does not re-evaluate it.
     if (typeof result === "string" && result.startsWith("refused:")) {
       this.noteRefusalString(record, result);
       record.result = result;
@@ -328,8 +321,7 @@ export class SerialTraceRecorder {
 
   /**
    * Reject a deferred invoke with a RAW string, exactly as Tauri rejects an
-   * `Err(String)`. An `in-flight-unreset` string moves the fence model to
-   * `unknown` (the backend's `mark_resend_failed`).
+   * `Err(String)`. A `refused:` string records that nothing was written.
    */
   releaseInvokeReject(index: number, raw: string): void {
     if (index < 0 || index >= this.records.length) {

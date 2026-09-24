@@ -265,9 +265,8 @@ export const machineConnection = {
       jobPollingSuspended = false;
       await invoke("serial_disconnect", { jobActive: needsEstop });
       store.setMachineConnected(false);
-      // RF-15 tail clear: an in-flight-unreset refusal that raced this
-      // teardown (arrived while machineConnected was still true) re-armed
-      // jobRunning; it must not outlive the connection.
+      // Tail clear: a job-running flag must never outlive the connection,
+      // whatever set it while the teardown was in progress.
       store.setJobRunning(false);
       store.setMachineState("disconnected");
       resetStatusConsumer();
@@ -326,8 +325,8 @@ export const machineConnection = {
       const msg = String(e);
       if (msg.startsWith(PERMIT_REFUSED_PREFIX)) {
         // RF-15: an admission refusal is not a dead port. Not-admitted lines
-        // were never written; in-flight lines were (the backend re-sent the
-        // reset after them, or reports that it could not).
+        // were never written; any other `refused:` string is unknown to the
+        // contract and is logged verbatim.
         if (msg.startsWith(`${PERMIT_REFUSED_PREFIX} not-admitted:`)) {
           store.addConsoleLine(`Not sent: ${msg}`, "error");
         } else {

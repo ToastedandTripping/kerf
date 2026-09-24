@@ -439,11 +439,6 @@ describe("jobStream.ts — Phase 2A streaming mode dispatch", () => {
 // the RAW string, exactly as Tauri rejects an `Err(String)`.
 // ---------------------------------------------------------------------------
 describe("RF-15 admission fence (jobStream)", () => {
-  const UNRESET =
-    "refused: in-flight-unreset: line written as admission closed; reset re-send failed (not connected); use the machine's physical stop";
-  const IN_FLIGHT =
-    "refused: in-flight: line written as admission closed; reset re-sent after it (the line may have preceded the stop's reset)";
-
   beforeEach(() => {
     mockInvoke.mockReset();
     localStorage.clear();
@@ -505,7 +500,6 @@ describe("RF-15 admission fence (jobStream)", () => {
     expect(sends).toHaveLength(1);
     expect(sends[0].args.jobEpoch).toBe(session.jobId);
     expect(sends[0].wrote).toBe(false);
-    // Applies to not-admitted sends only (in-flight refusals record wrote: true).
     const stopIdx = recs().findIndex((r) => r.command === "serial_stop");
     expect(stopIdx).toBeGreaterThanOrEqual(0);
     expect(
@@ -553,128 +547,22 @@ describe("RF-15 admission fence (jobStream)", () => {
     expect(useStore.getState().machineConnected).toBe(true);
   });
 
-  it("T4: buffered Ok(refused: in-flight) is cancelled with the in-flight line and no stop", async () => {
-    localStorage.setItem("streamingMode", "buffered");
-    fenced({ deferStream: true });
+  it("T4: a refusal string unknown to the contract is cancelled, never complete or disconnected", async () => {
+    fenced({ deferSend: true });
     const session = (await beginJobSession("Job"))!;
-    const job = streamJob("G1 X1", { label: "Job", session });
-    await recorder.waitUntilInvoked("serial_stream_job");
-    recorder.releaseInvoke(recorder.getRecordIndex("serial_stream_job"), IN_FLIGHT);
+    useStore.setState({ jobRunning: true });
+    const job = streamJob("G1 X1\nG1 X2", { label: "Job", session });
+    await recorder.waitUntilInvoked("serial_send");
+    const legacy = "refused: in-flight: legacy contract string";
+    recorder.releaseInvokeReject(recorder.getRecordIndex("serial_send"), legacy);
     const result = await job;
     expect(result.endState).toBe("cancelled");
-    expect(texts().some((t) => t.includes("Kerf sent the reset again after it"))).toBe(true);
-    expect(count("serial_stop")).toBe(0);
-  });
-
-  function expectUnresetState() {
-    expect(useStore.getState().jobRunning).toBe(true);
-    expect(useStore.getState().machineState).toBe("alarm");
+    expect(result.portDisconnected).toBe(false);
     expect(count("serial_send")).toBe(1);
-    const line = texts().find((t) => t.includes("the reset could not be re-sent"));
-    expect(line).toBeDefined();
-    expect(line).toContain("physical stop");
-    expect(line).toContain("disconnect and reconnect");
-  }
-
-  it("T4b(i): in-flight-unreset after production STOP re-arms STOP (per-line)", async () => {
-    fenced({ deferSend: true });
-    const session = (await beginJobSession("Job"))!;
-    useStore.setState({ jobRunning: true });
-    const job = streamJob("G1 X1\nG1 X2", { label: "Job", session });
-    await recorder.waitUntilInvoked("serial_send");
-    await pressStop();
-    recorder.releaseInvokeReject(recorder.getRecordIndex("serial_send"), UNRESET);
-    const result = await job;
-    expect(result.endState).toBe("unknown");
-    expectUnresetState();
-    expect(count("serial_stop")).toBe(1);
-  });
-
-  it("T4c: a second STOP recovers the backend admission after in-flight-unreset", async () => {
-    fenced({ deferSend: true });
-    const session = (await beginJobSession("Job"))!;
-    useStore.setState({ jobRunning: true });
-    const job = streamJob("G1 X1\nG1 X2", { label: "Job", session });
-    await recorder.waitUntilInvoked("serial_send");
-    await pressStop();
-    recorder.releaseInvokeReject(recorder.getRecordIndex("serial_send"), UNRESET);
-    await job;
-    await new Promise((r) => setTimeout(r, 0)); // let stopActiveSession settle
-
-    expect(await beginJobSession("Job")).toBeNull();
-    await pressStop();
-    expect(count("serial_stop")).toBe(2);
-    expect(useStore.getState().jobRunning).toBe(false);
-    // machineState stays "alarm" until the resumed status poll writes the
-    // controller's real state; this asserts the backend admission, not the UI.
-    const next = await beginJobSession("Job");
-    expect(next).not.toBeNull();
-    expect(next!.jobId).not.toBe(session.jobId);
-  });
-
-  it("T4b(ii): in-flight-unreset after production STOP re-arms STOP (buffered)", async () => {
-    localStorage.setItem("streamingMode", "buffered");
-    fenced({ deferStream: true });
-    const session = (await beginJobSession("Job"))!;
-    useStore.setState({ jobRunning: true });
-    const job = streamJob("G1 X1", { label: "Job", session });
-    await recorder.waitUntilInvoked("serial_stream_job");
-    await pressStop();
-    recorder.releaseInvoke(recorder.getRecordIndex("serial_stream_job"), UNRESET);
-    const result = await job;
-    expect(result.endState).toBe("unknown");
-    expect(useStore.getState().jobRunning).toBe(true);
-    expect(useStore.getState().machineState).toBe("alarm");
-    expect(count("serial_stop")).toBe(1);
-    expect(texts().some((t) => t.includes("disconnect and reconnect"))).toBe(true);
-  });
-
-  it("T4b(iii): in-flight-unreset while disconnected does not re-arm", async () => {
-    fenced({ deferSend: true });
-    const session = (await beginJobSession("Job"))!;
-    useStore.setState({ jobRunning: true });
-    const job = streamJob("G1 X1\nG1 X2", { label: "Job", session });
-    await recorder.waitUntilInvoked("serial_send");
-    await pressStop();
-    useStore.setState({ machineConnected: false });
-    recorder.releaseInvokeReject(recorder.getRecordIndex("serial_send"), UNRESET);
-    const result = await job;
-    expect(result.endState).toBe("unknown");
-    expect(useStore.getState().jobRunning).toBe(false);
-    expect(useStore.getState().machineState).toBe("alarm");
-  });
-
-  it("T4b(iii-b): a re-arm that raced disconnect teardown does not outlive it", async () => {
-    fenced({ deferSend: true });
-    recorder.defer("serial_disconnect");
-    const session = (await beginJobSession("Job"))!;
-    useStore.setState({ jobRunning: true });
-    const job = streamJob("G1 X1\nG1 X2", { label: "Job", session });
-    await recorder.waitUntilInvoked("serial_send");
-    const disc = machineConnection.disconnect();
-    await recorder.waitUntilInvoked("serial_disconnect");
-    expect(useStore.getState().machineConnected).toBe(true);
-    recorder.releaseInvokeReject(recorder.getRecordIndex("serial_send"), UNRESET);
-    await job;
-    expect(useStore.getState().jobRunning).toBe(true); // re-armed while still connected
-    recorder.releaseInvoke(recorder.getRecordIndex("serial_disconnect"), undefined);
-    await disc;
-    expect(useStore.getState().jobRunning).toBe(false);
-    expect(useStore.getState().machineConnected).toBe(false);
-  });
-
-  it("T4b(iv): in-flight-unreset with no TS stop sends zero stops", async () => {
-    fenced({ deferSend: true });
-    const session = (await beginJobSession("Job"))!;
-    useStore.setState({ jobRunning: true });
-    const job = streamJob("G1 X1\nG1 X2", { label: "Job", session });
-    await recorder.waitUntilInvoked("serial_send");
-    recorder.closeAdmission();
-    recorder.releaseInvokeReject(recorder.getRecordIndex("serial_send"), UNRESET);
-    const result = await job;
-    expect(result.endState).toBe("unknown");
-    expectUnresetState();
     expect(count("serial_stop")).toBe(0);
+    expect(count("serial_disconnect")).toBe(0);
+    expect(useStore.getState().machineConnected).toBe(true);
+    expect(texts().some((t) => t.includes(`(${legacy})`))).toBe(true);
   });
 
   it("T5 (RF-8): an unrecognised buffered outcome is unknown, never complete", async () => {

@@ -264,11 +264,15 @@ sessions until the old one settles. Callbacks from a cancelled session are disca
 | Order | Lock | Held by | Duration |
 |-------|------|---------|----------|
 | leaf  | `session.admitted_job`, `session.last_stop`, `session.observer`, `session.snapshot` | admission/stop/test, snapshot publish/read | Microseconds |
-| 2     | `realtime` | `send_byte_inner`, `serial_stop_inner`, `disconnect_inner_with_job`, `resend_reset_after_in_flight` (after dropping `command`) | Microseconds |
+| 2     | `realtime` | `send_byte_inner`, `serial_stop_inner`, `disconnect_inner_with_job` | Microseconds |
+| 2.5   | `session.submit` | `admit_and_write` (admission check + one `write()` of a job line), `serial_stop_inner` Step 2 (admission close) | Microseconds; at most one `write(2)` enqueue, bounded by the port timeout (1000 ms) |
 | 3     | `command` | `serial_send_inner`, `serial_stream_job_inner`, `serial_connect_inner`, `disconnect_inner_with_job`; `try_lock` only in `serial_get_status_inner` and the stop's banner read | Seconds to minutes |
 
 Connect is the one nesting exception: acquires `command` then `realtime` to install both
-handles atomically. The stop operation takes `admitted_job` then `realtime` (never `command`);
+handles atomically. Job-line order is `command` → `submit` → `admitted_job`; nothing takes
+`submit` while holding `realtime` or `admitted_job`, and `submit` is never held across a read,
+flush, drain, pump wait or emit. The stop operation takes `submit` → `admitted_job`, releases
+both, then takes `realtime` (never `command`);
 after `0x18` it may `try_lock` `command` (never wait) for a banner read. The canonical table
 is the module doc at the top of `serial.rs`.
 
@@ -359,18 +363,15 @@ then `machineConnection.emergencyStop()` → `serial_stop`. Per the DECISIONS ru
 2026-09-20 ("Abort sends 0x18 immediately — no feed hold, no M5, no ack wait"),
 `serial_stop_inner`:
 1. Single-flights via `StopGuard`; a concurrent caller waits up to 3s and returns `last_stop`.
-2. Closes admission: phase Stopping, `admitted_job` cleared, `permit_generation` incremented;
-   invalidates the snapshot; sets `job_abort`.
+2. Closes admission under `submit` then `admitted_job`: phase Stopping, `admitted_job`
+   cleared; releases both; invalidates the snapshot; sets `job_abort`.
 3. Writes `0x18` on the realtime handle, retrying once on write failure.
 4. Waits up to 3s for a reset banner, seen by any pump or status body or by its own
    `try_lock`ed read.
 Result: `confirmed` (epoch incremented, phase Idle via a Stopping→Idle compare-and-swap),
 `submittedUnconfirmed` (phase Unknown) or `submissionFailed` (phase Unknown; TS sets
-`machineState` to alarm). Every message says beam state is unqualified. `in_flight_write` is
-set when a writer detected a job line written as admission closed (the message then adds
-"reset re-sent after it"), and a failed in-flight re-send (`resend_failed`) forces
-`submittedUnconfirmed` with the physical-stop instruction even when a banner was observed.
-A concurrent stop call is a joiner: it waits, returns `last_stop`, and sends no byte. Job
+`machineState` to alarm). Every message says beam state is unqualified. One stop sends one
+reset; `serial_stop_inner` is the only production writer of an abort `0x18`. A concurrent stop call is a joiner: it waits, returns `last_stop`, and sends no byte. Job
 error/abort outcomes in `jobStream.ts` and `disconnect()` with a job active route through the
 same `emergencyStop()`; Rust `disconnect_inner_with_job` calls `serial_stop_inner` before
 teardown when a pump or job is active.
@@ -381,55 +382,48 @@ qualified on hardware, clears `jobRunning` and calls `emergencyStop()` (DECISION
 hardware"). `resumeJob()` sends only `~`.
 
 **Admission fence** (`serial_session.rs`, RF-15). Phase: Disconnected → Idle (connect) →
-Active (`serial_job_begin`) → Stopping (stop) → Idle (confirmed) or Unknown (unconfirmed, or a
-failed in-flight re-send). `serial_job_begin` succeeds only from Idle and returns the epoch as
-the job id; `serial_job_end` requires that id and moves Active→Idle only (a CAS: ending a job
-never overwrites Unknown). After an unconfirmed or failed stop, or a failed in-flight re-send,
-no job can begin until a later stop is confirmed by a reset banner or the port is reconnected.
-That later stop is the recovery the operator's live STOP button reaches: its Step 2 stores
-Stopping unconditionally and clears the in-flight flags, and a banner lets the CAS move
-Stopping→Idle.
+Active (`serial_job_begin`) → Stopping (stop) → Idle (confirmed) or Unknown (unconfirmed or
+failed stop). `serial_job_begin` succeeds only from Idle and returns the epoch as the job id;
+`serial_job_end` requires that id and moves Active→Idle only (a CAS: ending a job never
+overwrites Unknown). After an unconfirmed or failed stop, no job can begin until a later stop
+is confirmed by a reset banner or the port is reconnected. That later stop is the recovery the
+operator's live STOP button reaches: its Step 2 stores Stopping unconditionally, and a banner
+lets the CAS move Stopping→Idle.
 
 Every job line carries the admitted epoch: `serial_send` takes `jobEpoch` (absent for console,
 `$H`, jog and settings writes, which are not phase-gated) and `serial_stream_job` requires it.
-Each job line gets `permit_precheck` before the command-lock wait (a fast-fail only) and the
-authoritative `try_permit_begin` while holding `command`, before the drain and the write, so a
-refused line reads and writes nothing. The buffered pump applies the same gate per line
-(`SubmissionGate` in `serial_pump.rs`, implemented by `JobPermit`), independently of the shared
-`job_abort` flag; `$32=1` is bracketed the same way, and the stream body no longer clears
-`job_abort` (`serial_job_begin` is its only clearer). After each write `try_permit_end`
-compares the generation: a line written as the stop bumped it is "in flight". The writer then
-drops `command` and calls `resend_reset_after_in_flight`, which writes one more realtime `0x18`
-(retry once, no hold, no M5, no ack wait). If both attempts fail it sets `resend_failed` and
-stores Unknown, and the stop cannot confirm. The ordering argument, and its assumption that
-writer and realtime writes share one tty queue in syscall order, is in the `serial_session.rs`
-module doc. One stop may therefore put two `0x18` on the wire and produce two banners; that is
-by design.
+**Every job-epoch write goes through `SerialSession::admit_and_write`**: it takes `submit`,
+checks admission, makes the line's single `write()` and drops `submit`; the flush (`tcdrain`)
+follows outside the lock. The sites are the `serial_send` job line, the `$32=1` bracket, and
+the buffered pump's Phase A (`SubmissionGate::admit_write` in `serial_pump.rs`, implemented by
+`JobPermit`, independently of the shared `job_abort` flag). `permit_precheck` before the
+command-lock wait and `try_permit_begin` under `command` before the drain are
+non-authoritative fast-fails that spare a refused line the drain. The stop closes admission
+under the same `submit` lock, so a job line is either queued before the stop's single `0x18`
+or refused with nothing written; no interleaving puts job bytes after the reset. The premise
+(both handles are one tty with one output queue; a job line of at most 127 bytes is one
+`write(2)` that returns on enqueue, so the stop waits at most one enqueue, bounded by the port
+timeout, and never on the controller, an acknowledgement or transmission) is in the
+`serial_session.rs` module doc. The stream body never clears `job_abort` (`serial_job_begin`
+is its only clearer). The `$32=1` pump publishes a banner it reads while a stop is in flight,
+as `serial_send` does, so a STOP during the `$32=1` exchange still confirms.
 
-Refusals are `refused:`-prefixed strings in the existing `Err(String)` / outcome contracts:
-`refused: not-admitted: …` (nothing written), `refused: in-flight: …` (the reset was re-sent
-after the line), `refused: in-flight-unreset: …` (the re-send failed). `connection.send()`
-returns a refusal as `[<string>]`, never `error:disconnected`. `jobStream` checks it first:
+The only refusal is `refused: not-admitted: …` (nothing written), carried in the existing
+`Err(String)` / outcome contracts. `connection.send()` returns a refusal as `[<string>]`,
+never `error:disconnected`. `jobStream` checks it first:
 
 | Backend answer | `endState` | `jobRunning` after | TS sends anything? |
 |---|---|---|---|
-| `not-admitted` | `cancelled` | false | No |
-| `in-flight` | `cancelled` | false | No |
-| `in-flight-unreset` | `unknown` | re-armed true while connected (STOP stays live), `machineState` alarm | No automatic stop |
+| `not-admitted` (or any other `refused:` string) | `cancelled` | false | No |
 
 A refusal is never `complete` and never triggers a stop from TS. The buffered path defaults to
-`unknown` (RF-8). `disconnect()` clears `jobRunning` at its tail, so a re-arm that raced
-teardown cannot outlive it.
+`unknown` (RF-8). `disconnect()` clears `jobRunning` at its tail, so no job-running flag
+outlives the connection.
 
-Expected, conservative orderings (not bugs): a disconnect with a job running runs the stop
-and then teardown, so a late in-flight re-send hits "not connected" and reports
-`in-flight-unreset`. A writer from stop S can mark `resend_failed` after a later stop S2
-cleared it, so S2 shows the physical-stop line and the operator presses STOP again. The
-writer's Unknown store can land after `set_disconnected`, and `set_idle_on_connect` clears
-it. After an `in-flight-unreset` the app holds STOP live, but a manual write (console `$X`,
-Test Fire, a settings write) can drain a GRBL `ALARM:3` line through `surfaceUnsolicited`,
-which clears `jobRunning`; STOP then greys out while Rust is still Unknown, and reconnect is
-the recovery (Parking Lot: phase policy for manual writes).
+Residuals: the one line admitted just before STOP can execute before the reset arrives (beam
+state unqualified); `None`-epoch writes (console, Test Fire, settings) are not phase-gated and
+can land after STOP (Parking Lot: phase policy for manual writes); a future job-write site
+added without `admit_and_write` would reopen the race.
 
 **Idle-stall disconnect.** Both pumps count consecutive `<Idle…>` reports with no terminal in
 between. At `DEFAULT_IDLE_STALL_TICKS` (3) they conclude the ack was lost and return a
