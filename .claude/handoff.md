@@ -89,8 +89,6 @@ Next: resume the fence relay at Stage 2 (Razor), then cut-vs-screen, canvas, edi
 
 **B4 Razor PASS — Phase B stop spine complete.** B4 (shared abort/disconnect + pause containment): Razor PASS, 0 CRITICAL, 0 WARNING, 4 NOTE (stale comments only). 11/11 spec items covered. emergencyStop calls serial_stop (0x18 immediately), both abort sites in jobStream.ts route through it, Hold:0 poll deleted, pause becomes stop. All four CRITICAL checks confirmed: no M5 in any abort path, no 0x21/feedHold, no 0x9E on pause, serial_stop is the sole stop mechanism. Combined across Phase B: B1 Razor PASS (2W fixed), B2a Razor PASS (1W fixed), B2b Razor PASS (1C+2W fixed), B3 Razor PASS (1C+2W fixed), B4 Razor PASS (0 findings). The 0x18 abort patch is implemented, reviewed, and ready for merge + owner hardware verification.
 
-### 2026-09-22
-
 **Phase B stop spine — 4 relay batches.** B1 Razor PASS (2W fixed). B2a Razor PASS (1W fixed). B2b Razor PASS (1C fixed — serde case mismatch). B3 Razor PASS (1C fixed — stop deadlock). B4 Ted DONE, Razor NOT yet run (session quota 97%). All abort sites rewritten: 0x18 immediately, no M5, no hold, pause becomes stop. Next: B4 Razor review.
 
 ### 2026-09-20
