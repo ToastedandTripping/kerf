@@ -990,9 +990,10 @@ pub(crate) fn serial_stop_inner(inner: &SerialInner, sleeper: &dyn Fn(Duration))
         let result = StopResult::SubmissionFailed {
             epoch: epoch_before,
             error: error.clone(),
-            messages: vec![format!(
+            messages: vec![
                 "STOP failed: could not send reset. Use the machine's physical emergency stop. Beam state unqualified."
-            )],
+                    .to_string(),
+            ],
         };
         session.phase.store(PHASE_UNKNOWN, Ordering::SeqCst);
         *session.last_stop.lock().unwrap_or_else(|e| e.into_inner()) = Some(result.clone());
