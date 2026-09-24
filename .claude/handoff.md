@@ -51,11 +51,11 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - **Charter gap analysis at `.claude/plans/charter-gap-analysis.md`** — 293-line Fable audit of all 10 codebase areas vs the charter. None of the three 'done' conditions are met. Top gaps ranked. The fastest path to 'done' follows the existing remediation plan order.
 
-- **Fence relay `kerf-fence-reopen` PAUSED at Stage 2 (2026-09-24, Lee).** RF-15: batch 1.1's admission fence was never wired to production. Plan `.claude/plans/fence-wiring-1.1-reopen.md` (3 critic rounds). Ted DONE on `relay/kerf-fence-reopen` in worktree `~/Projects/relay-kerf-fence-reopen` (6 commits on d9f921f; orchestrator re-ran: 842 JS / 326 Rust, clippy/fmt/tsc clean; 40/40 mutants killed). Razor was stopped before writing findings; its partial review (gates re-run, out-of-scope files and golden byte-identical) is at `~/marvin/state/relay/kerf-fence-reopen-razor-review-b1.md`. RESUME: `/relay` recovery from `~/marvin/state/relay/kerf-fence-reopen-pack.json` — spawn a fresh Razor (opus, high) on the existing brief `kerf-fence-reopen-razor-brief-b1.md`, then 2.5/2.7/3.5/close, then merge the relay branch into the session branch. Ted flagged three mutants killed by an earlier assertion than the plan named (R3, R6 gate.begin, T1): Razor judges. Owner hardware test (4 steps, plan's Hardware note) after merge.
-
 - **Three code-refresh relays queued after the fence, plans final and critic-converged:** `refresh-cut-vs-screen` (3 rounds), `refresh-canvas-display` (3 rounds, F7 redesigned display-only so a node edit never changes the cut), `refresh-editing-shortcuts` (4 rounds, the 4th at Lee's request). Run in that order, one at a time. Cut-vs-screen must land before canvas (canvas precondition greps `drawnLeaves`).
 
 - **Two DECISIONS proposals owed to Lee at relay close:** (1) Ctrl+Shift+V = Flip Vertical, Alt+V = Paste in Place (Lee ruled 2026-09-22; entry wording in the editing plan's F3 implementer note); (2) the fence pin (plan's Out-of-scope section, critic A1 wording: up to two 0x18 per stop by design, refusal never maps to complete, never triggers a TS stop).
+
+- **Fence relay `kerf-fence-reopen` CLOSED and merged into this session branch (66c950a, 2026-09-24).** Razor PASS: 0 CRITICAL / 0 WARNING / 4 NOTE, 19/19 requirements covered; Stage 4.5 gate READY (build, lint, prettier, tsc, 842 JS, clippy, fmt, 326 Rust). N2 and N4 parked in ROADMAP (`### Deferred from kerf-fence-reopen (2026-09-24)`); N1 (T1 refused-branch mutant is killed by T2 `endState`, not the plan-named T1 assertions) is recorded in the Razor review. **Owner hardware test required** before this counts as verified: the four steps in ROADMAP `next` (stop mid-frame, frame again, full job on scrap, idle `$$`/jog/home). Not yet on master; `/save` merges the session branch. NEXT: refresh-cut-vs-screen relay.
 
 ## Open questions awaiting Lee
 
@@ -72,6 +72,10 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-09-24 (fence relay close)
+
+**Relay `kerf-fence-reopen` resumed at Stage 2 and closed.** Fresh Razor (the paused one had written only its gates section): PASS, 0C/0W/4N. Razor judged Ted's three flagged mutants by removing the earlier-firing assertions and re-running: R3 and R6 are killed by the plan-named assertion; T1 refused-branch is not (the plan named its assertions before refusals stopped mapping to disconnected) but is killed by T2 `endState` and five others, ruled killed. Gate re-run in the relay worktree: all green. Merged into `marvin/session-8b2728` as 66c950a; the one conflict was ROADMAP `next` (relay side taken, both Parking Lots kept). Ledger status `merged`; pack stamped for ingest.
 
 ### 2026-09-24
 
