@@ -534,6 +534,12 @@ impl SubmissionGate for OpenGate {
 /// 4. `ok` attribution is strictly FIFO.
 /// 5. RX budget is never exceeded (each line's byte count is checked before
 ///    sending).
+/// 6. RF-15: every line passes `gate.begin()` before its write and
+///    `gate.end()` after its flush, independently of `abort`.
+// The gate is the eighth parameter (RF-15 plan: an explicit per-line gate
+// keeps the pump session-agnostic); bundling it into a struct would touch
+// every call site for no behavioural gain.
+#[allow(clippy::too_many_arguments)]
 pub fn run_buffered_pump<R: BufRead, W: Write + ProbeWriter>(
     lines: &[String],
     reader: &mut R,
