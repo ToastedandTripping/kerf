@@ -47,13 +47,15 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - **Batch 2.3 must be re-specified before anyone implements it.** It was written to enforce a RESTRICTED release envelope; Lee chose the full feature set, so its refusals have to become actual corrections (R8, R13, R18, R19). It will likely split into three or four batches. The M4 default flip already pre-empts part of R8.
 
-- **Relay B (rapid gap traversal) COMPLETE (2026-09-19).** Relay `engrave-efficiency-b`: Ted+Razor PASS_WITH_WARNINGS (W1 fixed — vector path wiring gap). Acceleration-safe three-segment rapid gaps in the scanner, gated on 10% modeled savings. 251 Rust / 764 JS tests. On `relay-b-rapid-gaps` branch, not yet merged. Owner hardware coupon test recommended before calling production-validated.
-
 - **Charter amendment needed.** The text tool (4 bundled fonts, auto-convert at G-code time) ships in v0.8.29 and contradicts the charter's explicit exclusion of built-in font rendering. Lee requested it directly. Neither CHARTER.md nor ROADMAP's 'What We're NOT Building' has been amended. A one-line amendment approved by Lee closes the contradiction.
 
 - **Charter gap analysis at `.claude/plans/charter-gap-analysis.md`** — 293-line Fable audit of all 10 codebase areas vs the charter. None of the three 'done' conditions are met. Top gaps ranked. The fastest path to 'done' follows the existing remediation plan order.
 
-- Phase B stop spine COMPLETE — all 4 batches Razor PASS, 0 CRITICAL. 5 relay branches unmerged on master (B1: relay/kerf-b1-admission-fence 10 ahead, B2a: relay/kerf-b2a-status-contract 13 ahead, B2b: relay/kerf-b2b-status-consumer 17 ahead, B3: relay/kerf-b3-job-lifetime 21 ahead, B4: relay/kerf-b4-shared-abort 23 ahead). The chain is sequential (B4 includes all prior batches). Merge of B4's branch onto master lands the full stop spine. Merge is deploy-gated. Owner hardware verification follows merge.
+- **Fence relay `kerf-fence-reopen` PAUSED at Stage 2 (2026-09-24, Lee).** RF-15: batch 1.1's admission fence was never wired to production. Plan `.claude/plans/fence-wiring-1.1-reopen.md` (3 critic rounds). Ted DONE on `relay/kerf-fence-reopen` in worktree `~/Projects/relay-kerf-fence-reopen` (6 commits on d9f921f; orchestrator re-ran: 842 JS / 326 Rust, clippy/fmt/tsc clean; 40/40 mutants killed). Razor was stopped before writing findings; its partial review (gates re-run, out-of-scope files and golden byte-identical) is at `~/marvin/state/relay/kerf-fence-reopen-razor-review-b1.md`. RESUME: `/relay` recovery from `~/marvin/state/relay/kerf-fence-reopen-pack.json` — spawn a fresh Razor (opus, high) on the existing brief `kerf-fence-reopen-razor-brief-b1.md`, then 2.5/2.7/3.5/close, then merge the relay branch into the session branch. Ted flagged three mutants killed by an earlier assertion than the plan named (R3, R6 gate.begin, T1): Razor judges. Owner hardware test (4 steps, plan's Hardware note) after merge.
+
+- **Three code-refresh relays queued after the fence, plans final and critic-converged:** `refresh-cut-vs-screen` (3 rounds), `refresh-canvas-display` (3 rounds, F7 redesigned display-only so a node edit never changes the cut), `refresh-editing-shortcuts` (4 rounds, the 4th at Lee's request). Run in that order, one at a time. Cut-vs-screen must land before canvas (canvas precondition greps `drawnLeaves`).
+
+- **Two DECISIONS proposals owed to Lee at relay close:** (1) Ctrl+Shift+V = Flip Vertical, Alt+V = Paste in Place (Lee ruled 2026-09-22; entry wording in the editing plan's F3 implementer note); (2) the fence pin (plan's Out-of-scope section, critic A1 wording: up to two 0x18 per stop by design, refusal never maps to complete, never triggers a TS stop).
 
 ## Open questions awaiting Lee
 
@@ -70,6 +72,18 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-09-24
+
+**Session 8b2728: code refresh, Phase 1 merged, CI green, fence gap found, four relay plans.**
+
+Whole-repo code refresh (report `.refresh/2026-09-22.md`, gitignored). Found master CI red 13 runs since 2026-09-11 on Prettier, which skipped every Rust CI step (cargo test, clippy, fmt, golden guard) for 11 days. Found the Phase 1 stop spine (batches 1.1-1.5, each Razor PASS) stranded unmerged on relay branches; per Lee, merged it (6e1f507). Formatted the tree (301ff47), added a pre-commit format check (67115ca), a clippy fix for Rust 1.98 (229398f); master fast-forwarded and pushed at 229398f, CI green end to end. Bucket A cleanups: PDF constructPath tests, dither characterization tests, pointsBBox at two sites, dead snap branch, six un-exports, keepAwake comments. ARCHITECTURE.md reconciled with the tree (b7f4c41). Per Lee, struck the 2026-07-05 and 2026-09-10 abort rulings as superseded by 2026-09-20 (c08527d).
+
+The Relay B and Phase B owed items are discharged: Relay B shipped in v0.8.30 and its branch is an ancestor of master; the Phase B stack is merged.
+
+Audit found ~25 real defects (5 readers + cross-cut; 91 findings). Machine-side ones went to the remediation PLAN.md addendum as RF-1..RF-16 (marvin cad6bd45, 9404236c), including RF-15: the admission fence was never wired to production. Lee: fix it next. Fence plan passed 3 critic rounds (each round found a real defect: TOCTOU permit check, STOP disabled on resend failure, STOP re-arm never taking effect); Ted implemented it; Razor was paused at Lee's request. Three bug-group relay plans are final (cut-vs-screen found two more cut defects in planning: flipped/rotated text cut wrong, layer reorder and its undo move grouped parts to the wrong layer).
+
+Next: resume the fence relay at Stage 2 (Razor), then cut-vs-screen, canvas, editing.
 
 ### 2026-09-22
 
