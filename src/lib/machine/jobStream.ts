@@ -6,16 +6,22 @@
  *   send line -> wait for ok/error/ALARM/banner -> classify -> continue/abort
  *
  * Safety contract:
+ * - Every job line carries the owning session's epoch (`jobEpoch`); the
+ *   backend admission fence refuses a line from a job that STOP has closed
+ *   (RF-15). A refusal is never "complete", never read as a dead port, and
+ *   never causes TS to send anything (no stop, no M5, no line).
  * - Empty response or reset banner = the line was ABORTED, not acked
  * - ALARM = controller locked, laser already de-energized by firmware
- * - Safety volley (M5 + softReset) on abort ONLY when jobRunning is still
- *   true -- STOP's emergencyStop owns its own sequence
- * - jobRunning and jobProgress cleaned up on every exit path
+ * - On error/abort, ONE shared stop (`emergencyStop` → native `serial_stop`:
+ *   0x18 immediately, no feed hold, no M5, no ack wait, per 2026-09-20) fires
+ *   only when jobRunning is still true -- STOP already ran otherwise
+ * - The owning JobSession releases jobRunning/jobProgress on every exit path
+ *   ("unknown" deliberately retains jobRunning so STOP stays live)
  */
 
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { useStore } from "../../app/store";
-import { machineConnection } from "./connection";
+import { machineConnection, PERMIT_REFUSED_PREFIX } from "./connection";
 import type { JobSession } from "./jobSession";
 
 /**
@@ -64,10 +70,11 @@ export interface StreamJobOptions {
    *  acks (head is still decelerating at last-ack time). START-only. */
   waitForIdle?: boolean;
 
-  /** B3: job session that owns this stream. When provided, the session gates
-   *  progress/cleanup and handles draining. Callbacks that don't match the
-   *  session's jobId are discarded (cross-job safety). */
-  session?: JobSession;
+  /** B3: job session that owns this stream. REQUIRED (RF-15): its `jobId` is
+   *  the epoch every job line carries, so an unfenced job is not type-legal.
+   *  The session gates progress/cleanup and handles draining. Callbacks that
+   *  don't match the session's jobId are discarded (cross-job safety). */
+  session: JobSession;
 }
 
 export interface StreamJobResult {
@@ -83,9 +90,11 @@ export interface StreamJobResult {
  * - Handle any caller-specific post-stream work (e.g. status message)
  *
  * This function WILL:
- * - Set jobRunning=false and jobProgress=0 on every exit path
- * - Fire the M5+softReset safety volley on error/abort (when jobRunning is
- *   still true -- STOP's emergencyStop path is not duplicated)
+ * - Release the session on every exit path (jobRunning/jobProgress cleared
+ *   except for "unknown", which keeps STOP live)
+ * - Route error/abort through the one shared stop (`emergencyStop` →
+ *   `serial_stop`, 0x18 only) when jobRunning is still true -- STOP's own
+ *   path is not duplicated; a backend refusal never triggers it
  * - Tear down the serial port on disconnect detection
  */
 /**
@@ -100,6 +109,41 @@ export function getStreamingMode(): "perLine" | "buffered" {
     // localStorage unavailable — non-critical, use default
   }
   return "perLine";
+}
+
+/**
+ * RF-15 refusal contract. Maps a backend `refused:` answer to its end state,
+ * logs the operator message, and (in-flight-unreset only) re-arms STOP.
+ * The caller must skip every post-loop stop and console line when this ran.
+ */
+function handleRefusal(reason: string, label: string): StreamJobResult["endState"] {
+  const store = useStore.getState();
+  if (reason.startsWith(`${PERMIT_REFUSED_PREFIX} in-flight-unreset:`)) {
+    // The backend already closed admission (phase Unknown). Every production
+    // STOP cleared jobRunning before this refusal could arrive, so re-arm it
+    // explicitly (only while connected) to keep the STOP button live.
+    store.setMachineState("alarm");
+    if (useStore.getState().machineConnected) store.setJobRunning(true);
+    store.addConsoleLine(
+      `${label} stopped: one line may have reached the controller after STOP and the reset could not be re-sent. Use the machine's physical stop, then press STOP in Kerf; if STOP cannot confirm, disconnect and reconnect. Status updates pause until STOP. Beam state unqualified.`,
+      "error"
+    );
+    return "unknown";
+  }
+  if (reason.startsWith(`${PERMIT_REFUSED_PREFIX} in-flight:`)) {
+    store.addConsoleLine(
+      `${label} stopped: one line may have reached the controller as STOP landed. Kerf sent the reset again after it. Beam state unqualified — verify visually.`,
+      "warning"
+    );
+    return "cancelled";
+  }
+  const detailMatch = reason.match(/^refused: not-admitted: (.*)$/);
+  const detail = detailMatch ? detailMatch[1] : reason;
+  store.addConsoleLine(
+    `${label} stopped: the controller is no longer accepting this job's lines (${detail}). Nothing further was sent.`,
+    "warning"
+  );
+  return "cancelled";
 }
 
 /** Mirror of Rust `JobEvent` (serde-tagged). */
@@ -127,7 +171,7 @@ async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise
 
   channel.onmessage = (event: JobEvent) => {
     // B3: discard callbacks that don't belong to this session.
-    if (session && session.cancelled) return;
+    if (session.cancelled) return;
     const s = useStore.getState();
     switch (event.type) {
       case "progress":
@@ -165,60 +209,40 @@ async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise
     }
   };
 
-  let endState: StreamJobResult["endState"] = "complete";
+  // RF-8: default "unknown", never "complete" -- an outcome string no branch
+  // recognises must not report a stopped job as finished.
+  let endState: StreamJobResult["endState"] = "unknown";
   let portDisconnected = false;
+  let refused = false;
 
   try {
-    const outcome = await invoke<string>("serial_stream_job", { gcode, channel });
+    const outcome = await invoke<string>("serial_stream_job", {
+      gcode,
+      jobEpoch: session.jobId,
+      channel,
+    });
 
-    if (outcome.startsWith("complete")) {
+    if (outcome.startsWith(PERMIT_REFUSED_PREFIX)) {
+      refused = true;
+      endState = handleRefusal(outcome, opts.label);
+    } else if (outcome.startsWith("complete")) {
       endState = "complete";
-      // B3: when a session owns this stream, drain through the session.
-      // The session handles idle-wait and timeout-to-unknown.
-      if (session) {
-        const drainResult = await session.drain(!!opts.waitForIdle);
-        if (drainResult === "unknown") {
-          // 30s drain timeout: "unknown" state. Session retains protection
-          // (jobRunning stays true, keep-awake held). Razor W1: must NOT
-          // map to "complete" — that releases protection prematurely.
-          endState = "unknown";
-        } else if (drainResult === "alarm") {
-          endState = "alarm";
-          store.addConsoleLine(
-            `${opts.label} stopped -- machine alarm (laser already off; unlock to continue)`,
-            "error"
-          );
-        } else if (drainResult === "cancelled") {
-          endState = "cancelled";
-          store.addConsoleLine(`${opts.label} cancelled`, "info");
-        } else {
-          store.addConsoleLine(`${opts.label} complete`, "info");
-        }
-      } else if (opts.waitForIdle) {
-        const IDLE_TIMEOUT_MS = 30000;
-        const IDLE_POLL_MS = 200;
-        const idleDeadline = Date.now() + IDLE_TIMEOUT_MS;
-        let reachedIdle = false;
-        while (Date.now() < idleDeadline) {
-          await new Promise((r) => setTimeout(r, IDLE_POLL_MS));
-          try {
-            const report = await machineConnection.getStatusReport();
-            if (report && report.match(/^<Idle/i)) {
-              reachedIdle = true;
-              break;
-            }
-          } catch {
-            break;
-          }
-        }
-        if (!reachedIdle) {
-          store.addConsoleLine(
-            `${opts.label} complete (Idle timeout -- head may still be moving)`,
-            "warning"
-          );
-        } else {
-          store.addConsoleLine(`${opts.label} complete`, "info");
-        }
+      // B3: drain through the session (idle-wait and timeout-to-unknown).
+      const drainResult = await session.drain(!!opts.waitForIdle);
+      if (drainResult === "unknown") {
+        // 30s drain timeout: "unknown" state. Session retains protection
+        // (jobRunning stays true, keep-awake held). Razor W1: must NOT
+        // map to "complete" — that releases protection prematurely.
+        endState = "unknown";
+      } else if (drainResult === "alarm") {
+        endState = "alarm";
+        store.addConsoleLine(
+          `${opts.label} stopped -- machine alarm (laser already off; unlock to continue)`,
+          "error"
+        );
+      } else if (drainResult === "cancelled") {
+        endState = "cancelled";
+        store.addConsoleLine(`${opts.label} cancelled`, "info");
       } else {
         store.addConsoleLine(`${opts.label} complete`, "info");
       }
@@ -243,24 +267,43 @@ async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise
       store.addConsoleLine(`${opts.label} stopped: ${outcome}`, "error");
       useStore.getState().setMachineConnected(false);
       useStore.getState().setMachineState("disconnected");
+    } else {
+      // RF-8: explicit final branch; endState stays "unknown".
+      store.addConsoleLine(
+        `${opts.label} ended with an unrecognised result (${outcome}); controller state unknown`,
+        "warning"
+      );
     }
   } catch (e) {
-    endState = "error";
     const msg = String(e);
-    store.addConsoleLine(`${opts.label} failed: ${msg}`, "error");
-    if (msg.includes("disconnected") || msg.includes("Not connected")) {
-      portDisconnected = true;
-      useStore.getState().setMachineConnected(false);
-      useStore.getState().setMachineState("disconnected");
+    if (msg.startsWith(PERMIT_REFUSED_PREFIX)) {
+      // Checked BEFORE the disconnected test: the refusal text can contain
+      // "phase=disconnected", which is not a dead port.
+      refused = true;
+      endState = handleRefusal(msg, opts.label);
+    } else {
+      endState = "error";
+      store.addConsoleLine(`${opts.label} failed: ${msg}`, "error");
+      if (msg.includes("disconnected") || msg.includes("Not connected")) {
+        portDisconnected = true;
+        useStore.getState().setMachineConnected(false);
+        useStore.getState().setMachineState("disconnected");
+      }
     }
   }
 
   // Safety: on non-complete, non-alarm outcomes, route through one shared
   // emergencyStop (B1's native stop). ALARM excluded: GRBL is already locked.
-  // SKIPPED when jobRunning is already false — the user pressed STOP and
-  // emergencyStop already ran; duplicate stops are harmless (B1 single-flight)
-  // but pointless.
-  if (endState !== "complete" && endState !== "alarm" && useStore.getState().jobRunning) {
+  // SKIPPED when jobRunning is already false (STOP already ran), and ALWAYS
+  // skipped on a refusal: the backend has already reset the controller or
+  // handed it to another admission, and a stop sent on an epoch mismatch could
+  // reset a job that is not this producer's.
+  if (
+    !refused &&
+    endState !== "complete" &&
+    endState !== "alarm" &&
+    useStore.getState().jobRunning
+  ) {
     try {
       await machineConnection.emergencyStop();
     } catch {
@@ -268,16 +311,8 @@ async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise
     }
   }
 
-  // B3: when a session owns this stream, the session handles cleanup.
-  // Otherwise, legacy direct cleanup.
-  if (session) {
-    await session.end(
-      endState as "complete" | "cancelled" | "aborted" | "alarm" | "error" | "unknown"
-    );
-  } else {
-    store.setJobRunning(false);
-    store.setJobProgress(0);
-  }
+  // B3: the session handles cleanup.
+  await session.end(endState);
 
   if (portDisconnected) {
     try {
@@ -298,7 +333,7 @@ export async function streamJob(gcode: string, opts: StreamJobOptions): Promise<
     return streamJobBuffered(gcode, opts);
   }
 
-  // -- Per-line path (unchanged) --
+  // -- Per-line path --
 
   // Capture action creators (stable refs) at the start; read volatile state
   // fresh via useStore.getState() inside the loop.
@@ -306,8 +341,10 @@ export async function streamJob(gcode: string, opts: StreamJobOptions): Promise<
 
   const lines = gcode.split("\n").filter((l) => l.trim() && !l.startsWith(";"));
 
+  const session = opts.session;
   let endState: StreamJobResult["endState"] = "complete";
   let portDisconnected = false;
+  let refused = false;
 
   // -- Per-line protocol (F13/F17 -- unchanged from JobActionBar) --
 
@@ -328,7 +365,17 @@ export async function streamJob(gcode: string, opts: StreamJobOptions): Promise<
       break;
     }
 
-    const responses = await machineConnection.send(lines[i]);
+    const responses = await machineConnection.send(lines[i], { jobEpoch: session.jobId });
+
+    // RF-15: a backend refusal is checked FIRST, before any other
+    // classification. Nothing further is sent for this job.
+    const refusal = responses.find((r) => r.startsWith(PERMIT_REFUSED_PREFIX));
+    if (refusal !== undefined) {
+      refused = true;
+      endState = handleRefusal(refusal, opts.label);
+      break;
+    }
+
     store.setJobProgress((i + 1) / lines.length);
 
     // F13/F17: empty response or reset banner = the line was ABORTED, not
@@ -361,55 +408,25 @@ export async function streamJob(gcode: string, opts: StreamJobOptions): Promise<
   }
 
   // -- Post-loop handling --
-  const session = opts.session;
-
-  if (endState === "complete") {
-    // B3: when a session owns this stream, drain through the session.
-    if (session) {
-      const drainResult = await session.drain(!!opts.waitForIdle);
-      if (drainResult === "unknown") {
-        // Drain timeout: session retains protection; don't announce complete.
-        // Razor W1: must map to "unknown", not leave as "complete".
-        endState = "unknown";
-      } else if (drainResult === "alarm") {
-        endState = "alarm";
-        store.addConsoleLine(
-          `${opts.label} stopped -- machine alarm (laser already off; unlock to continue)`,
-          "error"
-        );
-      } else if (drainResult === "cancelled") {
-        endState = "cancelled";
-        store.addConsoleLine(`${opts.label} cancelled`, "info");
-      } else {
-        store.addConsoleLine(`${opts.label} complete`, "info");
-      }
-    } else if (opts.waitForIdle) {
-      // F19: after last ack, wait for machine to actually reach Idle before
-      // re-enabling START -- head is still decelerating at last-ack time.
-      const IDLE_TIMEOUT_MS = 30000;
-      const IDLE_POLL_MS = 200;
-      const idleDeadline = Date.now() + IDLE_TIMEOUT_MS;
-      let reachedIdle = false;
-      while (Date.now() < idleDeadline) {
-        await new Promise((r) => setTimeout(r, IDLE_POLL_MS));
-        try {
-          const report = await machineConnection.getStatusReport();
-          if (report && report.match(/^<Idle/i)) {
-            reachedIdle = true;
-            break;
-          }
-        } catch {
-          /* port may be gone; fall through to timeout */
-        }
-      }
-      if (!reachedIdle) {
-        store.addConsoleLine(
-          `${opts.label} complete (Idle timeout -- head may still be moving)`,
-          "warning"
-        );
-      } else {
-        store.addConsoleLine(`${opts.label} complete`, "info");
-      }
+  if (refused) {
+    // RF-15: handleRefusal already logged the only message; no stop, no
+    // "aborted"/"cancelled"/"complete" line.
+  } else if (endState === "complete") {
+    // B3: drain through the session.
+    const drainResult = await session.drain(!!opts.waitForIdle);
+    if (drainResult === "unknown") {
+      // Drain timeout: session retains protection; don't announce complete.
+      // Razor W1: must map to "unknown", not leave as "complete".
+      endState = "unknown";
+    } else if (drainResult === "alarm") {
+      endState = "alarm";
+      store.addConsoleLine(
+        `${opts.label} stopped -- machine alarm (laser already off; unlock to continue)`,
+        "error"
+      );
+    } else if (drainResult === "cancelled") {
+      endState = "cancelled";
+      store.addConsoleLine(`${opts.label} cancelled`, "info");
     } else {
       store.addConsoleLine(`${opts.label} complete`, "info");
     }
@@ -431,19 +448,12 @@ export async function streamJob(gcode: string, opts: StreamJobOptions): Promise<
     store.addConsoleLine(`${opts.label} aborted`, "error");
   }
 
-  // B3: when a session owns this stream, the session handles cleanup.
-  if (session) {
-    await session.end(
-      endState as "complete" | "cancelled" | "aborted" | "alarm" | "error" | "unknown"
-    );
-  } else {
-    store.setJobRunning(false);
-    store.setJobProgress(0);
-  }
+  // B3: the session handles cleanup.
+  await session.end(endState);
 
   // Tear down the serial port on disconnect so a subsequent reconnect
   // (which now sends 0x18) doesn't fail with "port busy". Runs AFTER the
-  // safety volley above so M5 has already been attempted before teardown.
+  // shared stop above so the reset has already been attempted before teardown.
   if (portDisconnected) {
     try {
       await machineConnection.disconnect();

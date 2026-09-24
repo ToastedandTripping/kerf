@@ -23,8 +23,64 @@
 //!
 //! Sends `0x18` immediately per the 2026-09-20 DECISIONS ruling (no feed hold,
 //! no M5, no ack wait). `0x18` is idempotent and realtime; the stop takes no
-//! epoch precondition. Single-flight gates only the observation/result phase,
-//! not the `0x18` send.
+//! epoch precondition. Single-flight: a second stop call while the first is
+//! observing is a JOINER — it waits for the first to finish, returns
+//! `last_stop`, and sends no byte at all. Anything that must put a second
+//! `0x18` on the wire (the in-flight re-send) must therefore never route
+//! through `serial_stop_inner`.
+//!
+//! ## Job-line admission (RF-15)
+//!
+//! Every job line carries the epoch of the admitted job. Both production send
+//! paths (`serial_send` with `job_epoch`, and `serial_stream_job`, per line in
+//! the buffered pump) run `permit_precheck` before waiting on the command lock
+//! (a fast-fail optimisation only) and the authoritative `try_permit_begin`
+//! while holding the command lock, before any drain or write. A refused line
+//! returns a `refused:`-prefixed contract string and touches neither reader
+//! nor writer.
+//!
+//! ### Ordering argument (post-write detection)
+//!
+//! **Assumption:** writes from the writer and realtime clones share one tty
+//! output queue and land on the wire in syscall order (true for the Linux and
+//! macOS tty layers). If this did not hold, the argument below would be
+//! decorative.
+//!
+//! - The stop does: phase store → generation bump → `0x18`.
+//! - The writer does, under the command lock: load g0 → load phase →
+//!   write+flush → load g1.
+//! - If the writer's phase load saw Active, its g0 load preceded the bump.
+//!   A line that lands after the stop's `0x18` was written by a syscall after
+//!   the `0x18` syscall, which follows the bump; g1 is loaded after the write,
+//!   so g1 != g0 and the writer detects it. If g1 = g0 the write completed
+//!   before the bump, and therefore before the `0x18`.
+//! - False positive (harmless): `flush()` is `tcdrain`, so a line queued
+//!   *before* the `0x18` whose drain returns after the bump is also reported
+//!   in flight. The second `0x18` costs one extra reset and banner, hence
+//!   the contract text "the line may have preceded the stop's reset".
+//! - Only the stop bumps the generation, so the re-send can never reset an
+//!   idle controller.
+//! - On detection the writer drops the command lock and writes `0x18` once
+//!   more on the realtime handle (`resend_reset_after_in_flight`, retry once).
+//!   If both attempts fail it sets `resend_failed` and stores Unknown; the
+//!   stop then refuses to confirm to Idle (its Idle transition is a CAS from
+//!   Stopping) and reports the physical-stop instruction.
+//! - **Guarantee:** every job line on the wire after the stop's `0x18` is
+//!   followed either by a writer-issued `0x18`, or by Unknown plus a
+//!   physical-stop instruction with admission closed.
+//!
+//! ### Two stale-mark orderings (expected, conservative)
+//!
+//! - A writer from stop S can mark `resend_failed` after a later stop S2 has
+//!   cleared it in its Step 2. S2 then returns `SubmittedUnconfirmed` with the
+//!   physical-stop line although its own reset succeeded; the operator presses
+//!   STOP again.
+//! - On the disconnect race the writer's Unknown store can land after
+//!   `set_disconnected`, leaving phase Unknown while disconnected.
+//!   `set_idle_on_connect` clears it, and connect performs a real reset.
+//!
+//! Ending a job (`serial_job_end`) moves Active→Idle only (CAS); it never
+//! overwrites Unknown.
 
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
@@ -80,6 +136,41 @@ impl StopResult {
     }
 }
 
+/// Stable prefix of every job-line refusal. TS (`connection.ts`
+/// `PERMIT_REFUSED_PREFIX`) matches it with `startsWith`.
+pub(crate) const REFUSED_PREFIX: &str = "refused:";
+
+/// Refusal: the session is not in the Active phase.
+pub(crate) fn refused_not_active(phase: u8) -> String {
+    format!(
+        "{REFUSED_PREFIX} not-admitted: session not active (phase={})",
+        phase_name(phase)
+    )
+}
+
+/// Refusal: the line's job epoch is not the admitted job.
+pub(crate) fn refused_epoch_mismatch(job: u64, admitted: Option<u64>) -> String {
+    let admitted = match admitted {
+        Some(n) => n.to_string(),
+        None => "none".to_string(),
+    };
+    format!("{REFUSED_PREFIX} not-admitted: epoch mismatch (job {job}, admitted {admitted})")
+}
+
+/// Refusal: the line was written as admission closed; the reset was re-sent.
+pub(crate) fn refused_in_flight() -> String {
+    format!(
+        "{REFUSED_PREFIX} in-flight: line written as admission closed; reset re-sent after it (the line may have preceded the stop's reset)"
+    )
+}
+
+/// Refusal: the line was written as admission closed and the re-send failed.
+pub(crate) fn refused_in_flight_unreset(err: &str) -> String {
+    format!(
+        "{REFUSED_PREFIX} in-flight-unreset: line written as admission closed; reset re-send failed ({err}); use the machine's physical stop"
+    )
+}
+
 /// Type alias to avoid clippy::type_complexity on the observer.
 type SessionObserver = Box<dyn Fn(&str) + Send + Sync>;
 
@@ -109,6 +200,12 @@ pub struct SerialSession {
     /// Last parsed status snapshot. Leaf lock — never held while waiting on
     /// anything (lock-order table: leaf, alongside admitted_job/last_stop/observer).
     pub(crate) snapshot: Mutex<Option<GrblSnapshot>>,
+    /// Set when a writer detected a job line written as admission closed.
+    /// Cleared by the stop's Step 2.
+    pub(crate) in_flight_write_detected: AtomicBool,
+    /// Set when the in-flight reset re-send failed (both attempts). Forces the
+    /// stop's result to `SubmittedUnconfirmed`. Cleared by the stop's Step 2.
+    pub(crate) resend_failed: AtomicBool,
 }
 
 impl Default for SerialSession {
@@ -125,6 +222,8 @@ impl Default for SerialSession {
             sink_failed: AtomicBool::new(false),
             snapshot_seq: AtomicU64::new(0),
             snapshot: Mutex::new(None),
+            in_flight_write_detected: AtomicBool::new(false),
+            resend_failed: AtomicBool::new(false),
         }
     }
 }
@@ -144,8 +243,9 @@ impl SerialSession {
         self.epoch.fetch_add(1, Ordering::SeqCst) + 1
     }
 
-    /// Try to acquire a submission permit. Returns Ok(()) if the session
-    /// is active and the generation has not changed, Err otherwise.
+    /// Try to acquire a submission permit. Returns g0 if the session is
+    /// active (and, with `Some(epoch)`, that epoch is the admitted job);
+    /// otherwise a `refused: not-admitted:` contract string.
     ///
     /// The permit is NOT a lock. It is a generation-checked atomic comparison
     /// with a phase gate:
@@ -156,28 +256,40 @@ impl SerialSession {
     /// 4. g1 = permit_generation (SeqCst)
     /// 5. if g0 != g1 → in-flight write detected
     ///
-    /// This function performs steps 1-2. The caller must perform step 4-5 after
-    /// the write. Returns g0 on success for the caller to compare.
+    /// This function performs steps 1-2 and must be called while holding the
+    /// command lock, before any drain or write. The caller performs 4-5 via
+    /// `try_permit_end`. Emits `permit_granted` on success, after the
+    /// `admitted_job` guard is released.
     pub(crate) fn try_permit_begin(&self, epoch: Option<u64>) -> Result<u64, String> {
         let g0 = self.permit_generation.load(Ordering::SeqCst);
+        self.check_admission(epoch)?;
+        self.emit("permit_granted");
+        Ok(g0)
+    }
+
+    /// Pre-lock fast-fail: phase + epoch, no generation capture. An
+    /// optimisation only; the under-lock `try_permit_begin` is the check that
+    /// counts. Emits `permit_prechecked` on success.
+    pub(crate) fn permit_precheck(&self, epoch: u64) -> Result<(), String> {
+        self.check_admission(Some(epoch))?;
+        self.emit("permit_prechecked");
+        Ok(())
+    }
+
+    /// Shared phase + epoch check. The `admitted_job` guard is dropped before
+    /// returning, so callers may emit afterwards (no leaf under leaf).
+    fn check_admission(&self, epoch: Option<u64>) -> Result<(), String> {
         let current_phase = self.phase.load(Ordering::SeqCst);
         if current_phase != PHASE_ACTIVE {
-            return Err(format!(
-                "session not active (phase={})",
-                phase_name(current_phase)
-            ));
+            return Err(refused_not_active(current_phase));
         }
         if let Some(ep) = epoch {
-            // Check epoch against admitted job
-            let admitted = self.admitted_job.lock().unwrap_or_else(|e| e.into_inner());
-            if *admitted != Some(ep) {
-                return Err(format!(
-                    "epoch mismatch: expected {:?}, got {}",
-                    *admitted, ep
-                ));
+            let admitted = *self.admitted_job.lock().unwrap_or_else(|e| e.into_inner());
+            if admitted != Some(ep) {
+                return Err(refused_epoch_mismatch(ep, admitted));
             }
         }
-        Ok(g0)
+        Ok(())
     }
 
     /// Check whether the generation changed after a write. Returns Ok if
@@ -191,9 +303,36 @@ impl SerialSession {
         }
     }
 
-    /// Transition to idle phase (from connect or confirmed stop).
-    pub(crate) fn set_idle(&self) {
+    /// Record that a job line was written as admission closed.
+    pub(crate) fn mark_in_flight(&self) {
+        self.in_flight_write_detected.store(true, Ordering::SeqCst);
+    }
+
+    /// Record that the in-flight reset re-send failed, then store Unknown
+    /// with a plain store so Unknown wins over any later CAS to Idle.
+    /// Never emits (it may run inside a test observer).
+    pub(crate) fn mark_resend_failed(&self) {
+        self.resend_failed.store(true, Ordering::SeqCst);
+        self.phase.store(PHASE_UNKNOWN, Ordering::SeqCst);
+    }
+
+    /// Unconditional Idle store: connect ONLY. No stop path may call this.
+    pub(crate) fn set_idle_on_connect(&self) {
         self.phase.store(PHASE_IDLE, Ordering::SeqCst);
+    }
+
+    /// The stop's confirmed transition: Stopping→Idle by CAS. Returns false
+    /// (leaving the phase alone) if anything moved it off Stopping, e.g. a
+    /// concurrent `mark_resend_failed` storing Unknown.
+    pub(crate) fn set_idle_from_stopping(&self) -> bool {
+        self.phase
+            .compare_exchange(
+                PHASE_STOPPING,
+                PHASE_IDLE,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
     }
 
     /// Publish a parsed status snapshot. Enforces monotonic `(epoch, seq)`:
@@ -392,6 +531,76 @@ mod tests {
         let g0 = session.permit_generation.load(Ordering::SeqCst);
         session.permit_generation.fetch_add(1, Ordering::SeqCst);
         assert!(session.try_permit_end(g0).is_err());
+    }
+
+    #[test]
+    fn rf15_refusal_strings_carry_prefix_and_name_phase() {
+        let session = SerialSession::default();
+        session.phase.store(PHASE_STOPPING, Ordering::SeqCst);
+        let e = session.try_permit_begin(Some(1)).unwrap_err();
+        assert_eq!(
+            e,
+            "refused: not-admitted: session not active (phase=stopping)"
+        );
+        assert!(e.starts_with(REFUSED_PREFIX));
+        let e = session.permit_precheck(1).unwrap_err();
+        assert_eq!(
+            e,
+            "refused: not-admitted: session not active (phase=stopping)"
+        );
+
+        session.phase.store(PHASE_ACTIVE, Ordering::SeqCst);
+        let e = session.try_permit_begin(Some(5)).unwrap_err();
+        assert_eq!(
+            e,
+            "refused: not-admitted: epoch mismatch (job 5, admitted none)"
+        );
+        *session.admitted_job.lock().unwrap() = Some(3);
+        let e = session.permit_precheck(5).unwrap_err();
+        assert_eq!(
+            e,
+            "refused: not-admitted: epoch mismatch (job 5, admitted 3)"
+        );
+        assert!(refused_in_flight().starts_with("refused: in-flight: "));
+        assert!(refused_in_flight_unreset("boom").starts_with("refused: in-flight-unreset: "));
+        assert!(refused_in_flight_unreset("boom").contains("(boom)"));
+    }
+
+    #[test]
+    fn rf15_permit_granted_emitted_only_on_success() {
+        let session = SerialSession::default();
+        let events = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
+        let ev = events.clone();
+        *session.observer.lock().unwrap() = Some(Box::new(move |e: &str| {
+            ev.lock().unwrap().push(e.to_string());
+        }));
+        session.phase.store(PHASE_IDLE, Ordering::SeqCst);
+        assert!(session.try_permit_begin(Some(1)).is_err());
+        assert!(session.permit_precheck(1).is_err());
+        assert!(events.lock().unwrap().is_empty());
+
+        session.phase.store(PHASE_ACTIVE, Ordering::SeqCst);
+        *session.admitted_job.lock().unwrap() = Some(1);
+        assert!(session.permit_precheck(1).is_ok());
+        assert!(session.try_permit_begin(Some(1)).is_ok());
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![
+                "permit_prechecked".to_string(),
+                "permit_granted".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn rf15_set_idle_from_stopping_leaves_unknown() {
+        let session = SerialSession::default();
+        session.phase.store(PHASE_UNKNOWN, Ordering::SeqCst);
+        assert!(!session.set_idle_from_stopping());
+        assert_eq!(session.phase.load(Ordering::SeqCst), PHASE_UNKNOWN);
+        session.phase.store(PHASE_STOPPING, Ordering::SeqCst);
+        assert!(session.set_idle_from_stopping());
+        assert_eq!(session.phase.load(Ordering::SeqCst), PHASE_IDLE);
     }
 
     #[test]

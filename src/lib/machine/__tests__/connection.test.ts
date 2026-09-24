@@ -675,3 +675,41 @@ describe("connection.ts (TN3)", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// T6 (RF-15): send() threads the job epoch and surfaces a refusal distinctly.
+// ---------------------------------------------------------------------------
+describe("connection.send — RF-15 job epoch and refusal", () => {
+  beforeEach(() => {
+    mockInvoke.mockReset();
+    seedConnectedStore();
+  });
+
+  it("a job line invokes serial_send with exactly { command, jobEpoch }", async () => {
+    mockInvoke.mockResolvedValue({ responses: ["ok"], drained: [] });
+    await machineConnection.send("G1 X1", { jobEpoch: 7 });
+    expect(mockInvoke).toHaveBeenCalledWith("serial_send", { command: "G1 X1", jobEpoch: 7 });
+  });
+
+  it("a console line invokes serial_send with { command } and no jobEpoch key", async () => {
+    mockInvoke.mockResolvedValue({ responses: ["ok"], drained: [] });
+    await machineConnection.send("$$");
+    const args = mockInvoke.mock.calls.find((c) => c[0] === "serial_send")![1];
+    expect(args).toEqual({ command: "$$" });
+    expect("jobEpoch" in args).toBe(false);
+  });
+
+  it("a raw-string refusal returns the refusal, not error:disconnected", async () => {
+    const raw = "refused: not-admitted: session not active (phase=stopping)";
+    mockInvoke.mockRejectedValue(raw);
+    const out = await machineConnection.send("G1 X1", { jobEpoch: 7 });
+    expect(out).toEqual([raw]);
+    expect(consoleTexts()).toContain(`Not sent: ${raw}`);
+  });
+
+  it("a disconnected rejection still maps to error:disconnected", async () => {
+    mockInvoke.mockRejectedValue("disconnected: port closed (EOF)");
+    const out = await machineConnection.send("G1 X1", { jobEpoch: 7 });
+    expect(out).toEqual(["error:disconnected"]);
+  });
+});
