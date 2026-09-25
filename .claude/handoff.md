@@ -55,9 +55,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - **Fence is now one stop, one reset (relay `kerf-fence-single-reset`, merged into this session branch as fd311af, 2026-09-24).** Per Lee ("figure out the right way to patch this and not try to design work around"), the fence-reopen relay's detect-and-re-send was replaced by a submission critical section: the admission check and the job line's `write(2)` are atomic against the stop's admission close, so no job line can land after the reset and no second reset exists. Ted+Razor PASS after one fix pass (W1: stop must hold the lock while closing admission, now asserted). 836 JS / 329 Rust; gate READY. **Owner hardware test required** (4 steps in ROADMAP `next`). Not yet on master; `/save` merges the session branch. NEXT: refresh-cut-vs-screen relay.
 
-- **Two DECISIONS proposals owed to Lee:** (1) Ctrl+Shift+V = Flip Vertical, Alt+V = Paste in Place (Lee ruled 2026-09-22; entry wording in the editing plan's F3 implementer note; propose at that relay's close). (2) The single-reset fence pin (wording in `.claude/plans/fence-single-reset.md` → Standing decisions touched): job-line admission and write are one critical section with the stop's admission close; the stop waits at most one `write(2)` after POLLOUT, never on the controller, an ack, or transmission. The earlier two-resets pin is withdrawn: the design it described no longer exists.
-
 - **Two owner-reported regressions (Lee, 2026-09-24) parked, need console text from a recurrence:** the first-Start-of-session bug (fixed v0.8.18) is back, surfacing as a disconnect; disconnect/reconnect often hangs. ROADMAP Parking Lot → `### Deferred from kerf-fence-single-reset (2026-09-24)`. The first touches charter gate 1.
+
+- **One DECISIONS proposal owed to Lee:** Ctrl+Shift+V = Flip Vertical, Alt+V = Paste in Place (Lee ruled 2026-09-22; entry wording in the editing plan's F3 implementer note; propose at that relay's close). The single-reset fence pin was approved and written 2026-09-24.
 
 ## Open questions awaiting Lee
 
