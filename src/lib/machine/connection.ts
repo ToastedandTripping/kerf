@@ -92,19 +92,34 @@ let settingsGeneration = 0;
 /** S1: true for commands that change a controller setting ($N=, $Nx=, $RST=).
  *  A startup block ($N0=...) runs after every reset, so it counts as a write. */
 export function isGrblSettingsWrite(cmd: string): boolean {
-  const c = cmd.trim();
-  return /^\$\d+\s*=/.test(c) || /^\$N\d*\s*=/i.test(c) || /^\$RST\s*=/i.test(c);
+  // Normalize as GRBL 1.1's line reader does before it executes the line:
+  // drop ( ... ) comments, cut at ';', delete every char <= 0x20 and every '/',
+  // upper-case.
+  const c = cmd
+    .replace(/\([^)]*\)?/g, "")
+    .split(";")[0]
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x20/]/g, "")
+    .toUpperCase();
+  return /^\$\d+=/.test(c) || /^\$N\d*=/.test(c) || /^\$RST=/.test(c);
 }
 
 /** S1: a settings write happened — laser mode is unknown until read back. */
 function invalidateGrblSettings(): void {
+  invalidateGrblSettingsSilently();
+  useStore
+    .getState()
+    .addConsoleLine(
+      "Settings changed -- laser mode must be re-verified (Enable Laser Mode, $$ in the console, or reconnect) before starting a job",
+      "warning"
+    );
+}
+
+/** S1 W1: second-side invalidate after a write settles (no warning). A readback
+ *  that began before the write reached the wire must not count. */
+function invalidateGrblSettingsSilently(): void {
   settingsGeneration++;
-  const store = useStore.getState();
-  store.setGrblLaserMode(false);
-  store.addConsoleLine(
-    "Settings changed -- laser mode must be re-verified (Enable Laser Mode, $$ in the console, or reconnect) before starting a job",
-    "warning"
-  );
+  useStore.getState().setGrblLaserMode(false);
 }
 
 /**
@@ -115,17 +130,20 @@ function invalidateGrblSettings(): void {
  */
 function applyLaserModeReadback(responses: string[], genAtStart: number): void {
   const store = useStore.getState();
-  store.setGrblLaserMode(
-    responses.some((l) => /^\$32=1(\.0+)?\s*$/.test(l.trim())) && genAtStart === settingsGeneration
-  );
+  const readOne = responses.some((l) => /^\$32=1(\.0+)?\s*$/.test(l.trim()));
+  const fresh = genAtStart === settingsGeneration;
+  store.setGrblLaserMode(readOne && fresh);
   const line32 = responses.find((l) => /^\$32=/.test(l.trim()));
   if (line32) {
     const m = line32.trim().match(/^\$32=([\d.]+)/);
     const value = m ? parseFloat(m[1]) : NaN;
-    store.addConsoleLine(
-      `$32=${value} (laser mode ${value === 1 ? "enabled" : "disabled"})`,
-      "info"
-    );
+    const verdict =
+      readOne && fresh
+        ? "enabled"
+        : readOne
+          ? "readback stale -- a settings write overlapped it; re-verify"
+          : "disabled";
+    store.addConsoleLine(`$32=${value} (laser mode ${verdict})`, "info");
   }
 }
 
@@ -393,6 +411,8 @@ export const machineConnection = {
         unsubscribeJobRunning = null;
       }
       jobPollingSuspended = false;
+      // S1 N3: a previous controller's laser-mode TRUE never survives.
+      store.setGrblLaserMode(false);
       await invoke("serial_disconnect", { jobActive: needsEstop });
       store.setMachineConnected(false);
       // Tail clear: a job-running flag must never outlive the connection,
@@ -418,13 +438,20 @@ export const machineConnection = {
     try {
       store.addConsoleLine(command, "sent");
       // S1: the one settings-write chokepoint — invalidate before the write.
-      if (isGrblSettingsWrite(command)) invalidateGrblSettings();
+      const isWrite = isGrblSettingsWrite(command);
+      if (isWrite) invalidateGrblSettings();
       // S1: a `$$` re-verifies; capture the generation BEFORE the invoke.
       const isReadback = command.trim() === "$$";
       const readbackGen = settingsGeneration;
       const args =
         opts?.jobEpoch === undefined ? { command } : { command, jobEpoch: opts.jobEpoch };
-      const outcome = await invoke<SendOutcome>("serial_send", args);
+      let outcome: SendOutcome;
+      try {
+        outcome = await invoke<SendOutcome>("serial_send", args);
+      } finally {
+        // S1 W1: invalidate again once the write has settled.
+        if (isWrite) invalidateGrblSettingsSilently();
+      }
       for (const d of outcome.drained) surfaceUnsolicited(d);
       let lastStatusReport: string | null = null;
       for (const r of outcome.responses) {
@@ -455,7 +482,9 @@ export const machineConnection = {
           });
         }
       }
-      if (isReadback) parseSettingsResponses(outcome.responses, readbackGen);
+      // S1 W3: a console/dialog `$$` applies the $32 readback only; the full
+      // settings parse runs only via queryGrblSettings().
+      if (isReadback) applyLaserModeReadback(outcome.responses, readbackGen);
       return outcome.responses;
     } catch (e) {
       const msg = String(e);
@@ -733,9 +762,15 @@ export const machineConnection = {
       // S1: this write bypasses send(), so invalidate explicitly.
       invalidateGrblSettings();
       store.addConsoleLine("$32=1", "sent");
-      const outcome = await invoke<SendOutcome>("serial_send", { command: "$32=1" });
+      let outcome: SendOutcome;
+      try {
+        outcome = await invoke<SendOutcome>("serial_send", { command: "$32=1" });
+      } finally {
+        // S1 W1: invalidate again once the write has settled.
+        invalidateGrblSettingsSilently();
+      }
       for (const d of outcome.drained) surfaceUnsolicited(d);
-      await this.readbackGrblSettings();
+      await this.readbackGrblSettings({ laserModeOnly: true });
       const enabled = useStore.getState().grblLaserMode;
       if (enabled) {
         store.addConsoleLine("$32=1 — laser mode enabled", "info");
@@ -754,14 +789,18 @@ export const machineConnection = {
 
   /** S1: send `$$` and parse it. Does NOT reset homing. A readback that never
    * returned clears laser mode (fail-closed). Returns true when the response
-   * parsed as settings. */
-  async readbackGrblSettings(): Promise<boolean> {
+   * parsed as settings. `laserModeOnly` (W3) applies $32 and nothing else. */
+  async readbackGrblSettings(opts?: { laserModeOnly?: boolean }): Promise<boolean> {
     const store = useStore.getState();
     const gen = settingsGeneration;
     try {
       store.addConsoleLine("$$", "sent");
       const outcome = await invoke<SendOutcome>("serial_send", { command: "$$" });
       for (const d of outcome.drained) surfaceUnsolicited(d);
+      if (opts?.laserModeOnly) {
+        applyLaserModeReadback(outcome.responses, gen);
+        return outcome.responses.some((l) => /^\$\d+=/.test(l));
+      }
       return parseSettingsResponses(outcome.responses, gen);
     } catch (e) {
       applyLaserModeReadback([], gen);
