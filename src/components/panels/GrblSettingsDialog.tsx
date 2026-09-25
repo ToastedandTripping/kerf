@@ -112,8 +112,6 @@ export function GrblSettingsDialog({ open, onClose }: Props) {
     const store = useStore.getState();
     if (key === 30) {
       store.setGrblSValueMax(Number(value));
-    } else if (key === 32) {
-      store.setGrblLaserMode(Number(value) === 1);
     } else if (key === 120 || key === 121) {
       const x = key === 120 ? Number(value) : store.grblAccelX;
       const y = key === 121 ? Number(value) : store.grblAccelY;

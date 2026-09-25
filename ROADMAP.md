@@ -17,6 +17,8 @@ pinned: true
 shipped:
   - date: 2026-09-25
     item: "Evidence E1a — relay kerf-evidence-e1a (Ted+Razor; the first review found 1 CRITICAL, fixed, and the re-check CLOSED it). A sharp-cornered rectangle on a Fill+Line layer used to be silently skipped by the engine (`; unknown layer mode`). It now gets a closed 4-corner contour, lowered to maskFill plus a cut outline. A new invariant, `assertNoFillLine`, makes any fillLine object that reaches the engine a loud error instead. The CRITICAL: lowering to `fill` would have burned up to 6.7 mm outside the cut line on a rotated rectangle, because the Rust fill arm scans the rotated AABB. maskFill measured 0 mm spill at 0/30/90/180 degrees (Rust scratch probe). 849 JS tests; battery 14/14 killed. OWNER CARD (E4): a Fill+Line rectangle burned on scrap shows a filled interior and a cut outline."
+  - date: 2026-09-25
+    item: "Safety S1: relay kerf-safety-s1 (Standard). Razor raised 3 WARNING (fixed; re-check CLOSED). Jen raised 7 CONCERN (6 applied, C3 owned by S3), and a bounded design-fix check came back CLOSED. START, main FRAME, and the material-test Send and Frame now all go through one admission, `canStartJob(state, ext?)`. The laser-mode flag is set only by a `$32=1` readback that was not overtaken by a settings write: every settings write is detected in `send()` (GRBL-normalized) and invalidated on both sides; a console `$$` re-verifies; a failed readback or a disconnect clears the flag. Material-test refusals are no longer silent: an in-dialog alert plus disabled buttons driven by the same gate. 871 JS tests; batteries 18 + 7 + 3 killed. NOT MET: the power-scale half of the 2026-09-10 START ruling (S4b). MUST SHIP WITH S3: on origin-top machines every material test is refused until S3 mirrors the grid. OWNER HARDWARE TEST: a live `$$` still carries `$32=1`; Enable Laser Mode shows enabled only after its readback."
   - date: 2026-09-24
     item: "Fence single-reset — relay kerf-fence-single-reset (Ted+Razor PASS after one fix pass; 0 CRITICAL, W1 closed). Replaces kerf-fence-reopen's detect-and-re-send: a new submit lock makes the admission check and the job line's write(2) atomic against the stop's admission close (close_admission requires the held guard; flush/tcdrain stays outside). One stop, one 0x18; the in-flight re-send, resend-failed state, refused: in-flight* contracts and the TS STOP re-arm are deleted. Also: the $32=1 pump now publishes the reset banner it consumes. Ordering tests O1-O4, U1/U2, one-reset-per-stop check; M1-M9 and X2 killed by named assertions. 836 JS / 329 Rust. Not in a release; owner hardware test pending."
   - date: 2026-09-24
@@ -549,6 +551,16 @@ verbatim and are not to be edited into summaries — this index points at them.
 - **Production-body stop verification against the simulator** (relay-plan D2); goes with the next batch that touches the stop. See `### Deferred from kerf-evidence-e1a (2026-09-25)` below.
 - **Move the committed probe log out of the public tree, and the controller-model comment at `probe-grbl.py:53`** (decision `kerf-d12`). See `### Deferred from kerf-evidence-e1a (2026-09-25)` below.
 - **Any change to the stop, fence or submit lock** stays out of the evidence batches (DECISIONS 2026-09-24). See `### Deferred from kerf-evidence-e1a (2026-09-25)` below.
+- **WPos/MPos conversion and WCO-aware jog envelopes** (astra 2.5 proper). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **`$23` sign inference and automatic homing/unlock**: never. See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **Astra 2.3 (release envelope → corrections) and 2.6 (bounded generation)**; 2.3 waits on `kerf-d9`. See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **Any change to the stop, reset, fence or submit lock** stays out of the safety-gate batches (DECISIONS 2026-09-24 pin). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **`$31` / Min Pwr** (decision `kerf-d11`). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **The Fire button is a powered door outside the admission** (MachinePanel stationary-beam fire). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **Material test `exceedsWorkspace` is a third bounds copy** (UI hint, can disagree with the gate). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **Stale status still shows green Idle/Ready** (Jen C3 on S1). OWNED BY S3; must not ship without it. See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **A malformed `gcodeResult` in the store crashes the job bar** (S1 behavioral evaluator, synthetic injection). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **Material-test button enablement checks the grid outline; the click checks the full program** (Razor N11; fails safe). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
 
 ### Deferred from the 2026-09-05 pause/stop investigation
 
@@ -663,6 +675,20 @@ It is out of scope for this relay (golden files untouched), and no test reads it
 - Production-body stop verification against the simulator (relay-plan D2) goes with the next batch that touches the stop.
 - Moving the committed probe log out of the public tree, and the existing controller-model comment at `probe-grbl.py:53` (decision `kerf-d12`).
 - Any change to the stop, fence or submit lock is out (DECISIONS 2026-09-24).
+### Deferred from kerf-safety-s1 (2026-09-25)
+
+**Why these are here:** the first five are the parent plan's Out-of-scope lines (`~/marvin/state/audits/gap-2026-09-24/kerf/PLAN-safety-gate-class.md` §Out of scope). S1's plan named the Fire button and `exceedsWorkspace` lines. The last three were found in review and not fixed in S1.
+
+- WPos/MPos conversion and WCO-aware jog envelopes (astra 2.5 proper). This needs a live frame map from an owner session.
+- `$23` sign inference and automatic homing/unlock: never.
+- Astra 2.3 (release envelope → corrections) and 2.6 (bounded generation): 2.3 waits on decision `kerf-d9`.
+- Any change to the stop, reset, fence or submit lock (DECISIONS 2026-09-24 pin).
+- `$31` / Min Pwr (decision `kerf-d11`).
+- **The Fire button is a powered door outside the admission.** `MachinePanel.tsx` Fire (`M3 S…`, `G4 P0.5`, `M5`) fires the beam stationary for focus and test, by design (M3 is for the stationary beam, DECISIONS 2026-09-10). Its gating is not unified with the four job doors, and it has no laser-mode, bed or stale check. It needs its own review.
+- **Material test `exceedsWorkspace` is a third bounds copy.** `MaterialTestDialog.tsx` keeps it as a UI hint that can disagree with the gate. The gate decides.
+- **Stale status shows a green Idle and Ready** (Jen C3, 2026-09-25). While `statusStale` is true, MachinePanel and StatusBar still show a fresh green "Idle" and "Ready" while START's title says stale. The screen says safe when Kerf does not know. **Owned by S3** (coordinator, 2026-09-25): fold it into S3's scope at lift. S1 and S3 ship in the same build, so no build reaches Lee with green-while-stale unless he has been told.
+- **A malformed `gcodeResult` crashes the job bar.** The S1 behavioral evaluator injected a malformed result through the store and blanked the UI. The injection was synthetic and no production path is known to produce one, but the job bar has no guard. Noted 2026-09-25.
+- **Material-test enablement and the click can disagree at the edge** (Razor N11). The disabled state checks the grid outline's extents, while the click-time gate checks the full grid program. When they disagree the click refuses, so it fails safe.
 
 ## Reference
 
