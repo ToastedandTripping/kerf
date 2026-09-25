@@ -187,4 +187,27 @@ describe("drawnLeaves — the cut's per-leaf visibility rule, minus output", () 
     expect(drawnLeaves(e, []).map((l) => l.key)).toEqual(composedLeaves(e).map((l) => l.key));
     expect(drawnLeaves(e, []).length).toBe(3);
   });
+  it("(j) orphan layerIndex falls back to layers[0]; layers are looked up by l.index, not position", () => {
+    // Razor N2. layers[0] is hidden and its index (5) is not its position.
+    const ls: Layer[] = [
+      { ...DEFAULT_LAYERS[0], index: 5, visible: false },
+      { ...DEFAULT_LAYERS[1], index: 0, visible: true },
+      { ...DEFAULT_LAYERS[2], index: 1, visible: false },
+    ];
+    const grp = buildGroupObject(
+      [
+        rect("orphan", 0, 0, 99),
+        rect("on0", 10, 0, 0),
+        rect("on1", 20, 0, 1),
+        rect("on5", 30, 0, 5),
+      ],
+      "j",
+      "j",
+      0
+    );
+    // orphan -> layers[0] (hidden); on0 -> index 0 (visible, stored at position 1);
+    // on1 -> index 1 (hidden); on5 -> index 5 (hidden, stored at position 0).
+    expect(drawnLeaves(grp, ls).map((l) => l.obj.id)).toEqual(["on0"]);
+    expect(drawnLeaves(grp, ls).map((l) => l.obj)).toEqual(oracle(grp, ls));
+  });
 });
