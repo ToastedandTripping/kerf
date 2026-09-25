@@ -673,16 +673,18 @@ describe("spindle-drop evidence during jobs (E3)", () => {
   async function runBuffered(gcode: string, events: unknown[]) {
     localStorage.setItem("streamingMode", "buffered");
     useStore.setState({ jobRunning: true });
-    mockInvoke.mockImplementation(async (cmd: string, args?: any) => {
-      if (cmd === "serial_stream_job") {
-        for (const e of events) args.channel.onmessage(e);
-        return "complete";
+    mockInvoke.mockImplementation(
+      async (cmd: string, args?: { channel: { onmessage: (e: unknown) => void } }) => {
+        if (cmd === "serial_stream_job") {
+          for (const e of events) args!.channel.onmessage(e);
+          return "complete";
+        }
+        if (cmd === "serial_get_status") {
+          return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
+        }
+        return undefined;
       }
-      if (cmd === "serial_get_status") {
-        return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
-      }
-      return undefined;
-    });
+    );
     const result = await streamJob(gcode, { label: "Job", session: detachedSession("Job") });
     mockInvoke.mockReset();
     return result;
