@@ -150,3 +150,74 @@ X2: no personal data. X4: nothing client- or public-facing. X7: no gate, hook or
 7. **Core 3d:** say the buffered record lags by up to 50 ms of lines mid-job and is exact at the end (`serial_pump.rs:617-619`).
 8. **Core 9c:** drop the "separate `import` statement" rule (E3 lands after S1; extending `:11` is safe, and a duplicate import may trip lint); core 9d: E3-M3's kill is "no warning", not "twice".
 9. **Core 10:** rewrite the stale comment at `:75-77` to name `noteSpindleSample` and its feeds; delete the "must not edit `:75-81`" rule (S1's hunk is after `:84` and E3 follows S1). Citation nits: S1's hunk is at `:84/85`; the drain span is `:123-181`; after S1 the object's last method is `queryGrblSettings`, so "after `};`" is the anchor.
+
+## Round 2 (recheck)
+
+**Date:** 2026-09-25. **Critic:** Fable, separate subagent, recheck of the fold at the end of `kerf-evidence-e3.md` ("## Critic fold (2026-09-25)"). **Tree:** worktree at `9e83265`; `git diff --stat caa0dcc HEAD -- src src-tauri` is still empty, so every citation below is against the same tree round 1 read. S1 re-read on `relay/kerf-safety-s1`. Read-only: no build, test or git state change. Scope per the brief: the nine must-fixes, the fold's rejections and corrections, X3 and the dimensions the fold touched, the implementation under the recommended option (B), anchor uniqueness, and new defects only.
+
+**Verdict: CONCERN.** No gating FAIL. X3 lifts from FAIL to CONCERN on one new defect the fold introduced in the decision's item 6, plus two nits in its wording.
+
+### 1. The nine must-fixes
+
+| # | Round-1 fix | Fold | Tree check | Closed? |
+|---|---|---|---|---|
+| 1 | Price (a) from the generator | Diagnosis 3 + brief item 3/(A) | `gcode_gen.rs` `:270` G0, `:290`/`:336` `G1 … S0`, `:323` M5 per scan line; `:879` M5 per vector path; `:586`/`:622` G0; `:693-700` and `:775` are the perforation/tab branches; `:1084`, `:1150` fills. All exact | Yes. Plan also bounds the count from the pump: `?` only on 1 s timeout ticks in both `run_pump` (`serial_pump.rs:287-289`) and the buffered loop (`:735`), port timeout 1000 ms (`serial.rs:384`), drain 200 ms / 30 s (`jobSession.ts:79-81`). Verified; the "hundreds" is correctly labelled a ceiling |
+| 2 | Second fault shape, "no line" is the datum | Intent, "does not satisfy", Hardware-only, Stage 3.5 E4 line, brief paragraph after the options | n/a (text) | Yes. The tally's `0 of N` makes the absence a written record, which is stronger than round 1 asked for |
+| 3 | Reprice (d); add (a′) with two mutant rows | (D) console-only; (B) is (a′) at `info` with a per-job tally; rows M13, M15-M21 | n/a | Yes. Seven rows added, not two; each traced below |
+| 4 | `send()`-site guard + test | `noteSpindleSample` total by construction; E3-M14 | `send()`'s `catch` at `:324-339` adds `Send failed: …` and returns `["error:disconnected"]`, so M14's "no console line starts `Send failed`" is a real observable | Yes. The alternative I offered, taken |
+| 5 | Reset `prev` at job start | `startJobEvidence()` = `resetSpindleDrop(); clearJobRecord();` before `const mode = getStreamingMode();` (`jobStream.ts:315`, the first statement of `streamJob`, so both modes pass it) | `:315` exact; `connect()`'s reset at `:136` with its comment at `:134-135` | Yes. E3-M15 kills it; E3-M6 correctly rewritten as within-job 0 to 0 |
+| 6 | Razor check by text | Verification names the two strings and checks by diff hunk | S1 branch: `if (jobPollingSuspended) return;` at `:537`, subscribe at `:322`, `if (r.startsWith("<")) {` at `:458`, `lastStatusReport = r;` at `:461`, `queryGrblSettings` at `:815` — all anchors present after S1 | Yes |
+| 7 | Buffered lag stated | Diagnosis 6, "does not satisfy" | `serial_pump.rs:617-619` (round 1) | Yes |
+| 8 | Drop the separate-import rule; M3 kill text | Extend `../connection` import in place; M3 reads "no drop line at all" | `eslint.config.js` exists (`npm run lint` = `eslint src`); it enables no duplicate-import rule (grep `duplicate` / `import/` empty) | Yes. The fold's correction of my lint reason is right; the rule change stands on the ordering reason |
+| 9 | Stale comment; withdraw the `:75-81` rule | Comment deleted with the variable it describes | The declaration + comment are `:75-78` at head; S1 inserts after `:84` | Yes. Deleting beats rewriting: the comment described state that no longer lives there |
+
+### 2. Rulings on the fold's corrections and rejections
+
+**Corrections of round-1 citations, all accepted with evidence.**
+- Claim 8 ("no test file calls `connect(`"): wrong. `connection.test.ts:358`, `:387`, `:401`, `:433`, `:658-659` call `machineConnection.connect(...)`. The plan's consequence (seed `jobRunning: false` in the E3 `beforeEach`) is the right one: a live subscription from those tests sets `jobPollingSuspended` on every `setState`, and seeding `false` drives it low.
+- `:693-700` is the perforation branch (`perf_skip`), not the general transit; the general per-path `M5` is `:879` ("Laser off"). Confirmed.
+- S1's hunk is after `:84`; drain span `:123-181`; `queryGrblSettings` last. Confirmed (round 1 already conceded these).
+
+**Rejections, all accepted.**
+- *First drop per job at `warning`:* the fold's reason is that a Run + `FS:0,0` report near the end is expected on most jobs (M5 then the final travel is Kerf's own footer rhythm, and the capture shows Run + `FS:0,0` + `Bf:127` at `:216`, `:218`, `:68`, `:845`, `:909`, `:972`). One yellow line on nearly every job is the X6 harm by another route. Accepted; the brief tells Lee it is one word (E3-M19) to flip.
+- *0 → > 0 recovery lines:* doubles the volume, and the last-sent line's own `S` word already shows the commanded power. Accepted.
+- *Wrap at the `send()` site:* the total-function alternative covers four feeds with one guard and no call-site edit. Accepted; it is what round 1 offered as the alternative.
+
+### 3. X3 and the dimensions the fold touched
+
+**X3 — CONCERN** (was FAIL). The brief now follows the required shape: question; what exists today; tension; four options each with change, cost, risk and what it rules out; recommendation with the cost of being wrong; reversibility and urgency. It is plain language except where it quotes a console line, which is fine. The costs are now true: (A)'s volume is derived from the pump's probe rule and stated as a ceiling nobody has counted; (B) and (C) are priced against (A); (D) is "the least". The recommendation follows from the evidence: only (B) keeps a line at the moment STOP would be pressed *and* a summary that survives the 501-line console (`store/index.ts:635`, `slice(-500)` + one; `send()` echoes every job line at `:289` and every `ok` at `:307`). Three defects, one of them new and the reason this is not PASS:
+
+- **New, item 6:** "(B) is console-only and one revert undoes it, so the orchestrator may treat it as plumbing inside the 10 September status-only ruling and record that in the Ted brief. Any other option needs Lee." This contradicts the section's own heading ("Decision needed before Stage 1") and the plan header ("It needs the answer to the decision at the end before Stage 1"), and it cites a ruling for something the ruling does not say: DECISIONS 2026-09-10 (`.claude/DECISIONS.md:148-151`) is about what hardware evidence can qualify, not about who decides what Kerf prints. A brief that ends by authorising the author to skip the reader is a hedge, not a decision. Pick one: either it is Lee's call (strike the sentence and batch it) or it is plumbing (then say so at the top and inform, not ask). Given two critics and the parent have framed it as Lee's, strike the sentence.
+- Item 3, "every time its queue runs empty … every job ends that way": the capture shows five repetitions of one M4 ring program. Generalising to every job is inference (Diagnosis 2 says so; the brief does not). Hedge it to what was measured.
+- Item 4/(B), "about a fifth more work": uncounted. Say what it is: seven more battery rows, one more exported function, one more line at each of two job ends.
+
+**Core 1 — PASS.** The second fault shape is now in Intent, "does not satisfy" and the brief.
+**Core 3 — PASS.** (a) frequency and its bound, (b) the second shape, (c) the job-start reset, (d) the 50 ms lag are all in. Verified the new claim that no existing test asserts console contents by count or equality: `consoleLines` appears in ten test files (falsifiable), and none pairs it with `toHaveLength`/`toEqual`/`.length)`; S1's test additions (`git diff a6ddc3a relay/kerf-safety-s1 -- '**/*.test.ts*'`) add none either. The tally line therefore reds nothing at baseline.
+**Core 6 — PASS.** Total function, verified against `send()`'s `catch`; drain site benign (`jobSession.ts:166-168`).
+**Core 9 — PASS**, residuals in §4.
+**Core 10 — PASS.** Comment removed with the state; ARCHITECTURE line names the four feeds and the two per-job calls.
+**X1 — PASS.** Unchanged control paths; the one new way to end a job (a throw in `send()`) is closed by construction and tested (M14).
+**X5 — PASS.** Job-start reset lands; feeds cannot interleave (round 1).
+**X6 — PASS** (was CONCERN). No `warning` is added; the tally is the one line guaranteed on screen after a job. Diagnosis 5 correctly notes that in buffered mode (no `sent`/`ok` echo: the Rust pump emits `Console` events only for `Msg` and `Other` line classes, `serial_pump.rs:706-712`) the drop lines would be most of what the console shows — stated, not hidden.
+
+### 4. Implementation under (B), and the anchors
+
+Every edit site exists on the tree and on S1's branch. `streamJob` has no statement before `const mode = getStreamingMode();` (`:312-315`), so `startJobEvidence()` there covers both modes. Both `// B3: the session handles cleanup.` comments (`:298`, `:435`) sit after the drain (`:215`, `:400`) and the stop block, and immediately before `session.end(endState)`, so the tally counts drain reports and prints while `jobRunning` still suspends `pollStatus`. `jobStream.ts` has no early `return` inside either job body (only `:107`, `:111`, `:130`, `:309`, `:317`, `:449`), so "every exit that returns" is true, including refusal. `StatusOutcome.status` is `string`, never null (`machineStatus.ts:59`), so `outcome.status.startsWith("<")` cannot throw. `MachineState` is the lowercase `"run"` string or an object for hold/door/unknown (`machineStatus.ts:18-28`), so the `typeof` guard and `s.state === "run"` are right.
+
+Mutants: all 21 plus C1 are one contiguous find/replace; every kill traced. Anchors distinct in their file: `s.spindle === 0` (M1/C1, shared by design, run separately); `s.state === "run" && ` (M2: step 2 uses `s.state === "run")`, so unique); `prevSpindleSpeed = s.spindle;` (M3); `prevSpindleSpeed > 0 && ` (M6); `.map((l) => l.trim())` (M7); the three call expressions (M8/M9/M10, each in its own file or with a distinct argument); `setLastSentLine(i, lines[i])` vs the buffered `setLastSentLine(event.lineIndex!, …)` (M11); the Status-only sentence vs the tally's `(status only, not beam output)` and the header comment (M12); the two-statement body (M13/M15, shared by design); `console.error("Spindle-drop evidence failed:", e);` (M14); the `addConsoleLine(summary, "info");` + `clearJobRecord();` span vs the lone `clearJobRecord();` in `startJobEvidence` (M16); the two `// E3:` trailing comments (M17/M18); `addConsoleLine(text, "info")` vs `addConsoleLine(summary, "info")` (M19); ` at ${time}` vs the tally's `First at ${first.time}` (M20); `tally.samples += 1;` (M21). E3-M13's "1 of 2" under the mutant is right: job 1's `endJobEvidence` clears, the two no-job Run samples give 1 drop of 2, and the mutant's `startJobEvidence` does not clear.
+
+Two anchor risks the fold introduced, both loud (the battery errors or reports `survived`; neither is silent), so residual not gating:
+- **M4/M5:** the mark's `line` is `#${n} "${text}"` and `where` is `#${last.index + 1} "${last.text}" (…)`. If Ted writes both from `last`, the literal `#${last.index + 1} "${last.text}"` appears twice and both anchors are `MUTANT_ANCHOR_AMBIGUOUS`. Say the reference is built once (`const ref = …`) and both the mark and `where` use it.
+- **M13/M15/M16 fixtures:** these drive `pollStatus` from `jobStream.test.ts`, whose `serial_get_status` mocks return `{ status, events }` with no `snapshot` (`jobStream.test.ts:231-236`, `:297-302`). `pollStatus` samples only under `accepted && outcome.snapshot`, and `consumeStatusOutcome` rejects non-monotonic epoch/seq. A fixture without a valid snapshot makes all three mutants `survived`. Say the pollStatus calls in those tests use the `makeStatusOutcome` shape from `connection.test.ts` (or move the three tests there), and have M13 assert the between-jobs drop line printed, so the fixture proves itself live.
+
+### 5. New defects introduced by the fold
+
+Only the three under X3 above (item 6 self-authorisation; the "every time" generalisation; the uncounted "a fifth"), and the two anchor risks in §4. Nothing in the code plan regressed.
+
+### Residual must-fix (none gating)
+
+1. **X3, brief item 6:** strike "the orchestrator may treat it as plumbing inside the 10 September status-only ruling"; the ruling does not say that and the section's heading says the opposite. The decision goes to Lee, batched.
+2. **X3, brief item 3:** hedge "every time its queue runs empty … every job ends that way" to the five repetitions of one M4 program that were measured.
+3. **X3, brief (B) cost:** replace "about a fifth more work" with the counted difference (seven battery rows, one function, two call lines).
+4. **Core 9 / M4-M5:** build the `#n "text"` reference once and reuse it in the mark and in `where`, so each template anchor occurs once.
+5. **Core 9 / M13, M15, M16:** the `pollStatus` fixtures in `jobStream.test.ts` must carry a valid `snapshot` (epoch/seq monotonic, `machineConnected: true`), and M13 should assert the between-jobs drop line so a rejected fixture cannot pass at baseline.
