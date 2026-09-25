@@ -57,13 +57,19 @@
 //! - **Assumption:** the writer and realtime handles are one tty
 //!   (`try_clone` = `F_DUPFD_CLOEXEC`) with one kernel output queue, so bytes
 //!   reach the wire in `write(2)` order.
-//! - **Bound (premise):** `submit` covers one `write(2)` after `POLLOUT` on a
-//!   blocking fd. A job line is at most 127 bytes (the RX budget), far below
-//!   the driver buffer, so one write call is one line and the hold is bounded
-//!   by the port timeout (1000 ms). `write()` returns on enqueue, not on
-//!   transmit. The stop never waits on the controller, an acknowledgement, or
-//!   transmission. If lines ever grew past the driver buffer this premise
-//!   would need revisiting.
+//! - **Bound (premise):** `submit` covers the line's `write_all` (normally
+//!   one `write(2)` after `POLLOUT` on a blocking fd). Buffered job lines are
+//!   capped at 127 bytes (the RX budget); per-line job lines are uncapped but
+//!   GRBL-sized, far below the driver buffer. Ordering never depends on
+//!   length: the whole `write_all` runs under `submit`. Only the latency bound
+//!   depends on it: the hold is one port timeout (1000 ms) per partial write,
+//!   so a line past the driver buffer stretches it by one timeout per extra
+//!   write. `write()` returns on enqueue, not on transmit. The stop never
+//!   waits on the controller, an acknowledgement, or transmission.
+//! - **Close under the lock:** the stop's admission close is
+//!   `close_admission`, which takes the `submit` guard by reference, so the
+//!   caller must hold it while phase and `admitted_job` are written (a
+//!   barrier-only take-and-drop would let a writer pass the check in the gap).
 //! - **Lock order:** `command` → `submit` → `admitted_job` (leaf). Nothing
 //!   takes `submit` while holding `realtime` or `admitted_job`. Every
 //!   acquisition recovers from poison, so a panicked writer never stops STOP.
@@ -211,7 +217,7 @@ impl SerialSession {
 
     /// Pre-drain admission check, made while holding the command lock before
     /// any drain. NON-AUTHORITATIVE: it only spares a refused send the drain
-    /// (so a refusal consumes no reader bytes). The check that counts is the
+    /// (so a refusal here consumes no reader bytes). The check that counts is the
     /// one inside `admit_and_write`. Emits `permit_granted` on success, after
     /// the `admitted_job` guard is released.
     pub(crate) fn try_permit_begin(&self, epoch: Option<u64>) -> Result<(), String> {
@@ -228,10 +234,10 @@ impl SerialSession {
     /// The caller flushes AFTER this returns, outside the lock, and emits
     /// nothing while it is held. **Every job-epoch write goes through here.**
     ///
-    /// Bound: the lock covers one `write(2)` after `POLLOUT` on a blocking fd;
-    /// a job line (≤127 bytes, the RX budget) is far smaller than the driver
-    /// buffer, so the hold is bounded by the port timeout (1000 ms). If lines
-    /// ever grew past the driver buffer, this premise would need revisiting.
+    /// Bound: the lock covers the line's `write_all`. Ordering never depends
+    /// on line length; the hold is one port timeout (1000 ms) per partial
+    /// write (buffered lines are capped at 127 bytes, per-line lines are
+    /// uncapped but GRBL-sized, far below the driver buffer).
     pub(crate) fn admit_and_write(
         &self,
         epoch: u64,
@@ -265,6 +271,21 @@ impl SerialSession {
             }
         }
         Ok(())
+    }
+
+    /// The stop's admission close: phase Stopping and `admitted_job` cleared.
+    /// `_held` is the `submit` guard: the caller must HOLD `submit` across
+    /// this call (not take-and-drop it as a barrier), or a writer could pass
+    /// `check_admission` in the gap and write after the stop's `0x18`.
+    pub(crate) fn close_admission(&self, _held: &std::sync::MutexGuard<'_, ()>) {
+        #[cfg(test)]
+        assert!(
+            self.submit.try_lock().is_err(),
+            "close_admission: submit must be held while admission closes"
+        );
+        let mut aj = self.admitted_job.lock().unwrap_or_else(|e| e.into_inner());
+        self.phase.store(PHASE_STOPPING, Ordering::SeqCst);
+        *aj = None;
     }
 
     /// Unconditional Idle store: connect ONLY. No stop path may call this.
@@ -509,6 +530,30 @@ mod tests {
         });
         assert!(called, "U1: admitted write not invoked");
         assert_eq!(r.unwrap().unwrap_err().to_string(), "boom");
+    }
+
+    /// W1: `close_admission` closes admission only while `submit` is held.
+    #[test]
+    fn rf15_close_admission_under_submit() {
+        let session = SerialSession::default();
+        session.phase.store(PHASE_ACTIVE, Ordering::SeqCst);
+        *session.admitted_job.lock().unwrap() = Some(1);
+        let held = session.submit.lock().unwrap();
+        session.close_admission(&held);
+        drop(held);
+        assert_eq!(session.phase.load(Ordering::SeqCst), PHASE_STOPPING);
+        assert!(session.admitted_job.lock().unwrap().is_none());
+    }
+
+    /// W1: a barrier-only take-and-drop of `submit` trips the held assertion.
+    #[test]
+    #[should_panic(expected = "submit must be held")]
+    fn rf15_close_admission_panics_when_submit_not_held() {
+        let session = SerialSession::default();
+        drop(session.submit.lock().unwrap());
+        let other = Mutex::new(());
+        let not_submit = other.lock().unwrap();
+        session.close_admission(&not_submit);
     }
 
     /// `admit_and_write` holds `submit` across the write (the closure cannot

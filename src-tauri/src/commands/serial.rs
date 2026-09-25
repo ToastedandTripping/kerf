@@ -58,9 +58,11 @@ use super::serial_pump::{
     self, BufferedPumpConfig, BufferedPumpEvent, BufferedPumpOutcome, ProbeWriter, PumpFailure,
     PumpReader, DEFAULT_LIVENESS_TICKS, STATUS_MAX_TICKS,
 };
+#[cfg(test)]
+use super::serial_session::PHASE_STOPPING;
 use super::serial_session::{
     self, SerialSession, StopGuard, StopResult, PHASE_ACTIVE, PHASE_DISCONNECTED, PHASE_IDLE,
-    PHASE_STOPPING, PHASE_UNKNOWN,
+    PHASE_UNKNOWN,
 };
 
 /// Type alias for the port-factory parameter to avoid clippy::type_complexity.
@@ -487,8 +489,10 @@ pub(crate) fn serial_send_inner(
     let channel = guard.as_mut().ok_or("Not connected")?;
 
     // Pre-drain admission check (non-authoritative): under the command lock,
-    // before the drain and before PumpFlight, so a refused send consumes no
-    // reader bytes. The check that counts is inside `admit_and_write`.
+    // before the drain and before PumpFlight, so a send refused HERE consumes
+    // no reader bytes. The check that counts is inside `admit_and_write`; a
+    // refusal there comes after the drain (harmless: the stop's banner is
+    // not in the reader yet, since its `0x18` follows the admission close).
     if let Some(epoch) = job_epoch {
         inner.session.try_permit_begin(Some(epoch))?;
     }
@@ -1018,13 +1022,8 @@ pub(crate) fn serial_stop_inner(inner: &SerialInner, sleeper: &dyn Fn(Duration))
     // released before the `0x18`, which needs no lock: ordering is already
     // fixed. Poison is recovered so a panicked writer can never stop STOP.
     {
-        let _submit = session.submit.lock().unwrap_or_else(|e| e.into_inner());
-        let mut aj = session
-            .admitted_job
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        session.phase.store(PHASE_STOPPING, Ordering::SeqCst);
-        *aj = None;
+        let submit = session.submit.lock().unwrap_or_else(|e| e.into_inner());
+        session.close_admission(&submit);
     }
     session.emit("admission_closed");
 
