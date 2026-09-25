@@ -3,9 +3,10 @@
  * flip and text/image placement. Moved out of Viewport.tsx so they can be
  * tested against real pixi.js display objects.
  */
-import { Container, Sprite, Text } from "pixi.js";
+import { Container, Graphics, Sprite, Text } from "pixi.js";
 import type { DesignObject } from "../../app/types";
 import { PX_PER_MM } from "../../lib/constants";
+import { getReadyTexture, isTextureFailed } from "./textureCache";
 
 /**
  * R2 F4: the one placement for an image sprite, used at creation and on every
@@ -123,4 +124,43 @@ export function applyObjectRotation(displayObj: Container, t: DesignObject["tran
   displayObj.pivot.set(r.pivotX, r.pivotY);
   displayObj.position.set(r.x, r.y);
   displayObj.rotation = r.rotation;
+}
+
+/**
+ * R2 F5: the display object for an image. A Sprite once its texture has
+ * decoded; null while the decode is pending (nothing drawn, nothing cached, so
+ * the next objects render retries); the crossed-box placeholder if the decode
+ * failed, wrapped in a Container so later renders take the content-hash path
+ * rather than the vector re-render that would wipe it.
+ */
+export function renderImageObject(obj: DesignObject): Container | null {
+  if (!obj.imageData) return null;
+  const t = obj.transform;
+  const texture = getReadyTexture(obj.id, obj.imageData);
+  if (texture) {
+    const sprite = new Sprite(texture);
+    placeSprite(sprite, t);
+    sprite.alpha = obj.opacity;
+    return sprite;
+  }
+  if (!isTextureFailed(obj.id)) return null;
+
+  const px = t.x * PX_PER_MM;
+  const py = t.y * PX_PER_MM;
+  const pw = t.width * PX_PER_MM;
+  const ph = t.height * PX_PER_MM;
+  // Fallback: draw a placeholder box
+  const g = new Graphics();
+  g.setStrokeStyle({ width: 1, color: 0x999999, alpha: 0.5 });
+  g.rect(px, py, pw, ph).stroke();
+  // X through the box
+  g.moveTo(px, py)
+    .lineTo(px + pw, py + ph)
+    .stroke();
+  g.moveTo(px + pw, py)
+    .lineTo(px, py + ph)
+    .stroke();
+  const placeholder = new Container();
+  placeholder.addChild(g);
+  return placeholder;
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from "react";
-import { Application, Container, Graphics, Text, TextStyle, Sprite } from "pixi.js";
+import { Application, Container, Graphics, Text, TextStyle } from "pixi.js";
 import { useShallow } from "zustand/shallow";
 import { useStore } from "../../app/store";
 import { getDirtyObjectIds, clearDirtyObjectIds, setCursorPosition } from "../../app/store";
@@ -28,8 +28,8 @@ import { measureDistance, measureAngleDeg, formatMeasureLabel } from "../../lib/
 
 import { PX_PER_MM, MIN_ZOOM, MAX_ZOOM } from "../../lib/constants";
 import { drawnLeaves, orientedHandlePoints } from "../../lib/geometry";
-import { applyObjectRotation, applyTextImageTransform, placeSprite } from "./renderHelpers";
-import { clearTextures, evictTextures, getOrCreateTexture } from "./textureCache";
+import { applyObjectRotation, applyTextImageTransform, renderImageObject } from "./renderHelpers";
+import { clearTextures, evictTextures, setTextureReadyListener } from "./textureCache";
 
 // P8: Content hash cache keyed by display cache key (avoids rebuilding text/image when only transform changes)
 const contentHashCache = new Map<string, string>();
@@ -46,6 +46,9 @@ export function Viewport() {
   // R2 F1: flips once when the live Pixi app has built its refs. A scalar, so
   // it is safe from React Error 185; every canvas effect depends on it.
   const [pixiReady, setPixiReady] = useState(false);
+  // R2 F5: bumped when an image texture finishes decoding (or fails), so the
+  // objects effect reruns and draws it. A scalar, safe from React Error 185.
+  const [textureTick, setTextureTick] = useState(0);
   const canvasRef = useRef<HTMLDivElement>(null);
   const appRef = useRef<Application | null>(null);
   const worldRef = useRef<Container | null>(null);
@@ -228,6 +231,13 @@ export function Viewport() {
     g.rect(0, 0, w, h).stroke();
   }, [workspaceWidth, workspaceHeight, pixiReady]);
 
+  // R2 F5: declared ABOVE the objects effect so the listener is in place
+  // before the first objects render can start a texture load.
+  useEffect(() => {
+    setTextureReadyListener(() => setTextureTick((n) => n + 1));
+    return () => setTextureReadyListener(null);
+  }, []);
+
   // Draw objects with persistent cache (diff against previous state)
   useEffect(() => {
     if (!pixiReady || !objectsContainerRef.current) return;
@@ -328,7 +338,9 @@ export function Viewport() {
     };
     for (const obj of objects) collectImageIds(obj, activeImageIds);
     evictTextures(activeImageIds);
-  }, [objects, layers, pixiReady]);
+    // textureTick is read only to rerun this effect when a decode settles.
+    void textureTick;
+  }, [objects, layers, pixiReady, textureTick]);
 
   // Draw temporary drawing object
   useEffect(() => {
@@ -1328,36 +1340,6 @@ function renderTextObject(obj: DesignObject): Container | null {
   }
 
   return text;
-}
-
-function renderImageObject(obj: DesignObject): Container | null {
-  if (!obj.imageData) return null;
-  const t = obj.transform;
-  const px = t.x * PX_PER_MM;
-  const py = t.y * PX_PER_MM;
-  const pw = t.width * PX_PER_MM;
-  const ph = t.height * PX_PER_MM;
-
-  try {
-    const texture = getOrCreateTexture(obj.id, obj.imageData);
-    const sprite = new Sprite(texture);
-    placeSprite(sprite, t);
-    sprite.alpha = obj.opacity;
-    return sprite;
-  } catch {
-    // Fallback: draw a placeholder box
-    const g = new Graphics();
-    g.setStrokeStyle({ width: 1, color: 0x999999, alpha: 0.5 });
-    g.rect(px, py, pw, ph).stroke();
-    // X through the box
-    g.moveTo(px, py)
-      .lineTo(px + pw, py + ph)
-      .stroke();
-    g.moveTo(px + pw, py)
-      .lineTo(px, py + ph)
-      .stroke();
-    return g;
-  }
 }
 
 function ContextMenuContent({ x, y, onClose }: { x: number; y: number; onClose: () => void }) {

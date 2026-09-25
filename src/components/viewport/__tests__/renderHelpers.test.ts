@@ -4,12 +4,18 @@
  * canvas text measurement, so text is modelled by a Container with the same
  * x and scale (the helpers only touch the transform fields both share).
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { Container, Graphics, Point, Sprite, Texture, TextureSource } from "pixi.js";
 import type { DesignObject } from "../../../app/types";
 import { PX_PER_MM } from "../../../lib/constants";
 import { rotatePathPoint } from "../../../lib/geometry";
-import { applyObjectRotation, applyTextImageTransform, rotationPlacement } from "../renderHelpers";
+import {
+  applyObjectRotation,
+  applyTextImageTransform,
+  renderImageObject,
+  rotationPlacement,
+} from "../renderHelpers";
+import { clearTextures } from "../textureCache";
 
 type T = DesignObject["transform"];
 
@@ -194,5 +200,79 @@ describe("flipped images keep their flip when moved (R2 F4)", () => {
 
   it("a Sprite is updated in place", () => {
     expect(applyTextImageTransform(makeSprite(), imageObj(IMG))).toBe(true);
+  });
+});
+
+describe("renderImageObject waits for decode (R2 F5)", () => {
+  let decodes: { resolve: () => void; reject: (e: unknown) => void }[] = [];
+  const originalDecode = HTMLImageElement.prototype.decode;
+  const T_IMG: T = { x: 10, y: 10, width: 50, height: 25, rotation: 0, scaleX: -1, scaleY: 1 };
+  function img(id: string): DesignObject {
+    return {
+      id,
+      type: "image",
+      name: id,
+      transform: T_IMG,
+      layerIndex: 0,
+      visible: true,
+      locked: false,
+      fill: null,
+      stroke: "#4a90e2",
+      strokeWidth: 1,
+      opacity: 0.5,
+      imageData: "data:image/png;base64,AAAA",
+    };
+  }
+  async function flush() {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+  }
+
+  beforeEach(() => {
+    decodes = [];
+    HTMLImageElement.prototype.decode = vi.fn(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          decodes.push({ resolve, reject });
+        })
+    );
+    vi.spyOn(Texture, "from").mockImplementation(
+      () => new Texture({ source: new TextureSource({ width: 200, height: 100 }) })
+    );
+    clearTextures();
+  });
+
+  afterEach(() => {
+    clearTextures();
+    HTMLImageElement.prototype.decode = originalDecode;
+    vi.restoreAllMocks();
+  });
+
+  it("pending: returns null", () => {
+    expect(renderImageObject(img("p"))).toBeNull();
+  });
+
+  it("ready: returns a Sprite placed by placeSprite (flip, box, alpha)", async () => {
+    renderImageObject(img("r"));
+    decodes[0].resolve();
+    await flush();
+    const el = renderImageObject(img("r"));
+    expect(el).toBeInstanceOf(Sprite);
+    const s = el as Sprite;
+    expect(s.scale.x).toBeLessThan(0);
+    expect(s.alpha).toBe(0.5);
+    expectClose(mapLocal(s, 0, 0), { x: 60 * PX_PER_MM, y: 10 * PX_PER_MM });
+    expectClose(mapLocal(s, 200, 100), { x: 10 * PX_PER_MM, y: 35 * PX_PER_MM });
+  });
+
+  it("failed: returns the placeholder wrapped in a Container that is not a Graphics", async () => {
+    renderImageObject(img("f"));
+    decodes[0].reject(new Error("bad"));
+    await flush();
+    const el = renderImageObject(img("f"));
+    expect(el).toBeInstanceOf(Container);
+    expect(el).not.toBeInstanceOf(Graphics);
+    expect(el).not.toBeInstanceOf(Sprite);
+    expect(el!.children).toHaveLength(1);
+    expect(el!.children[0]).toBeInstanceOf(Graphics);
   });
 });
