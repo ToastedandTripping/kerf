@@ -139,3 +139,31 @@ describe("Store", () => {
     expect(state.nodeEditState).toEqual({ pathId: null, selectedNodeIndex: null });
   });
 });
+
+describe("refresh-cut-vs-screen F6: reorderLayers carries group children", () => {
+  beforeEach(() => {
+    useStore.setState({ objects: [], selectedIds: [], undoStack: [], redoStack: [] });
+  });
+
+  it("depth-2 group and its descendants follow their layer; leaves gain no children key", () => {
+    useStore.setState({ layers: DEFAULT_LAYERS });
+    const a = makeObject({ id: "a", layerIndex: 0 });
+    const b = makeObject({ id: "b", layerIndex: 0 });
+    const inner = makeObject({ id: "inner", type: "group", layerIndex: 0, children: [a, b] });
+    const outer = makeObject({ id: "outer", type: "group", layerIndex: 0, children: [inner] });
+    const top = makeObject({ id: "top", layerIndex: 2 });
+    useStore.getState().addObject(outer);
+    useStore.getState().addObject(top);
+    useStore.getState().reorderLayers(0, 1);
+    const objs = useStore.getState().objects;
+    const o = objs.find((x) => x.id === "outer")!;
+    const i = o.children![0];
+    expect(o.layerIndex).toBe(1);
+    expect(i.layerIndex).toBe(1);
+    expect(i.children!.map((c) => c.layerIndex)).toEqual([1, 1]);
+    for (const leaf of i.children!) expect("children" in leaf).toBe(false);
+    const t = objs.find((x) => x.id === "top")!;
+    expect(t.layerIndex).toBe(2);
+    expect("children" in t).toBe(false);
+  });
+});

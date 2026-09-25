@@ -38,6 +38,20 @@ function markDescendantsDirty(obj: DesignObject) {
   }
 }
 
+// refresh-cut-vs-screen F6: remap layerIndex at every group depth — the cut
+// reads each LEAF's layer, so a top-level-only remap cut grouped parts with
+// the swapped-in layer's power and speed. No `children` key on leaves.
+function remapLayerIndexDeep(
+  objects: DesignObject[],
+  map: ReadonlyMap<number, number>
+): DesignObject[] {
+  return objects.map((o) => {
+    const next: DesignObject = { ...o, layerIndex: map.get(o.layerIndex) ?? o.layerIndex };
+    if (o.children !== undefined) next.children = remapLayerIndexDeep(o.children, map);
+    return next;
+  });
+}
+
 // --- P4: Module-level cursor position (removed from Zustand to avoid 60 set() calls/sec) ---
 let _cursorPosition = { x: 0, y: 0 };
 let _cursorListeners: Array<() => void> = [];
@@ -319,10 +333,7 @@ export const useStore = create<AppState>((set, get) => ({
         indexMap.set(l.index, i);
         return { ...l, index: i };
       });
-      const objects = state.objects.map((o) => ({
-        ...o,
-        layerIndex: indexMap.get(o.layerIndex) ?? o.layerIndex,
-      }));
+      const objects = remapLayerIndexDeep(state.objects, indexMap);
       const activeLayerIndex = indexMap.get(state.activeLayerIndex) ?? state.activeLayerIndex;
       return {
         layers: reindexed,
