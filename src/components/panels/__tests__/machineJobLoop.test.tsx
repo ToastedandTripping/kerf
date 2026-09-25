@@ -28,6 +28,7 @@ import type { AppState } from "../../../app/store";
 import { DEFAULT_LAYERS } from "../../../app/types";
 import { JobActionBar } from "../JobActionBar";
 import { MachinePanel } from "../MachinePanel";
+import { MaterialTestDialog } from "../MaterialTestDialog";
 import { streamJob, pauseJob, resumeJob } from "../../../lib/machine/jobStream";
 import { beginJobSession, _testResetJobSession } from "../../../lib/machine/jobSession";
 import { machineConnection } from "../../../lib/machine/connection";
@@ -466,13 +467,19 @@ describe("MachinePanel START/FRAME gating (F15)", () => {
   });
 
   it("FRAME no-ops with a console error on empty moves (never G0 XInfinity)", async () => {
-    useStore.setState({ gcodeResult: { ...gcodeWithMoves(), moves: [] } });
     mockSerial(() => ({ responses: ["ok"], drained: [] }));
     const { getByText } = render(<JobActionBar />);
-
+    // S1: the button now shares START's gate, so it renders disabled with the
+    // gate reason as its title on empty moves. Reach the HANDLER guard by
+    // emptying moves after render and clicking before React re-renders.
+    useStore.setState({ gcodeResult: { ...gcodeWithMoves(), moves: [] } });
     fireEvent.click(getByText("FRAME"));
     await waitFor(() =>
       expect(consoleTexts()).toContain("Nothing to cut -- no moves in the generated G-code")
+    );
+    expect((getByText("FRAME") as HTMLButtonElement).disabled).toBe(true);
+    expect((getByText("FRAME") as HTMLButtonElement).title).toBe(
+      "Nothing to cut -- no moves in the generated G-code"
     );
     expect(sentCommands()).toEqual([]);
   });
@@ -849,5 +856,144 @@ describe("emergencyStop — native stop contract (B4)", () => {
 
     expect(useStore.getState().machineState).toBe("alarm");
     expect(consoleTexts().some((t) => t.includes("Beam state unqualified"))).toBe(true);
+  });
+});
+
+describe("S1 — one admission for four doors", () => {
+  const LASER_REASON =
+    "Enable Laser Mode first — $32 must be 1. Use the 'Enable Laser Mode' button in the Machine panel, or run $32=1 in the console.";
+
+  beforeEach(() => {
+    cleanup();
+    mockInvoke.mockReset();
+    resetStatusConsumer();
+    _mockSeq = 0;
+    localStorage.clear();
+    seedReadyToStart();
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    if (recorder) {
+      await recorder.dispose();
+    }
+  });
+
+  /** Every powered/motion write the recorder saw (line sends and streamed jobs). */
+  function powerWrites() {
+    return recorder
+      .allRecords()
+      .filter((r) => r.command === "serial_send" || r.command === "serial_stream_job");
+  }
+
+  it("S1-M3: main FRAME handler with laser mode off and fresh G-code makes zero sends", async () => {
+    mockSerial(() => ({ responses: ["ok"], drained: [] }));
+    const { getByText } = render(<JobActionBar />);
+    useStore.setState({ grblLaserMode: false });
+    fireEvent.click(getByText("FRAME")); // synchronous: button not yet re-rendered disabled
+    await waitFor(() => expect(consoleTexts()).toContain(LASER_REASON));
+    expect(powerWrites()).toEqual([]);
+    expect(recorder.findRecords("serial_job_begin")).toEqual([]);
+  });
+
+  it("S1-M10: main FRAME handler with stale G-code makes zero sends", async () => {
+    mockSerial(() => ({ responses: ["ok"], drained: [] }));
+    const { getByText } = render(<JobActionBar />);
+    useStore.setState({ gcodeStale: true });
+    fireEvent.click(getByText("FRAME"));
+    await waitFor(() => expect(consoleTexts()).toContain("Design changed -- regenerate G-code"));
+    // Give any (wrongly) admitted frame a chance to reach the wire.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(powerWrites()).toEqual([]);
+    expect(recorder.findRecords("serial_job_begin")).toEqual([]);
+  });
+
+  it("S1-M4: main FRAME button is disabled when status is stale", () => {
+    useStore.setState({ statusStale: true });
+    const { getByText } = render(<JobActionBar />);
+    const frame = getByText("FRAME") as HTMLButtonElement;
+    expect(frame.disabled).toBe(true);
+    expect(frame.title).toBe("Machine status stale — waiting for a fresh status report");
+    // Positive sibling: fresh status enables it.
+    cleanup();
+    useStore.setState({ statusStale: false });
+    const again = render(<JobActionBar />);
+    expect((again.getByText("FRAME") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("S1-M5: a console $32=0 clears laser mode and START then refuses", async () => {
+    mockSerial(() => ({ responses: ["ok"], drained: [] }));
+    const { getByText } = render(<JobActionBar />);
+    await machineConnection.send("$32=0"); // what Console.tsx sends
+    fireEvent.click(getByText("START"));
+    await waitFor(() => expect((getByText("START") as HTMLButtonElement).title).toBe(LASER_REASON));
+    expect((getByText("START") as HTMLButtonElement).disabled).toBe(true);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(sentCommands()).toEqual(["$32=0"]);
+    expect(useStore.getState().grblLaserMode).toBe(false);
+  });
+
+  describe("material test dialog", () => {
+    it("S1-M1: grid send with laser mode off makes zero sends; dialog stays open; reason names $32", async () => {
+      mockSerial(() => ({ responses: ["ok"], drained: [] }));
+      const onClose = vi.fn();
+      const { getByText, getByLabelText } = render(<MaterialTestDialog open onClose={onClose} />);
+      // Labels engrave real text, whose font does not load under jsdom.
+      fireEvent.click(getByLabelText("Labels"));
+      useStore.setState({ grblLaserMode: false });
+      fireEvent.click(getByText("Send to Machine"));
+      await waitFor(() => expect(consoleTexts()).toContain(LASER_REASON));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(powerWrites()).toEqual([]);
+      expect(recorder.findRecords("serial_job_begin")).toEqual([]);
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("S1-M2: material FRAME with laser mode off makes zero sends; dialog stays open", async () => {
+      mockSerial(() => ({ responses: ["ok"], drained: [] }));
+      const onClose = vi.fn();
+      const { getByText, getByLabelText } = render(<MaterialTestDialog open onClose={onClose} />);
+      // Labels engrave real text, whose font does not load under jsdom.
+      fireEvent.click(getByLabelText("Labels"));
+      useStore.setState({ grblLaserMode: false });
+      fireEvent.click(getByText("Frame"));
+      await waitFor(() => expect(consoleTexts()).toContain(LASER_REASON));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(powerWrites()).toEqual([]);
+      expect(recorder.findRecords("serial_job_begin")).toEqual([]);
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("S1-M7: a grid that fits only in the wrong frame refuses on an origin-top machine", async () => {
+      useStore.setState({ originTop: true });
+      mockSerial(() => ({ responses: ["ok"], drained: [] }));
+      const onClose = vi.fn();
+      const { getByText, getByLabelText } = render(<MaterialTestDialog open onClose={onClose} />);
+      // Labels engrave real text, whose font does not load under jsdom.
+      fireEvent.click(getByLabelText("Labels"));
+      fireEvent.click(getByText("Send to Machine"));
+      await waitFor(() =>
+        expect(consoleTexts()).toContain(
+          "G-code extends outside workspace bounds. Move or resize the design to fit."
+        )
+      );
+      await new Promise((r) => setTimeout(r, 50));
+      expect(powerWrites()).toEqual([]);
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("S1-C3: grid is admitted with bed verified, laser on, idle and NO design G-code", async () => {
+      useStore.setState({ gcodeResult: null, gcodeStale: true });
+      mockSerial(() => ({ responses: ["ok"], drained: [] }));
+      const onClose = vi.fn();
+      const { getByText, getByLabelText } = render(<MaterialTestDialog open onClose={onClose} />);
+      // Labels engrave real text, whose font does not load under jsdom.
+      fireEvent.click(getByLabelText("Labels"));
+      fireEvent.click(getByText("Send to Machine"));
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+      await waitFor(() => expect(useStore.getState().jobRunning).toBe(false), { timeout: 5000 });
+      expect(recorder.findRecords("serial_job_begin").length).toBe(1);
+      expect(powerWrites().length).toBeGreaterThan(0);
+    });
   });
 });

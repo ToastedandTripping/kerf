@@ -238,3 +238,42 @@ describe("gcodeExtents (G-code text to bounding box)", () => {
     expect(gcodeExtents(gcode)).toEqual({ minX: -5, minY: -10, maxX: 20, maxY: 30 });
   });
 });
+
+describe("canStartJob with a locally generated program (S1: material-test doors)", () => {
+  const EXT = { minX: 10, minY: 10, maxX: 100, maxY: 60 };
+
+  it("skips the design G-code checks when ext is supplied", () => {
+    const s = { ...okState(), gcodeResult: null, gcodeStale: true };
+    expect(canStartJob(s, EXT)).toEqual({ ok: true });
+    // Without ext, the same state refuses on the design G-code.
+    expect(canStartJob(s).ok).toBe(false);
+  });
+
+  it("refuses ext === null with the nothing-to-send reason", () => {
+    expect(canStartJob(okState(), null)).toEqual({
+      ok: false,
+      reason: "Nothing to send -- the generated program has no moves",
+    });
+  });
+
+  it("bounds use ext with originTop", () => {
+    expect(canStartJob({ ...okState(), originTop: true }, EXT).ok).toBe(false);
+    expect(
+      canStartJob({ ...okState(), originTop: true }, { minX: 10, minY: -60, maxX: 100, maxY: -10 })
+        .ok
+    ).toBe(true);
+  });
+
+  it("every shared check still applies with ext", () => {
+    const refusals: Array<Partial<JobGateState>> = [
+      { machineConnected: false },
+      { statusStale: true },
+      { grblLaserMode: false },
+      { machineState: "alarm" },
+      { machineState: "run" },
+      { jobRunning: true },
+      { workspaceVerified: false },
+    ];
+    for (const r of refusals) expect(canStartJob({ ...okState(), ...r }, EXT).ok).toBe(false);
+  });
+});

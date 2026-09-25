@@ -8,7 +8,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../../app/store";
 import { DEFAULT_LAYERS } from "../../../app/types";
-import { machineConnection, _testResetPollFailures } from "../connection";
+import { machineConnection, _testResetPollFailures, isGrblSettingsWrite } from "../connection";
 import { resetStatusConsumer } from "../machineStatus";
 import { SerialTraceRecorder } from "../../../lib/machine/__tests__/serialTraceHarness";
 
@@ -710,5 +710,135 @@ describe("connection.send — RF-15 job epoch and refusal", () => {
     mockInvoke.mockRejectedValue("disconnected: port closed (EOF)");
     const out = await machineConnection.send("G1 X1", { jobEpoch: 7 });
     expect(out).toEqual(["error:disconnected"]);
+  });
+});
+
+describe("S1 — readback-only laser-mode flag", () => {
+  beforeEach(() => {
+    mockInvoke.mockReset();
+    seedConnectedStore();
+  });
+
+  /** Controllable promise for one invoke. */
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  }
+
+  function mockReadback(dollarResponses: string[]) {
+    mockInvoke.mockImplementation(async (_cmd: string, args?: { command?: string }) =>
+      args?.command === "$$"
+        ? { responses: dollarResponses, drained: [] }
+        : { responses: ["ok"], drained: [] }
+    );
+  }
+
+  it("S1-C1: a console $X is not a settings write — the flag is unchanged", async () => {
+    useStore.setState({ grblLaserMode: true });
+    mockInvoke.mockResolvedValue({ responses: ["ok"], drained: [] });
+    await machineConnection.send("$X");
+    expect(useStore.getState().grblLaserMode).toBe(true);
+    expect(consoleTexts().some((t) => t.startsWith("Settings changed"))).toBe(false);
+  });
+
+  it("isGrblSettingsWrite classifies writes and non-writes", () => {
+    for (const w of ["$32=0", " $30 = 1000 ", "$N0=G21", "$N=G20", "$RST=$", "$rst=*"]) {
+      expect(isGrblSettingsWrite(w)).toBe(true);
+    }
+    for (const n of ["$X", "$H", "$$", "$#", "$I", "$G", "$C", "$J=G91 X1 F100", "G1 X1"]) {
+      expect(isGrblSettingsWrite(n)).toBe(false);
+    }
+  });
+
+  it("S1-M12: send('$N0=G21') clears the flag (a startup block runs after every reset)", async () => {
+    useStore.setState({ grblLaserMode: true });
+    mockInvoke.mockResolvedValue({ responses: ["ok"], drained: [] });
+    await machineConnection.send("$N0=G21");
+    expect(useStore.getState().grblLaserMode).toBe(false);
+    expect(consoleTexts()).toContain(
+      "Settings changed -- laser mode must be re-verified (Enable Laser Mode, $$ in the console, or reconnect) before starting a job"
+    );
+  });
+
+  it("S1-M6: enableLaserMode — ok, then a $$ readback showing $32=0, leaves the flag false", async () => {
+    mockReadback(["$32=0", "ok"]);
+    const result = await machineConnection.enableLaserMode();
+    expect(result).toBe(false);
+    expect(useStore.getState().grblLaserMode).toBe(false);
+    expect(consoleTexts().some((t) => t.startsWith("$32=1 may not have been accepted"))).toBe(true);
+  });
+
+  it("S1-C2: enableLaserMode — ok and a $32=1 readback leaves the flag true", async () => {
+    mockReadback(["$32=1", "ok"]);
+    const result = await machineConnection.enableLaserMode();
+    expect(result).toBe(true);
+    expect(useStore.getState().grblLaserMode).toBe(true);
+    const sent = mockInvoke.mock.calls
+      .filter((c) => c[0] === "serial_send")
+      .map((c) => (c[1] as { command: string }).command);
+    expect(sent).toEqual(["$32=1", "$$"]);
+  });
+
+  it("S1-C4: enableLaserMode leaves machineHomed unchanged", async () => {
+    useStore.setState({ machineHomed: true });
+    mockReadback(["$32=1", "ok"]);
+    await machineConnection.enableLaserMode();
+    expect(useStore.getState().machineHomed).toBe(true);
+    expect(useStore.getState().grblLaserMode).toBe(true);
+  });
+
+  it("S1-M8: a readback with no $32 line, after the flag was true, leaves it false", async () => {
+    useStore.setState({ grblLaserMode: true });
+    mockInvoke.mockResolvedValueOnce({ responses: ["$30=1000", "ok"], drained: [] });
+    expect(await machineConnection.queryGrblSettings()).toBe(true);
+    expect(useStore.getState().grblLaserMode).toBe(false);
+  });
+
+  it("S1-M13: a readback whose invoke rejects, after the flag was true, leaves it false", async () => {
+    useStore.setState({ grblLaserMode: true });
+    mockInvoke.mockRejectedValueOnce(new Error("boom"));
+    expect(await machineConnection.queryGrblSettings()).toBe(false);
+    expect(useStore.getState().grblLaserMode).toBe(false);
+  });
+
+  it("S1-M9: a stale readback (write lands mid-readback, then $32=1) leaves the flag false", async () => {
+    const pending = deferred<{ responses: string[]; drained: string[] }>();
+    mockInvoke.mockImplementation((_cmd: string, args?: { command?: string }) =>
+      args?.command === "$$" ? pending.promise : Promise.resolve({ responses: ["ok"], drained: [] })
+    );
+    const readback = machineConnection.readbackGrblSettings();
+    await machineConnection.send("$1=25");
+    pending.resolve({ responses: ["$32=1", "ok"], drained: [] });
+    await readback;
+    expect(useStore.getState().grblLaserMode).toBe(false);
+  });
+
+  it("S1-M15: a console $$ overtaken by an invalidation before its invoke resolves leaves the flag false", async () => {
+    const pending = deferred<{ responses: string[]; drained: string[] }>();
+    mockInvoke.mockImplementation((_cmd: string, args?: { command?: string }) =>
+      args?.command === "$$" ? pending.promise : Promise.resolve({ responses: ["ok"], drained: [] })
+    );
+    const readback = machineConnection.send("$$");
+    await machineConnection.send("$32=0");
+    pending.resolve({ responses: ["$32=1", "ok"], drained: [] });
+    await readback;
+    expect(useStore.getState().grblLaserMode).toBe(false);
+  });
+
+  it("S1-M14: a console $$ with $32=1, after an invalidation, sets the flag true", async () => {
+    useStore.setState({ grblLaserMode: true });
+    mockReadback(["$30=1000", "$32=1", "ok"]);
+    await machineConnection.send("$32=1");
+    expect(useStore.getState().grblLaserMode).toBe(false);
+    await machineConnection.send("$$");
+    expect(useStore.getState().grblLaserMode).toBe(true);
+    // parse-only hook: exactly one $$ reached the wire
+    const dollars = mockInvoke.mock.calls.filter(
+      (c) => c[0] === "serial_send" && (c[1] as { command: string }).command === "$$"
+    );
+    expect(dollars).toHaveLength(1);
   });
 });
