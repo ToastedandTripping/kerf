@@ -14,6 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import { useStore } from "../../../app/store";
 import { _testImportSvgWithLayers } from "../SvgImportDialog";
+import { matrixMaxStretch } from "../../../lib/geometry";
 
 beforeEach(() => {
   useStore.setState({ objects: [], selectedIds: [], undoStack: [], redoStack: [] });
@@ -154,5 +155,16 @@ describe("refresh-cut-vs-screen F2 — SVG arcs tessellate to 0.05 mm in real mm
     </svg>`;
     const pts = importOnePath(svg);
     expect(maxDeviation(pts, 50, 50, 4, 20)).toBeLessThanOrEqual(0.05 + 1e-6);
+  });
+});
+
+describe("refresh-cut-vs-screen F2 — matrixMaxStretch is the max singular value", () => {
+  it("skew stretches more than either column: [[1,1],[0,1]] → golden ratio", () => {
+    // Column norms are 1 and √2; the true largest stretch is (1+√5)/2.
+    expect(matrixMaxStretch([1, 0, 1, 1, 0, 0])).toBeCloseTo((1 + Math.sqrt(5)) / 2, 12);
+  });
+  it("uniform and axis scales", () => {
+    expect(matrixMaxStretch([2, 0, 0, 2, 5, 5])).toBeCloseTo(2, 12);
+    expect(matrixMaxStretch([1, 0, 0, 5, 0, 0])).toBeCloseTo(5, 12);
   });
 });
