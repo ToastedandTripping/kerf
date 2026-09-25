@@ -82,6 +82,136 @@ let prevSpindleSpeed: number | null = null;
  *  callers get the same promise instead of racing a second connection. */
 let connectingPromise: Promise<string> | null = null;
 
+/**
+ * S1: settings generation. Bumped by every settings write; a readback only
+ * counts when no write landed between its capture and its parse. Module-level,
+ * not store state (no selector churn).
+ */
+let settingsGeneration = 0;
+
+/** S1: true for commands that change a controller setting ($N=, $Nx=, $RST=).
+ *  A startup block ($N0=...) runs after every reset, so it counts as a write. */
+export function isGrblSettingsWrite(cmd: string): boolean {
+  const c = cmd.trim();
+  return /^\$\d+\s*=/.test(c) || /^\$N\d*\s*=/i.test(c) || /^\$RST\s*=/i.test(c);
+}
+
+/** S1: a settings write happened — laser mode is unknown until read back. */
+function invalidateGrblSettings(): void {
+  settingsGeneration++;
+  const store = useStore.getState();
+  store.setGrblLaserMode(false);
+  store.addConsoleLine(
+    "Settings changed -- laser mode must be re-verified (Enable Laser Mode, $$ in the console, or reconnect) before starting a job",
+    "warning"
+  );
+}
+
+/**
+ * S1: the ONLY code that sets `grblLaserMode` true. True iff the readback
+ * carried `$32=1` AND no settings write landed since the readback began.
+ * Every other outcome (no $32 line, $32=0, rejected readback, stale
+ * generation) ends false.
+ */
+function applyLaserModeReadback(responses: string[], genAtStart: number): void {
+  const store = useStore.getState();
+  store.setGrblLaserMode(
+    responses.some((l) => /^\$32=1(\.0+)?\s*$/.test(l.trim())) && genAtStart === settingsGeneration
+  );
+  const line32 = responses.find((l) => /^\$32=/.test(l.trim()));
+  if (line32) {
+    const m = line32.trim().match(/^\$32=([\d.]+)/);
+    const value = m ? parseFloat(m[1]) : NaN;
+    store.addConsoleLine(
+      `$32=${value} (laser mode ${value === 1 ? "enabled" : "disabled"})`,
+      "info"
+    );
+  }
+}
+
+/**
+ * S1: parse a `$$` response set (parse-only; sends nothing). Applies
+ * $20-22, $30, $110/111, $120/121, $130/131 as the connect parse always has;
+ * $32 is decided by applyLaserModeReadback. Returns true when at least one
+ * `$N=V` line parsed.
+ */
+function parseSettingsResponses(responses: string[], gen: number): boolean {
+  const store = useStore.getState();
+  let parsedAny = false;
+  let accelX = 0,
+    accelY = 0;
+  let maxFeedRateX = 0,
+    maxFeedRateY = 0;
+  let maxTravelX = 0,
+    maxTravelY = 0;
+  for (const line of responses) {
+    const match = line.match(/^\$(\d+)=([\d.]+)/);
+    if (match) {
+      parsedAny = true;
+      const key = parseInt(match[1], 10);
+      const value = parseFloat(match[2]);
+      if (key === 20) {
+        store.setGrblSoftLimits(value === 1);
+        store.addConsoleLine(
+          `$20=${value} (soft limits ${value === 1 ? "enabled" : "disabled"})`,
+          "info"
+        );
+      } else if (key === 21) {
+        store.setGrblHardLimits(value === 1);
+        store.addConsoleLine(
+          `$21=${value} (hard limits ${value === 1 ? "enabled" : "disabled"})`,
+          "info"
+        );
+      } else if (key === 22) {
+        store.setGrblHoming(value === 1);
+        store.addConsoleLine(
+          `$22=${value} (homing cycle ${value === 1 ? "enabled" : "disabled"})`,
+          "info"
+        );
+      } else if (key === 30) {
+        // C2: firmware always wins (safety); log when it differs from the persisted value
+        const prev = store.grblSValueMax;
+        if (value !== prev) {
+          store.addConsoleLine(`S-value max updated from machine: ${prev} → ${value}`, "info");
+        }
+        store.setGrblSValueMax(value);
+        store.addConsoleLine(`$30=${value} (S-value max)`, "info");
+      } else if (key === 110) {
+        maxFeedRateX = value;
+      } else if (key === 111) {
+        maxFeedRateY = value;
+      } else if (key === 120) {
+        accelX = value;
+      } else if (key === 121) {
+        accelY = value;
+      } else if (key === 130) {
+        maxTravelX = value;
+      } else if (key === 131) {
+        maxTravelY = value;
+      }
+    }
+  }
+  // $32: always decided here, so a readback with no $32 line clears the flag.
+  applyLaserModeReadback(responses, gen);
+  if (accelX > 0 || accelY > 0) {
+    store.setGrblAccel(accelX || 500, accelY || 500);
+    store.addConsoleLine(`Acceleration: X=${accelX} Y=${accelY} mm/s²`, "info");
+  }
+  if (maxFeedRateX > 0 && maxFeedRateY > 0) {
+    store.setGrblMaxFeedRate(maxFeedRateX, maxFeedRateY);
+    store.addConsoleLine(`Max feed rate: X=${maxFeedRateX} Y=${maxFeedRateY} mm/min`, "info");
+  }
+  if (maxTravelX > 0 && maxTravelY > 0) {
+    store.setWorkspaceSize(maxTravelX, maxTravelY);
+    store.setWorkspaceVerified(true);
+    store.addConsoleLine(
+      `Workspace set to ${maxTravelX}×${maxTravelY}mm from machine settings`,
+      "info"
+    );
+  }
+  return parsedAny;
+}
+
 export const machineConnection = {
   async listPorts(): Promise<PortInfo[]> {
     try {
@@ -287,6 +417,11 @@ export const machineConnection = {
     const store = useStore.getState();
     try {
       store.addConsoleLine(command, "sent");
+      // S1: the one settings-write chokepoint — invalidate before the write.
+      if (isGrblSettingsWrite(command)) invalidateGrblSettings();
+      // S1: a `$$` re-verifies; capture the generation BEFORE the invoke.
+      const isReadback = command.trim() === "$$";
+      const readbackGen = settingsGeneration;
       const args =
         opts?.jobEpoch === undefined ? { command } : { command, jobEpoch: opts.jobEpoch };
       const outcome = await invoke<SendOutcome>("serial_send", args);
@@ -320,6 +455,7 @@ export const machineConnection = {
           });
         }
       }
+      if (isReadback) parseSettingsResponses(outcome.responses, readbackGen);
       return outcome.responses;
     } catch (e) {
       const msg = String(e);
@@ -589,28 +725,47 @@ export const machineConnection = {
     }
   },
 
-  /** Send $32=1 to enable GRBL laser mode and update the store on success.
-   * Must be called only when connected. Returns true if the setting was accepted
-   * (any "ok" in the response), false on error. */
+  /** Send $32=1 to enable GRBL laser mode, then read it back. The flag is
+   * set only by the readback (applyLaserModeReadback). Returns the flag. */
   async enableLaserMode(): Promise<boolean> {
     const store = useStore.getState();
     try {
+      // S1: this write bypasses send(), so invalidate explicitly.
+      invalidateGrblSettings();
       store.addConsoleLine("$32=1", "sent");
       const outcome = await invoke<SendOutcome>("serial_send", { command: "$32=1" });
       for (const d of outcome.drained) surfaceUnsolicited(d);
-      const accepted = outcome.responses.some((r) => r.trim() === "ok");
-      if (accepted) {
-        store.setGrblLaserMode(true);
+      await this.readbackGrblSettings();
+      const enabled = useStore.getState().grblLaserMode;
+      if (enabled) {
         store.addConsoleLine("$32=1 — laser mode enabled", "info");
       } else {
         store.addConsoleLine(
-          `$32=1 may not have been accepted. Re-check with $$ in the console. Response: ${outcome.responses.join(", ")}`,
+          `$32=1 may not have been accepted. Re-check with $$ in the console. Response: ${outcome.responses.join(", ")}; readback did not show $32=1`,
           "warning"
         );
       }
-      return accepted;
+      return enabled;
     } catch (e) {
       store.addConsoleLine(`Failed to enable laser mode: ${e}`, "error");
+      return false;
+    }
+  },
+
+  /** S1: send `$$` and parse it. Does NOT reset homing. A readback that never
+   * returned clears laser mode (fail-closed). Returns true when the response
+   * parsed as settings. */
+  async readbackGrblSettings(): Promise<boolean> {
+    const store = useStore.getState();
+    const gen = settingsGeneration;
+    try {
+      store.addConsoleLine("$$", "sent");
+      const outcome = await invoke<SendOutcome>("serial_send", { command: "$$" });
+      for (const d of outcome.drained) surfaceUnsolicited(d);
+      return parseSettingsResponses(outcome.responses, gen);
+    } catch (e) {
+      applyLaserModeReadback([], gen);
+      store.addConsoleLine(`Failed to query GRBL settings: ${e}`, "error");
       return false;
     }
   },
@@ -619,94 +774,9 @@ export const machineConnection = {
    * parsed as settings (at least one `$N=V` line) — the $32 warning and the
    * "unverified" fallback in connect() key off this. */
   async queryGrblSettings(): Promise<boolean> {
-    const store = useStore.getState();
     // New connection: machineHomed resets — must home again this session for soft limits
-    store.setMachineHomed(false);
-    try {
-      store.addConsoleLine("$$", "sent");
-      const outcome = await invoke<SendOutcome>("serial_send", { command: "$$" });
-      for (const d of outcome.drained) surfaceUnsolicited(d);
-      let parsedAny = false;
-      let accelX = 0,
-        accelY = 0;
-      let maxFeedRateX = 0,
-        maxFeedRateY = 0;
-      let maxTravelX = 0,
-        maxTravelY = 0;
-      for (const line of outcome.responses) {
-        const match = line.match(/^\$(\d+)=([\d.]+)/);
-        if (match) {
-          parsedAny = true;
-          const key = parseInt(match[1], 10);
-          const value = parseFloat(match[2]);
-          if (key === 20) {
-            store.setGrblSoftLimits(value === 1);
-            store.addConsoleLine(
-              `$20=${value} (soft limits ${value === 1 ? "enabled" : "disabled"})`,
-              "info"
-            );
-          } else if (key === 21) {
-            store.setGrblHardLimits(value === 1);
-            store.addConsoleLine(
-              `$21=${value} (hard limits ${value === 1 ? "enabled" : "disabled"})`,
-              "info"
-            );
-          } else if (key === 22) {
-            store.setGrblHoming(value === 1);
-            store.addConsoleLine(
-              `$22=${value} (homing cycle ${value === 1 ? "enabled" : "disabled"})`,
-              "info"
-            );
-          } else if (key === 30) {
-            // C2: firmware always wins (safety); log when it differs from the persisted value
-            const prev = store.grblSValueMax;
-            if (value !== prev) {
-              store.addConsoleLine(`S-value max updated from machine: ${prev} → ${value}`, "info");
-            }
-            store.setGrblSValueMax(value);
-            store.addConsoleLine(`$30=${value} (S-value max)`, "info");
-          } else if (key === 32) {
-            store.setGrblLaserMode(value === 1);
-            store.addConsoleLine(
-              `$32=${value} (laser mode ${value === 1 ? "enabled" : "disabled"})`,
-              "info"
-            );
-          } else if (key === 110) {
-            maxFeedRateX = value;
-          } else if (key === 111) {
-            maxFeedRateY = value;
-          } else if (key === 120) {
-            accelX = value;
-          } else if (key === 121) {
-            accelY = value;
-          } else if (key === 130) {
-            maxTravelX = value;
-          } else if (key === 131) {
-            maxTravelY = value;
-          }
-        }
-      }
-      if (accelX > 0 || accelY > 0) {
-        store.setGrblAccel(accelX || 500, accelY || 500);
-        store.addConsoleLine(`Acceleration: X=${accelX} Y=${accelY} mm/s²`, "info");
-      }
-      if (maxFeedRateX > 0 && maxFeedRateY > 0) {
-        store.setGrblMaxFeedRate(maxFeedRateX, maxFeedRateY);
-        store.addConsoleLine(`Max feed rate: X=${maxFeedRateX} Y=${maxFeedRateY} mm/min`, "info");
-      }
-      if (maxTravelX > 0 && maxTravelY > 0) {
-        store.setWorkspaceSize(maxTravelX, maxTravelY);
-        store.setWorkspaceVerified(true);
-        store.addConsoleLine(
-          `Workspace set to ${maxTravelX}×${maxTravelY}mm from machine settings`,
-          "info"
-        );
-      }
-      return parsedAny;
-    } catch (e) {
-      store.addConsoleLine(`Failed to query GRBL settings: ${e}`, "error");
-      return false;
-    }
+    useStore.getState().setMachineHomed(false);
+    return this.readbackGrblSettings();
   },
 };
 

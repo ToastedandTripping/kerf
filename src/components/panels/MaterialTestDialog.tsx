@@ -2,7 +2,7 @@ import { useState, useRef } from "react";
 import { useStore } from "../../app/store";
 import { streamJob } from "../../lib/machine/jobStream";
 import { beginJobSession } from "../../lib/machine/jobSession";
-import { gcodeExtents, isWithinBounds } from "../../lib/machine/canStartJob";
+import { canStartJob, gcodeExtents } from "../../lib/machine/canStartJob";
 import { useEscapeClose } from "../../lib/hooks/useEscapeClose";
 import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
 import { effectiveMaxSpeed } from "../../lib/speedScale";
@@ -388,21 +388,10 @@ export function MaterialTestDialog({ open, onClose }: Props) {
       onClose();
     } else {
       const state = useStore.getState();
-      if (!state.machineConnected) {
-        state.addConsoleLine("Machine not connected", "error");
-        return;
-      }
-      if (state.jobRunning) {
-        state.addConsoleLine("Cannot start material test while a job is running", "error");
-        return;
-      }
-      // A5: hard gate — bounds check generated G-code before sending
-      const ext = gcodeExtents(gcode);
-      if (ext && !isWithinBounds(ext, state.workspaceWidth, state.workspaceHeight)) {
-        state.addConsoleLine(
-          "Material test blocked: grid extends outside workspace bounds. Reduce steps or cell size.",
-          "error"
-        );
+      // S1: the one admission all four powered doors share (grid send).
+      const gate = canStartJob(state, gcodeExtents(gcode));
+      if (!gate.ok) {
+        state.addConsoleLine(gate.reason!, "error");
         return; // dialog stays open
       }
       const lines = gcode.split("\n").filter((l) => l.trim() && !l.startsWith(";"));
@@ -419,22 +408,11 @@ export function MaterialTestDialog({ open, onClose }: Props) {
 
   async function handleFrame() {
     const state = useStore.getState();
-    if (!state.machineConnected) {
-      state.addConsoleLine("Machine not connected", "error");
-      return;
-    }
-    if (state.jobRunning) {
-      state.addConsoleLine("Cannot start frame while a job is running", "error");
-      return;
-    }
     const gcode = generateFrameGcode(totalWidth, totalHeight);
-    // A5: hard gate — bounds check frame G-code before sending
-    const ext = gcodeExtents(gcode);
-    if (ext && !isWithinBounds(ext, state.workspaceWidth, state.workspaceHeight)) {
-      state.addConsoleLine(
-        "Frame blocked: grid extends outside workspace bounds. Reduce steps or cell size.",
-        "error"
-      );
+    // S1: the one admission all four powered doors share (material FRAME).
+    const gate = canStartJob(state, gcodeExtents(gcode));
+    if (!gate.ok) {
+      state.addConsoleLine(gate.reason!, "error");
       return; // dialog stays open
     }
     const lines = gcode.split("\n").filter((l) => l.trim() && !l.startsWith(";"));

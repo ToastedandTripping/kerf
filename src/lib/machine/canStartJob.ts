@@ -146,8 +146,13 @@ export interface JobGate {
  *
  *  Gate unification (P1-C): both START and FRAME require idle. The old START
  *  gate only checked for alarm, silently permitting hold/run/door — which let
- *  a user queue a new job while a pause was in progress. */
-export function canStartJob(state: JobGateState): JobGate {
+ *  a user queue a new job while a pause was in progress.
+ *
+ *  S1: one admission for all four powered doors. START and main FRAME omit
+ *  `ext` (they trace the design's gcodeResult). The material-test grid and
+ *  material FRAME pass `ext` from their locally generated program: the
+ *  gcodeResult/gcodeStale checks are skipped and bounds use `ext`. */
+export function canStartJob(state: JobGateState, ext?: MovesExtents | null): JobGate {
   if (!state.machineConnected) return { ok: false, reason: "Machine not connected" };
   // B2b: 3s eligibility rule — status freshness check. statusStale is written
   // by the poll loop using isStatusEligible(). Fail-closed: undefined = stale.
@@ -179,15 +184,26 @@ export function canStartJob(state: JobGateState): JobGate {
     };
   }
   if (state.jobRunning) return { ok: false, reason: "Job already running" };
-  if (!state.gcodeResult) return { ok: false, reason: "Generate G-code first" };
-  if (state.gcodeStale) return { ok: false, reason: "Design changed -- regenerate G-code" };
+  const localProgram = ext !== undefined;
+  if (!localProgram) {
+    if (!state.gcodeResult) return { ok: false, reason: "Generate G-code first" };
+    if (state.gcodeStale) return { ok: false, reason: "Design changed -- regenerate G-code" };
+  }
   // NOTE-1: fail-closed — any falsy value (false, undefined) blocks; only explicit true passes
   if (!state.workspaceVerified) {
     return { ok: false, reason: "Confirm bed size before starting — go to Machine Settings" };
   }
-  const ext = movesExtents(state.gcodeResult.moves);
-  if (!ext) return { ok: false, reason: "Nothing to cut -- no moves in the generated G-code" };
-  if (!isWithinBounds(ext, state.workspaceWidth, state.workspaceHeight, state.originTop)) {
+  let bounds: MovesExtents;
+  if (localProgram) {
+    if (!ext) return { ok: false, reason: "Nothing to send -- the generated program has no moves" };
+    bounds = ext;
+  } else {
+    const designExt = movesExtents(state.gcodeResult!.moves);
+    if (!designExt)
+      return { ok: false, reason: "Nothing to cut -- no moves in the generated G-code" };
+    bounds = designExt;
+  }
+  if (!isWithinBounds(bounds, state.workspaceWidth, state.workspaceHeight, state.originTop)) {
     return {
       ok: false,
       reason: "G-code extends outside workspace bounds. Move or resize the design to fit.",

@@ -15,12 +15,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useStore } from "../../app/store";
 import { machineConnection } from "../../lib/machine/connection";
-import {
-  canStartJob,
-  movesExtents,
-  frameTargets,
-  isWithinBounds,
-} from "../../lib/machine/canStartJob";
+import { canStartJob, frameTargets } from "../../lib/machine/canStartJob";
 import { streamJob, pauseJob, resumeJob } from "../../lib/machine/jobStream";
 import { beginJobSession, stopActiveSession } from "../../lib/machine/jobSession";
 import { formatTime } from "../../lib/constants";
@@ -121,33 +116,17 @@ export function JobActionBar() {
     // Machine-frame moves extents — the old design->machine Y-flip
     // is deliberately DELETED, not ported: moves[] is already
     // machine-frame, flipping again would trace a mirrored rect.
-    const storeState = useStore.getState();
-    // WARNING-2: explicit guard — frameDisabled already blocks the button,
-    // but guard here too so the handler is safe if called by other paths.
-    if (!storeState.workspaceVerified) {
-      addConsoleLine("FRAME blocked: confirm bed size before framing", "error");
+    // S1: the same admission START uses (no ext — main FRAME traces the
+    // design's gcodeResult, so gcodeStale applies). Reason printed verbatim.
+    const moves = useStore.getState().gcodeResult?.moves ?? [];
+    const gate = canStartJob(useStore.getState());
+    if (!gate.ok) {
+      addConsoleLine(gate.reason!, "error");
       return;
     }
-    const moves = storeState.gcodeResult?.moves ?? [];
     const targets = frameTargets(moves);
     if (!targets) {
       addConsoleLine("Nothing to cut -- no moves in the generated G-code", "error");
-      return;
-    }
-    // Bounds check: same gate that START uses — never send out-of-range G0s
-    const ext = movesExtents(moves)!; // targets non-null implies ext non-null
-    if (
-      !isWithinBounds(
-        ext,
-        storeState.workspaceWidth,
-        storeState.workspaceHeight,
-        storeState.originTop
-      )
-    ) {
-      addConsoleLine(
-        "FRAME blocked: G-code extends outside workspace bounds. Move or resize the design to fit.",
-        "error"
-      );
       return;
     }
 
@@ -186,22 +165,14 @@ export function JobActionBar() {
 
   // FRAME contract: framing traces the true G-code extents; fresh G-code +
   // verified workspace are prerequisites.
-  const frameDisabled =
-    !machineConnected ||
-    machineState === "alarm" ||
-    machineState !== "idle" ||
-    jobRunning ||
-    !gcodeResult ||
-    gcodeStale ||
-    !workspaceVerified ||
-    !grblLaserMode;
+  const frameDisabled = !startGate.ok;
   const frameHint = !workspaceVerified
     ? "Confirm bed size before framing"
     : !gcodeResult
       ? "Generate G-code first"
       : gcodeStale
         ? "Design changed -- regenerate G-code"
-        : undefined;
+        : startGate.reason;
 
   return (
     <div style={{ flexShrink: 0, borderTop: "1px solid var(--border)" }}>
