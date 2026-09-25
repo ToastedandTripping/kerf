@@ -69,13 +69,50 @@ export function applyTextImageTransform(displayObj: Container, obj: DesignObject
   }
 }
 
-/** Apply rotation transform to a Pixi display object around its bounding box center */
-export function applyObjectRotation(displayObj: Container, t: DesignObject["transform"]) {
-  const rot = ((t.rotation || 0) * Math.PI) / 180;
-  if (rot === 0) return;
+/**
+ * R2 F3: where a display object must sit to draw its box rotated about the
+ * box centre. Pixi maps local p to position + R*S*(p - pivot), with the pivot
+ * in local (pre-scale) units, so pivot = (centre - unrotated origin) / scale
+ * and position = centre. For Graphics and template Containers (origin 0,
+ * scale 1) that is today's pivot = position = centre.
+ *
+ * The unrotated origin is recovered from the current position, pivot and
+ * scale, so the result is correct on a fresh object, after an earlier
+ * placement by this function, and at rotation 0 (which undoes a rotation).
+ */
+export function rotationPlacement(
+  cur: { x: number; y: number; scaleX: number; scaleY: number; pivotX: number; pivotY: number },
+  t: { x: number; y: number; width: number; height: number; rotation?: number }
+): { x: number; y: number; pivotX: number; pivotY: number; rotation: number } {
+  const x0 = cur.x - cur.pivotX * cur.scaleX;
+  const y0 = cur.y - cur.pivotY * cur.scaleY;
+  const deg = t.rotation || 0;
+  if (deg === 0) return { x: x0, y: y0, pivotX: 0, pivotY: 0, rotation: 0 };
   const cx = t.x * PX_PER_MM + (t.width * PX_PER_MM) / 2;
   const cy = t.y * PX_PER_MM + (t.height * PX_PER_MM) / 2;
-  displayObj.pivot.set(cx, cy);
-  displayObj.position.set(cx, cy);
-  displayObj.rotation = rot;
+  return {
+    x: cx,
+    y: cy,
+    pivotX: cur.scaleX === 0 ? 0 : (cx - x0) / cur.scaleX,
+    pivotY: cur.scaleY === 0 ? 0 : (cy - y0) / cur.scaleY,
+    rotation: (deg * Math.PI) / 180,
+  };
+}
+
+/** Apply rotation transform to a Pixi display object around its bounding box center */
+export function applyObjectRotation(displayObj: Container, t: DesignObject["transform"]) {
+  const r = rotationPlacement(
+    {
+      x: displayObj.x,
+      y: displayObj.y,
+      scaleX: displayObj.scale.x,
+      scaleY: displayObj.scale.y,
+      pivotX: displayObj.pivot.x,
+      pivotY: displayObj.pivot.y,
+    },
+    t
+  );
+  displayObj.pivot.set(r.pivotX, r.pivotY);
+  displayObj.position.set(r.x, r.y);
+  displayObj.rotation = r.rotation;
 }
