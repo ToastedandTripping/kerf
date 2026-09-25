@@ -488,7 +488,6 @@ describe("connection.ts (TN3)", () => {
       mockInvoke.mockResolvedValueOnce({
         outcome: "submittedUnconfirmed",
         epoch: 1,
-        inFlightWrite: false,
         messages: [
           "STOP: 0x18 sent",
           "STOP: unconfirmed — use the machine's physical stop before reconnecting. Beam state unqualified — verify visually.",

@@ -112,31 +112,15 @@ export function getStreamingMode(): "perLine" | "buffered" {
 }
 
 /**
- * RF-15 refusal contract. Maps a backend `refused:` answer to its end state,
- * logs the operator message, and (in-flight-unreset only) re-arms STOP.
- * The caller must skip every post-loop stop and console line when this ran.
+ * RF-15 refusal contract. The backend's only refusal is
+ * `refused: not-admitted: …` (nothing was written). Maps it to `cancelled` and
+ * logs the operator message. Any other `refused:` string is unknown to the
+ * contract and takes the same `cancelled` path, never `complete` or
+ * `disconnected`. The caller must skip every post-loop stop and console line
+ * when this ran.
  */
 function handleRefusal(reason: string, label: string): StreamJobResult["endState"] {
   const store = useStore.getState();
-  if (reason.startsWith(`${PERMIT_REFUSED_PREFIX} in-flight-unreset:`)) {
-    // The backend already closed admission (phase Unknown). Every production
-    // STOP cleared jobRunning before this refusal could arrive, so re-arm it
-    // explicitly (only while connected) to keep the STOP button live.
-    store.setMachineState("alarm");
-    if (useStore.getState().machineConnected) store.setJobRunning(true);
-    store.addConsoleLine(
-      `${label} stopped: one line may have reached the controller after STOP and the reset could not be re-sent. Use the machine's physical stop, then press STOP in Kerf; if STOP cannot confirm, disconnect and reconnect. Status updates pause until STOP. Beam state unqualified.`,
-      "error"
-    );
-    return "unknown";
-  }
-  if (reason.startsWith(`${PERMIT_REFUSED_PREFIX} in-flight:`)) {
-    store.addConsoleLine(
-      `${label} stopped: one line may have reached the controller as STOP landed. Kerf sent the reset again after it. Beam state unqualified — verify visually.`,
-      "warning"
-    );
-    return "cancelled";
-  }
   const detailMatch = reason.match(/^refused: not-admitted: (.*)$/);
   const detail = detailMatch ? detailMatch[1] : reason;
   store.addConsoleLine(
