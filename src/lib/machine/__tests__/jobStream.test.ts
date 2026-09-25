@@ -22,6 +22,8 @@ import {
   _testResetJobSession,
 } from "../jobSession";
 import { machineConnection } from "../connection";
+import { resetStatusConsumer } from "../machineStatus";
+import { _testResetJobEvidence, bufferedJobLines } from "../lastSentLine";
 import { SerialTraceRecorder } from "../../../lib/machine/__tests__/serialTraceHarness";
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>;
@@ -606,5 +608,195 @@ describe("RF-15 admission fence (jobStream)", () => {
     expect(result.endState).toBe("cancelled");
     expect(count("serial_send")).toBe(1);
     expect(recs().find((r) => r.command === "serial_send")!.wrote).toBe(false);
+  });
+});
+
+describe("spindle-drop evidence during jobs (E3)", () => {
+  const RUN_500 = "<Run|MPos:0.000,0.000,0.000|FS:1000,500>";
+  const RUN_0 = "<Run|MPos:0.000,0.000,0.000|FS:1000,0>";
+  const PROGRAM = "G0 X0\nG1 X1 S500\nG1 X2 S500";
+
+  const lines = () => useStore.getState().consoleLines;
+  const texts = () => lines().map((l) => l.text);
+  const dropLines = () => texts().filter((t) => t.includes("spindle 0 during Run"));
+  const tallyLines = () => texts().filter((t) => t.includes("status reports during Run"));
+
+  let seq = 0;
+  /** makeStatusOutcome's shape (connection.test.ts): a snapshot-carrying
+   *  outcome, so pollStatus's consumer accepts it. */
+  function statusOutcome(raw: string) {
+    const state = raw.match(/^<(\w+)/)![1].toLowerCase();
+    const fs = raw.match(/FS:([-\d.]+),([-\d.]+)/)!;
+    return {
+      status: raw,
+      events: [],
+      kind: "report",
+      snapshot: {
+        epoch: 1,
+        seq: ++seq,
+        state,
+        positionKind: "MPos",
+        position: [0, 0, 0],
+        wco: null,
+        feed: parseFloat(fs[1]),
+        spindle: parseFloat(fs[2]),
+        accessory: "Unknown",
+        units: "Unknown",
+        raw,
+        unknownFields: [],
+      },
+    };
+  }
+
+  async function poll(raw: string) {
+    useStore.setState({ jobRunning: false, machineConnected: true });
+    mockInvoke.mockImplementationOnce(async () => statusOutcome(raw));
+    await machineConnection.pollStatus();
+  }
+
+  /** Per-line job; `inPump` maps a sent line to the in-pump reports that
+   *  precede its `ok`. The drain is answered Idle by the recorder. */
+  async function runPerLine(gcode: string, inPump: Record<string, string[]> = {}) {
+    useStore.setState({ jobRunning: true });
+    recorder = new SerialTraceRecorder((cmd) => ({
+      responses: [...(inPump[cmd] ?? []), "ok"],
+      drained: [],
+    }));
+    mockInvoke.mockImplementation(recorder.handler);
+    const result = await streamJob(gcode, { label: "Job", session: detachedSession("Job") });
+    mockInvoke.mockReset();
+    return result;
+  }
+
+  /** Buffered job: the given channel events are delivered before the pump
+   *  resolves "complete". */
+  async function runBuffered(gcode: string, events: unknown[]) {
+    localStorage.setItem("streamingMode", "buffered");
+    useStore.setState({ jobRunning: true });
+    mockInvoke.mockImplementation(async (cmd: string, args?: any) => {
+      if (cmd === "serial_stream_job") {
+        for (const e of events) args.channel.onmessage(e);
+        return "complete";
+      }
+      if (cmd === "serial_get_status") {
+        return { status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>", events: [] };
+      }
+      return undefined;
+    });
+    const result = await streamJob(gcode, { label: "Job", session: detachedSession("Job") });
+    mockInvoke.mockReset();
+    return result;
+  }
+
+  beforeEach(() => {
+    mockInvoke.mockReset();
+    localStorage.clear();
+    _testResetJobSession();
+    seedStore();
+    useStore.setState({ spindleSpeed: 0 });
+    resetStatusConsumer();
+    seq = 0;
+    _testResetJobEvidence();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("per-line: the drop line names the line being sent (#2 and its text), at info", async () => {
+    const r = await runPerLine(PROGRAM, { "G1 X1 S500": [RUN_500, RUN_0] });
+    expect(r.endState).toBe("complete");
+    const drops = lines().filter((l) => l.text.includes("spindle 0 during Run"));
+    expect(drops).toHaveLength(1);
+    expect(drops[0].type).toBe("info");
+    expect(drops[0].text).toContain('#2 "G1 X1 S500"');
+    expect(drops[0].text).not.toContain("#1");
+    expect(drops[0].text).toContain("the controller may still be executing earlier lines");
+    expect(
+      lines().some((l) => l.type === "warning" && l.text.toLowerCase().includes("spindle"))
+    ).toBe(false);
+  });
+
+  it("per-line: the drop line and tally carry the wall-clock time", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 8, 25, 9, 3, 7));
+    await runPerLine(PROGRAM, { "G1 X1 S500": [RUN_500, RUN_0] });
+    expect(dropLines()[0]).toContain("at 09:03:07");
+    expect(tallyLines()).toHaveLength(1);
+    expect(tallyLines()[0]).toContain('First at 09:03:07, last line sent #2 "G1 X1 S500".');
+  });
+
+  it("per-line: 0 to 0 is not a drop", async () => {
+    await runPerLine(PROGRAM, {
+      "G0 X0": ["<Run|MPos:0.000,0.000,0.000|FS:0,0>"],
+      "G1 X1 S500": ["<Run|MPos:0.000,0.000,0.000|FS:0,0>"],
+    });
+    expect(dropLines()).toHaveLength(0);
+    expect(tallyLines()).toEqual([
+      "Job: 0 of 2 status reports during Run showed spindle 0 (status only, not beam output).",
+    ]);
+  });
+
+  it("per-line: exactly one tally line, counting every Run sample", async () => {
+    await runPerLine(PROGRAM, {
+      "G0 X0": [RUN_500],
+      "G1 X1 S500": [RUN_0],
+      "G1 X2 S500": [RUN_0],
+    });
+    expect(dropLines()).toHaveLength(1);
+    expect(tallyLines()).toHaveLength(1);
+    expect(tallyLines()[0].startsWith("Job: 1 of 3 status reports during Run")).toBe(true);
+  });
+
+  it("bufferedJobLines mirrors Rust's filter, and a buffered drop names that line", async () => {
+    const gcode = "G0 X0\n  ; note\n\nG1 X1 S500\nG1 X2";
+    expect(bufferedJobLines(gcode)).toEqual(["G0 X0", "G1 X1 S500", "G1 X2"]);
+    await runBuffered(gcode, [
+      { type: "progress", lineIndex: 2, total: 3 },
+      { type: "status", report: RUN_500 },
+      { type: "status", report: RUN_0 },
+    ]);
+    expect(dropLines()).toHaveLength(1);
+    expect(dropLines()[0]).toContain('#3 "G1 X2"');
+  });
+
+  it("buffered: status events feed the check and the job ends with one tally", async () => {
+    const r = await runBuffered("G1 X1 S500", [
+      { type: "status", report: RUN_500 },
+      { type: "status", report: RUN_0 },
+    ]);
+    expect(r.endState).toBe("complete");
+    expect(dropLines()).toHaveLength(1);
+    expect(tallyLines()).toHaveLength(1);
+    expect(tallyLines()[0]).toContain("1 of 2");
+  });
+
+  it("job start clears the record and tally left by between-jobs polling", async () => {
+    await runPerLine(PROGRAM, { "G1 X1 S500": [RUN_500, RUN_0] });
+    await poll(RUN_500);
+    await poll(RUN_0);
+    expect(dropLines()).toHaveLength(2);
+    expect(dropLines()[1]).toContain("no job line recorded");
+    await runPerLine(PROGRAM);
+    const tallies = tallyLines();
+    expect(tallies).toHaveLength(2);
+    expect(tallies[1]).toContain("Job: 0 of 0 status reports");
+  });
+
+  it("job start resets the previous sample, so a drop is within one job", async () => {
+    await poll(RUN_500);
+    expect(useStore.getState().spindleSpeed).toBe(500);
+    await runPerLine(PROGRAM, { "G0 X0": [RUN_0] });
+    expect(dropLines()).toHaveLength(0);
+    expect(tallyLines()[0]).toContain("Job: 0 of 1 status reports");
+  });
+
+  it("after the tally, a no-job drop never names the finished job's line", async () => {
+    await runPerLine(PROGRAM);
+    await poll(RUN_500);
+    await poll(RUN_0);
+    expect(dropLines()).toHaveLength(1);
+    expect(dropLines()[0]).toContain("no job line recorded");
+    expect(dropLines()[0]).not.toContain("G1 X2");
   });
 });
