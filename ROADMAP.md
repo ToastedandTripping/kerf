@@ -572,7 +572,7 @@ verbatim and are not to be edited into summaries — this index points at them.
 - **SVG arcs as cubic handles instead of polylines** See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
 - **Layers panel counts, select-by-layer and the Properties layer badge read top-level objects only** See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
 - **Already-imported SVG arcs keep their old coarse tessellation** See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
-- **Converted-text counters draw as a stacked lighter fill, not holes, on a Fill layer** (Jen C1; pre-existing; owner R2 canvas-display) See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
+- **Converted-text counters draw as a stacked lighter fill, not holes, on a Fill layer** (Jen C1 on cut-vs-screen; pre-existing; NOT in R2 canvas-display's plan, unowned) See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
 - **On about 6-10% of page loads the canvas never draws** (R1 behavioral evaluator; also on the S1 branch; pre-existing) See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
 - **A text-tool click creates the text box and immediately loses it** (R1 behavioral evaluator; pre-existing) See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
 - **Every wheel zoom logs a passive-event-listener console error** (R1 behavioral evaluator; pre-existing) See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
@@ -721,7 +721,7 @@ It is out of scope for this relay (golden files untouched), and no test reads it
 - **SVG arcs as cubic handles instead of polylines** — rejected in refresh-cut-vs-screen F2 because `pointsBBox` is anchors-only; revisit once bounding boxes account for curve extrema, which would also stop tessellated arcs faceting when scaled up inside Kerf. Noted 2026-09-22.
 - **Layers panel counts, select-by-layer and the Properties layer badge read top-level objects only** — `selectByLayer` (store/index.ts), the Layers panel's per-layer object list, count and selected-highlight (LayerPanel.tsx), and the Properties panel's layer indicator (PropertiesPanel.tsx) all filter top-level `objects`; grouped children on another layer are honoured by the cut and (after refresh-cut-vs-screen F1) the canvas but never listed, so hiding a layer can remove half a group that the panel shows under no layer. Selection is top-level by design, so this is a listing gap, not a cut defect. Noted 2026-09-22.
 - **Already-imported SVG arcs keep their old coarse tessellation** — F2 fixes import only; affected objects are repaired by re-importing the source SVG, and nothing marks which objects came from arcs. Noted 2026-09-22 (refresh-cut-vs-screen).
-- **Converted-text counters draw as a stacked lighter fill, not holes, on a Fill layer** (Jen C1; pre-existing; owner R2 canvas-display).
+- **Converted-text counters draw as a stacked lighter fill, not holes, on a Fill layer** (Jen C1 on cut-vs-screen; pre-existing; NOT in R2 canvas-display's plan, unowned).
 - **On about 6-10% of page loads the canvas never draws** (R1 behavioral evaluator; also on the S1 branch; pre-existing).
 - **A text-tool click creates the text box and immediately loses it** (R1 behavioral evaluator; pre-existing).
 - **Every wheel zoom logs a passive-event-listener console error** (R1 behavioral evaluator; pre-existing).
