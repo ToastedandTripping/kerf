@@ -3434,6 +3434,139 @@ mod sim_integration {
             "diagnostic cap changed — update test"
         );
     }
+    // -- E5: laser-switch wedge driven through the REAL pumps ---------------
+
+    /// (sim, writer, reader, pending) for the wedge tests.
+    type WedgeRig = (
+        SimPort,
+        Box<dyn SerialPort>,
+        BufReader<Box<dyn SerialPort>>,
+        Vec<u8>,
+    );
+
+    /// The sim armed with the one-shot laser-switch wedge, a small planner
+    /// clock, and its banner drained.
+    fn wedge_armed_sim() -> WedgeRig {
+        let sim = SimPort::new(SimConfig {
+            line_ticks: 1,
+            ..SimConfig::default()
+        });
+        let writer = sim.try_clone().unwrap();
+        let mut reader = BufReader::new(sim.try_clone().unwrap());
+        let mut pending = Vec::new();
+        let _ = serial_pump::drain_classified(&mut reader, &mut pending); // drain banner
+        sim.set_wedge_after_spindle_cmd();
+        (sim, writer, reader, pending)
+    }
+
+    // E5-M6: per-line `run_pump` into a wedge. The M4 line is accepted and
+    // executed but never acked; `?` keeps answering Idle, so the idle-stall
+    // detector declares the terminal lost.
+    #[test]
+    fn wedge_after_laser_switch_triggers_idle_stall_disconnect() {
+        let (sim, mut writer, mut reader, mut pending) = wedge_armed_sim();
+
+        writer.write_all(b"M4 S500\n").unwrap();
+        let result = serial_pump::run_pump(
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            DEFAULT_LIVENESS_TICKS,
+            3,
+            None,
+        );
+        match result {
+            Err(serial_pump::PumpFailure::Disconnected(msg)) => {
+                assert!(msg.contains("terminal lost"), "got: {msg}");
+            }
+            other => panic!("expected idle-stall Disconnected, got {other:?}"),
+        }
+        let probes = sim
+            .realtime_bytes_received()
+            .iter()
+            .filter(|&&b| b == b'?')
+            .count();
+        assert!(probes >= 3, "`?` still answered during the wedge: {probes}");
+    }
+
+    // E5-M7: a wedge, then the production realtime path's 0x18, then a
+    // line that acks — the reset clears the wedge.
+    #[test]
+    fn wedge_is_cleared_by_realtime_reset() {
+        let (sim, mut writer, mut reader, mut pending) = wedge_armed_sim();
+
+        writer.write_all(b"M4 S500\n").unwrap();
+        let wedged = serial_pump::run_pump(
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            DEFAULT_LIVENESS_TICKS,
+            3,
+            None,
+        );
+        assert!(
+            matches!(wedged, Err(serial_pump::PumpFailure::Disconnected(_))),
+            "precondition: wedged, got {wedged:?}"
+        );
+
+        let inner = SerialInner {
+            command: Mutex::new(None),
+            realtime: Mutex::new(Some(sim.try_clone().unwrap())),
+            connected: AtomicBool::new(true),
+            pump_in_flight: AtomicBool::new(false),
+            job_abort: AtomicBool::new(false),
+            session: SerialSession::default(),
+        };
+        send_byte_inner(&inner, 0x18).unwrap();
+        pending.clear();
+        let _ = serial_pump::drain_classified(&mut reader, &mut pending); // reset banner
+        pending.clear();
+
+        writer.write_all(b"G1 X1 F500\n").unwrap();
+        let out = serial_pump::run_pump(
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            DEFAULT_LIVENESS_TICKS,
+            3,
+            None,
+        )
+        .expect("after 0x18 the line must ack");
+        assert_eq!(out.terminal, serial_pump::PumpTerminal::Ok);
+    }
+
+    // Coverage (no battery id): buffered `run_buffered_pump` into a wedge
+    // reports the terminal lost while lines are in flight.
+    #[test]
+    fn buffered_pump_wedge_after_laser_switch_disconnects() {
+        let (_sim, mut writer, mut reader, mut pending) = wedge_armed_sim();
+
+        let lines: Vec<String> = ["M4 S500", "G1 X1 F500", "G1 X2 F500"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let abort = std::sync::atomic::AtomicBool::new(false);
+        let config = serial_pump::BufferedPumpConfig {
+            idle_stall_ticks: 3,
+            ..serial_pump::BufferedPumpConfig::default()
+        };
+        let result = serial_pump::run_buffered_pump(
+            &lines,
+            &mut reader,
+            &mut writer,
+            &mut pending,
+            &config,
+            &abort,
+            &serial_pump::OpenGate,
+            &|_| {},
+        );
+        match result {
+            Ok(serial_pump::BufferedPumpOutcome::Disconnected(msg)) => {
+                assert!(msg.contains("terminal lost"), "got: {msg}");
+            }
+            other => panic!("expected buffered Disconnected, got {other:?}"),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

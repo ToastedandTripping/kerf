@@ -168,6 +168,25 @@ src-tauri/src/
                                shared Arc<Mutex> brain, two-stage RX→planner buffer with
                                ok-on-accept, fault injection, strict-hold (M3/M4/M5-in-Hold)
                                invariant. The CI backbone for the streaming stack.
+                               `$$` is a settings table and `$32` is tracked (non-zero
+                               integer part = laser mode, stored as 1/0): the hold
+                               auto-off applies only under `$32=1`. `set_reject_setting`
+                               (error:3, not applied); `set_ignore_setting` (ok, not
+                               applied: the START ruling's acknowledged-but-not-accepted
+                               case). Writes are accepted in every state (stock error:8
+                               outside Idle/Alarm is not modelled), and 0x18 always
+                               clears the spindle. `set_wedge_after_spindle_cmd` arms when
+                               the M3/M4 line is parsed: from then until 0x18 every line
+                               not yet acked, parked ones sent before it included, is
+                               accepted and executed but never acked; `?` answers.
+                               Non-finite setting values answer error:2.
+                               `SimProfile::{Stock, Captured127}` (128/15 vs 65535/127).
+                               `A:` field per profile: Stock `A:S` while the sim's spindle
+                               flag is set (stock-source intent); Captured127 `A:S` on every
+                               report (the 2026-09-14 capture shows it only on reports
+                               carrying overrides). Not a beam signal under either
+                               profile (DECISIONS 2026-09-25). Host/model evidence only;
+                               never certifies the owner's controller.
     scripted_port.rs         — Deterministic test double with scripted read steps,
                                ordered I/O trace, hold points, session-event observer
   engine/
