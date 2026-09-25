@@ -29,6 +29,7 @@ import { DEFAULT_LAYERS } from "../../../app/types";
 import { JobActionBar } from "../JobActionBar";
 import { MachinePanel } from "../MachinePanel";
 import { streamJob, pauseJob, resumeJob } from "../../../lib/machine/jobStream";
+import { beginJobSession, _testResetJobSession } from "../../../lib/machine/jobSession";
 import { machineConnection } from "../../../lib/machine/connection";
 import { resetStatusConsumer } from "../../../lib/machine/machineStatus";
 import { SerialTraceRecorder } from "../../../lib/machine/__tests__/serialTraceHarness";
@@ -454,6 +455,14 @@ describe("MachinePanel START/FRAME gating (F15)", () => {
         "M5",
       ])
     );
+    // T7 (RF-15): every FRAME line from JobActionBar's path carries the
+    // session's epoch (the id serial_job_begin returned).
+    const records = recorder.allRecords();
+    const jobId = records.find((r) => r.command === "serial_job_begin")!.result;
+    expect(typeof jobId).toBe("number");
+    const sends = records.filter((r) => r.command === "serial_send");
+    expect(sends).toHaveLength(7);
+    for (const r of sends) expect(r.args.jobEpoch).toBe(jobId);
   });
 
   it("FRAME no-ops with a console error on empty moves (never G0 XInfinity)", async () => {
@@ -522,6 +531,12 @@ describe("MachinePanel Fire button (F17 Fix 2.3)", () => {
 // check makes the test fail.
 // ---------------------------------------------------------------------------
 
+/** RF-15: streamJob requires a session (its jobId is every line's epoch). */
+async function freshSession(label: string) {
+  _testResetJobSession();
+  return beginJobSession(label);
+}
+
 describe("streamJob FRAME abort protocol (P1-A)", () => {
   const frameGcode = "G0 X10 Y20\nG0 X50 Y80";
 
@@ -546,7 +561,10 @@ describe("streamJob FRAME abort protocol (P1-A)", () => {
       cmd.startsWith("G0") ? { responses: [], drained: [] } : { responses: ["ok"], drained: [] }
     );
 
-    const result = await streamJob(frameGcode, { label: "Frame" });
+    const result = await streamJob(frameGcode, {
+      label: "Frame",
+      session: (await freshSession("Frame"))!,
+    });
     expect(result.endState).toBe("aborted");
     expect(consoleTexts()).toContain("Frame aborted -- machine was reset mid-line");
     expect(useStore.getState().jobRunning).toBe(false);
@@ -561,7 +579,10 @@ describe("streamJob FRAME abort protocol (P1-A)", () => {
         : { responses: ["ok"], drained: [] }
     );
 
-    const result = await streamJob(frameGcode, { label: "Frame" });
+    const result = await streamJob(frameGcode, {
+      label: "Frame",
+      session: (await freshSession("Frame"))!,
+    });
     expect(result.endState).toBe("aborted");
     expect(consoleTexts()).toContain("Frame aborted -- machine was reset mid-line");
     expect(useStore.getState().jobRunning).toBe(false);
@@ -576,7 +597,10 @@ describe("streamJob FRAME abort protocol (P1-A)", () => {
         : { responses: ["ok"], drained: [] }
     );
 
-    const result = await streamJob(frameGcode, { label: "Frame" });
+    const result = await streamJob(frameGcode, {
+      label: "Frame",
+      session: (await freshSession("Frame"))!,
+    });
     expect(result.endState).toBe("alarm");
     expect(consoleTexts()).toContain(
       "Frame stopped -- machine alarm (laser already off; unlock to continue)"
@@ -611,7 +635,10 @@ describe("streamJob material-test abort protocol (P1-A)", () => {
       cmd.startsWith("G1") ? { responses: [], drained: [] } : { responses: ["ok"], drained: [] }
     );
 
-    const result = await streamJob(testGcode, { label: "Material test" });
+    const result = await streamJob(testGcode, {
+      label: "Material test",
+      session: (await freshSession("Material test"))!,
+    });
     expect(result.endState).toBe("aborted");
     expect(consoleTexts()).toContain("Material test aborted -- machine was reset mid-line");
     expect(useStore.getState().jobRunning).toBe(false);
@@ -626,7 +653,10 @@ describe("streamJob material-test abort protocol (P1-A)", () => {
         : { responses: ["ok"], drained: [] }
     );
 
-    const result = await streamJob(testGcode, { label: "Material test" });
+    const result = await streamJob(testGcode, {
+      label: "Material test",
+      session: (await freshSession("Material test"))!,
+    });
     expect(result.endState).toBe("aborted");
     expect(consoleTexts()).toContain("Material test aborted -- machine was reset mid-line");
     expect(useStore.getState().jobRunning).toBe(false);
@@ -641,7 +671,10 @@ describe("streamJob material-test abort protocol (P1-A)", () => {
         : { responses: ["ok"], drained: [] }
     );
 
-    const result = await streamJob(testGcode, { label: "Material test" });
+    const result = await streamJob(testGcode, {
+      label: "Material test",
+      session: (await freshSession("Material test"))!,
+    });
     expect(result.endState).toBe("alarm");
     expect(consoleTexts()).toContain(
       "Material test stopped -- machine alarm (laser already off; unlock to continue)"

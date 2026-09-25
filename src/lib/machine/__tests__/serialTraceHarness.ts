@@ -11,9 +11,17 @@ interface InvokeRecord {
   args: Record<string, unknown>;
   promise: Promise<unknown>;
   resolve: (value: unknown) => void;
-  reject: (error: Error) => void;
+  /** Typed `unknown`: Tauri rejects an `Err(String)` command with the RAW
+   *  string, never an Error. The fence model rejects the same way. */
+  reject: (error: unknown) => void;
   result?: unknown;
+  /** Fence model only: whether this send's line reached the port. */
+  wrote?: boolean;
+  /** Fence model only: the rejection value, if rejected. */
+  rejection?: unknown;
 }
+
+type FencePhase = "idle" | "active" | "stopping" | "unknown" | "disconnected";
 
 interface NativeJobEvent {
   type: "progress" | "console" | "status" | "finished";
@@ -31,6 +39,90 @@ export class SerialTraceRecorder {
   private startedJobPromises: Promise<unknown>[] = [];
   private onSend: ((command: string) => { responses: string[]; drained: string[] }) | null = null;
   private _jobEpoch = 0;
+
+  // ── RF-15 fence model (opt-in) ──
+  private fenceEnabled = false;
+  private fencePhase: FencePhase = "idle";
+  private fenceAdmitted: number | null = null;
+  /** Whether a confirmed `serial_stop` recovers the model from `unknown`
+   *  (Rust R8c: Step 2 stores Stopping unconditionally, a banner confirms). */
+  private stopRecoversUnknown = true;
+
+  /**
+   * Model the backend admission fence: `serial_job_begin` admits the returned
+   * epoch, `serial_job_end` clears it, `serial_stop` closes admission and
+   * resolves a confirmed StopResult, and each job line (`jobEpoch` numeric)
+   * is evaluated AT RESOLUTION TIME (inside `releaseInvoke` for deferred
+   * sends), modelling Rust executing late. An absent `jobEpoch` is accepted
+   * (the `None` console bypass).
+   */
+  enableFenceModel(): void {
+    this.fenceEnabled = true;
+    this.fencePhase = "idle";
+    this.fenceAdmitted = null;
+  }
+
+  /** Close admission directly (no TS STOP), as a backend stop would. */
+  closeAdmission(): void {
+    this.fencePhase = "stopping";
+    this.fenceAdmitted = null;
+  }
+
+  /** Reconnect: clears admission, phase idle. */
+  simulateReconnect(): void {
+    this.fencePhase = "idle";
+    this.fenceAdmitted = null;
+  }
+
+  /** Model phase (for assertions). */
+  fenceState(): { phase: FencePhase; admitted: number | null } {
+    return { phase: this.fencePhase, admitted: this.fenceAdmitted };
+  }
+
+  /** The Rust not-admitted refusal for `jobEpoch`, or null if admitted. */
+  private fenceRefusal(jobEpoch: unknown): string | null {
+    if (typeof jobEpoch !== "number") return null;
+    if (this.fencePhase !== "active") {
+      return `refused: not-admitted: session not active (phase=${this.fencePhase})`;
+    }
+    if (this.fenceAdmitted !== jobEpoch) {
+      return `refused: not-admitted: epoch mismatch (job ${jobEpoch}, admitted ${
+        this.fenceAdmitted ?? "none"
+      })`;
+    }
+    return null;
+  }
+
+  /** Apply a refusal string's side effects on the record. The backend's
+   *  only refusal is `refused: not-admitted:`, which writes nothing. */
+  private noteRefusalString(record: InvokeRecord, value: unknown): void {
+    if (typeof value !== "string" || !value.startsWith("refused:")) return;
+    record.wrote = false;
+  }
+
+  /** Settle a job-line record under the fence model. */
+  private settleFenced(record: InvokeRecord, result: unknown): void {
+    // A result that is itself a backend refusal (e.g. buffered
+    // `Ok("refused: not-admitted: …")`) is the backend's answer, so the model
+    // does not re-evaluate it.
+    if (typeof result === "string" && result.startsWith("refused:")) {
+      this.noteRefusalString(record, result);
+      record.result = result;
+      record.resolve(result);
+      return;
+    }
+    const refusal = this.fenceRefusal(record.args.jobEpoch);
+    if (refusal !== null) {
+      record.wrote = false;
+      record.rejection = refusal;
+      record.reject(refusal);
+      return;
+    }
+    record.wrote = true;
+    this.noteRefusalString(record, result);
+    record.result = result;
+    record.resolve(result);
+  }
 
   constructor(onSend?: (command: string) => { responses: string[]; drained: string[] }) {
     this.onSend = onSend || null;
@@ -51,7 +143,7 @@ export class SerialTraceRecorder {
   handler = async (cmd: string, args?: Record<string, unknown>): Promise<unknown> => {
     const resolverPair: {
       resolve: (value: unknown) => void;
-      reject: (error: Error) => void;
+      reject: (error: unknown) => void;
     } = { resolve: () => {}, reject: () => {} };
 
     const promise = new Promise<unknown>((resolve, reject) => {
@@ -85,8 +177,63 @@ export class SerialTraceRecorder {
       }
     }
 
+    // RF-15 fence model: lifecycle commands (never deferred).
+    if (this.fenceEnabled && !this.deferredCommands.has(cmd)) {
+      if (cmd === "serial_job_begin") {
+        if (this.fencePhase !== "idle") {
+          const err = `cannot begin job: session not idle (phase=${this.fencePhase})`;
+          record.rejection = err;
+          resolverPair.reject(err);
+          return promise;
+        }
+        const jobId = ++this._jobEpoch;
+        this.fencePhase = "active";
+        this.fenceAdmitted = jobId;
+        record.result = jobId;
+        resolverPair.resolve(jobId);
+        return jobId;
+      }
+      if (cmd === "serial_job_end") {
+        if (this.fencePhase === "active") this.fencePhase = "idle";
+        this.fenceAdmitted = null;
+        record.result = undefined;
+        resolverPair.resolve(undefined);
+        return undefined;
+      }
+      if (cmd === "serial_stop") {
+        const epochBefore = this._jobEpoch;
+        this.fenceAdmitted = null;
+        if (this.fencePhase === "unknown" && !this.stopRecoversUnknown) {
+          // leave unknown in place
+        } else {
+          this.fencePhase = "idle";
+        }
+        const result = {
+          outcome: "confirmed",
+          epochBefore,
+          epochAfter: epochBefore,
+          messages: [] as string[],
+        };
+        record.result = result;
+        resolverPair.resolve(result);
+        return result;
+      }
+    }
+
     // If deferred, leave the promise pending for manual release
     if (this.deferredCommands.has(cmd)) {
+      return promise;
+    }
+
+    // RF-15 fence model: an immediate job line is evaluated now.
+    if (this.fenceEnabled && (cmd === "serial_send" || cmd === "serial_stream_job")) {
+      const result =
+        cmd === "serial_send" && this.onSend
+          ? this.onSend((args?.command as string) || "")
+          : cmd === "serial_send"
+            ? { responses: ["ok"], drained: [] }
+            : "complete";
+      this.settleFenced(record, result);
       return promise;
     }
 
@@ -161,8 +308,29 @@ export class SerialTraceRecorder {
       throw new Error(`Invalid record index: ${index} (length: ${this.records.length})`);
     }
     const record = this.records[index];
+    if (
+      this.fenceEnabled &&
+      (record.command === "serial_send" || record.command === "serial_stream_job")
+    ) {
+      this.settleFenced(record, result);
+      return;
+    }
     record.result = result;
     record.resolve(result);
+  }
+
+  /**
+   * Reject a deferred invoke with a RAW string, exactly as Tauri rejects an
+   * `Err(String)`. A `refused:` string records that nothing was written.
+   */
+  releaseInvokeReject(index: number, raw: string): void {
+    if (index < 0 || index >= this.records.length) {
+      throw new Error(`Invalid record index: ${index} (length: ${this.records.length})`);
+    }
+    const record = this.records[index];
+    record.rejection = raw;
+    if (this.fenceEnabled) this.noteRefusalString(record, raw);
+    record.reject(raw);
   }
 
   /**
@@ -208,11 +376,19 @@ export class SerialTraceRecorder {
    * Get all recorded invocations in order.
    * Each record includes command name, args, and result.
    */
-  allRecords(): Array<{ command: string; args: Record<string, unknown>; result?: unknown }> {
+  allRecords(): Array<{
+    command: string;
+    args: Record<string, unknown>;
+    result?: unknown;
+    wrote?: boolean;
+    rejection?: unknown;
+  }> {
     return this.records.map((r) => ({
       command: r.command,
       args: r.args,
       result: r.result,
+      wrote: r.wrote,
+      rejection: r.rejection,
     }));
   }
 
@@ -249,7 +425,11 @@ export class SerialTraceRecorder {
   async dispose(): Promise<void> {
     const error = new Error("Recorder disposed");
     for (const record of this.records) {
-      if (!record.result && this.deferredCommands.has(record.command)) {
+      if (
+        !record.result &&
+        record.rejection === undefined &&
+        this.deferredCommands.has(record.command)
+      ) {
         record.reject(error);
       }
     }

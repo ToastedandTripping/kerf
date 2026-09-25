@@ -4,7 +4,8 @@
 //!
 //! | Order | Lock / guard | Held by | Duration |
 //! |-------|--------------|---------|----------|
-//! | leaf  | `session.admitted_job` | `serial_job_begin`, `serial_job_end`, `serial_stop_inner` | Microseconds (check+set) |
+//! | leaf  | `session.admitted_job` | `serial_job_begin`, `serial_job_end`, `serial_stop_inner` (under `submit`), `admit_and_write` (under `submit`) | Microseconds (check+set) |
+//! | 2.5   | `session.submit` | `admit_and_write` (admission check + one `write()` of a job line), `serial_stop_inner` Step 2 (admission close) | Microseconds; at most one `write(2)` enqueue, bounded by the port timeout (1000 ms) |
 //! | leaf  | `session.last_stop` | `serial_stop_inner` (result write), joiner (result read) | Microseconds |
 //! | leaf  | `session.observer` | test setup, session event emission | Microseconds |
 //! | leaf  | `session.snapshot` | snapshot publish/read/invalidate | Microseconds |
@@ -18,8 +19,8 @@
 //!   so no cycle exists.
 //! - Never acquire `command` while holding `admitted_job`.
 //! - `realtime` and `admitted_job` are independent — may be held in either order.
-//! - The stop operation takes `admitted_job` (to close admission), then `realtime`
-//!   (to send `0x18`). It never takes `command`. After `0x18`, the stop may
+//! - The stop operation takes `submit` then `admitted_job` (to close admission),
+//!   releases both, then takes `realtime` (to send `0x18`). It never takes `command`. After `0x18`, the stop may
 //!   `try_lock` `command` (never wait) for a banner read in per-line/idle mode.
 //! - Event-send failure from inside the pump (which holds `command`) sets
 //!   `job_abort` atomically via the mapping closure and returns `Cancelled`.
@@ -30,6 +31,20 @@
 //!   so a minutes-long pump can never freeze the Tauri event loop.
 //! - `SerialSession` tracks connection epoch, job phase, submission permits, and
 //!   the stop operation. See `serial_session.rs` for the full design.
+//! - **Job-line admission (RF-15, submission critical section).** Lock order
+//!   `command` → `submit` → `admitted_job` (leaf). Nothing takes `submit`
+//!   while holding `realtime` or `admitted_job`, and `submit` is never held
+//!   across a read, a flush, a drain, a pump wait, or an observer emit. Every
+//!   acquisition recovers from poison. **Every job-epoch write goes through
+//!   `SerialSession::admit_and_write`** (the `serial_send` job line, the
+//!   `$32=1` bracket, buffered Phase A via `JobPermit::admit_write`), which
+//!   checks admission and makes the one `write()` under `submit`; the flush
+//!   follows outside it. `permit_precheck` (before the `command` wait) and
+//!   `try_permit_begin` (under `command`, before the drain) are
+//!   non-authoritative fast-fails. The stop closes admission under `submit`,
+//!   so a job line is either queued ahead of its single `0x18` or refused.
+//!   Connect stays the one nesting exception, and the stop path never takes
+//!   `command`.
 
 use serde::{Deserialize, Serialize};
 use serialport::{self, SerialPort};
@@ -43,9 +58,11 @@ use super::serial_pump::{
     self, BufferedPumpConfig, BufferedPumpEvent, BufferedPumpOutcome, ProbeWriter, PumpFailure,
     PumpReader, DEFAULT_LIVENESS_TICKS, STATUS_MAX_TICKS,
 };
+#[cfg(test)]
+use super::serial_session::PHASE_STOPPING;
 use super::serial_session::{
     self, SerialSession, StopGuard, StopResult, PHASE_ACTIVE, PHASE_DISCONNECTED, PHASE_IDLE,
-    PHASE_STOPPING, PHASE_UNKNOWN,
+    PHASE_UNKNOWN,
 };
 
 /// Type alias for the port-factory parameter to avoid clippy::type_complexity.
@@ -339,7 +356,7 @@ pub(crate) fn serial_connect_inner(
     // This happens after handle install, inside the scope where both
     // guards were just released, so the new epoch is visible to all callers.
     inner.session.increment_epoch();
-    inner.session.set_idle();
+    inner.session.set_idle_on_connect();
 
     if banner.trim().is_empty() {
         Ok(format!("Connected to {} at {} baud", port_name, baud_rate))
@@ -446,26 +463,40 @@ pub(crate) fn disconnect_inner_with_job(
 
 /// Send body: extracted for testability.
 ///
-/// `job_epoch`: When `Some(epoch)`, the send calls `session.try_permit_begin(epoch)`
-/// before writing — the same phase+generation protocol the buffered pump uses.
-/// When `None` (console command, `$H`), no permit check.
+/// `job_epoch`: When `Some(epoch)` (a job line), the send is fenced:
+/// `permit_precheck` before the lock wait (fast-fail), `try_permit_begin`
+/// under the command lock before the drain (non-authoritative: spares a
+/// refused send the drain), and `admit_and_write` for the write itself (the
+/// check that counts, atomic with the write against the stop's admission
+/// close). The flush follows outside the `submit` lock.
+/// Refusals are `refused:`-prefixed contract strings (see `serial_session`).
+/// When `None` (console command, `$H`, jog, settings), no permit check.
 pub(crate) fn serial_send_inner(
     inner: &SerialInner,
     command: &str,
     job_epoch: Option<u64>,
 ) -> Result<SendOutcome, String> {
-    // Permit check before taking the command lock (for per-line jobs).
-    let g0 = if let Some(epoch) = job_epoch {
-        Some(inner.session.try_permit_begin(Some(epoch))?)
-    } else {
-        None
-    };
+    // Pre-lock fast-fail (optimisation only; never parks a stale send behind
+    // a long pump).
+    if let Some(epoch) = job_epoch {
+        inner.session.permit_precheck(epoch)?;
+    }
 
     let mut guard = inner
         .command
         .lock()
         .map_err(|e| format!("Lock failed: {}", e))?;
     let channel = guard.as_mut().ok_or("Not connected")?;
+
+    // Pre-drain admission check (non-authoritative): under the command lock,
+    // before the drain and before PumpFlight, so a send refused HERE consumes
+    // no reader bytes. The check that counts is inside `admit_and_write`; a
+    // refusal there comes after the drain (harmless: the stop's banner is
+    // not in the reader yet, since its `0x18` follows the admission close).
+    if let Some(epoch) = job_epoch {
+        inner.session.try_permit_begin(Some(epoch))?;
+    }
+
     let _flight = PumpFlight::begin(&inner.pump_in_flight);
 
     // Capture epoch at command lock acquisition (not at publish time).
@@ -484,21 +515,19 @@ pub(crate) fn serial_send_inner(
     } else {
         format!("{}\n", command)
     };
-    channel
-        .writer
-        .write_all(cmd.as_bytes())
-        .map_err(|e| format!("Write error: {}", e))?;
+    let write_result = match job_epoch {
+        // Job line: admission check + the one write, atomic under `submit`.
+        Some(epoch) => inner
+            .session
+            .admit_and_write(epoch, || channel.writer.write_all(cmd.as_bytes()))?,
+        None => channel.writer.write_all(cmd.as_bytes()),
+    };
+    write_result.map_err(|e| format!("Write error: {}", e))?;
+    // Flush (`tcdrain`) outside the `submit` lock.
     channel
         .writer
         .flush()
         .map_err(|e| format!("Flush error: {}", e))?;
-
-    // Post-write permit check: detect if a stop happened during the write.
-    if let Some(g0_val) = g0 {
-        if let Err(msg) = inner.session.try_permit_end(g0_val) {
-            return Err(format!("permit expired: {}", msg));
-        }
-    }
 
     let pump_result = serial_pump::run_pump(
         &mut channel.reader,
@@ -537,12 +566,17 @@ pub(crate) fn serial_send_inner(
 /// Send a command line and pump until a terminal response (`ok` / `error:N` /
 /// `ALARM…` / reset banner). See `serial_pump` for the protocol design.
 #[tauri::command]
+///
+/// `job_epoch` (IPC key `jobEpoch`): present for job lines, absent for console,
+/// `$H`, jog and settings writes. A renamed key would deserialize to `None` and
+/// silently unfence the job; `rf15_ipc_serial_send_carries_job_epoch` pins it.
 pub async fn serial_send(
     state: State<'_, SerialState>,
     command: String,
+    job_epoch: Option<u64>,
 ) -> Result<SendOutcome, String> {
     let inner = state.0.clone();
-    tokio::task::spawn_blocking(move || serial_send_inner(&inner, &command, None))
+    tokio::task::spawn_blocking(move || serial_send_inner(&inner, &command, job_epoch))
         .await
         .map_err(|e| format!("Task join error: {}", e))?
 }
@@ -568,6 +602,21 @@ pub(crate) fn send_byte_inner(inner: &SerialInner, byte: u8) -> Result<(), Strin
     port.write_all(&[byte])
         .map_err(|e| format!("Write error: {}", e))?;
     port.flush().map_err(|e| format!("Flush error: {}", e))
+}
+
+/// The buffered pump's per-line gate over the admission fence.
+struct JobPermit<'a> {
+    session: &'a SerialSession,
+    epoch: u64,
+}
+
+impl serial_pump::SubmissionGate for JobPermit<'_> {
+    fn admit_write(
+        &self,
+        write: &mut dyn FnMut() -> std::io::Result<()>,
+    ) -> Result<std::io::Result<()>, String> {
+        self.session.admit_and_write(self.epoch, write)
+    }
 }
 
 /// Status body: extracted for testability. Uses try_lock to avoid blocking.
@@ -690,19 +739,34 @@ pub enum JobEvent {
 /// `on_event` returns `Result<(), String>` — on `Err`, the pump sets `job_abort`
 /// and returns `Cancelled`; the wrapper calls `serial_stop_inner` after releasing
 /// `command`.
+///
+/// RF-15: `job_epoch` is the admitted job's epoch. The body never clears
+/// `job_abort` (`serial_job_begin_inner` is its only clearer, under
+/// `admitted_job`). Entry: `permit_precheck` before the lock, then the
+/// non-authoritative `try_permit_begin` under the lock before the drain and
+/// before `$32=1` (refusal → `Err(refused: not-admitted…)`, nothing read or
+/// written). The `$32=1` write goes through `admit_and_write` (refusal →
+/// `Err(refused: not-admitted…)`, nothing written); every job line goes
+/// through `JobPermit::admit_write`, and a refused line's outcome string
+/// (`Ok`) is the refusal contract text.
 pub(crate) fn serial_stream_job_inner(
     inner: &SerialInner,
     gcode: &str,
+    job_epoch: u64,
     on_event: &dyn Fn(JobEvent) -> Result<(), String>,
 ) -> Result<String, String> {
-    // Reset the abort flag at the start of every job.
-    inner.job_abort.store(false, Ordering::SeqCst);
+    inner.session.permit_precheck(job_epoch)?;
 
     let mut guard = inner
         .command
         .lock()
         .map_err(|e| format!("Lock failed: {}", e))?;
     let cmd_channel = guard.as_mut().ok_or("Not connected")?;
+
+    // Pre-drain entry check (non-authoritative), before the drain and before
+    // `$32=1`, so a refused stream consumes no reader bytes.
+    inner.session.try_permit_begin(Some(job_epoch))?;
+
     let _flight = PumpFlight::begin(&inner.pump_in_flight);
 
     // Capture epoch at command lock acquisition for snapshot publication.
@@ -718,24 +782,36 @@ pub(crate) fn serial_stream_job_inner(
         let _ = on_event(JobEvent::Console { text: line.clone() });
     }
 
-    // Write $32=1
-    cmd_channel
-        .writer
-        .write_all(b"$32=1\n")
+    // Write $32=1 on the job's behalf: admission + write under `submit`,
+    // flush outside it.
+    inner
+        .session
+        .admit_and_write(job_epoch, || cmd_channel.writer.write_all(b"$32=1\n"))?
         .map_err(|e| format!("Write error: {}", e))?;
     cmd_channel
         .writer
         .flush()
         .map_err(|e| format!("Flush error: {}", e))?;
 
-    match serial_pump::run_pump(
+    let dollar32 = serial_pump::run_pump(
         &mut cmd_channel.reader,
         &mut cmd_channel.writer,
         &mut cmd_channel.pending,
         DEFAULT_LIVENESS_TICKS,
         serial_pump::DEFAULT_IDLE_STALL_TICKS,
         None,
-    ) {
+    );
+    // Banner publication (mirrors `serial_send_inner`): a STOP landing during
+    // the `$32=1` exchange must not lose its banner to this pump.
+    if let Ok(ref out) = dollar32 {
+        if out.terminal == serial_pump::PumpTerminal::Banner
+            && inner.session.stop_in_flight.load(Ordering::SeqCst)
+        {
+            inner.session.banner_observed.store(true, Ordering::SeqCst);
+            inner.session.emit("banner_observed");
+        }
+    }
+    match dollar32 {
         Ok(out) => {
             let has_ok = out.lines.iter().any(|l| l == "ok");
             if !has_ok {
@@ -775,6 +851,10 @@ pub(crate) fn serial_stream_job_inner(
         &mut cmd_channel.pending,
         &config,
         &inner.job_abort,
+        &JobPermit {
+            session: &inner.session,
+            epoch: job_epoch,
+        },
         &|event| {
             let job_event = match event {
                 BufferedPumpEvent::LineSent { line_index, total } => {
@@ -830,6 +910,7 @@ pub(crate) fn serial_stream_job_inner(
         Ok(BufferedPumpOutcome::Alarm { alarm_text }) => format!("alarm: {}", alarm_text),
         Ok(BufferedPumpOutcome::Aborted) => "aborted".to_string(),
         Ok(BufferedPumpOutcome::Disconnected(msg)) => format!("disconnected: {}", msg),
+        Ok(BufferedPumpOutcome::Refused { reason, .. }) => reason.clone(),
         Err(PumpFailure::Disconnected(msg)) => format!("disconnected: {}", msg),
         Err(PumpFailure::Io(msg)) => format!("io error: {}", msg),
     };
@@ -857,14 +938,18 @@ pub(crate) fn serial_stream_job_inner(
 /// `$32=1` is hard-gated: the first line sent is `$32=1`, and the pump waits
 /// for its `ok` before sending any G-code. This is a DECISIONS.md pin.
 #[tauri::command]
+///
+/// `job_epoch` (IPC key `jobEpoch`) is REQUIRED: an omitted key is rejected by
+/// Tauri's argument deserialization, so the command fails closed.
 pub async fn serial_stream_job(
     state: State<'_, SerialState>,
     gcode: String,
+    job_epoch: u64,
     channel: Channel<JobEvent>,
 ) -> Result<String, String> {
     let inner = state.0.clone();
     tokio::task::spawn_blocking(move || {
-        serial_stream_job_inner(&inner, &gcode, &|event| {
+        serial_stream_job_inner(&inner, &gcode, job_epoch, &|event| {
             channel
                 .send(event)
                 .map_err(|e| format!("channel.send failed: {e}"))
@@ -922,7 +1007,6 @@ pub(crate) fn serial_stop_inner(inner: &SerialInner, sleeper: &dyn Fn(Duration))
                 .take();
             return result.unwrap_or(StopResult::SubmittedUnconfirmed {
                 epoch: epoch_before,
-                in_flight_write: false,
                 messages: vec![
                     "STOP: joined existing stop operation. Beam state unqualified — verify visually."
                         .to_string(),
@@ -931,17 +1015,16 @@ pub(crate) fn serial_stop_inner(inner: &SerialInner, sleeper: &dyn Fn(Duration))
         }
     };
 
-    // Step 2: Close admission.
+    // Step 2: Close admission inside the submission critical section
+    // (`submit` → `admitted_job`). A writer holding `submit` finishes its one
+    // `write()` first, so its line is queued ahead of this stop's `0x18`; any
+    // writer after this block is refused with nothing written. Both guards are
+    // released before the `0x18`, which needs no lock: ordering is already
+    // fixed. Poison is recovered so a panicked writer can never stop STOP.
     {
-        let mut aj = session
-            .admitted_job
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        session.phase.store(PHASE_STOPPING, Ordering::SeqCst);
-        *aj = None;
+        let submit = session.submit.lock().unwrap_or_else(|e| e.into_inner());
+        session.close_admission(&submit);
     }
-    // Then increment permit_generation (phase before gen — SeqCst).
-    session.permit_generation.fetch_add(1, Ordering::SeqCst);
     session.emit("admission_closed");
 
     // Invalidate the status snapshot: post-stop snapshots must not carry
@@ -1034,25 +1117,38 @@ pub(crate) fn serial_stop_inner(inner: &SerialInner, sleeper: &dyn Fn(Duration))
     }
 
     let result = if session.banner_observed.load(Ordering::SeqCst) {
-        // Confirmed: reset banner observed.
+        // Confirmed path.
         session.banner_observed.store(false, Ordering::SeqCst);
+        // `stop_confirming` is emitted before the epoch increment and CAS.
+        session.emit("stop_confirming");
         let epoch_after = session.increment_epoch();
-        session.set_idle();
-        session.emit("banner_observed");
-        StopResult::Confirmed {
-            epoch_before,
-            epoch_after,
-            messages: vec![
-                "STOP: 0x18 sent".to_string(),
-                "STOP: reset confirmed. Controller reset confirmed. Beam state unqualified — verify visually.".to_string(),
-            ],
+        if session.set_idle_from_stopping() {
+            session.emit("banner_observed");
+            StopResult::Confirmed {
+                epoch_before,
+                epoch_after,
+                messages: vec![
+                    "STOP: 0x18 sent".to_string(),
+                    "STOP: reset confirmed. Controller reset confirmed. Beam state unqualified — verify visually.".to_string(),
+                ],
+            }
+        } else {
+            // Only a concurrent disconnect can move the phase off Stopping
+            // here (nothing else stores a phase during a stop): leave the
+            // phase alone and report unconfirmed.
+            StopResult::SubmittedUnconfirmed {
+                epoch: epoch_before,
+                messages: vec![
+                    "STOP: 0x18 sent".to_string(),
+                    "STOP: unconfirmed — use the machine's physical stop before reconnecting. Beam state unqualified — verify visually.".to_string(),
+                ],
+            }
         }
     } else {
         // Unconfirmed: banner not observed within deadline.
         session.phase.store(PHASE_UNKNOWN, Ordering::SeqCst);
         StopResult::SubmittedUnconfirmed {
             epoch: epoch_before,
-            in_flight_write: false,
             messages: vec![
                 "STOP: 0x18 sent".to_string(),
                 "STOP: unconfirmed — use the machine's physical stop before reconnecting. Beam state unqualified — verify visually.".to_string(),
@@ -1100,8 +1196,10 @@ pub(crate) fn serial_job_begin_inner(inner: &SerialInner) -> Result<u64, String>
     Ok(epoch)
 }
 
-/// End a per-line job: set phase to idle, clear admitted_job.
-/// Fails if the epoch doesn't match (stale).
+/// End a per-line job: Active→Idle by CAS, clear admitted_job.
+/// Fails if the epoch doesn't match (stale). If the CAS fails (phase is
+/// Unknown/Stopping), the phase is left alone and the call still returns Ok:
+/// the job is over either way, and ending a job never overwrites Unknown.
 pub(crate) fn serial_job_end_inner(inner: &SerialInner, job_id: u64) -> Result<(), String> {
     let session = &inner.session;
     let mut aj = session
@@ -1116,7 +1214,12 @@ pub(crate) fn serial_job_end_inner(inner: &SerialInner, job_id: u64) -> Result<(
         ));
     }
 
-    session.phase.store(PHASE_IDLE, Ordering::SeqCst);
+    let _ = session.phase.compare_exchange(
+        PHASE_ACTIVE,
+        PHASE_IDLE,
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    );
     *aj = None;
     Ok(())
 }
@@ -1825,7 +1928,10 @@ mod tests {
             session: SerialSession::default(),
         };
 
-        let result = serial_stream_job_inner(&inner, "G0 X10\nG1 X20 F1000 S500\n", &|_evt| Ok(()));
+        inner.session.phase.store(PHASE_IDLE, Ordering::SeqCst);
+        let job = serial_job_begin_inner(&inner).unwrap();
+        let result =
+            serial_stream_job_inner(&inner, "G0 X10\nG1 X20 F1000 S500\n", job, &|_evt| Ok(()));
 
         assert!(
             result.is_err(),
@@ -1846,30 +1952,8 @@ mod tests {
     // serialport::new().open() directly). Routed to the Tauri test-port smoke.
     // Tracked as UNPROVEN in this batch per the plan.
 
-    /// P1-C: already-connected guard — calling serial_connect on a connected
-    /// inner should disconnect first. Verified via the connected flag lifecycle.
-    #[test]
-    fn already_connected_guard_disconnects_first() {
-        let inner = SerialInner {
-            command: Mutex::new(None),
-            realtime: Mutex::new(Some(Box::new(MockPort::new()) as Box<dyn SerialPort>)),
-            connected: AtomicBool::new(true),
-            pump_in_flight: AtomicBool::new(false),
-            job_abort: AtomicBool::new(false),
-            session: SerialSession::default(),
-        };
-
-        // Simulate the guard: if connected, disconnect first
-        if inner.connected.load(Ordering::SeqCst) {
-            let _ = disconnect_inner(&inner);
-        }
-
-        // After disconnect, connected should be false
-        assert!(!inner.connected.load(Ordering::SeqCst));
-        // And the channels should be cleared
-        assert!(inner.command.lock().unwrap().is_none());
-        assert!(inner.realtime.lock().unwrap().is_none());
-    }
+    // P1-C / RF-11: the already-connected guard test now drives the real
+    // connect body: see `rf15::already_connected_guard_disconnects_first`.
 
     // ─── B1 Admission Fence Tests ─────────────────────────────────────────
 
@@ -1922,9 +2006,10 @@ mod tests {
         let result = serial_send_inner(&inner, "G0 X10\n", Some(job_id));
         assert!(result.is_err(), "send after stop must be refused");
 
-        // Verify no G-code bytes were written (only 0x18 from the stop).
+        // Verify no G-code bytes reached the writer. (The writer and realtime
+        // handles here are separate MockPorts, so the stop's 0x18 is NOT in
+        // `written`; ordering is proven by the rf15_* ScriptedPort tests.)
         let bytes = written.lock().unwrap();
-        // The only write should be the 0x18 from stop.
         assert!(
             !bytes.windows(5).any(|w| w == b"G0 X1"),
             "no G-code must reach the wire after stop"
@@ -1961,20 +2046,20 @@ mod tests {
         inner.session.phase.store(PHASE_ACTIVE, Ordering::SeqCst);
         *inner.session.admitted_job.lock().unwrap() = Some(1);
 
-        let gen_before = inner.session.permit_generation.load(Ordering::SeqCst);
-
         let result = serial_stop_inner(&inner, &|_| {});
 
         // Phase should be stopping or idle/unknown (stop completed)
         let phase = inner.session.phase.load(Ordering::SeqCst);
         assert!(phase != PHASE_ACTIVE, "phase must not be active after stop");
 
-        // Permit generation must have incremented
-        let gen_after = inner.session.permit_generation.load(Ordering::SeqCst);
-        assert!(
-            gen_after > gen_before,
-            "permit generation must increment on stop"
-        );
+        // Admission is closed: a job write for the old epoch is refused
+        // without the write being invoked.
+        let mut called = false;
+        let r = inner.session.admit_and_write(1, || {
+            called = true;
+            Ok(())
+        });
+        assert!(!called && r.is_err(), "stop must close admission");
 
         // Admitted job must be cleared
         assert!(inner.session.admitted_job.lock().unwrap().is_none());
@@ -2066,7 +2151,6 @@ mod tests {
             },
             StopResult::SubmittedUnconfirmed {
                 epoch: 3,
-                in_flight_write: false,
                 messages: vec!["STOP: unconfirmed".to_string()],
             },
             StopResult::SubmissionFailed {
@@ -2080,26 +2164,6 @@ mod tests {
             let parsed: StopResult = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, parsed);
         }
-    }
-
-    /// Mutant: try_permit refuses after generation bump.
-    #[test]
-    fn b1_permit_generation_bump_refuses_write() {
-        let inner = SerialInner::default();
-        inner.session.phase.store(PHASE_ACTIVE, Ordering::SeqCst);
-        inner.session.epoch.store(1, Ordering::SeqCst);
-        *inner.session.admitted_job.lock().unwrap() = Some(1);
-
-        let g0 = inner.session.try_permit_begin(Some(1)).unwrap();
-
-        // Simulate a stop: bump generation
-        inner
-            .session
-            .permit_generation
-            .fetch_add(1, Ordering::SeqCst);
-
-        // The post-write check should fail
-        assert!(inner.session.try_permit_end(g0).is_err());
     }
 
     /// Mutant 4: RED if phase is not set to STOPPING during the stop operation.
@@ -2928,6 +2992,7 @@ mod sim_integration {
             &mut pending,
             &config,
             &abort,
+            &serial_pump::OpenGate,
             &|_| {},
         );
 
@@ -2964,6 +3029,7 @@ mod sim_integration {
             &mut pending,
             &config,
             &abort,
+            &serial_pump::OpenGate,
             &|_| {},
         );
 
@@ -3006,6 +3072,7 @@ mod sim_integration {
                 &mut pending,
                 &config,
                 &abort,
+                &serial_pump::OpenGate,
                 &|_| {},
             )
         });
@@ -3068,6 +3135,7 @@ mod sim_integration {
                 &mut pending,
                 &config,
                 &abort_clone,
+                &serial_pump::OpenGate,
                 &|_| {},
             )
         });
@@ -3364,6 +3432,796 @@ mod sim_integration {
             serial_pump::DIAGNOSTIC_DATA_CAP,
             65536,
             "diagnostic cap changed — update test"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RF-15: job-line admission fence, driven through the production bodies over
+// a one-brain ScriptedPort (writer, reader and realtime share one ordered
+// trace). Every scenario runs under a 2 s deadline, below the stop's 3 s
+// banner deadline; every stop gets a scripted banner; barriers are trace
+// events and hold points, never sleeps.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod rf15 {
+    use super::*;
+    use crate::sim::scripted_port::{
+        make_session_observer, HandleRole, ScriptStep, ScriptedPort, TraceEvent,
+    };
+    use std::thread;
+
+    const BANNER: &[u8] = b"Grbl 1.1h ['$' for help]\r\n";
+    const SCENARIO: Duration = Duration::from_secs(2);
+
+    fn rig(script: Vec<ScriptStep>) -> (Arc<SerialInner>, ScriptedPort) {
+        let base = ScriptedPort::new(script);
+        let inner = Arc::new(SerialInner {
+            command: Mutex::new(Some(CommandChannel {
+                writer: Box::new(base.clone_with_role(HandleRole::Writer)),
+                reader: BufReader::new(
+                    Box::new(base.clone_with_role(HandleRole::Reader)) as Box<dyn SerialPort>
+                ),
+                pending: Vec::new(),
+            })),
+            realtime: Mutex::new(Some(
+                Box::new(base.clone_with_role(HandleRole::Realtime)) as Box<dyn SerialPort>
+            )),
+            connected: AtomicBool::new(true),
+            pump_in_flight: AtomicBool::new(false),
+            job_abort: AtomicBool::new(false),
+            session: SerialSession::default(),
+        });
+        inner.session.epoch.store(1, Ordering::SeqCst);
+        inner.session.phase.store(PHASE_IDLE, Ordering::SeqCst);
+        *inner.session.observer.lock().unwrap() = Some(make_session_observer(base.brain_arc()));
+        (inner, base)
+    }
+
+    /// Real (short) sleep so the stop's banner loop does not busy-spin.
+    fn nap(_: Duration) {
+        thread::sleep(Duration::from_millis(1));
+    }
+
+    fn stop(inner: &SerialInner) -> StopResult {
+        serial_stop_inner(inner, &nap)
+    }
+
+    fn is_reset(e: &TraceEvent) -> bool {
+        matches!(e, TraceEvent::Write { role: HandleRole::Realtime, data } if data == &[0x18])
+    }
+
+    fn is_writer_write(e: &TraceEvent) -> bool {
+        matches!(
+            e,
+            TraceEvent::Write {
+                role: HandleRole::Writer,
+                ..
+            }
+        )
+    }
+
+    fn first_reset(trace: &[TraceEvent]) -> usize {
+        trace
+            .iter()
+            .position(is_reset)
+            .expect("the stop's 0x18 must be in the trace")
+    }
+
+    /// Writer writes after the stop's (first) Realtime 0x18.
+    fn writer_writes_after_reset(trace: &[TraceEvent]) -> Vec<TraceEvent> {
+        let r = first_reset(trace);
+        trace[r..]
+            .iter()
+            .filter(|e| is_writer_write(e))
+            .cloned()
+            .collect()
+    }
+
+    /// O5: at most one Realtime 0x18 per stop invocation. A stop invocation
+    /// spans from one `stop_requested` session event to the next; no reset may
+    /// precede the first. Returns the total reset count.
+    fn assert_one_reset_per_stop(trace: &[TraceEvent]) -> usize {
+        let mut per_segment = vec![0usize];
+        for e in trace {
+            if matches!(e, TraceEvent::SessionEvent { name } if name == "stop_requested") {
+                per_segment.push(0);
+            } else if is_reset(e) {
+                *per_segment.last_mut().unwrap() += 1;
+            }
+        }
+        assert_eq!(
+            per_segment[0], 0,
+            "O5: a 0x18 precedes every stop_requested: {trace:?}"
+        );
+        assert!(
+            per_segment.iter().all(|n| *n <= 1),
+            "O5 one-reset assertion: more than one 0x18 in a stop invocation {per_segment:?}: {trace:?}"
+        );
+        per_segment.iter().sum()
+    }
+
+    /// Wait until the stop thread has provably entered: `StopGuard::begin`
+    /// sets `stop_in_flight` before Step 2, so after this the stop is at (or
+    /// past) its `submit` acquisition.
+    fn wait_stop_entered(inner: &SerialInner) {
+        wait_until("stop_in_flight", || {
+            inner.session.stop_in_flight.load(Ordering::SeqCst)
+        });
+    }
+
+    /// The parked-write negatives: no reset and no admission close yet.
+    fn assert_stop_parked_behind_write(base: &ScriptedPort, what: &str) {
+        // Give the stop thread real time to run as far as it can; these
+        // negatives must hold however long it runs (it is blocked on
+        // `submit`). The positive barrier is `wait_stop_entered`.
+        thread::sleep(Duration::from_millis(50));
+        let trace = base.trace();
+        assert!(
+            !trace.iter().any(is_reset),
+            "{what}: the stop's 0x18 was written while a job write held submit: {trace:?}"
+        );
+        assert!(
+            !has_session_event(base, "admission_closed"),
+            "{what}: admission closed while a job write held submit: {trace:?}"
+        );
+    }
+
+    /// The line precedes the single 0x18 and no Writer write follows it.
+    fn assert_line_before_single_reset(trace: &[TraceEvent], line: &[u8]) {
+        let r = first_reset(trace);
+        let w = trace
+            .iter()
+            .position(|t| matches!(t, TraceEvent::Write { role: HandleRole::Writer, data } if data == line))
+            .unwrap_or_else(|| panic!("line {:?} never written: {trace:?}", String::from_utf8_lossy(line)));
+        assert!(w < r, "ordering assertion: line after the 0x18: {trace:?}");
+        assert!(
+            writer_writes_after_reset(trace).is_empty(),
+            "no Writer write may follow the 0x18: {trace:?}"
+        );
+        assert_eq!(
+            trace.iter().filter(|t| is_reset(t)).count(),
+            1,
+            "exactly one 0x18: {trace:?}"
+        );
+    }
+
+    fn has_session_event(base: &ScriptedPort, name: &str) -> bool {
+        base.trace()
+            .iter()
+            .any(|e| matches!(e, TraceEvent::SessionEvent { name: n } if n == name))
+    }
+
+    fn has_hold_reached(base: &ScriptedPort, id: &str) -> bool {
+        base.trace()
+            .iter()
+            .any(|e| matches!(e, TraceEvent::HoldReached { id: i } if i == id))
+    }
+
+    /// Poll the trace (not a sleep barrier: it returns as soon as the event
+    /// exists). Panics at 1.5 s so a missed event fails loudly.
+    fn wait_until(what: &str, f: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_millis(1500);
+        while !f() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "never observed: {what}"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn wait_reset(base: &ScriptedPort) {
+        wait_until("Realtime 0x18", || base.trace().iter().any(is_reset));
+    }
+
+    // ── R1 ────────────────────────────────────────────────────────────────
+
+    fn ipc_serial_send(
+        inner: Arc<SerialInner>,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, serde_json::Value> {
+        let app = tauri::test::mock_builder()
+            .manage(SerialState(inner))
+            .invoke_handler(tauri::generate_handler![serial_send])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+        tauri::test::get_ipc_response(
+            &webview,
+            tauri::webview::InvokeRequest {
+                cmd: "serial_send".into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: "http://tauri.localhost".parse().unwrap(),
+                body: tauri::ipc::InvokeBody::Json(body),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_string(),
+            },
+        )
+        .map(|b| b.deserialize::<serde_json::Value>().unwrap())
+    }
+
+    /// R1: the literal IPC key `jobEpoch` reaches the real
+    /// `#[tauri::command] serial_send` body and fences the job line.
+    #[test]
+    fn rf15_ipc_serial_send_carries_job_epoch() {
+        ScriptedPort::run_scenario(
+            || {
+                let (inner, base) = rig(vec![
+                    ScriptStep::Timeout,
+                    ScriptStep::Data(b"ok\r\n"),
+                    ScriptStep::Data(BANNER),
+                ]);
+                let e = serial_job_begin_inner(&inner).unwrap();
+
+                // (a) Positive control: an admitted job line is written and acked.
+                let ok = ipc_serial_send(
+                    inner.clone(),
+                    serde_json::json!({"command": "G1 X1", "jobEpoch": e}),
+                );
+                assert!(ok.is_ok(), "admitted line must succeed: {ok:?}");
+                assert!(base.trace().iter().any(
+                    |t| matches!(t, TraceEvent::Write { role: HandleRole::Writer, data } if data == b"G1 X1\n")
+                ));
+
+                // (b) After a confirmed stop, the same job line is refused.
+                assert!(matches!(stop(&inner), StopResult::Confirmed { .. }));
+                let refused = ipc_serial_send(
+                    inner.clone(),
+                    serde_json::json!({"command": "G1 X1", "jobEpoch": e}),
+                );
+                let err = refused.expect_err("stale job line must be refused");
+                assert!(
+                    err.as_str()
+                        .unwrap_or_default()
+                        .starts_with("refused: not-admitted:"),
+                    "raw refusal string expected, got {err:?}"
+                );
+                assert!(
+                    writer_writes_after_reset(&base.trace()).is_empty(),
+                    "no Writer write may follow the stop's 0x18"
+                );
+
+                // (c) Without jobEpoch (console path) the line is still written.
+                // Assert on the trace: the pump may hit EOF on the exhausted script.
+                let _ = ipc_serial_send(inner.clone(), serde_json::json!({"command": "$$"}));
+                assert!(
+                    writer_writes_after_reset(&base.trace()).iter().any(
+                        |t| matches!(t, TraceEvent::Write { data, .. } if data == b"$$\n")
+                    ),
+                    "console send must still reach the writer"
+                );
+                assert_one_reset_per_stop(&base.trace());
+            },
+            SCENARIO,
+        )
+        .unwrap();
+    }
+
+    // ── R2 ────────────────────────────────────────────────────────────────
+
+    /// R2: a stale per-line send after a confirmed stop is refused, nothing is
+    /// written after the reset, and nothing is read (the decoy stays unread).
+    #[test]
+    fn rf15_per_line_stale_send_after_stop_refused_nothing_after_reset() {
+        ScriptedPort::run_scenario(
+            || {
+                let (inner, base) = rig(vec![
+                    ScriptStep::Timeout,
+                    ScriptStep::Data(b"ok\r\n"),
+                    ScriptStep::Data(BANNER),
+                    // Decoy: visible to drain_classified; the green path never reads it.
+                    ScriptStep::Data(b"ok\n"),
+                ]);
+                let e = serial_job_begin_inner(&inner).unwrap();
+                serial_send_inner(&inner, "G1 X1", Some(e)).expect("accepted first line");
+                assert!(matches!(stop(&inner), StopResult::Confirmed { .. }));
+
+                base.push_session_event("stale_send_begin");
+                let result = serial_send_inner(&inner, "G1 X2", Some(e));
+
+                let err = result.expect_err("stale send must be refused");
+                assert!(
+                    err.starts_with("refused: not-admitted:"),
+                    "prefix assertion: {err}"
+                );
+                let trace = base.trace();
+                assert_one_reset_per_stop(&trace);
+                assert!(
+                    writer_writes_after_reset(&trace).is_empty(),
+                    "no Writer write may follow the Realtime 0x18: {trace:?}"
+                );
+                let marker = trace
+                    .iter()
+                    .position(|t| matches!(t, TraceEvent::SessionEvent { name } if name == "stale_send_begin"))
+                    .unwrap();
+                assert!(
+                    !trace[marker..]
+                        .iter()
+                        .any(|t| matches!(t, TraceEvent::ReadData { .. })),
+                    "ReadData assertion: a refused send must read nothing: {trace:?}"
+                );
+            },
+            SCENARIO,
+        )
+        .unwrap();
+    }
+
+    // ── R3 ────────────────────────────────────────────────────────────────
+
+    /// R3: a sender that passed its precheck before the stop, and then waited
+    /// on the command lock through the stop, is refused under the lock.
+    #[test]
+    fn rf15_per_line_permit_checked_after_lock_wait() {
+        ScriptedPort::run_scenario(
+            || {
+                let (inner, base) = rig(vec![
+                    ScriptStep::HoldUntilRelease { id: "banner" },
+                    ScriptStep::Data(BANNER),
+                ]);
+                let e = serial_job_begin_inner(&inner).unwrap();
+
+                let lock = inner.command.lock().unwrap();
+                let i2 = inner.clone();
+                let sender = thread::spawn(move || serial_send_inner(&i2, "G1 X9", Some(e)));
+                wait_until("permit_prechecked", || {
+                    has_session_event(&base, "permit_prechecked")
+                });
+
+                let i3 = inner.clone();
+                let stopper = thread::spawn(move || stop(&i3));
+                wait_reset(&base);
+                drop(lock);
+
+                // Whoever reaches the reader first parks on the banner hold.
+                wait_until("banner hold", || has_hold_reached(&base, "banner"));
+                base.release_hold("banner");
+                let result = sender.join().unwrap();
+                let _ = stopper.join().unwrap();
+
+                let err = result.expect_err("sender must be refused");
+                assert!(err.starts_with("refused: not-admitted:"), "{err}");
+                let trace = base.trace();
+                assert_one_reset_per_stop(&trace);
+                assert!(
+                    writer_writes_after_reset(&trace).is_empty(),
+                    "zero Writer writes after the stop's 0x18: {trace:?}"
+                );
+                assert!(
+                    !has_session_event(&base, "permit_granted"),
+                    "no permit may be granted after the stop"
+                );
+            },
+            SCENARIO,
+        )
+        .unwrap();
+    }
+
+    // ── O1 ────────────────────────────────────────────────────────────────
+
+    /// O1 (per-line): a writer parked inside its `write()` holds `submit`, so
+    /// the stop cannot close admission or write `0x18` until the line is
+    /// queued. The line precedes the single reset; nothing follows it.
+    #[test]
+    fn rf15_o1_per_line_write_in_progress_precedes_single_reset() {
+        ScriptedPort::run_scenario(
+            || {
+                let (inner, base) = rig(vec![
+                    ScriptStep::HoldUntilRelease { id: "banner" },
+                    ScriptStep::Data(BANNER),
+                ]);
+                let e = serial_job_begin_inner(&inner).unwrap();
+                base.hold_next_write(HandleRole::Writer, "line");
+
+                let i2 = inner.clone();
+                let sender = thread::spawn(move || serial_send_inner(&i2, "G1 X5", Some(e)));
+                wait_until("write parked", || has_hold_reached(&base, "line"));
+
+                let i3 = inner.clone();
+                let stopper = thread::spawn(move || stop(&i3));
+                wait_stop_entered(&inner);
+                assert_stop_parked_behind_write(&base, "O1");
+                base.release_hold("line");
+
+                wait_reset(&base);
+                wait_until("banner hold", || has_hold_reached(&base, "banner"));
+                base.release_hold("banner");
+                let result = sender.join().unwrap();
+                let stop_result = stopper.join().unwrap();
+
+                let trace = base.trace();
+                assert_line_before_single_reset(&trace, b"G1 X5\n");
+                assert_one_reset_per_stop(&trace);
+                let out = result.expect("O1: the admitted line's send is Ok (banner-terminated)");
+                assert!(
+                    out.responses.iter().any(|l| l.starts_with("Grbl")),
+                    "O1: pump ended on the banner: {out:?}"
+                );
+                assert!(
+                    matches!(stop_result, StopResult::Confirmed { .. }),
+                    "{stop_result:?}"
+                );
+            },
+            SCENARIO,
+        )
+        .unwrap();
+    }
+
+    // ── R5-R7 (buffered) ─────────────────────────────────────────────────
+
+    /// R5: a queued buffered stream after a stop is refused at entry: nothing
+    /// written after the reset (not even `$32=1`) and `job_abort` untouched.
+    #[test]
+    fn rf15_buffered_stream_after_stop_refused_at_entry() {
+        ScriptedPort::run_scenario(
+            || {
+                let (inner, base) = rig(vec![ScriptStep::Data(BANNER)]);
+                let e = serial_job_begin_inner(&inner).unwrap();
+                assert!(matches!(stop(&inner), StopResult::Confirmed { .. }));
+
+                let result = serial_stream_job_inner(&inner, "G1 X1\nG1 X2\n", e, &|_| Ok(()));
+                let err = result.expect_err("entry must refuse");
+                assert!(err.starts_with("refused: not-admitted:"), "{err}");
+                let trace = base.trace();
+                assert_one_reset_per_stop(&trace);
+                assert!(
+                    writer_writes_after_reset(&trace).is_empty(),
+                    "no Writer write (not even $32=1) after the 0x18: {trace:?}"
+                );
+                assert!(
+                    inner.job_abort.load(Ordering::SeqCst),
+                    "flag assertion: the stream entry must not clear job_abort"
+                );
+            },
+            SCENARIO,
+        )
+        .unwrap();
+    }
+
+    /// R6 (mechanism): the pump's per-line gate refuses independently of the
+    /// shared `job_abort` flag. The hand clear models the class, not a
+    /// reachable production sequence: the production clearer of `job_abort`
+    /// is `serial_job_begin_inner`, which cannot coincide with a live pump —
+    /// a stop confirms only when a reader publishes the banner, and while the
+    /// pump holds `command` it is the only reader, and seeing the banner ends it.
+    #[test]
+    fn rf15_buffered_mid_job_gate_independent_of_abort_flag() {
+        ScriptedPort::run_scenario(
+            || {
+                let (inner, base) = rig(vec![
+                    ScriptStep::Timeout,
+                    ScriptStep::Data(b"ok\r\n"), // $32=1 ack
+                    ScriptStep::HoldUntilRelease { id: "phase_b" },
+                    ScriptStep::Data(b"ok\r\n"),
+                    ScriptStep::Data(BANNER),
+                ]);
+                let e = serial_job_begin_inner(&inner).unwrap();
+                let gcode: String = (0..30).map(|i| format!("G1 X{i} F500\n")).collect();
+
+                let i2 = inner.clone();
+                let pump =
+                    thread::spawn(move || serial_stream_job_inner(&i2, &gcode, e, &|_| Ok(())));
+                wait_until("pump in Phase B", || has_hold_reached(&base, "phase_b"));
+
+                let i3 = inner.clone();
+                let stopper = thread::spawn(move || stop(&i3));
+                wait_reset(&base);
+                inner.job_abort.store(false, Ordering::SeqCst);
+                base.release_hold("phase_b");
+
+                let outcome = pump.join().unwrap().expect("pump outcome is Ok");
+                let stop_result = stopper.join().unwrap();
+
+                assert!(
+                    outcome.starts_with("refused: not-admitted:"),
+                    "outcome: {outcome}"
+                );
+                let trace = base.trace();
+                assert_one_reset_per_stop(&trace);
+                assert!(
+                    writer_writes_after_reset(&trace).is_empty(),
+                    "no Writer write after the 0x18: {trace:?}"
+                );
+                assert!(matches!(stop_result, StopResult::Confirmed { .. }));
+            },
+            SCENARIO,
+        )
+        .unwrap();
+    }
+
+    /// O2 (buffered): O1's shape on a Phase A line.
+    #[test]
+    fn rf15_o2_buffered_write_in_progress_precedes_single_reset() {
+        ScriptedPort::run_scenario(
+            || {
+                let (inner, base) = rig(vec![
+                    ScriptStep::HoldUntilRelease { id: "ack32" },
+                    ScriptStep::Data(b"ok\r\n"),
+                    ScriptStep::HoldUntilRelease { id: "banner" },
+                    ScriptStep::Data(BANNER),
+                ]);
+                let e = serial_job_begin_inner(&inner).unwrap();
+
+                let i2 = inner.clone();
+                let pump = thread::spawn(move || {
+                    serial_stream_job_inner(&i2, "G1 X1 F500\n", e, &|_| Ok(()))
+                });
+                // Arm the write hold for the job line once $32=1 is out.
+                wait_until("$32 ack hold", || has_hold_reached(&base, "ack32"));
+                base.hold_next_write(HandleRole::Writer, "line");
+                base.release_hold("ack32");
+                wait_until("line write parked", || has_hold_reached(&base, "line"));
+
+                let i3 = inner.clone();
+                let stopper = thread::spawn(move || stop(&i3));
+                wait_stop_entered(&inner);
+                assert_stop_parked_behind_write(&base, "O2");
+                base.release_hold("line");
+
+                wait_reset(&base);
+                wait_until("banner hold", || has_hold_reached(&base, "banner"));
+                base.release_hold("banner");
+                let outcome = pump.join().unwrap().expect("pump outcome is Ok");
+                let stop_result = stopper.join().unwrap();
+
+                let trace = base.trace();
+                assert_line_before_single_reset(&trace, b"G1 X1 F500\n");
+                assert_one_reset_per_stop(&trace);
+                // The line was admitted and written: the job ends on the
+                // stop (banner or abort flag), never as a refusal.
+                assert!(
+                    outcome == "aborted" || outcome == "cancelled",
+                    "outcome: {outcome}"
+                );
+                assert!(
+                    matches!(stop_result, StopResult::Confirmed { .. }),
+                    "{stop_result:?}"
+                );
+            },
+            SCENARIO,
+        )
+        .unwrap();
+    }
+
+    /// O3 (`$32=1` bracket): O1's shape on the `$32=1` write. The stream's
+    /// `$32=1` pump reads the stop's banner instead of `ok`, so the stream
+    /// fails the gate, and it publishes the banner so the stop confirms.
+    #[test]
+    fn rf15_o3_dollar32_write_in_progress_precedes_single_reset() {
+        ScriptedPort::run_scenario(
+            || {
+                let (inner, base) = rig(vec![
+                    ScriptStep::HoldUntilRelease { id: "banner" },
+                    ScriptStep::Data(BANNER),
+                ]);
+                let e = serial_job_begin_inner(&inner).unwrap();
+                base.hold_next_write(HandleRole::Writer, "line");
+
+                let i2 = inner.clone();
+                let pump = thread::spawn(move || {
+                    serial_stream_job_inner(&i2, "G1 X1 F500\n", e, &|_| Ok(()))
+                });
+                wait_until("$32=1 write parked", || has_hold_reached(&base, "line"));
+
+                let i3 = inner.clone();
+                let stopper = thread::spawn(move || stop(&i3));
+                wait_stop_entered(&inner);
+                assert_stop_parked_behind_write(&base, "O3");
+                base.release_hold("line");
+
+                wait_reset(&base);
+                wait_until("banner hold", || has_hold_reached(&base, "banner"));
+                base.release_hold("banner");
+                let result = pump.join().unwrap();
+                let stop_result = stopper.join().unwrap();
+
+                let trace = base.trace();
+                assert_line_before_single_reset(&trace, b"$32=1\n");
+                assert_one_reset_per_stop(&trace);
+                let err = result.expect_err("O3: the stream fails its $32=1 gate");
+                assert!(err.starts_with("$32=1 gate failed"), "{err}");
+                assert!(
+                    matches!(stop_result, StopResult::Confirmed { .. }),
+                    "O3 banner-publication assertion: the stop must confirm off the \
+                     banner the $32=1 pump consumed: {stop_result:?}"
+                );
+            },
+            SCENARIO,
+        )
+        .unwrap();
+    }
+
+    /// O4 (stop first): a writer parked on the command lock after its
+    /// precheck; the stop runs to completion; then the lock is released. The
+    /// writer is refused, no Writer write follows the single 0x18.
+    #[test]
+    fn rf15_o4_stop_first_writer_refused() {
+        ScriptedPort::run_scenario(
+            || {
+                let (inner, base) = rig(vec![]);
+                let e = serial_job_begin_inner(&inner).unwrap();
+
+                let lock = inner.command.lock().unwrap();
+                let i2 = inner.clone();
+                let sender = thread::spawn(move || serial_send_inner(&i2, "G1 X9", Some(e)));
+                wait_until("permit_prechecked", || {
+                    has_session_event(&base, "permit_prechecked")
+                });
+
+                // The stop cannot read a banner while the lock is held: it
+                // runs to its deadline and completes unconfirmed.
+                let stop_result = stop(&inner);
+                assert!(
+                    matches!(stop_result, StopResult::SubmittedUnconfirmed { .. }),
+                    "{stop_result:?}"
+                );
+                drop(lock);
+                let result = sender.join().unwrap();
+
+                let trace = base.trace();
+                assert!(
+                    writer_writes_after_reset(&trace).is_empty(),
+                    "O4: zero Writer writes after the stop's 0x18: {trace:?}"
+                );
+                assert_eq!(
+                    assert_one_reset_per_stop(&trace),
+                    1,
+                    "exactly one 0x18: {trace:?}"
+                );
+                let err = result.expect_err("O4: the writer must be refused");
+                assert!(err.starts_with("refused: not-admitted:"), "{err}");
+            },
+            Duration::from_secs(6),
+        )
+        .unwrap();
+    }
+
+    // ── R8 (resend failure / CAS / recovery) ─────────────────────────────
+
+    #[test]
+    fn rf15_job_end_does_not_overwrite_unknown() {
+        let inner = SerialInner::default();
+        inner.session.phase.store(PHASE_UNKNOWN, Ordering::SeqCst);
+        *inner.session.admitted_job.lock().unwrap() = Some(7);
+        assert!(serial_job_end_inner(&inner, 7).is_ok());
+        assert!(inner.session.admitted_job.lock().unwrap().is_none());
+        assert_eq!(inner.session.phase.load(Ordering::SeqCst), PHASE_UNKNOWN);
+    }
+
+    /// U2 (kills M4 through the pump's gate): a refused
+    /// `JobPermit::admit_write` never invokes the write.
+    #[test]
+    fn rf15_u2_job_permit_refuses_without_writing() {
+        use serial_pump::SubmissionGate;
+        let session = SerialSession::default();
+        let permit = JobPermit {
+            session: &session,
+            epoch: 1,
+        };
+        *session.admitted_job.lock().unwrap() = Some(1);
+        session.phase.store(PHASE_STOPPING, Ordering::SeqCst);
+        let mut called = false;
+        let r = permit.admit_write(&mut || {
+            called = true;
+            Ok(())
+        });
+        assert!(!called, "U2: write invoked while Stopping");
+        assert!(r.unwrap_err().starts_with("refused: not-admitted:"));
+
+        session.phase.store(PHASE_ACTIVE, Ordering::SeqCst);
+        *session.admitted_job.lock().unwrap() = None;
+        let mut called = false;
+        let r = permit.admit_write(&mut || {
+            called = true;
+            Ok(())
+        });
+        assert!(!called, "U2: write invoked with admitted_job None");
+        assert!(r.unwrap_err().starts_with("refused: not-admitted:"));
+
+        *session.admitted_job.lock().unwrap() = Some(1);
+        let mut called = false;
+        let r = permit.admit_write(&mut || {
+            called = true;
+            Ok(())
+        });
+        assert!(called, "U2: admitted write not invoked");
+        assert!(r.unwrap().is_ok());
+    }
+
+    /// R8c: from Unknown reached through `SubmissionFailed` (both `0x18`
+    /// attempts fail), a second STOP recovers: Confirmed, Idle, and admission
+    /// reopens.
+    #[test]
+    fn rf15_second_stop_recovers_from_unknown() {
+        ScriptedPort::run_scenario(
+            || {
+                let (inner, base) = rig(vec![]);
+                serial_job_begin_inner(&inner).unwrap();
+                base.fail_writes_after(HandleRole::Realtime, 0);
+                let first = stop(&inner);
+                assert!(
+                    matches!(first, StopResult::SubmissionFailed { .. }),
+                    "first stop: {first:?}"
+                );
+                assert_eq!(
+                    inner.session.phase.load(Ordering::SeqCst),
+                    PHASE_UNKNOWN,
+                    "phase after SubmissionFailed"
+                );
+                assert!(serial_job_begin_inner(&inner).is_err(), "admission closed");
+
+                base.clear_write_faults();
+                base.push_script(vec![ScriptStep::Data(BANNER)]);
+                let result = stop(&inner);
+
+                assert!(
+                    matches!(result, StopResult::Confirmed { .. }),
+                    "variant assertion: {result:?}"
+                );
+                assert_eq!(
+                    inner.session.phase.load(Ordering::SeqCst),
+                    PHASE_IDLE,
+                    "phase assertion"
+                );
+                assert!(
+                    serial_job_begin_inner(&inner).is_ok(),
+                    "admission reopens after a confirmed stop"
+                );
+                assert_eq!(assert_one_reset_per_stop(&base.trace()), 1);
+            },
+            SCENARIO,
+        )
+        .unwrap();
+    }
+
+    // ── F7 (RF-11) ────────────────────────────────────────────────────────
+
+    /// RF-11: the already-connected guard in the REAL connect body tears the
+    /// first connection down before the second connection's port is opened
+    /// (and therefore before its DTR toggle), recorded in the trace.
+    #[test]
+    fn already_connected_guard_disconnects_first() {
+        let base = ScriptedPort::new(vec![]);
+        let inner = Arc::new(SerialInner::default());
+        let opens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (fi, fb, fo) = (
+            inner.clone(),
+            base.clone_with_role(HandleRole::Writer),
+            opens,
+        );
+        let factory = move |_: &str, _: u32| -> Result<Box<dyn SerialPort>, serialport::Error> {
+            let n = fo.fetch_add(1, Ordering::SeqCst);
+            if n == 1 {
+                let torn_down = !fi.connected.load(Ordering::SeqCst)
+                    && fi.command.lock().unwrap().is_none()
+                    && fi.realtime.lock().unwrap().is_none();
+                fb.push_session_event(&format!("second_open torn_down={torn_down}"));
+            }
+            Ok(Box::new(fb.clone_with_role(HandleRole::Writer)))
+        };
+        serial_connect_inner(&inner, "p", 115200, &|_| {}, &factory).unwrap();
+        serial_connect_inner(&inner, "p", 115200, &|_| {}, &factory).unwrap();
+
+        let trace = base.trace();
+        let marker = trace
+            .iter()
+            .position(|t| matches!(t, TraceEvent::SessionEvent { name } if name.starts_with("second_open")))
+            .expect("second open recorded");
+        assert!(
+            matches!(&trace[marker], TraceEvent::SessionEvent { name } if name == "second_open torn_down=true"),
+            "first connection must be torn down before the second open: {:?}",
+            trace[marker]
+        );
+        let dtr_after = trace[marker..]
+            .iter()
+            .filter(|t| matches!(t, TraceEvent::WriteDataTerminalReady { .. }))
+            .count();
+        assert_eq!(
+            dtr_after, 2,
+            "the second connection's DTR toggle follows teardown"
         );
     }
 }

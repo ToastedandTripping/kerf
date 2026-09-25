@@ -1,0 +1,120 @@
+# Critic review — Fence: one stop, one reset (submission critical section)
+
+Plan: `/home/leesalo/.claude/plans/curried-pondering-honey.md` (2026-09-24)
+Reviewer: Fable, separate subagent. Rubric: `~/marvin/rules/plan-critic-rubric.md` v2.
+Tree read: `~/.local/share/marvin/worktrees/kerf/session-8b2728` at 68b34b0; serialport 4.8.1 `posix/tty.rs`, `posix/poll.rs`.
+Prior plan and its three critic rounds read in full (`fence-wiring-1.1-reopen*.md`; note the round-3 file is the unsuffixed `-critic.md`, so the plan's "critic r3 A6" resolves correctly to that file's A6).
+
+## Applicability
+
+Project type: Tauri desktop app driving a GRBL laser cutter over serial. The plan changes the stop/admission concurrency design in the Rust serial layer and the TS refusal contract.
+
+| Dimension | Fires | Tag | Why |
+|---|---|---|---|
+| Core 1–10 | yes | GATING | always |
+| X1 Physical safety | **yes** | **GATING** | the change decides whether a job line can reach the controller after STOP's `0x18`; worst case is the beam firing after STOP |
+| X2 Privacy | no | — | no personal, child or client data anywhere in the change |
+| X3 Evidence integrity | no | — | not research or public output; the plan's kernel/firmware claims are engineering assumptions and are graded under Approach and Load-bearing assumptions |
+| X4 Audience/brand/money | no (N/A) | — | nothing client-facing |
+| X5 Concurrency | yes | **GATING** (X1-class) | a new mutex, a new lock order, two writers and a stop racing on one port |
+| X6 Operability | yes | ADVISORY | released app; the only field-visible change is stop latency on a wedged port |
+| X7 Self-modification | no | — | touches no MARVIN gate, hook, skill or automation |
+| X8 Deps/perf/cost | yes | ADVISORY | no new dependency; one uncontended mutex per job line on the hot path |
+
+## Citations checked against the tree
+
+All load-bearing citations verified, none trusted from the plan:
+
+- `serial.rs:305` `port.try_clone()` for the realtime handle — matches. `serial.rs:377` `.timeout(Duration::from_millis(1000))` — matches.
+- `tty.rs:392-393` `try_clone_native` is `fcntl(F_DUPFD_CLOEXEC)` — matches. `tty.rs:478-484` `write` = `wait_write_fd` then `nix::unistd::write` — matches. `tty.rs:486-505` `flush` = `tcdrain` — matches.
+- Not in the plan but strengthens it: `tty.rs:129,177-178` open with `O_NONBLOCK` then **clear** it, so the fd is blocking; `write(2)` after a successful `POLLOUT` copies the whole line for any line far smaller than the driver buffer (the RX budget caps lines at 127 bytes, `serial_pump.rs:553-565`). So "returns on enqueue, not transmit" holds, and the practical hold time is the poll bound.
+- `connection.test.ts:491` is the only TS reader of `inFlightWrite` — matches (`grep -rn inFlightWrite src` hits that line only; `connection.ts:563-570` types the result without it).
+- `scripted_port.rs:168-184, 357-405`: `hold_next_write` parks **inside** `write()` with the brain mutex released, and the `Write` event is pushed at release (`rf15_write_hold_records_write_at_release`, `:587`). So a Realtime `0x18` written while a Writer write is parked is recorded ahead of it. The model can see M1–M3.
+- ROADMAP `next` bullet text "Rust R4, R7, R8a and R8b are their only evidence" (`ROADMAP.md:5`), the N2 parking-lot item (`:524`), the A12 item (`:512`) — all present.
+- TS test names T1, T2, T4, T4b(i)-(iv) incl. (iii-b), T4c, T5, T7 exist in `jobStream.test.ts:491-713`. `machineJobLoop.test.tsx` lives at `src/components/panels/__tests__/`, not under `src/lib/machine/__tests__/` as the Files row implies, and it contains no in-flight case (grep: none) — that row's edit there is a no-op.
+- `serialTraceHarness.ts:99-113, 331` models `in-flight` / `in-flight-unreset` strings — the plan's "harness model loses in-flight" is real work.
+
+## Core dimensions
+
+**1. Problem-fit — PASS.** Solves exactly Lee's instruction ("the right way to patch this and not try to design work around"): it removes the race instead of repairing it. `## Intent (grilled)` present with a skip line. No DECISIONS entry is contradicted: the 2026-09-20 ruling forbids feed hold, M5 and ack wait, and the plan adds none; the 2026-09-10/22 "one shared stop" pin is restored (the second `0x18` writer goes away, which also retires Razor N3 without a new ruling). The proposed pin is the right vehicle for the one thing a future reader could misread (a stop that waits on a lock).
+
+**2. Approach soundness — PASS.** The ordering argument is correct and it is the same one the current module doc already relies on for the other half of the race (`serial_session.rs:44-56` "writes from the writer and realtime clones share one tty output queue and land on the wire in syscall order"). What the lock adds is that the writer's check and its `write(2)` become atomic against the stop's admission close, so the only orderings left are "line enqueued, then admission closed, then `0x18`" and "admission closed, then refused with nothing written". One-queue FIFO: both fds are dups of one open file description (`F_DUPFD_CLOEXEC`), hence one `struct tty` (Linux) / one tty vnode (macOS) and one output queue; Linux serialises concurrent tty writes under `atomic_write_lock` and the USB-serial drivers (generic kfifo, cdc-acm write buffers) drain in submission order; macOS `ttwrite` appends to the one `t_outq` under the tty lock. I could not verify kernel sources from this tree; that stays a high-confidence assumption (see Load-bearing). The rejected-alternative test (below, Inversion) comes out in the plan's favour: this lock is not the thing the prior plan rejected.
+
+**3. Completeness — CONCERN.** Three gaps, one of them load-bearing for the plan's own O3.
+- **(C3a) The `$32=1` pump does not publish a banner it consumes.** `serial_send_inner` publishes `banner_observed` when its pump ends on Banner while a stop is in flight (`serial.rs:545-552`); the `$32=1` pump in `serial_stream_job_inner` does not (`:853-869` returns `Err("$32=1 gate failed…")` with no publication). Today that is a pre-existing hole (STOP landing during the `$32=1` exchange eats the banner and the stop goes Unknown after 3 s). The plan's O3 walks straight into it: after the release the `$32=1` pump reads the banner, returns `Err`, drops `command`; the stop's `try_lock` read then finds nothing and waits 3 s — past the 2 s `SCENARIO` deadline. Fix: mirror the per-line publication in the `$32=1` branch (three lines), and state O3's expected send result honestly: `Err` beginning `$32=1 gate failed`, with the stop `Confirmed`. Since the plan claims "every abort path ends in Confirmed/Unconfirmed/Failed" this is completeness, not test hygiene.
+- **(C3b) R8c is contradicted and its precondition is deleted.** The plan lists `rf15_second_stop_recovers_from_unknown` under "keep" and then says "Keep R8c only if it reaches Unknown by banner timeout. Otherwise delete it, since `rf15_second_stop_recovers_from_unknown` covers recovery" — R8c *is* that test (`serial.rs:4195-4198`) and it reaches Unknown through `r8b_resend_failure`, which is deleted. A banner-timeout route costs 3 s of real time (the stop's deadline is `Instant::now() + 3s`, `:1175`, independent of the sleeper) and exceeds `SCENARIO`. Fix: rewrite R8c to reach Unknown through `SubmissionFailed` (`base.fail_writes_after(HandleRole::Realtime, 0)` makes both `0x18` attempts fail, `:1134-1147` → Unknown at `:1164`), then `clear_write_faults`, push a banner, second stop → Confirmed, Idle, `serial_job_begin_inner` Ok. Fast, uses existing faults, and keeps the "Unknown is recoverable by a second STOP" evidence the plan says it keeps.
+- **(C3c) O4's "hold placed on the pre-drain read" cannot exist.** `drain_classified` is non-blocking by contract (`serial_pump.rs:322-333`: it reads only when `available_now() > 0`, which for the production `BufReader` is the already-buffered length, `serial.rs:186-188`); a `HoldUntilRelease` script step is never reached from the drain. O4 must use the command-lock barrier (R3's shape, `:3845-3855`). See dimension 9 for why that also changes which mutant O4 can kill.
+
+**4. Right-sizing & reuse — CONCERN.** Net deletion, one helper, one leaf-ish mutex, reuses `check_admission`, ScriptedPort and the rf15 helpers unchanged; out-of-scope items are named and indexed (A12, manual-write phase policy, buffered owner test all already in the Parking Lot). The batch touches 12 files (3 Rust, 2 TS, 4 TS tests, `scripted_port.rs` conditional, 2 docs) with no waiver line. Fix: one sentence — single subsystem root (the serial admission fence), all files change for one invariant, independence not claimed.
+
+**5. Security — PASS.** No new surface; IPC contract shrinks (`inFlightWrite` removed, refusal set shrinks to one prefix).
+
+**6. Failure modes — PASS** (with two notes to carry into the plan text).
+- Write failure inside `admit_and_write`: returned as the inner `io::Result`, the lock is released by scope, the caller maps it as today (`Write error` / `PumpFailure::Disconnected`). Stop then proceeds normally.
+- Poison: `unwrap_or_else(into_inner)` everywhere — a panicked writer cannot wedge STOP.
+- Dead port: the plan's "+~1 s" is right for the reason above (blocking fd, but a line ≤127 bytes never sleeps inside `write(2)` after a successful poll, because `POLLOUT` on a tty implies chars-in-buffer < 256 and the driver fifos are ≥4 KiB; on macOS poll fires at `lowat`, and `lowat + 127 < hiwat`). Two things worth one sentence each in the plan: (i) the bound is per `write(2)` call, which equals per line only because lines are small — say so, since it is the premise; (ii) a wedged-but-present adapter that stops completing URBs after `POLLOUT` was reported is the same pathology as the stop's own `tcdrain` (A12, parked), so the new lock does not widen that exposure, but the A12 parking-lot line should now mention `submit` beside the flush.
+
+**7. Change safety — PASS.** Pure code change, revertible by commit; goldens and generators untouched and byte-checked by Razor; the deleted tests are replaced by stricter ones (O1 is R4 with the opposite required outcome). Owner hardware steps unchanged and already recorded in ROADMAP `next`.
+
+**8. Data integrity & compatibility — PASS.** `StopResult` loses one field TS never reads in production; refusal strings keep the `refused:` prefix and the `not-admitted:` form TS already matches; the buffered outcome contract loses only the two `in-flight` strings. Nothing persisted changes.
+
+**9. Verifiability (incl. testing the tests) — CONCERN.** The ordering tests are the right shape and the model can see what they assert; the mutant table has one entry that cannot kill and one negative check that cannot fire.
+- **(V9a) M4 is not killed by O4 as designed.** In O4 the writer parks on the command lock (the only viable barrier, per C3c). When it proceeds it hits the kept pre-drain `try_permit_begin` first, which refuses `not-admitted` before `admit_and_write` ever runs — so a mutant that moves the check inside `admit_and_write` after the write is never exercised. There is no blocking point between `try_permit_begin` and `admit_and_write` in the per-line body (PumpFlight, an epoch load, a non-blocking drain, a `format!`), and parking inside the `permit_granted` observer callback would hold the `observer` leaf across the stop's own emits. Fix: kill M4 at unit level — a `SerialSession` test (beside `try_permit_begin_refuses_non_active`, `serial_session.rs:506`) that calls `admit_and_write(Some(e), || { called = true; Ok(()) })` with phase Stopping and with `admitted_job = None`, asserting the closure was **never invoked** and the string starts `refused: not-admitted:`; and the same through `JobPermit::admit_write`. Keep O4 for "stop first → refused, zero writes after `0x18`", but re-label its expected killer as the R3-class mutants (`try_permit_begin` deleted, precheck made authoritative), not M4.
+- **(V9b) O1's "while the hold is still parked" assertions have no barrier.** "The trace has no `0x18` and `admission_closed` was not emitted" is checked right after spawning the stop thread; if that thread has not been scheduled yet the check passes for the wrong reason (Lee's rule: a negative check must be able to fire). The ordering assertion after release is what actually kills M1–M3 (all three put `0x18` ahead of the parked line in the trace), so this is not a false killer, but the plan presents the parked-state check as evidence. Fix: `wait_until(stop_in_flight)` (`StopGuard::begin` sets it before Step 2, `:1067`) or a new `stop_entered` emit placed before the `submit` acquisition, then assert; no production change needed for the first option.
+- O3's expected result and the banner publication: see C3a.
+- O5's per-stop `0x18` counter is a good invariant helper; define "per stop invocation" as between `stop_requested` events in the trace so the two-stop tests count correctly.
+- T-side: T2 kills M7 as claimed (`jobStream.test.ts:527`). The new "unknown `refused:` string → cancelled, nothing sent" assertion is right; note the default branch logs the whole string as `detail` when the `not-admitted` regex does not match — acceptable, say so.
+- Battery: `~/marvin/scripts/mutation-battery.mjs` exists; the plan routes through it, not a hand-rolled script.
+
+**10. Maintainability — PASS** (two grep hazards to name for Razor). `pump_in_flight`, `PumpFlight` and the pump's `InFlightLine`/`in_flight: VecDeque` (RX accounting, `serial_pump.rs:569,628`) share the token `in_flight` with the deleted fields; the "zero references to deleted symbols" check must grep the exact identifiers. The stop's CAS-false branch comment (`:1239-1240`) names `mark_resend_failed`; after deletion only a disconnect race reaches it — rewrite the comment, not just the code.
+
+## Conditional dimensions
+
+**X1 Physical & human safety — PASS**, with the residuals named so nobody reads "structurally impossible" as "nothing after STOP":
+- Guarantee after the change: no job-epoch byte is enqueued after admission closes, and the stop's `0x18` is enqueued after admission closes; therefore at most one already-admitted line precedes the reset on the wire, and nothing follows it. That is strictly better than today (today a line can follow the reset and is repaired by a second reset).
+- Residual 1 (inherent, unchanged): that one preceding line can execute before the reset arrives — for an `M3 S…` line that is ~3 ms of beam at wire speed until `mc_reset` hits `spindle_stop`. Beam state stays unqualified (DECISIONS 2026-09-10).
+- Residual 2 (parked, unchanged): `None`-epoch writes — console, Test Fire's `M3 S…`/`G4`/`M5` (`MachinePanel.tsx:902-904`), settings — are not phase-gated and can land after STOP. Already in the Parking Lot as "phase policy for manual writes". The plan says "unchanged"; X1 wants it said as a residual in the plan's own words.
+- Residual 3: a new job-write site added without the helper. The plan's doc invariant plus Razor's `write_all` grep is the right control; I add that the grep must also cover `write(` and any future `Write::write_fmt`.
+- Every failure path ends safe: write failure → error → TS stop if the job still owns the port; `SubmissionFailed` → Unknown + physical-stop instruction; poison → lock still taken. Hardware-only steps named and unchanged.
+
+**X5 Concurrency & re-entrancy — PASS.** Lock-order walk, every path that touches `submit`:
+- Writer (`serial_send_inner`, `serial_stream_job_inner` `$32=1`, Phase A via `JobPermit`): holds `command` → takes `submit` → `check_admission` takes `admitted_job` (leaf, released inside) → `write_all` → drops `submit` → flush/pump outside. Never waits on anything else while holding `submit`; never emits under it (plan states this; keep it, because `emit` holds the `observer` leaf and a blocking test observer would otherwise deadlock the stop).
+- Stop Step 2: `submit` → `admitted_job` → release both → `realtime` (Step 5) → `command.try_lock` (Step 6). Holds `submit` for two atomic stores. Never `command`.
+- `serial_job_begin_inner` / `serial_job_end_inner` / `set_disconnected`: `admitted_job` only, never `submit`, never wait while holding it — no cycle with the stop.
+- Connect: `command` → `realtime`, no `submit`. Disconnect: stop (may wait on `submit` ≤ one write poll) then `command` → `realtime`, sequential. Joiner: polls an atomic, no locks. `serial_get_status_inner`: `command.try_lock`, `realtime` on the busy path, no `submit`. Sink-failure stop: called after `command` is dropped.
+- Two stops: single-flight unchanged; only the holder reaches Step 2, so `submit` is taken by at most one stop at a time.
+- Result: order `command → submit → admitted_job` with `realtime` disjoint; no path holds `realtime` or `admitted_job` and then waits on `submit`. No cycle. Re-entrancy: a second STOP during a parked write joins; a job cannot begin between admission close and the `0x18` because Idle is only reached by a confirmed banner, which needs the `0x18` first.
+
+**X6 Operability — PASS (advisory).** Field-visible delta: on a wedged port STOP reports `SubmissionFailed` ~1 s later than today; message unchanged and already tells the operator to use the physical stop. The console loses the two in-flight lines; the operator now sees either "cancelled" or the plain not-admitted line. Fine.
+
+**X8 Dependencies, performance & cost — PASS.** No dependency change; one uncontended mutex per line (~tens of ns) against ~2.6 ms wire time per line.
+
+## Stress tests
+
+**Pre-mortem — three months out, this failed.**
+1. *The relay stalled or was waved through on the battery.* M4 survived because O4 could not reach it (V9a), and O3 hung on the eaten banner (C3a). Under time pressure the implementer lengthened `SCENARIO` to 5 s and re-labelled M4 "killed by O4" without a journal line to show it. What we should have seen: the battery journal for M4 naming a unit assertion, and O3's scenario finishing in milliseconds because the stop confirmed off a published banner.
+2. *STOP "hung" on a wedged adapter.* Not the lock: the stop's own Step 5 `tcdrain` (A12) is the unbounded wait, and the writer's parked `write(2)` shares its pathology. Someone reads the +1 s and blames `submit`. What we should have seen: the A12 parking-lot line naming both, and the DECISIONS pin stating the bound and its premise (small lines, one queue).
+3. *The type-specific worst case — the laser fires after STOP.* Not via a job line any more; via Test Fire's `M3 S…` console write landing after `0x18` (Residual 2), or a later feature that writes job bytes without `admit_and_write`. What we should have seen: the manual-write phase policy scheduled rather than parked, and Razor's per-relay grep of every `write_all`/`write(` on the command channel.
+
+**Load-bearing assumptions.**
+1. *Both handles share one FIFO output queue* (dup'd fd → one tty). High confidence, reasoned from `F_DUPFD_CLOEXEC` and tty semantics on both platforms; not verified against kernel source from this tree. If wrong, the stop's `0x18` could overtake queued line bytes — and the current design has the identical exposure, so the plan does not add risk here. Not a resolve-before-implementation item; record it as the pin's stated premise.
+2. *A GRBL reset discards bytes received ahead of it and resets the planner.* Same assumption as the 2026-09-20 ruling; vendor-fork caveat (DECISIONS 2026-09-05) unchanged; status-only evidence means beam state is never claimed.
+3. *`write()` returns on enqueue and holds the lock for at most one poll bound.* **Verified**: blocking fd (`tty.rs:177-178`), `poll` + `write(2)` (`:478-484`), lines ≤127 bytes (`serial_pump.rs:553-565`). Premise to state: lines are far smaller than the driver buffer.
+4. *ScriptedPort parks inside `write()` with the brain released and records the write at release.* **Verified** (`scripted_port.rs:357-405`, self-test `:587`). This is what makes M1–M3 detectable.
+
+**Inversion — is this lock the thing the prior plan rejected?** The prior plan rejected "a submission mutex the stop waits on, bounded at 250 ms" (`fence-wiring-1.1-reopen.md:50`), and critic r1's inversion (`-critic-r1.md:151`) said it could only win if the in-flight window were long, "e.g. a line's `tcdrain` taking hundreds of ms on a slow adapter", concluding "the ruling forbids the stop waiting on anything, and 250 ms of stop delay is worse than a 2.6 ms line followed by a reset". Two differences, both real: (a) scope — the rejected mutex covered the send including its `tcdrain`; this one covers `check_admission` plus one `write_all` and explicitly excludes flush, drain, pump and emit; (b) what is waited on — `tcdrain` waits for transmission, which on a slow adapter is hundreds of ms and on a wedged one is unbounded; `write(2)` after `POLLOUT` waits for nothing on a healthy port and for the poll bound on a dead one, and on a healthy port that wait is *shorter* than the wire time of the bytes it orders behind. For the detect-and-re-send design to win, the lock would have to delay a `0x18` that could otherwise reach the wire sooner — but without the lock the `0x18` either lands ahead of the line (the case the re-send existed for, now impossible) or behind it (same as with the lock). The only delta is microseconds of enqueue on a healthy port. The condition is false in this tree. On the ruling's substance: "no ack wait" and "immediately" are about not depending on the controller; a bounded host-side syscall the kernel would impose on the `0x18` anyway is inside that, and the proposed pin should say exactly that so the next reader does not re-litigate it.
+
+## Overall verdict
+
+**APPROVE WITH CHANGES.** The design is right and it is the fix Lee asked for: admission check and job write become one critical section shared with the stop's admission close, so a job byte after the reset is impossible rather than detected, one stop sends one reset, and the whole repair apparatus (re-send, resend-failed state, TS re-arm) is deleted rather than defended. Every citation I checked matches the tree, the lock order is acyclic on every path including disconnect and the joiner, the ScriptedPort model can genuinely see the orderings the tests assert, and the "this is not the rejected mutex" claim survives inversion for a concrete reason (scope excludes `tcdrain`; the wait is on the kernel's own enqueue, not on the controller). What must change before implementation is the verification plan, not the design: M4 has no killer as written, O3 will hang on a banner the `$32=1` pump eats without publishing (a small production fix the plan should own), O4's proposed barrier does not exist, and R8c is kept and deleted in the same paragraph. All four are concrete and small.
+
+## Prioritized must-fix
+
+1. **Publish `banner_observed` from the `$32=1` pump** (`serial_stream_job_inner`, mirror `serial.rs:545-552`) and state O3's real expected result (`Err` "$32=1 gate failed…", stop `Confirmed`). (C3a)
+2. **Give M4 a killer that can reach it**: unit tests on `admit_and_write` and `JobPermit::admit_write` asserting the write closure is never invoked when refused. Re-label O4's mutants. (V9a)
+3. **Rewrite R8c** to reach Unknown via `fail_writes_after(Realtime, 0)` → `SubmissionFailed`, then recover with a second stop; drop the contradictory keep/delete sentence. (C3b)
+4. **Replace O4's "hold on the pre-drain read"** with the command-lock barrier; the drain is non-blocking by contract. (C3c)
+5. **Barrier for O1's parked-state negatives**: `wait_until(stop_in_flight)` before asserting no `0x18` / no `admission_closed`. (V9b)
+6. Add the batch waiver sentence (12 files, one subsystem root). (4)
+7. Pin wording: state the bound (one `write(2)` after `POLLOUT`, ≤ port timeout), its premise (small lines, one shared queue), and that it never waits on the controller; add `submit` to the A12 parking-lot line. (6, X1)
+8. Name Residuals 1–2 in the plan's X1 language; fix the `machineJobLoop.test.tsx` path and note it has no in-flight case; tell Razor the `in_flight` grep hazard. (X1, 10)

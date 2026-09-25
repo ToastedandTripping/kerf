@@ -58,6 +58,13 @@ function surfaceUnsolicited(line: string): void {
   }
 }
 
+/** RF-15: stable prefix of a job-line refusal from the backend admission
+ * fence (Rust `REFUSED_PREFIX`). Matched with `startsWith`, never `includes`:
+ * Tauri rejects an `Err(String)` with the raw string, so `String(e)` is the
+ * bare contract text. Only a job line (one sent with `jobEpoch`) can be
+ * refused. */
+export const PERMIT_REFUSED_PREFIX = "refused:";
+
 const LAST_PORT_KEY = "kerf-last-port";
 const LAST_BAUD_KEY = "kerf-last-baud";
 let statusPollInterval: ReturnType<typeof setInterval> | null = null;
@@ -258,19 +265,31 @@ export const machineConnection = {
       jobPollingSuspended = false;
       await invoke("serial_disconnect", { jobActive: needsEstop });
       store.setMachineConnected(false);
+      // Tail clear: a job-running flag must never outlive the connection,
+      // whatever set it while the teardown was in progress.
+      store.setJobRunning(false);
       store.setMachineState("disconnected");
       resetStatusConsumer();
       store.addConsoleLine("Disconnected", "info");
     } catch (e) {
+      store.setJobRunning(false);
       console.error("Disconnect error:", e);
     }
   },
 
-  async send(command: string): Promise<string[]> {
+  /**
+   * Send one line and pump to its terminal. `opts.jobEpoch` marks a JOB line:
+   * the backend admits it only while that job is admitted (RF-15). Console,
+   * `$H`, jog and settings writes omit it and are unchanged on the wire.
+   * A refusal returns `[<refusal string>]` (never `error:disconnected`).
+   */
+  async send(command: string, opts?: { jobEpoch?: number }): Promise<string[]> {
     const store = useStore.getState();
     try {
       store.addConsoleLine(command, "sent");
-      const outcome = await invoke<SendOutcome>("serial_send", { command });
+      const args =
+        opts?.jobEpoch === undefined ? { command } : { command, jobEpoch: opts.jobEpoch };
+      const outcome = await invoke<SendOutcome>("serial_send", args);
       for (const d of outcome.drained) surfaceUnsolicited(d);
       let lastStatusReport: string | null = null;
       for (const r of outcome.responses) {
@@ -304,6 +323,17 @@ export const machineConnection = {
       return outcome.responses;
     } catch (e) {
       const msg = String(e);
+      if (msg.startsWith(PERMIT_REFUSED_PREFIX)) {
+        // RF-15: an admission refusal is not a dead port. Not-admitted lines
+        // were never written; any other `refused:` string is unknown to the
+        // contract and is logged verbatim.
+        if (msg.startsWith(`${PERMIT_REFUSED_PREFIX} not-admitted:`)) {
+          store.addConsoleLine(`Not sent: ${msg}`, "error");
+        } else {
+          store.addConsoleLine(msg, "error");
+        }
+        return [msg];
+      }
       store.addConsoleLine(`Send failed: ${msg}`, "error");
       return ["error:disconnected"];
     }

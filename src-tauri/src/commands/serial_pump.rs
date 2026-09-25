@@ -481,6 +481,35 @@ pub enum BufferedPumpOutcome {
     Aborted,
     /// The port is dead (liveness expiry, EOF, or idle stall).
     Disconnected(String),
+    /// The submission gate refused line `line_index` (nothing written).
+    Refused { line_index: usize, reason: String },
+}
+
+/// Per-line submission gate for the buffered pump. Keeps the pump
+/// session-agnostic: `serial.rs` implements it over the admission fence.
+pub trait SubmissionGate {
+    /// Admit and write one line atomically: checks admission and, only if
+    /// admitted, calls `write` (one `write_all` of the line) before
+    /// returning. `Err(reason)` means refused with nothing written; `Ok` is
+    /// the write's io result. The caller flushes AFTER this returns.
+    fn admit_write(
+        &self,
+        write: &mut dyn FnMut() -> std::io::Result<()>,
+    ) -> Result<std::io::Result<()>, String>;
+}
+
+/// Always-open gate for pump tests that do not exercise admission.
+#[cfg(test)]
+pub struct OpenGate;
+
+#[cfg(test)]
+impl SubmissionGate for OpenGate {
+    fn admit_write(
+        &self,
+        write: &mut dyn FnMut() -> std::io::Result<()>,
+    ) -> Result<std::io::Result<()>, String> {
+        Ok(write())
+    }
 }
 
 /// A writer that also supports the `?` probe byte. In production this is
@@ -501,6 +530,13 @@ pub enum BufferedPumpOutcome {
 /// 4. `ok` attribution is strictly FIFO.
 /// 5. RX budget is never exceeded (each line's byte count is checked before
 ///    sending).
+/// 6. RF-15: every line's write happens inside `gate.admit_write()` (the
+///    admission check and the write are one critical section), independently
+///    of `abort`. The flush follows outside the gate.
+// The gate is the eighth parameter (RF-15 plan: an explicit per-line gate
+// keeps the pump session-agnostic); bundling it into a struct would touch
+// every call site for no behavioural gain.
+#[allow(clippy::too_many_arguments)]
 pub fn run_buffered_pump<R: BufRead, W: Write + ProbeWriter>(
     lines: &[String],
     reader: &mut R,
@@ -508,6 +544,7 @@ pub fn run_buffered_pump<R: BufRead, W: Write + ProbeWriter>(
     pending: &mut Vec<u8>,
     config: &BufferedPumpConfig,
     abort: &AtomicBool,
+    gate: &dyn SubmissionGate,
     on_event: &dyn Fn(BufferedPumpEvent),
 ) -> Result<BufferedPumpOutcome, PumpFailure> {
     // Pre-validation: reject any line that would exceed the RX budget.
@@ -552,12 +589,21 @@ pub fn run_buffered_pump<R: BufRead, W: Write + ProbeWriter>(
                 break; // buffer full, wait for acks
             }
 
-            // Write line + newline
+            // Write line + newline. RF-15: admission check + write are one
+            // critical section (after the abort check, independent of the
+            // shared `abort` flag); the flush follows outside it.
             let mut cmd = line.clone();
             cmd.push('\n');
-            writer
-                .write_all(cmd.as_bytes())
-                .map_err(|e| PumpFailure::Disconnected(format!("write failed: {}", e)))?;
+            let write_result = match gate.admit_write(&mut || writer.write_all(cmd.as_bytes())) {
+                Ok(r) => r,
+                Err(reason) => {
+                    return Ok(BufferedPumpOutcome::Refused {
+                        line_index: send_cursor,
+                        reason,
+                    })
+                }
+            };
+            write_result.map_err(|e| PumpFailure::Disconnected(format!("write failed: {}", e)))?;
             writer
                 .flush()
                 .map_err(|e| PumpFailure::Disconnected(format!("flush failed: {}", e)))?;
@@ -1320,6 +1366,7 @@ mod tests {
             &mut pending,
             config,
             abort,
+            &OpenGate,
             &|e| events.lock().unwrap().push(e),
         );
         (result, events.into_inner().unwrap(), writer)
@@ -1543,6 +1590,7 @@ mod tests {
             &mut pending,
             &config,
             &abort,
+            &OpenGate,
             &|_| {},
         );
         match result {

@@ -44,3 +44,7 @@ keepawake = "=0.6.0"
 [dev-dependencies]
 # Used only by #[cfg(test)] round-trip assertions in gcode_gen and image_gcode_gen.
 serde_json = "1"
+# RF-15: `tauri::test` mock runtime drives the real #[tauri::command] bodies
+# (incl. IPC argument deserialization). Dev-only; resolver 2 keeps it out of
+# `cargo build` and `--features sim`.
+tauri = { version = "2", features = ["test"] }
