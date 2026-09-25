@@ -389,3 +389,131 @@ describe("svgExport groups (W1c Fix 4)", () => {
     }
   });
 });
+
+describe("refresh-cut-vs-screen F4: SVG export keeps image and text flips", () => {
+  beforeEach(() => {
+    useStore.setState({
+      objects: [],
+      selectedIds: [],
+      undoStack: [],
+      redoStack: [],
+      layers: DEFAULT_LAYERS,
+      workspaceWidth: 300,
+      workspaceHeight: 200,
+    });
+  });
+
+  /** Apply an SVG transform list (rotate / translate / scale) to a point,
+   *  right-to-left as SVG does. */
+  function applySvgTransform(attr: string, x: number, y: number): { x: number; y: number } {
+    const ops = [...attr.matchAll(/(rotate|translate|scale)\(([^)]*)\)/g)].map((m) => ({
+      op: m[1],
+      args: m[2]
+        .split(/[\s,]+/)
+        .filter((s) => s.length > 0)
+        .map(Number),
+    }));
+    let px = x;
+    let py = y;
+    for (let i = ops.length - 1; i >= 0; i--) {
+      const { op, args } = ops[i];
+      if (op === "translate") {
+        px += args[0];
+        py += args[1] ?? 0;
+      } else if (op === "scale") {
+        px *= args[0];
+        py *= args[1] ?? args[0];
+      } else {
+        const [a, cx = 0, cy = 0] = args;
+        const r = (a * Math.PI) / 180;
+        const dx = px - cx;
+        const dy = py - cy;
+        px = cx + dx * Math.cos(r) - dy * Math.sin(r);
+        py = cy + dx * Math.sin(r) + dy * Math.cos(r);
+      }
+    }
+    return { x: px, y: py };
+  }
+
+  function obj(
+    type: "image" | "text" | "rectangle",
+    t: { x: number; y: number; w: number; h: number; rot?: number; sx?: number; sy?: number }
+  ): DesignObject {
+    return {
+      id: `${type}-1`,
+      type,
+      name: type,
+      transform: {
+        x: t.x,
+        y: t.y,
+        width: t.w,
+        height: t.h,
+        rotation: t.rot ?? 0,
+        scaleX: t.sx ?? 1,
+        scaleY: t.sy ?? 1,
+      },
+      layerIndex: 0,
+      visible: true,
+      locked: false,
+      fill: null,
+      stroke: "#4a90e2",
+      strokeWidth: 1,
+      opacity: 1,
+      ...(type === "image" ? { imageData: "data:image/png;base64,AAAA" } : {}),
+      ...(type === "text" ? { text: "KERF", fontSize: 10 } : {}),
+    };
+  }
+
+  function transformOf(svg: string, tag: string): string {
+    const m = svg.match(new RegExp(`<${tag}[^>]*?transform="([^"]*)"`));
+    expect(m, `<${tag}> has a transform`).not.toBeNull();
+    return m![1];
+  }
+
+  const near = (p: { x: number; y: number }, x: number, y: number) => {
+    expect(p.x).toBeCloseTo(x, 9);
+    expect(p.y).toBeCloseTo(y, 9);
+  };
+
+  it("(a) horizontally flipped image mirrors about its box centre", () => {
+    useStore.getState().addObject(obj("image", { x: 10, y: 20, w: 40, h: 30, sx: -1 }));
+    const tr = transformOf(exportSvgContent(), "image");
+    near(applySvgTransform(tr, 10, 20), 50, 20);
+    near(applySvgTransform(tr, 50, 50), 10, 50);
+  });
+
+  it("(b) vertically flipped text mirrors about its box centre", () => {
+    useStore.getState().addObject(obj("text", { x: 5, y: 7, w: 40, h: 12, sy: -1 }));
+    const tr = transformOf(exportSvgContent(), "text");
+    near(applySvgTransform(tr, 5, 7), 5, 19);
+  });
+
+  it("(c) rotated and flipped image is flip-then-rotate (R·F) about the centre", () => {
+    useStore.getState().addObject(obj("image", { x: 10, y: 20, w: 40, h: 30, rot: 90, sx: -1 }));
+    const tr = transformOf(exportSvgContent(), "image");
+    const cx = 30;
+    const cy = 35;
+    const rot = (p: { x: number; y: number }) => ({
+      x: cx - (p.y - cy),
+      y: cy + (p.x - cx),
+    });
+    for (const [x, y] of [
+      [10, 20],
+      [50, 20],
+      [50, 50],
+      [10, 50],
+    ]) {
+      const e = rot({ x: 2 * cx - x, y });
+      near(applySvgTransform(tr, x, y), e.x, e.y);
+    }
+  });
+
+  it("(d) flipped rotated rectangle exports exactly as before — no scale(", () => {
+    useStore
+      .getState()
+      .addObject(obj("rectangle", { x: 10, y: 20, w: 40, h: 30, rot: 30, sx: -1 }));
+    const svg = exportSvgContent();
+    expect(svg).toContain('transform="rotate(30, 30, 35)"');
+    expect(svg).not.toContain("scale(");
+  });
+});

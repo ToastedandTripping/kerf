@@ -27,7 +27,7 @@ import {
 import { measureDistance, measureAngleDeg, formatMeasureLabel } from "../../lib/measure";
 
 import { PX_PER_MM, MIN_ZOOM, MAX_ZOOM } from "../../lib/constants";
-import { composeGroupChild, orientedHandlePoints } from "../../lib/geometry";
+import { drawnLeaves, orientedHandlePoints } from "../../lib/geometry";
 
 // Cache for GPU textures keyed by object ID (avoids retaining megabyte-sized base64 strings as Map keys)
 const textureCache = new Map<string, Texture>();
@@ -238,12 +238,8 @@ export function Viewport() {
     clearDirtyObjectIds();
 
     // Build set of IDs that should be visible this frame
-    // For groups, we use composite keys: "groupId/childId"
+    // Group leaves are keyed by full id path: "outer/inner/leaf" (depth 1: "groupId/childId")
     const activeIds = new Set<string>();
-
-    function renderKey(obj: DesignObject, prefix?: string): string {
-      return prefix ? `${prefix}/${obj.id}` : obj.id;
-    }
 
     function ensureDisplayObject(key: string, obj: DesignObject) {
       activeIds.add(key);
@@ -306,22 +302,10 @@ export function Viewport() {
     }
 
     for (const obj of objects) {
-      if (!obj.visible) continue;
-      const objLayer = layers[obj.layerIndex];
-      if (objLayer && !objLayer.visible) continue;
-      if (obj.type === "group" && obj.children) {
-        for (const child of obj.children) {
-          // W1b: group composition (translation + rotation; path/line points are
-          // GROUP-LOCAL) lives in lib/geometry's composeGroupChild — the ONE
-          // function shared with gcodeGen's flatten, so screen and cut agree.
-          // Note: nested groups are not rendered (this loop is single-level and
-          // renderObject has no "group" case — pre-existing; the cut DOES
-          // recurse). Do not add viewport recursion in this phase.
-          ensureDisplayObject(renderKey(child, obj.id), composeGroupChild(child, obj));
-        }
-      } else {
-        ensureDisplayObject(renderKey(obj), obj);
-      }
+      // W1b: group composition (translation + rotation; path/line points are
+      // GROUP-LOCAL) lives in lib/geometry's composeGroupChild — the ONE
+      // function shared with gcodeGen's flatten, so screen and cut agree.
+      for (const leaf of drawnLeaves(obj, layers)) ensureDisplayObject(leaf.key, leaf.obj);
     }
 
     // Remove stale entries
@@ -334,16 +318,14 @@ export function Viewport() {
       }
     }
 
-    // Evict unused GPU textures (keyed by object ID)
+    // Evict unused GPU textures (keyed by object ID). Plain recursive id walk
+    // over every object regardless of visibility — images at any group depth.
     const activeImageIds = new Set<string>();
-    for (const obj of objects) {
-      if (obj.imageData) activeImageIds.add(obj.id);
-      if (obj.type === "group" && obj.children) {
-        for (const child of obj.children) {
-          if (child.imageData) activeImageIds.add(child.id);
-        }
-      }
-    }
+    const collectImageIds = (o: DesignObject, set: Set<string>) => {
+      if (o.imageData) set.add(o.id);
+      if (o.children) for (const c of o.children) collectImageIds(c, set);
+    };
+    for (const obj of objects) collectImageIds(obj, activeImageIds);
     for (const [id, tex] of textureCache) {
       if (!activeImageIds.has(id)) {
         tex.destroy(true);

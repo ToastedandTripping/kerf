@@ -279,6 +279,7 @@ export interface AppState {
       height: number;
       widthMm?: number;
       heightMm?: number;
+      detectedDpi?: number;
     } | null;
     ditherPreviewObjectId: string | null;
     pendingPdf: { data: ArrayBuffer; name: string } | null;
