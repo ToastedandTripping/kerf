@@ -122,6 +122,8 @@ src/
     geometry/
       index.ts               — Shared geometry utilities: 2x3 affine helpers,
                                composeGroupChild(Transform), buildGroupObject,
+                               composedLeaves/drawnLeaves (render = cut composition),
+                               matrixMaxStretch (SVG arc tolerance in real mm),
                                computeAABB/rotatedExtents/pointsBBox, move/scale/points
                                partials, orientedHandlePoints, offsetRingByDistance,
                                adaptive bezier sampler + CURVE_CHORD_TOLERANCE_MM
@@ -318,9 +320,19 @@ Undo/redo uses a command pattern with snapshot capture (`pushObjectsUndo`). Imag
 per-command map keyed by object id, and restore uses that map with live objects taking
 precedence. Stack capped at 50.
 
-**Known gap: nested groups.** A group inside a group does not render in the viewport but is
-cut. `Viewport.tsx` renders group children one level deep (`renderObject` has no `group`
-case), while `gcodeGen.ts` `flattenObjects` recurses to any depth.
+**Nested groups render to any depth** (kerf-refresh-cut-vs-screen F1). The Viewport draws
+`drawnLeaves(obj, layers)` for each top-level object. That is `composedLeaves` (the same
+recursion and `composeGroupChild` as `gcodeGen.ts` `flattenObjects`, keyed by id path
+`outer/inner/leaf`), filtered by the cut's own per-leaf rule: it skips `!leaf.visible` and
+a leaf whose layer (by `l.index`, falling back to `layers[0]`) is hidden. Unlike the cut,
+it does NOT skip `output === false`: output-off objects stay drawn as reference. Texture
+eviction walks image ids at any depth.
+
+**Layer reorder is one undo command** (F6/F7). `reorderLayers` remaps `layerIndex` through
+every descendant (`remapLayerIndexDeep`) and pushes a `reorder-layers` command whose
+undo and redo apply the inverse or forward index permutation to LIVE state
+(`applyLayerIndexMap`). It never restores a layers or objects snapshot, so edits that
+are not commands (layer power and speed, imports) are kept across undo.
 
 ### Rendering
 

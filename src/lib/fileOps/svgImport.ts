@@ -38,8 +38,17 @@ interface ParsedSubpath {
  * large jump between points is not provably a boundary (glyphs legitimately
  * contain long straight segments). Pre-fix imported compound paths keep the
  * bridge defect; RE-IMPORT to repair.
+ *
+ * `chordTolerance` bounds arc tessellation error and is in the `d` string's OWN
+ * units (user units), not mm: callers that map points through a matrix and a
+ * mm scale afterwards pass CURVE_CHORD_TOLERANCE_MM divided by that stretch.
+ * Arcs imported before this parameter existed keep their old (possibly coarse)
+ * tessellation in saved files; RE-IMPORT the source SVG to repair.
  */
-export function parsePathD(d: string): ParsedSubpath[] {
+export function parsePathD(
+  d: string,
+  chordTolerance: number = CURVE_CHORD_TOLERANCE_MM
+): ParsedSubpath[] {
   const subpaths: ParsedSubpath[] = [];
   let points: PathPoint[] = [];
   let closed = false;
@@ -394,7 +403,8 @@ export function parsePathD(d: string): ParsedSubpath[] {
           largeArc !== 0,
           sweep !== 0,
           ex,
-          ey
+          ey,
+          chordTolerance
         );
         for (const p of arcPoints) {
           points.push({ x: p.x, y: p.y });
@@ -450,7 +460,8 @@ function approximateArc(
   largeArc: boolean,
   sweep: boolean,
   x2: number,
-  y2: number
+  y2: number,
+  chordTolerance: number
 ): Array<{ x: number; y: number }> {
   if (rx === 0 || ry === 0) return [{ x: x2, y: y2 }];
 
@@ -504,13 +515,15 @@ function approximateArc(
   if (sweep && dtheta < 0) dtheta += 2 * Math.PI;
 
   // Adaptive tessellation: chord deviation = r*(1-cos(θ/2)) = tolerance → θ = 2*acos(1-tol/r)
-  // Use the smaller of rx/ry as the effective radius for conservative segmentation.
-  const effectiveR = Math.min(rx, ry);
+  // An ellipse's chord deviation at parameter step Δt is bounded by
+  // max(rx, ry)·(1 − cos(Δt/2)), so the LARGER radius sizes the segments (the
+  // smaller one under-segments eccentric arcs, e.g. rx=50/ry=5 at 5× tolerance).
+  const effectiveR = Math.max(rx, ry);
   let segments: number;
-  if (effectiveR <= 0 || CURVE_CHORD_TOLERANCE_MM >= effectiveR) {
+  if (effectiveR <= 0 || chordTolerance >= effectiveR) {
     segments = 8; // very small radius: fixed fallback
   } else {
-    const thetaPerSeg = 2 * Math.acos(1 - CURVE_CHORD_TOLERANCE_MM / effectiveR);
+    const thetaPerSeg = 2 * Math.acos(1 - chordTolerance / effectiveR);
     segments = Math.max(4, Math.min(360, Math.ceil(Math.abs(dtheta) / thetaPerSeg)));
   }
   const result: Array<{ x: number; y: number }> = [];

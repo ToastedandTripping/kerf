@@ -2,6 +2,21 @@ import { useStore } from "../../app/store";
 import { composeGroupChild } from "../geometry";
 import type { DesignObject } from "../../app/types";
 
+function elementTransform(obj: DesignObject): string {
+  const t = obj.transform;
+  const cx = t.x + t.width / 2;
+  const cy = t.y + t.height / 2;
+  const rotation = t.rotation || 0;
+  let list = Math.abs(rotation) > 0.001 ? `rotate(${rotation}, ${cx}, ${cy})` : "";
+  const sx = t.scaleX ?? 1;
+  const sy = t.scaleY ?? 1;
+  if ((obj.type === "image" || obj.type === "text") && (sx < 0 || sy < 0)) {
+    const flip = `translate(${cx}, ${cy}) scale(${sx < 0 ? -1 : 1}, ${sy < 0 ? -1 : 1}) translate(${-cx}, ${-cy})`;
+    list = list ? `${list} ${flip}` : flip;
+  }
+  return list ? ` transform="${list}"` : "";
+}
+
 export function exportSvgContent(): string {
   const store = useStore.getState();
   const { objects, workspaceWidth, workspaceHeight } = store;
@@ -33,11 +48,12 @@ export function exportSvgContent(): string {
     // Emit rotate transform for rotated objects.
     // Center = AABB center (x+w/2, y+h/2), consistent with D2 rotation-center convention.
     // P3-A: now applied to path/line as well (was previously missing).
-    const rotation = t.rotation || 0;
-    const rotTransform =
-      Math.abs(rotation) > 0.001
-        ? ` transform="rotate(${rotation}, ${t.x + t.width / 2}, ${t.y + t.height / 2})"`
-        : "";
+    // refresh-cut-vs-screen F4: image and text flips (negative scaleX/scaleY)
+    // export as a mirror about the same centre, flip-then-rotate (R·F; SVG
+    // applies the list right-to-left) — both the screen and the cut honour
+    // them. Rect/ellipse/path/line/group flips are inert on screen and in the
+    // cut, so they are deliberately NOT exported.
+    const rotTransform = elementTransform(obj);
 
     switch (obj.type) {
       case "rectangle": {
