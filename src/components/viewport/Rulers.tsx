@@ -177,13 +177,16 @@ export function Rulers() {
   );
 
   // Redraw on camera change
+  // R2 F2: gridVisible is a dependency because toggling it remounts both canvases.
   useEffect(() => {
+    if (!gridVisible) return;
     if (hCanvasRef.current) drawHorizontal(hCanvasRef.current);
     if (vCanvasRef.current) drawVertical(vCanvasRef.current);
-  }, [camera, drawHorizontal, drawVertical]);
+  }, [camera, drawHorizontal, drawVertical, gridVisible]);
 
   // Resize observer
   useEffect(() => {
+    if (!gridVisible) return;
     const hCanvas = hCanvasRef.current;
     const vCanvas = vCanvasRef.current;
     if (!hCanvas || !vCanvas) return;
@@ -201,7 +204,7 @@ export function Rulers() {
     observer.observe(hParent);
     observer.observe(vParent);
     return () => observer.disconnect();
-  }, [drawHorizontal, drawVertical]);
+  }, [drawHorizontal, drawVertical, gridVisible]);
 
   if (!gridVisible) return null;
 
