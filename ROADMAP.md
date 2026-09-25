@@ -16,6 +16,8 @@ testing: null
 pinned: true
 shipped:
   - date: 2026-09-25
+    item: "Evidence E2: relay kerf-evidence-e2 (Standard). Razor raised 0 CRITICAL, 2 WARNING (fixed; re-check CLOSED): the active coordinate system was unchecked, and eight safety gates were unpinned. `scripts/probe-grbl.py` was rewritten fail-closed, with `scripts/test_probe_grbl.py` (52 tests against a scripted fake controller) and `docs/qualification-card.md`. CLI contract: `--case` is required. `--pause` is retired (exit 2). Preflight refuses powered cases unless `$32=1` reads back, `$30`/`$130`/`$131` are present, `--smax` <= `$30`, the box fits, the offset is zero (`$#` G54/G92, else the status WCO), and `$G` reports G54 active. Every motion case needs `--home` ($22=1). hold-m4/stop-m4 refuse feeds above 600 mm/min and reps > 1. A controller that answers `?` is not reset at startup. Every fault, Ctrl-C, dead port or exception sends 0x18 first. The RESULT line is written last, by the main thread. Exit codes 0/1/2/3. OWNER: runs the card; nothing here was run against hardware."
+  - date: 2026-09-25
     item: "Evidence E1a — relay kerf-evidence-e1a (Ted+Razor; the first review found 1 CRITICAL, fixed, and the re-check CLOSED it). A sharp-cornered rectangle on a Fill+Line layer used to be silently skipped by the engine (`; unknown layer mode`). It now gets a closed 4-corner contour, lowered to maskFill plus a cut outline. A new invariant, `assertNoFillLine`, makes any fillLine object that reaches the engine a loud error instead. The CRITICAL: lowering to `fill` would have burned up to 6.7 mm outside the cut line on a rotated rectangle, because the Rust fill arm scans the rotated AABB. maskFill measured 0 mm spill at 0/30/90/180 degrees (Rust scratch probe). 849 JS tests; battery 14/14 killed. OWNER CARD (E4): a Fill+Line rectangle burned on scrap shows a filled interior and a cut outline."
   - date: 2026-09-25
     item: "Safety S1: relay kerf-safety-s1 (Standard). Razor raised 3 WARNING (fixed; re-check CLOSED). Jen raised 7 CONCERN (6 applied, C3 owned by S3), and a bounded design-fix check came back CLOSED. START, main FRAME, and the material-test Send and Frame now all go through one admission, `canStartJob(state, ext?)`. The laser-mode flag is set only by a `$32=1` readback that was not overtaken by a settings write: every settings write is detected in `send()` (GRBL-normalized) and invalidated on both sides; a console `$$` re-verifies; a failed readback or a disconnect clears the flag. Material-test refusals are no longer silent: an in-dialog alert plus disabled buttons driven by the same gate. 871 JS tests; batteries 18 + 7 + 3 killed. NOT MET: the power-scale half of the 2026-09-10 START ruling (S4b). MUST SHIP WITH S3: on origin-top machines every material test is refused until S3 mirrors the grid. OWNER HARDWARE TEST: a live `$$` still carries `$32=1`; Enable Laser Mode shows enabled only after its readback."
@@ -575,6 +577,9 @@ verbatim and are not to be edited into summaries — this index points at them.
 - **A text-tool click creates the text box and immediately loses it** (R1 behavioral evaluator; pre-existing) See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
 - **Every wheel zoom logs a passive-event-listener console error** (R1 behavioral evaluator; pre-existing) See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
 - **Canvas render cost with large nested groups** (Razor W4). Composition runs per leaf per render; about 110-129 ms per redraw at 2,000 contours in a benchmark. Browser median was unchanged, but p90 roughly doubled on a loaded machine. OWNER PERF STEP: re-measure on an idle machine See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
+- **Probe contract changed (E2)** — the Tooling paragraph under the 2026-09-05 deferred section describes the pre-E2 probe; the current contract is in docs/qualification-card.md. See `### Deferred from kerf-evidence-e2 (2026-09-25)` below.
+- **Wedge diagnostic "plain command while wedged" retired (E2)** — the probe no longer writes a line before its reset; if session A needs that datum, it needs a new plan that writes the probe line with output isolated only. See `### Deferred from kerf-evidence-e2 (2026-09-25)` below.
+- **Stop and hold at job feed (E2)** — the probe's hold-m4/stop-m4 refuse feeds above 600 mm/min so the event lands inside a 20 mm segment; astra 3.2 steps 8-9 "then admitted job feed" needs a longer segment and a larger checked region, in a new plan. See `### Deferred from kerf-evidence-e2 (2026-09-25)` below.
 
 ### Deferred from the 2026-09-05 pause/stop investigation
 
@@ -727,6 +732,14 @@ It is out of scope for this relay (golden files untouched), and no test reads it
 2. File > Import Image and drag-drop of the same 600-DPI PNG produce the same size (F3).
 3. Flipped text engraved on scrap reads mirrored, and rotated text engraves as one rotated line (F5).
 4. After reordering layers, a traced group's G-code uses the group's layer power and speed (F6). Then make any edit, reorder, and press Ctrl+Z. Regenerate: the S and F values still match each object's layer (F7).
+
+### Deferred from kerf-evidence-e2 (2026-09-25)
+
+**Why these are here:** the E2 plan's Stage 3.5 obligations, verbatim.
+
+- **Probe contract changed (E2)** — the Tooling paragraph under the 2026-09-05 deferred section describes the pre-E2 probe; the current contract is in docs/qualification-card.md.
+- **Wedge diagnostic "plain command while wedged" retired (E2)** — the probe no longer writes a line before its reset; if session A needs that datum, it needs a new plan that writes the probe line with output isolated only.
+- **Stop and hold at job feed (E2)** — the probe's hold-m4/stop-m4 refuse feeds above 600 mm/min so the event lands inside a 20 mm segment; astra 3.2 steps 8-9 "then admitted job feed" needs a longer segment and a larger checked region, in a new plan.
 
 ## Reference
 
