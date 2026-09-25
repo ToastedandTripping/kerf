@@ -16,7 +16,7 @@
  * in-place mutation context is the load-time migration (fresh-parsed JSON, pre-store).
  */
 
-import type { DesignObject, PathPoint, Transform } from "../../app/types";
+import type { DesignObject, Layer, PathPoint, Transform } from "../../app/types";
 
 /**
  * A 2D affine transform in the SVG/PDF convention: [a, b, c, d, e, f], i.e.
@@ -454,6 +454,42 @@ export function composeGroupChild(child: DesignObject, group: DesignObject): Des
     ...child,
     transform: { ...t, x: composed.x, y: composed.y, rotation: composed.rotation },
   };
+}
+
+/** Every leaf of obj's group tree composed to world frame, with its render key
+ *  (full id path: "outer/inner/leaf"; a top-level leaf's key is its id). The
+ *  same recursion and the same composeGroupChild as gcodeGen's flattenObjects,
+ *  so screen and cut agree at every depth. PURE. */
+export function composedLeaves(
+  obj: DesignObject,
+  key: string = obj.id
+): Array<{ key: string; obj: DesignObject }> {
+  if (obj.type === "group" && obj.children) {
+    return obj.children.flatMap((c) => composedLeaves(composeGroupChild(c, obj), `${key}/${c.id}`));
+  }
+  return [{ key, obj }];
+}
+
+/** The leaves the canvas draws for one top-level object: composedLeaves,
+ *  filtered by the cut's own per-leaf rule (gcodeGen.ts:276-279): skip
+ *  !leaf.visible, and skip a leaf whose layer (by l.index, falling back to
+ *  layers[0]) is hidden. Deliberately NOT the cut's `output === false` —
+ *  output-off objects stay on the canvas as reference geometry. A leaf whose
+ *  layer cannot be resolved at all (layers is empty) is DRAWN: the cut throws
+ *  there, so there is no rule to match, and a throw inside the render effect
+ *  is a blank canvas. PURE; never throws. */
+export function drawnLeaves(
+  obj: DesignObject,
+  layers: ReadonlyArray<Layer>
+): Array<{ key: string; obj: DesignObject }> {
+  const out: Array<{ key: string; obj: DesignObject }> = [];
+  for (const leaf of composedLeaves(obj)) {
+    if (!leaf.obj.visible) continue;
+    const ll = layers.find((l) => l.index === leaf.obj.layerIndex) ?? layers[0];
+    if (ll && !ll.visible) continue;
+    out.push(leaf);
+  }
+  return out;
 }
 
 /**
