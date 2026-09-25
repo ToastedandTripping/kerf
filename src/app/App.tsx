@@ -127,10 +127,13 @@ export function openImageImport(
   width: number,
   height: number,
   widthMm?: number,
-  heightMm?: number
+  heightMm?: number,
+  detectedDpi?: number
 ) {
   const s = useStore.getState();
-  s.setDialogData({ pendingImage: { data, name, width, height, widthMm, heightMm } });
+  s.setDialogData({
+    pendingImage: { data, name, width, height, widthMm, heightMm, detectedDpi },
+  });
   s.openDialog("imageImport");
 }
 export function openDitherPreview(objectId: string) {
@@ -326,6 +329,7 @@ export default function App() {
         imageHeight={dialogData.pendingImage?.height ?? 0}
         widthMmOverride={dialogData.pendingImage?.widthMm}
         heightMmOverride={dialogData.pendingImage?.heightMm}
+        detectedDpi={dialogData.pendingImage?.detectedDpi}
         onClose={() => {
           closeDialog("imageImport");
           setDialogData({ pendingImage: null });

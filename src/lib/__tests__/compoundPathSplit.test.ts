@@ -41,13 +41,20 @@ vi.mock("opentype.js", () => {
     { type: "L", x: 0, y: -700 },
     { type: "Z" },
   ];
+  // "S": one contour with a cubic, so its points carry bezier handles.
+  const curve = [
+    { type: "M", x: 0, y: 0 },
+    { type: "C", x1: 100, y1: -200, x2: 400, y2: -500, x: 500, y: -700 },
+    { type: "L", x: 0, y: -700 },
+    { type: "Z" },
+  ];
   const makeFont = () => ({
     unitsPerEm: 1000,
     getAdvanceWidth: (text: string, fontSize: number) => text.length * 500 * (fontSize / 1000),
     stringToGlyphs: (text: string) =>
       text.split("").map((ch) => ({
         advanceWidth: 500,
-        getPath: () => ({ commands: ch === "O" ? outerHole : square }),
+        getPath: () => ({ commands: ch === "O" ? outerHole : ch === "S" ? curve : square }),
       })),
   });
   return {
@@ -65,6 +72,7 @@ import { buildTracedPathObjects } from "../../components/panels/ImageTraceDialog
 import { textObjectToPaths } from "../../app/store/geometryActions";
 import { flattenObjectsForTest, toCutObjectsForTest } from "../machine/gcodeGen";
 import { DEFAULT_LAYERS } from "../../app/types";
+import { rotatePathPoint } from "../geometry";
 
 // Donut deliberately AWAY from the origin: the group origin lands at (5,7),
 // so a hand-rolled world-frame-children group (the double-translate failure
@@ -536,5 +544,175 @@ describe("Phase 1: toCutObjects — fill layer coalesces grouped compound shapes
     // Both cut objects must be maskFill (I is ungrouped non-rect on fill → maskFill too)
     const maskFillCuts = cut.filter((c) => c.layer.mode === "maskFill");
     expect(maskFillCuts).toHaveLength(2);
+  });
+});
+
+describe("refresh-cut-vs-screen F5: text flip and rotation are baked into the points", () => {
+  function boxText(
+    id: string,
+    text: string,
+    t: { rotation?: number; scaleX?: number; scaleY?: number; width?: number; height?: number } = {}
+  ): DesignObject {
+    return {
+      id,
+      type: "text",
+      name: `Text ${id}`,
+      transform: {
+        x: 0,
+        y: 0,
+        width: t.width ?? 10,
+        height: t.height ?? 10,
+        rotation: t.rotation ?? 0,
+        scaleX: t.scaleX ?? 1,
+        scaleY: t.scaleY ?? 1,
+      },
+      layerIndex: 0,
+      visible: true,
+      locked: false,
+      fill: "#e8e8e8",
+      stroke: "#e8e8e8",
+      strokeWidth: 0,
+      opacity: 1,
+      text,
+      fontSize: 5,
+      fontFamily: "sans-serif",
+    };
+  }
+  const close = (a: number, b: number) => expect(a).toBeCloseTo(b, 9);
+
+  it("scaleX -1 mirrors every point about the box centre; contours carry scaleX 1", async () => {
+    const id = await textObjectToPaths(boxText("i", "AB"));
+    const fl = await textObjectToPaths(boxText("f", "AB", { scaleX: -1 }));
+    expect(fl).toHaveLength(id.length);
+    for (let k = 0; k < id.length; k++) {
+      expect(fl[k].transform.scaleX).toBe(1);
+      expect(fl[k].transform.scaleY).toBe(1);
+      assertPointsInvariant(fl[k]);
+      const ip = id[k].points!;
+      const fp = fl[k].points!;
+      expect(fp).toHaveLength(ip.length);
+      for (let j = 0; j < ip.length; j++) {
+        close(fp[j].x, 10 - ip[j].x);
+        close(fp[j].y, ip[j].y);
+      }
+    }
+  });
+
+  it("rotation 90 rotates every point about the box centre (5,5); contours carry rotation 0", async () => {
+    const id = await textObjectToPaths(boxText("i", "AB"));
+    const rt = await textObjectToPaths(boxText("r", "AB", { rotation: 90 }));
+    for (let k = 0; k < id.length; k++) {
+      expect(rt[k].transform.rotation).toBe(0);
+      assertPointsInvariant(rt[k]);
+      const ip = id[k].points!;
+      const rp = rt[k].points!;
+      for (let j = 0; j < ip.length; j++) {
+        const e = rotatePathPoint(ip[j], 5, 5, 90);
+        close(rp[j].x, e.x);
+        close(rp[j].y, e.y);
+      }
+    }
+  });
+
+  it('multi-contour "O" flipped: group rebuilt from mirrored children; flatten yields mirrored world points', async () => {
+    const id = flattenObjectsForTest(await textObjectToPaths(boxText("i", "O")));
+    const prepared = await textObjectToPaths(boxText("f", "O", { scaleX: -1 }));
+    expect(prepared).toHaveLength(1);
+    expect(prepared[0].type).toBe("group");
+    assertPointsInvariant(prepared[0]);
+    const fl = flattenObjectsForTest(prepared);
+    expect(fl).toHaveLength(id.length);
+    for (let k = 0; k < id.length; k++) {
+      expect(fl[k].transform.scaleX).toBe(1);
+      const ip = id[k].points!;
+      const fp = fl[k].points!;
+      for (let j = 0; j < ip.length; j++) {
+        close(fp[j].x, 10 - ip[j].x);
+        close(fp[j].y, ip[j].y);
+      }
+    }
+  });
+  // Razor W3: a NON-square box (20 x 10, centre (10,5)) so mirroring about the
+  // x-centre and the y-centre give different answers.
+  const W = 20;
+  const H = 10;
+
+  it("scaleY -1 mirrors every point about the box's vertical centre (non-square box)", async () => {
+    const id = await textObjectToPaths(boxText("i", "AB", { width: W, height: H }));
+    const fl = await textObjectToPaths(boxText("f", "AB", { width: W, height: H, scaleY: -1 }));
+    expect(fl).toHaveLength(id.length);
+    for (let k = 0; k < id.length; k++) {
+      expect(fl[k].transform.scaleY).toBe(1);
+      const ip = id[k].points!;
+      const fp = fl[k].points!;
+      expect(fp).toHaveLength(ip.length);
+      for (let j = 0; j < ip.length; j++) {
+        close(fp[j].x, ip[j].x);
+        close(fp[j].y, H - ip[j].y);
+      }
+    }
+  });
+
+  it("scaleX -1 + rotation 90 bakes R·F: mirror about the box centre first, then rotate", async () => {
+    const id = await textObjectToPaths(boxText("i", "AB", { width: W, height: H }));
+    const fr = await textObjectToPaths(
+      boxText("fr", "AB", { width: W, height: H, scaleX: -1, rotation: 90 })
+    );
+    expect(fr).toHaveLength(id.length);
+    let differsFromFR = false;
+    for (let k = 0; k < id.length; k++) {
+      expect(fr[k].transform.rotation).toBe(0);
+      expect(fr[k].transform.scaleX).toBe(1);
+      const ip = id[k].points!;
+      const fp = fr[k].points!;
+      for (let j = 0; j < ip.length; j++) {
+        const e = rotatePathPoint({ x: W - ip[j].x, y: ip[j].y }, W / 2, H / 2, 90);
+        close(fp[j].x, e.x);
+        close(fp[j].y, e.y);
+        // Guard that the fixture can tell R·F from F·R at all.
+        const r = rotatePathPoint(ip[j], W / 2, H / 2, 90);
+        if (Math.abs(W - r.x - e.x) > 1e-6 || Math.abs(r.y - e.y) > 1e-6) differsFromFR = true;
+      }
+    }
+    expect(differsFromFR).toBe(true);
+  });
+
+  it("bezier handles are mirrored and rotated with their anchors", async () => {
+    const id = await textObjectToPaths(boxText("i", "S", { width: W, height: H }));
+    const ip = id[0].points!;
+    expect(ip.some((p) => p.handleIn) && ip.some((p) => p.handleOut)).toBe(true);
+    const mir = (h: { x: number; y: number }) => ({ x: W - h.x, y: h.y });
+    for (const t of [{ scaleX: -1 }, { scaleX: -1, rotation: 90 }, { scaleY: -1, rotation: 30 }]) {
+      const out = await textObjectToPaths(boxText("h", "S", { width: W, height: H, ...t }));
+      const op = out[0].points!;
+      expect(op).toHaveLength(ip.length);
+      const my = (h: { x: number; y: number }) => ({ x: h.x, y: H - h.y });
+      const m = t.scaleX === -1 ? mir : my;
+      for (let j = 0; j < ip.length; j++) {
+        const p = ip[j];
+        const e = rotatePathPoint(
+          {
+            ...m(p),
+            handleIn: p.handleIn && m(p.handleIn),
+            handleOut: p.handleOut && m(p.handleOut),
+          },
+          W / 2,
+          H / 2,
+          t.rotation ?? 0
+        );
+        close(op[j].x, e.x);
+        close(op[j].y, e.y);
+        expect(!!op[j].handleIn).toBe(!!p.handleIn);
+        expect(!!op[j].handleOut).toBe(!!p.handleOut);
+        if (e.handleIn) {
+          close(op[j].handleIn!.x, e.handleIn.x);
+          close(op[j].handleIn!.y, e.handleIn.y);
+        }
+        if (e.handleOut) {
+          close(op[j].handleOut!.x, e.handleOut.x);
+          close(op[j].handleOut!.y, e.handleOut.y);
+        }
+      }
+    }
   });
 });
