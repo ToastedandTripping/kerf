@@ -28,6 +28,7 @@ import { measureDistance, measureAngleDeg, formatMeasureLabel } from "../../lib/
 
 import { PX_PER_MM, MIN_ZOOM, MAX_ZOOM } from "../../lib/constants";
 import { drawnLeaves, orientedHandlePoints } from "../../lib/geometry";
+import { applyObjectRotation, applyTextImageTransform } from "./renderHelpers";
 
 // Cache for GPU textures keyed by object ID (avoids retaining megabyte-sized base64 strings as Map keys)
 const textureCache = new Map<string, Texture>();
@@ -1112,79 +1113,6 @@ function contentHash(obj: DesignObject): string {
   if (obj.type === "image")
     return `${obj.imageData?.slice(0, 50)}|${obj.opacity}|${JSON.stringify(obj.imageAdjustments)}`;
   return "";
-}
-
-/** P8: Update position of text/image display object without destroying and rebuilding */
-function applyTextImageTransform(displayObj: Container, obj: DesignObject) {
-  const t = obj.transform;
-  const px = t.x * PX_PER_MM;
-  const py = t.y * PX_PER_MM;
-  const pw = t.width * PX_PER_MM;
-  const ph = t.height * PX_PER_MM;
-  const rot = ((t.rotation || 0) * Math.PI) / 180;
-
-  // Reset pivot/position/rotation first
-  displayObj.pivot.set(0, 0);
-  displayObj.position.set(0, 0);
-  displayObj.rotation = 0;
-
-  if (displayObj instanceof Sprite) {
-    displayObj.x = px;
-    displayObj.y = py;
-    displayObj.width = pw;
-    displayObj.height = ph;
-    const sx = t.scaleX ?? 1;
-    const sy = t.scaleY ?? 1;
-    if (sx < 0) {
-      displayObj.scale.x *= -1;
-      displayObj.x += pw;
-    }
-    if (sy < 0) {
-      displayObj.scale.y *= -1;
-      displayObj.y += ph;
-    }
-  } else if (displayObj instanceof Text) {
-    displayObj.x = px;
-    displayObj.y = py;
-    const sx = t.scaleX ?? 1;
-    const sy = t.scaleY ?? 1;
-    if (sx < 0) {
-      displayObj.scale.x = -1;
-      displayObj.x += pw;
-    } else {
-      displayObj.scale.x = 1;
-    }
-    if (sy < 0) {
-      displayObj.scale.y = -1;
-      displayObj.y += ph;
-    } else {
-      displayObj.scale.y = 1;
-    }
-  } else {
-    // Container (template text) -- update child positions
-    for (const child of displayObj.children) {
-      if (child instanceof Text) {
-        child.x = px;
-        child.y = py;
-      }
-    }
-  }
-
-  // Re-apply rotation if needed
-  if (rot !== 0) {
-    applyObjectRotation(displayObj, t);
-  }
-}
-
-/** Apply rotation transform to a Pixi display object around its bounding box center */
-function applyObjectRotation(displayObj: Container, t: DesignObject["transform"]) {
-  const rot = ((t.rotation || 0) * Math.PI) / 180;
-  if (rot === 0) return;
-  const cx = t.x * PX_PER_MM + (t.width * PX_PER_MM) / 2;
-  const cy = t.y * PX_PER_MM + (t.height * PX_PER_MM) / 2;
-  displayObj.pivot.set(cx, cy);
-  displayObj.position.set(cx, cy);
-  displayObj.rotation = rot;
 }
 
 function getCursor(tool: string): string {
