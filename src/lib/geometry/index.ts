@@ -392,6 +392,61 @@ export function pointsPartial(obj: DesignObject, points: PathPoint[]): GeometryP
 }
 
 /**
+ * R2 F7: a path's points as they are drawn and cut, i.e. rotated by
+ * transform.rotation about the transform centre (the same centre
+ * gcode_gen.rs rotates about). Display and hit-testing only; never written
+ * back. Returns obj.points itself when there is no rotation.
+ */
+export function pathPointsToWorld(obj: DesignObject): PathPoint[] {
+  const pts = obj.points ?? [];
+  const deg = obj.transform.rotation || 0;
+  if (deg === 0 || pts.length === 0) return pts;
+  const t = obj.transform;
+  const cx = t.x + t.width / 2;
+  const cy = t.y + t.height / 2;
+  return pts.map((p) => ({ ...p, ...rotatePathPoint(p, cx, cy, deg) }));
+}
+
+/** R2 F7: a world-frame vector expressed in a frame rotated by `rotationDeg` (inverse rotation). */
+export function worldDeltaToLocal(
+  dx: number,
+  dy: number,
+  rotationDeg: number
+): { x: number; y: number } {
+  const r = (rotationDeg * Math.PI) / 180;
+  const cos = Math.cos(r);
+  const sin = Math.sin(r);
+  return { x: dx * cos + dy * sin, y: -dx * sin + dy * cos };
+}
+
+/**
+ * R2 F7: pointsPartial for a node edit on a (possibly rotated) path that keeps
+ * every untouched node where it was on screen and in the cut. An edit that
+ * changes the anchor bbox moves the rotation centre from c0 to c'; translating
+ * all points by t = (I - R)(c0 - c') moves the new centre by exactly t, which
+ * cancels that shift, while transform still equals the anchor bbox (W1b).
+ * Rotation is carried through unchanged. At rotation 0, t is 0 and this is
+ * exactly pointsPartial.
+ */
+export function pointsPartialKeepingPlacement(
+  obj: DesignObject,
+  points: PathPoint[],
+  centreBefore: { x: number; y: number }
+): GeometryPartial {
+  const deg = obj.transform.rotation || 0;
+  if (deg === 0) return pointsPartial(obj, points);
+  const bb = pointsBBox(points); // anchors only, never handle-inclusive
+  const vx = centreBefore.x - (bb.x + bb.width / 2);
+  const vy = centreBefore.y - (bb.y + bb.height / 2);
+  const r = (deg * Math.PI) / 180;
+  const cos = Math.cos(r);
+  const sin = Math.sin(r);
+  const tx = vx - (vx * cos - vy * sin);
+  const ty = vy - (vx * sin + vy * cos);
+  return pointsPartial(obj, translatePoints(points, tx, ty));
+}
+
+/**
  * Compose a group's transform onto one child, producing the world-frame child.
  * THE single shared group-flatten composition — consumed by BOTH the Viewport
  * renderer and gcodeGen's flatten so screen and cut can never disagree (the

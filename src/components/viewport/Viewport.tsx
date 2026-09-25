@@ -33,7 +33,7 @@ import {
   ROTATE_HANDLE_OFFSET_PX,
   screenPxToMm,
 } from "../../lib/constants";
-import { drawnLeaves, orientedHandlePoints } from "../../lib/geometry";
+import { drawnLeaves, orientedHandlePoints, pathPointsToWorld } from "../../lib/geometry";
 import { applyObjectRotation, applyTextImageTransform, renderImageObject } from "./renderHelpers";
 import { clearTextures, evictTextures, setTextureReadyListener } from "./textureCache";
 
@@ -114,6 +114,8 @@ export function Viewport() {
     // R2 F1: set synchronously by cleanup. Under StrictMode the first mount's
     // app is disposed before its init resolves; it must never go live.
     let disposed = false;
+    // The display cache Map is never replaced, so capturing it here is the same object.
+    const displayCache = displayCacheRef.current;
     const initPromise = app
       .init({
         preference: "webgl",
@@ -173,7 +175,7 @@ export function Viewport() {
           // StrictMode app that never went live must not touch the live one's.
           if (appRef.current === app) {
             appRef.current = null;
-            displayCacheRef.current.clear();
+            displayCache.clear();
             contentHashCache.clear();
             // Clear module-level caches — textures belong to the destroyed GPU context
             clearTextures();
@@ -511,7 +513,8 @@ export function Viewport() {
         // Stale state -- path was deleted
         setNodeEditState({ pathId: null, selectedNodeIndex: null });
       } else {
-        const pts = pathObj.points;
+        // R2 F7: draw nodes where the path is drawn (rotated about its centre).
+        const pts = pathPointsToWorld(pathObj);
         const handleRadius = 4 / camera.zoom;
         const anchorSize = 6 / camera.zoom;
         const ahs = anchorSize / 2;
