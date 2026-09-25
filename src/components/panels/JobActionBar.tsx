@@ -166,13 +166,8 @@ export function JobActionBar() {
   // FRAME contract: framing traces the true G-code extents; fresh G-code +
   // verified workspace are prerequisites.
   const frameDisabled = !startGate.ok;
-  const frameHint = !workspaceVerified
-    ? "Confirm bed size before framing"
-    : !gcodeResult
-      ? "Generate G-code first"
-      : gcodeStale
-        ? "Design changed -- regenerate G-code"
-        : startGate.reason;
+  // C7: one admission, one first step — FRAME shows the gate's own reason.
+  const frameHint = startGate.reason;
 
   return (
     <div style={{ flexShrink: 0, borderTop: "1px solid var(--border)" }}>

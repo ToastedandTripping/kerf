@@ -860,8 +860,7 @@ describe("emergencyStop — native stop contract (B4)", () => {
 });
 
 describe("S1 — one admission for four doors", () => {
-  const LASER_REASON =
-    "Enable Laser Mode first — $32 must be 1. Use the 'Enable Laser Mode' button in the Machine panel, or run $32=1 in the console.";
+  const LASER_REASON = "Laser mode is off ($32=0). Press Enable Laser Mode in the Machine panel.";
 
   beforeEach(() => {
     cleanup();
@@ -965,21 +964,68 @@ describe("S1 — one admission for four doors", () => {
     });
 
     it("S1-M7: a grid that fits only in the wrong frame refuses on an origin-top machine", async () => {
-      useStore.setState({ originTop: true });
       mockSerial(() => ({ responses: ["ok"], drained: [] }));
       const onClose = vi.fn();
       const { getByText, getByLabelText } = render(<MaterialTestDialog open onClose={onClose} />);
       // Labels engrave real text, whose font does not load under jsdom.
       fireEvent.click(getByLabelText("Labels"));
+      useStore.setState({ originTop: true }); // after render: exercise the click-time gate
       fireEvent.click(getByText("Send to Machine"));
       await waitFor(() =>
-        expect(consoleTexts()).toContain(
-          "G-code extends outside workspace bounds. Move or resize the design to fit."
-        )
+        expect(consoleTexts()).toContain("Grid extends outside the bed. Reduce steps or cell size.")
       );
       await new Promise((r) => setTimeout(r, 50));
       expect(powerWrites()).toEqual([]);
       expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("S1-D1: a refusal renders in the dialog as an alert with the console closed", async () => {
+      useStore.setState({ showConsole: false });
+      mockSerial(() => ({ responses: ["ok"], drained: [] }));
+      const onClose = vi.fn();
+      const { getByText, getByLabelText, queryByRole, rerender } = render(
+        <MaterialTestDialog open onClose={onClose} />
+      );
+      fireEvent.click(getByLabelText("Labels"));
+      expect(queryByRole("alert")).toBeNull();
+      useStore.setState({ grblLaserMode: false });
+      fireEvent.click(getByText("Send to Machine"));
+      await waitFor(() => expect(queryByRole("alert")?.textContent).toBe(LASER_REASON));
+      expect(useStore.getState().showConsole).toBe(false);
+      expect(powerWrites()).toEqual([]);
+      // Closing the dialog clears it.
+      rerender(<MaterialTestDialog open={false} onClose={onClose} />);
+      rerender(<MaterialTestDialog open onClose={onClose} />);
+      expect(queryByRole("alert")).toBeNull();
+    });
+
+    it.each([
+      ["grblLaserMode false", { grblLaserMode: false }, LASER_REASON],
+      [
+        "workspaceVerified false",
+        { workspaceVerified: false },
+        "Confirm bed size first — Machine panel, Set bed size",
+      ],
+      [
+        "statusStale true",
+        { statusStale: true },
+        "Machine status stale — waiting for a fresh status report",
+      ],
+    ] as const)("S1-D2: Send and Frame are disabled when %s", (_label, patch, reason) => {
+      useStore.setState(patch);
+      const { getByText } = render(<MaterialTestDialog open onClose={vi.fn()} />);
+      const send = getByText("Send to Machine") as HTMLButtonElement;
+      const frame = getByText("Frame") as HTMLButtonElement;
+      expect(send.disabled).toBe(true);
+      expect(frame.disabled).toBe(true);
+      expect(send.title).toBe(reason);
+      expect(frame.title).toBe(reason);
+    });
+
+    it("S1-D3: Send and Frame are enabled in the ready state (positive sibling)", () => {
+      const { getByText } = render(<MaterialTestDialog open onClose={vi.fn()} />);
+      expect((getByText("Send to Machine") as HTMLButtonElement).disabled).toBe(false);
+      expect((getByText("Frame") as HTMLButtonElement).disabled).toBe(false);
     });
 
     it("S1-C3: grid is admitted with bed verified, laser on, idle and NO design G-code", async () => {

@@ -317,11 +317,41 @@ export function MaterialTestDialog({ open, onClose }: Props) {
   const workspaceH = useStore((s) => s.workspaceHeight);
   const machineConnected = useStore((s) => s.machineConnected);
   const machineState = useStore((s) => s.machineState);
+  // C2: the rest of the admission's inputs, as scalars (never an object selector).
+  const workspaceVerified = useStore((s) => s.workspaceVerified);
+  const originTop = useStore((s) => s.originTop);
+  const statusStale = useStore((s) => s.statusStale);
   const effectiveSpeedMax = effectiveMaxSpeed(grblMaxFeedRateX, grblMaxFeedRateY);
 
   const dialogRef = useRef<HTMLDivElement>(null);
   useEscapeClose(open, onClose);
   useFocusTrap(dialogRef, open);
+
+  // C1: the last refusal, shown in the dialog so it is visible with the console
+  // closed. Cleared when the dialog closes, when any grid input changes, and
+  // when an attempt is admitted.
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const refusalKey = [
+    open,
+    powerMin,
+    powerMax,
+    powerSteps,
+    speedMin,
+    speedMax,
+    speedSteps,
+    cellWidth,
+    cellHeight,
+    cellGap,
+    mode,
+    powerMode,
+    labels,
+    cutBorder,
+  ].join("|");
+  const [prevRefusalKey, setPrevRefusalKey] = useState(refusalKey);
+  if (prevRefusalKey !== refusalKey) {
+    setPrevRefusalKey(refusalKey);
+    setRefusal(null);
+  }
 
   if (!open) return null;
 
@@ -391,9 +421,11 @@ export function MaterialTestDialog({ open, onClose }: Props) {
       // S1: the one admission all four powered doors share (grid send).
       const gate = canStartJob(state, gcodeExtents(gcode));
       if (!gate.ok) {
+        setRefusal(gate.reason!);
         state.addConsoleLine(gate.reason!, "error");
         return; // dialog stays open
       }
+      setRefusal(null);
       const lines = gcode.split("\n").filter((l) => l.trim() && !l.startsWith(";"));
       // B3: acquire a job session for material test.
       const session = await beginJobSession("Material test");
@@ -412,9 +444,11 @@ export function MaterialTestDialog({ open, onClose }: Props) {
     // S1: the one admission all four powered doors share (material FRAME).
     const gate = canStartJob(state, gcodeExtents(gcode));
     if (!gate.ok) {
+      setRefusal(gate.reason!);
       state.addConsoleLine(gate.reason!, "error");
       return; // dialog stays open
     }
+    setRefusal(null);
     const lines = gcode.split("\n").filter((l) => l.trim() && !l.startsWith(";"));
     // B3: acquire a job session for material test frame.
     const session = await beginJobSession("Frame");
@@ -427,6 +461,26 @@ export function MaterialTestDialog({ open, onClose }: Props) {
   }
 
   const showLaserWarning = powerMode === "M4" && !grblLaserMode;
+
+  // C2: the buttons' disabled state comes from the same admission the click
+  // runs, using the grid outline's extents (the click re-gates on the real
+  // program). Display only; the handlers' gate is the safety mechanism.
+  const displayGate = canStartJob(
+    {
+      machineConnected,
+      machineState,
+      jobRunning,
+      gcodeResult: null,
+      gcodeStale: false,
+      workspaceWidth: workspaceW,
+      workspaceHeight: workspaceH,
+      originTop,
+      workspaceVerified,
+      grblLaserMode,
+      statusStale,
+    },
+    gcodeExtents(generateFrameGcode(totalWidth, totalHeight))
+  );
 
   return (
     <div
@@ -485,7 +539,7 @@ export function MaterialTestDialog({ open, onClose }: Props) {
               lineHeight: 1.4,
             }}
           >
-            Laser mode ($32) is disabled -- M4 won't fire. Enable with $32=1 in the console.
+            Laser mode is off — M4 won&apos;t fire. Press Enable Laser Mode in the Machine panel.
           </div>
         )}
 
@@ -773,21 +827,37 @@ export function MaterialTestDialog({ open, onClose }: Props) {
           {exceedsWorkspace && " -- exceeds workspace!"}
         </div>
 
+        {/* C1: refusal, above the action row where the eye already is. Inside the
+            dialog's own box (above the z-index 2000 scrim), wrapped so it never
+            clips at the dialog edge the way the console line did. */}
+        {refusal && (
+          <div
+            role="alert"
+            style={{
+              background: "rgba(226,74,74,0.12)",
+              border: "1px solid rgba(226,74,74,0.4)",
+              borderRadius: "var(--radius-sm)",
+              padding: "8px 10px",
+              marginBottom: "10px",
+              fontSize: "11px",
+              lineHeight: 1.4,
+              color: "var(--danger)",
+              overflowWrap: "anywhere",
+            }}
+          >
+            {refusal}
+          </div>
+        )}
+
         {/* Actions — A5: Send/Frame disabled when exceeds bounds or not idle */}
         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
           {(() => {
-            const sendDisabled =
-              jobRunning ||
-              exceedsWorkspace ||
-              !machineConnected ||
-              (machineState !== "idle" && machineState !== "disconnected");
-            const sendTitle = exceedsWorkspace
-              ? "Grid exceeds workspace bounds"
-              : jobRunning
-                ? "Cannot start while a job is running"
-                : !machineConnected
-                  ? "Machine not connected"
-                  : undefined;
+            const sendDisabled = !displayGate.ok || exceedsWorkspace;
+            const sendTitle = !displayGate.ok
+              ? displayGate.reason
+              : exceedsWorkspace
+                ? "Grid exceeds workspace bounds"
+                : undefined;
             return (
               <button
                 onClick={() => handleGenerate("send")}
@@ -811,15 +881,12 @@ export function MaterialTestDialog({ open, onClose }: Props) {
             );
           })()}
           {(() => {
-            const frameDisabled =
-              jobRunning || exceedsWorkspace || !machineConnected || machineState !== "idle";
-            const frameTitle = exceedsWorkspace
-              ? "Grid exceeds workspace bounds"
-              : jobRunning
-                ? "Cannot frame while a job is running"
-                : !machineConnected
-                  ? "Machine not connected"
-                  : "Trace the grid outline without firing the laser";
+            const frameDisabled = !displayGate.ok || exceedsWorkspace;
+            const frameTitle = !displayGate.ok
+              ? displayGate.reason
+              : exceedsWorkspace
+                ? "Grid exceeds workspace bounds"
+                : "Trace the grid outline without firing the laser";
             return (
               <button
                 onClick={handleFrame}

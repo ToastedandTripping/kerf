@@ -169,9 +169,7 @@ export function canStartJob(state: JobGateState, ext?: MovesExtents | null): Job
   if (!state.grblLaserMode) {
     return {
       ok: false,
-      reason:
-        "Enable Laser Mode first — $32 must be 1. " +
-        "Use the 'Enable Laser Mode' button in the Machine panel, or run $32=1 in the console.",
+      reason: "Laser mode is off ($32=0). Press Enable Laser Mode in the Machine panel.",
     };
   }
   if (state.machineState === "alarm")
@@ -180,6 +178,7 @@ export function canStartJob(state: JobGateState, ext?: MovesExtents | null): Job
   if (state.machineState && state.machineState !== "idle") {
     return {
       ok: false,
+      // C4 state-label copy held: machineSafety.test.ts (frozen) asserts the raw token.
       reason: `Machine is ${state.machineState} — wait for idle before starting`,
     };
   }
@@ -191,7 +190,7 @@ export function canStartJob(state: JobGateState, ext?: MovesExtents | null): Job
   }
   // NOTE-1: fail-closed — any falsy value (false, undefined) blocks; only explicit true passes
   if (!state.workspaceVerified) {
-    return { ok: false, reason: "Confirm bed size before starting — go to Machine Settings" };
+    return { ok: false, reason: "Confirm bed size first — Machine panel, Set bed size" };
   }
   let bounds: MovesExtents;
   if (localProgram) {
@@ -206,7 +205,10 @@ export function canStartJob(state: JobGateState, ext?: MovesExtents | null): Job
   if (!isWithinBounds(bounds, state.workspaceWidth, state.workspaceHeight, state.originTop)) {
     return {
       ok: false,
-      reason: "G-code extends outside workspace bounds. Move or resize the design to fit.",
+      reason: localProgram
+        ? "Grid extends outside the bed. Reduce steps or cell size."
+        : // C6 design-branch copy held: machineSafety.test.ts (frozen) asserts this text.
+          "G-code extends outside workspace bounds. Move or resize the design to fit.",
     };
   }
   return { ok: true };
