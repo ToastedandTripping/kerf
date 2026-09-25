@@ -35,14 +35,15 @@
 //!   `GrblBrain`/`SimPort` is constructed (modeling "power-on") and again on
 //!   a `0x18` soft reset.
 //! - `ok` / `error:N` — acceptance semantics above. A line is rejected with
-//!   `error:N` only by a scripted fault: `set_error_at_line` (the Nth
-//!   accepted line) or `set_reject_setting` (`error:3` for one setting
-//!   write). Nothing is rejected on its own merits.
+//!   `error:N` by a scripted fault (`set_error_at_line`, the Nth accepted
+//!   line, or `set_reject_setting`, `error:3` for one setting write), and on
+//!   its own merits in one case only: a setting write whose value is not
+//!   finite (`NaN`, `inf`) answers `error:2`.
 //! - `ALARM:n` is reachable only via `initial_state`/reset (config surface),
 //!   cleared by `$X`.
 //! - `?` (single realtime byte) -> `<State|MPos:x,y,z|FS:f,s>`, plus an
 //!   `|A:S` accessory field per profile (see `status_probe`): `Stock` emits
-//!   it while the spindle is on, `Captured127` on every report. Muted while
+//!   it while the sim's spindle flag is set, `Captured127` on every report. Muted while
 //!   `$H` homing is in flight, mirroring the muted-`?` window real GRBL
 //!   exhibits (serial_pump's liveness probing tolerates stretches of
 //!   silence for exactly this reason).

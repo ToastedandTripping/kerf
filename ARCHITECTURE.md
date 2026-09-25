@@ -169,8 +169,8 @@ src-tauri/src/
                                accepted and executed but never acked; `?` answers.
                                Non-finite setting values answer error:2.
                                `SimProfile::{Stock, Captured127}` (128/15 vs 65535/127).
-                               `A:` field per profile: Stock `A:S` while the spindle is
-                               on (stock-source intent); Captured127 `A:S` on every
+                               `A:` field per profile: Stock `A:S` while the sim's spindle
+                               flag is set (stock-source intent); Captured127 `A:S` on every
                                report (the 2026-09-14 capture shows it only on reports
                                carrying overrides). Not a beam signal under either
                                profile (DECISIONS 2026-09-25). Host/model evidence only;
