@@ -166,6 +166,10 @@ src-tauri/src/
                                offsetFill (inward polygon rings); maskFill (delegates to
                                mask_fill.rs). maskFill is internal-only, assigned by
                                gcodeGen.ts for non-rectangular/compound fills
+                               The TS generator never sends `fillLine` to Rust: it lowers
+                               it to maskFill plus a `line` overlay (a sharp rectangle gets
+                               a synthesized 4-corner contour), and `assertNoFillLine`
+                               throws otherwise.
     mask_fill.rs             — The one shared raster scanner (~1170 lines + tests):
                                scan_mask_to_gcode (MaskScanParams; binary or grayscale S)
                                used by image engrave and maskFill; fill_compound_mask

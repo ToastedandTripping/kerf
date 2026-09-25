@@ -15,6 +15,8 @@ next: "REMEDIATION Phase 1 (batches 1.1-1.5, the stop spine: 0x18 immediately, p
 testing: null
 pinned: true
 shipped:
+  - date: 2026-09-25
+    item: "Evidence E1a — relay kerf-evidence-e1a (Ted+Razor; the first review found 1 CRITICAL, fixed, and the re-check CLOSED it). A sharp-cornered rectangle on a Fill+Line layer used to be silently skipped by the engine (`; unknown layer mode`). It now gets a closed 4-corner contour, lowered to maskFill plus a cut outline. A new invariant, `assertNoFillLine`, makes any fillLine object that reaches the engine a loud error instead. The CRITICAL: lowering to `fill` would have burned up to 6.7 mm outside the cut line on a rotated rectangle, because the Rust fill arm scans the rotated AABB. maskFill measured 0 mm spill at 0/30/90/180 degrees (Rust scratch probe). 849 JS tests; battery 14/14 killed. OWNER CARD (E4): a Fill+Line rectangle burned on scrap shows a filled interior and a cut outline."
   - date: 2026-09-24
     item: "Fence single-reset — relay kerf-fence-single-reset (Ted+Razor PASS after one fix pass; 0 CRITICAL, W1 closed). Replaces kerf-fence-reopen's detect-and-re-send: a new submit lock makes the admission check and the job line's write(2) atomic against the stop's admission close (close_admission requires the held guard; flush/tcdrain stays outside). One stop, one 0x18; the in-flight re-send, resend-failed state, refused: in-flight* contracts and the TS STOP re-arm are deleted. Also: the $32=1 pump now publishes the reset banner it consumes. Ordering tests O1-O4, U1/U2, one-reset-per-stop check; M1-M9 and X2 killed by named assertions. 836 JS / 329 Rust. Not in a release; owner hardware test pending."
   - date: 2026-09-24
@@ -539,6 +541,14 @@ verbatim and are not to be edited into summaries — this index points at them.
 - **Golden `stop_result_fixture.json` still carries `inFlightWrite`** (Razor N3). See `### Deferred from kerf-fence-single-reset (2026-09-24)` below.
 - **Admission close can still be written inline, bypassing `close_admission`** (Razor N8). See `### Deferred from kerf-fence-single-reset (2026-09-24)` below.
 - **`close_admission`'s held-lock test assertion also passes on a poisoned lock** (Razor N9). See `### Deferred from kerf-fence-single-reset (2026-09-24)` below.
+- **A non-zero layer scan angle makes fill and maskFill burn outside the shape** (Razor W1 on E1a; Rust). See `### Deferred from kerf-evidence-e1a (2026-09-25)` below.
+- **Two more Rust comment-and-skip sites should become errors** (`gcode_gen.rs:897-906`, `:1198-1203`); belongs with astra 2.6 bounded generation. See `### Deferred from kerf-evidence-e1a (2026-09-25)` below.
+- **Kerf offset is never applied to Fill+Line perimeters**; parked under Gate D2 ("Lee + architect call"). See `### Deferred from kerf-evidence-e1a (2026-09-25)` below.
+- **The per-line and buffered paths filter job lines differently** (`jobStream.ts:326` vs `serial.rs:825-830`); harmless today, a lead. See `### Deferred from kerf-evidence-e1a (2026-09-25)` below.
+- **The owner qualification session (astra 3.2)**: Lee runs it; the E plans only make it runnable. See `### Deferred from kerf-evidence-e1a (2026-09-25)` below.
+- **Production-body stop verification against the simulator** (relay-plan D2); goes with the next batch that touches the stop. See `### Deferred from kerf-evidence-e1a (2026-09-25)` below.
+- **Move the committed probe log out of the public tree, and the controller-model comment at `probe-grbl.py:53`** (decision `kerf-d12`). See `### Deferred from kerf-evidence-e1a (2026-09-25)` below.
+- **Any change to the stop, fence or submit lock** stays out of the evidence batches (DECISIONS 2026-09-24). See `### Deferred from kerf-evidence-e1a (2026-09-25)` below.
 
 ### Deferred from the 2026-09-05 pause/stop investigation
 
@@ -640,6 +650,19 @@ It is out of scope for this relay (golden files untouched), and no test reads it
 **N8 (NOTE).** The pin holds only while the close goes through `close_admission`. X2i writes `phase` and `admitted_job` inline after a take-and-drop, and it passes all 329 tests, because both fields are `pub(crate)` and nothing forces the stop to use the helper. This is no longer the "narrow a guard's scope and ship green" regression W1 described: it requires deleting the helper call, and review would see that. Making `phase`/`admitted_job` writable only through `SerialSession` methods would close it, but tests poke those fields directly, so that is a refactor and not a fix-pass item.
 
 **N9 (NOTE, test-only).** `try_lock().is_err()` is also true when `submit` is poisoned and not held (`TryLockError::Poisoned`), so after a writer panic the assertion cannot catch a barrier-shaped caller. Production is unaffected (the assertion is `cfg(test)`, and the guard parameter still documents the contract). `matches!(self.submit.try_lock(), Err(TryLockError::WouldBlock))` would be exact.
+
+### Deferred from kerf-evidence-e1a (2026-09-25)
+
+**Why these are here:** the parent plan's seven Out-of-scope lines (`~/marvin/state/audits/gap-2026-09-24/kerf/PLAN-silent-drop-and-evidence.md` §Out of scope, written by the first E batch to close), plus one Razor WARNING that was left unfixed because it is out of scope.
+
+- **Scan angle spills the fill (Razor W1, 2026-09-25).** The Rust fill arm scans `R(+r)*AABB(R(-r)*shape)` with the layer scan angle folded into `r` (`gcode_gen.rs:925-970`). Measured by probe: an unrotated sharp rectangle on a Fill+Line layer at scan angle 45 burns up to 14.6 mm outside the rectangle in `fill`. The maskFill arm also rotates the shape itself by the layer angle, and burns 7.9 mm outside at 45. The test `f10_fill_scan_angle_covers_full_area` asserts the expansion instead of forbidding it. Scan angle and angle increment are live LayerPanel controls. The fix is in Rust. Until then, Fill and Fill+Line layers with a non-zero scan angle can engrave outside their shape.
+- Converting the other two comment-and-skip sites (`gcode_gen.rs:897-906`, `:1198-1203`) to errors belongs with astra 2.6 bounded generation.
+- Kerf offset is never applied to fillLine perimeters (`gcodeGen.ts:416-478` handles line mode only). This is Gate D2 (DECISIONS: Gate D2 is explicitly a "Lee + architect call") and astra 2.3.
+- The per-line and buffered paths filter job lines differently (`jobStream.ts:326` vs `serial.rs:825-830`). It is harmless today; treat it as a lead.
+- The owner session itself (astra 3.2): Lee runs it. The plan only makes it runnable.
+- Production-body stop verification against the simulator (relay-plan D2) goes with the next batch that touches the stop.
+- Moving the committed probe log out of the public tree, and the existing controller-model comment at `probe-grbl.py:53` (decision `kerf-d12`).
+- Any change to the stop, fence or submit lock is out (DECISIONS 2026-09-24).
 
 ## Reference
 
