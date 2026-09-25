@@ -28,7 +28,7 @@ import { measureDistance, measureAngleDeg, formatMeasureLabel } from "../../lib/
 
 import { PX_PER_MM, MIN_ZOOM, MAX_ZOOM } from "../../lib/constants";
 import { drawnLeaves, orientedHandlePoints } from "../../lib/geometry";
-import { applyObjectRotation, applyTextImageTransform } from "./renderHelpers";
+import { applyObjectRotation, applyTextImageTransform, placeSprite } from "./renderHelpers";
 
 // Cache for GPU textures keyed by object ID (avoids retaining megabyte-sized base64 strings as Map keys)
 const textureCache = new Map<string, Texture>();
@@ -271,9 +271,9 @@ export function Viewport() {
         } else {
           // P8: Content hash for text/image -- skip destroy+rebuild when only transform changed
           const hash = contentHash(obj);
-          if (contentHashCache.get(key) === hash) {
-            // Content unchanged -- just update transform position
-            applyTextImageTransform(existing, obj);
+          // Content unchanged -- just update transform position. R2 F4: template
+          // text (a plain Container) cannot be moved in place and falls through.
+          if (contentHashCache.get(key) === hash && applyTextImageTransform(existing, obj)) {
             return;
           }
           // Content changed -- destroy and rebuild
@@ -1359,24 +1359,8 @@ function renderImageObject(obj: DesignObject): Container | null {
   try {
     const texture = getOrCreateTexture(obj.id, obj.imageData);
     const sprite = new Sprite(texture);
-    sprite.x = px;
-    sprite.y = py;
-    sprite.width = pw;
-    sprite.height = ph;
+    placeSprite(sprite, t);
     sprite.alpha = obj.opacity;
-
-    // Apply flip (scaleX/scaleY from transform)
-    const sx = t.scaleX ?? 1;
-    const sy = t.scaleY ?? 1;
-    if (sx < 0) {
-      sprite.scale.x *= -1;
-      sprite.x += pw;
-    }
-    if (sy < 0) {
-      sprite.scale.y *= -1;
-      sprite.y += ph;
-    }
-
     return sprite;
   } catch {
     // Fallback: draw a placeholder box

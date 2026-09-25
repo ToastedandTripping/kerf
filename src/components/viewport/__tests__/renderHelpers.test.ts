@@ -9,7 +9,7 @@ import { Container, Graphics, Point, Sprite, Texture, TextureSource } from "pixi
 import type { DesignObject } from "../../../app/types";
 import { PX_PER_MM } from "../../../lib/constants";
 import { rotatePathPoint } from "../../../lib/geometry";
-import { applyObjectRotation, rotationPlacement } from "../renderHelpers";
+import { applyObjectRotation, applyTextImageTransform, rotationPlacement } from "../renderHelpers";
 
 type T = DesignObject["transform"];
 
@@ -128,5 +128,71 @@ describe("rotationPlacement (pure)", () => {
     expect(r.y).toBeCloseTo(cy, 9);
     expect(r.pivotX).toBeCloseTo((cx - 20) / 0.5, 9);
     expect(r.pivotY).toBeCloseTo((cy - 30) / 2, 9);
+  });
+});
+
+describe("flipped images keep their flip when moved (R2 F4)", () => {
+  const IMG: T = { x: 10, y: 10, width: 50, height: 25, rotation: 0, scaleX: -1, scaleY: 1 };
+  function imageObj(t: T): DesignObject {
+    return {
+      id: "img",
+      type: "image",
+      name: "img",
+      transform: t,
+      layerIndex: 0,
+      visible: true,
+      locked: false,
+      fill: null,
+      stroke: "#4a90e2",
+      strokeWidth: 1,
+      opacity: 1,
+      imageData: "data:image/png;base64,AAAA",
+    };
+  }
+  /** The creation path's placement: a fresh sprite placed for `t`. */
+  function createdSprite(t: T): Sprite {
+    const s = makeSprite();
+    applyTextImageTransform(s, imageObj(t));
+    return s;
+  }
+
+  it("a flipped image moved twice stays mirrored and fills its box", () => {
+    const s = createdSprite(IMG);
+    for (const x of [20, 35]) {
+      const t = { ...IMG, x };
+      applyTextImageTransform(s, imageObj(t));
+      const px = x * PX_PER_MM;
+      const py = t.y * PX_PER_MM;
+      const pw = t.width * PX_PER_MM;
+      expect(s.scale.x).toBeLessThan(0);
+      expectClose(mapLocal(s, 0, 0), { x: px + pw, y: py });
+      expectClose(mapLocal(s, 200, 0), { x: px, y: py });
+    }
+  });
+
+  it("flipping back un-mirrors", () => {
+    const s = createdSprite(IMG);
+    applyTextImageTransform(s, imageObj({ ...IMG, scaleX: 1 }));
+    expect(s.scale.x).toBeGreaterThan(0);
+    expectClose(mapLocal(s, 0, 0), { x: IMG.x * PX_PER_MM, y: IMG.y * PX_PER_MM });
+  });
+
+  it("a vertically flipped image stays flipped when moved", () => {
+    const t = { ...IMG, scaleX: 1, scaleY: -1 };
+    const s = createdSprite(t);
+    applyTextImageTransform(s, imageObj({ ...t, y: 30 }));
+    expect(s.scale.y).toBeLessThan(0);
+    expectClose(mapLocal(s, 0, 0), {
+      x: t.x * PX_PER_MM,
+      y: (30 + t.height) * PX_PER_MM,
+    });
+  });
+
+  it("a template-text Container cannot be updated in place", () => {
+    expect(applyTextImageTransform(new Container(), imageObj(IMG))).toBe(false);
+  });
+
+  it("a Sprite is updated in place", () => {
+    expect(applyTextImageTransform(makeSprite(), imageObj(IMG))).toBe(true);
   });
 });

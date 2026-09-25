@@ -7,8 +7,36 @@ import { Container, Sprite, Text } from "pixi.js";
 import type { DesignObject } from "../../app/types";
 import { PX_PER_MM } from "../../lib/constants";
 
-/** P8: Update position of text/image display object without destroying and rebuilding */
-export function applyTextImageTransform(displayObj: Container, obj: DesignObject) {
+/**
+ * R2 F4: the one placement for an image sprite, used at creation and on every
+ * move. Pixi 8's width/height setters keep the current sign of the scale, so
+ * the flip sign is set absolutely afterwards rather than toggled.
+ */
+export function placeSprite(sprite: Sprite, t: DesignObject["transform"]) {
+  const px = t.x * PX_PER_MM;
+  const py = t.y * PX_PER_MM;
+  const pw = t.width * PX_PER_MM;
+  const ph = t.height * PX_PER_MM;
+  const sx = t.scaleX ?? 1;
+  const sy = t.scaleY ?? 1;
+  sprite.pivot.set(0, 0);
+  sprite.rotation = 0;
+  sprite.width = pw;
+  sprite.height = ph;
+  sprite.scale.x = Math.abs(sprite.scale.x) * (sx < 0 ? -1 : 1);
+  sprite.scale.y = Math.abs(sprite.scale.y) * (sy < 0 ? -1 : 1);
+  sprite.x = px + (sx < 0 ? pw : 0);
+  sprite.y = py + (sy < 0 ? ph : 0);
+}
+
+/**
+ * P8: Update position of text/image display object without destroying and rebuilding.
+ * R2 F4: returns false for any other Container (template text: a Text plus a
+ * dashed indicator drawn in world coordinates), meaning "cannot update in
+ * place"; the caller rebuilds it instead.
+ */
+export function applyTextImageTransform(displayObj: Container, obj: DesignObject): boolean {
+  if (!(displayObj instanceof Sprite) && !(displayObj instanceof Text)) return false;
   const t = obj.transform;
   const px = t.x * PX_PER_MM;
   const py = t.y * PX_PER_MM;
@@ -22,21 +50,8 @@ export function applyTextImageTransform(displayObj: Container, obj: DesignObject
   displayObj.rotation = 0;
 
   if (displayObj instanceof Sprite) {
-    displayObj.x = px;
-    displayObj.y = py;
-    displayObj.width = pw;
-    displayObj.height = ph;
-    const sx = t.scaleX ?? 1;
-    const sy = t.scaleY ?? 1;
-    if (sx < 0) {
-      displayObj.scale.x *= -1;
-      displayObj.x += pw;
-    }
-    if (sy < 0) {
-      displayObj.scale.y *= -1;
-      displayObj.y += ph;
-    }
-  } else if (displayObj instanceof Text) {
+    placeSprite(displayObj, t);
+  } else {
     displayObj.x = px;
     displayObj.y = py;
     const sx = t.scaleX ?? 1;
@@ -53,20 +68,13 @@ export function applyTextImageTransform(displayObj: Container, obj: DesignObject
     } else {
       displayObj.scale.y = 1;
     }
-  } else {
-    // Container (template text) -- update child positions
-    for (const child of displayObj.children) {
-      if (child instanceof Text) {
-        child.x = px;
-        child.y = py;
-      }
-    }
   }
 
   // Re-apply rotation if needed
   if (rot !== 0) {
     applyObjectRotation(displayObj, t);
   }
+  return true;
 }
 
 /**
