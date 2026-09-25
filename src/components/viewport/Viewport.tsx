@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from "react";
-import { Application, Container, Graphics, Text, TextStyle, Sprite, Texture } from "pixi.js";
+import { Application, Container, Graphics, Text, TextStyle, Sprite } from "pixi.js";
 import { useShallow } from "zustand/shallow";
 import { useStore } from "../../app/store";
 import { getDirtyObjectIds, clearDirtyObjectIds, setCursorPosition } from "../../app/store";
@@ -29,22 +29,10 @@ import { measureDistance, measureAngleDeg, formatMeasureLabel } from "../../lib/
 import { PX_PER_MM, MIN_ZOOM, MAX_ZOOM } from "../../lib/constants";
 import { drawnLeaves, orientedHandlePoints } from "../../lib/geometry";
 import { applyObjectRotation, applyTextImageTransform, placeSprite } from "./renderHelpers";
-
-// Cache for GPU textures keyed by object ID (avoids retaining megabyte-sized base64 strings as Map keys)
-const textureCache = new Map<string, Texture>();
+import { clearTextures, evictTextures, getOrCreateTexture } from "./textureCache";
 
 // P8: Content hash cache keyed by display cache key (avoids rebuilding text/image when only transform changes)
 const contentHashCache = new Map<string, string>();
-
-function getOrCreateTexture(id: string, imageData: string): Texture {
-  let tex = textureCache.get(id);
-  if (tex) return tex;
-  const img = new Image();
-  img.src = imageData;
-  tex = Texture.from(img);
-  textureCache.set(id, tex);
-  return tex;
-}
 
 export function Viewport() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -179,8 +167,7 @@ export function Viewport() {
             displayCacheRef.current.clear();
             contentHashCache.clear();
             // Clear module-level caches — textures belong to the destroyed GPU context
-            for (const tex of textureCache.values()) tex.destroy(true);
-            textureCache.clear();
+            clearTextures();
           }
         })
         .catch((err) => console.error("Pixi.js destroy failed:", err));
@@ -340,12 +327,7 @@ export function Viewport() {
       if (o.children) for (const c of o.children) collectImageIds(c, set);
     };
     for (const obj of objects) collectImageIds(obj, activeImageIds);
-    for (const [id, tex] of textureCache) {
-      if (!activeImageIds.has(id)) {
-        tex.destroy(true);
-        textureCache.delete(id);
-      }
-    }
+    evictTextures(activeImageIds);
   }, [objects, layers, pixiReady]);
 
   // Draw temporary drawing object
