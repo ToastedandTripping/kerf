@@ -859,9 +859,6 @@ def parse_args(argv):
 
 def check_args(args):
     """Returns 2 for a refused command line, else None. Prints the reason."""
-    if args.pause:
-        refuse_args("--pause is retired: it sent 0x9E, which re-arms the beam. Use --case hold-m4.")
-        return 2
     if args.no_home:
         refuse_args("--no-home is retired: the probe never homes on its own; motion cases require --home.")
         return 2

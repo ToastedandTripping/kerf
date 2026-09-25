@@ -755,8 +755,7 @@ class RazorFixes(unittest.TestCase):
         code = h.run(["--pause", "--port", "FAKE", "--log-file", h.log_path])
         self.assertEqual(code, 2)
         self.assertEqual(h.open_calls, [])
-        self.assertIn("--pause is retired", h.stderr)
-        self.assertNotIn("--case is required", h.stderr)
+        self.assertEqual(h.stderr, "probe-grbl: refused: --pause is retired: it sent 0x9E, which re-arms the beam. Use --case hold-m4.\n")
         self.assertFalse(os.path.exists(h.log_path))
 
 
