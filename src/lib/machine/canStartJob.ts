@@ -15,6 +15,8 @@
  * explicit gate here and an explicit no-op in frameTargets.
  */
 
+import { MACHINE_STATE_LABELS } from "./machineStateDisplay";
+
 // B2b: isStatusEligible is consumed by the poll loop which writes
 // statusStale to the store. canStartJob reads it as a JobGateState field,
 // keeping canStartJob a pure function.
@@ -178,8 +180,11 @@ export function canStartJob(state: JobGateState, ext?: MovesExtents | null): Job
   if (state.machineState && state.machineState !== "idle") {
     return {
       ok: false,
-      // C4 state-label copy held: machineSafety.test.ts (frozen) asserts the raw token.
-      reason: `Machine is ${state.machineState} — wait for idle before starting`,
+      reason: `Machine is ${
+        state.machineState === "hold"
+          ? "on hold"
+          : (MACHINE_STATE_LABELS[state.machineState] ?? state.machineState).toLowerCase()
+      } — wait for Ready`,
     };
   }
   if (state.jobRunning) return { ok: false, reason: "Job already running" };
@@ -207,8 +212,7 @@ export function canStartJob(state: JobGateState, ext?: MovesExtents | null): Job
       ok: false,
       reason: localProgram
         ? "Grid extends outside the bed. Reduce steps or cell size."
-        : // C6 design-branch copy held: machineSafety.test.ts (frozen) asserts this text.
-          "G-code extends outside workspace bounds. Move or resize the design to fit.",
+        : "Design is outside workspace bounds. Move or resize it to fit.",
     };
   }
   return { ok: true };

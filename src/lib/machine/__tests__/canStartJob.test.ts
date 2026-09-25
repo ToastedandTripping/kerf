@@ -57,7 +57,7 @@ describe("canStartJob", () => {
     const gate = canStartJob({ ...okState(), machineState: "hold" });
     expect(gate.ok).toBe(false);
     expect(gate.reason).toContain("hold");
-    expect(gate.reason).toContain("wait for idle");
+    expect(gate.reason).toContain("wait for Ready");
   });
 
   it("blocks when machineState is run (gate unification)", () => {
