@@ -30,8 +30,6 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - **Charter gap analysis at `.claude/plans/charter-gap-analysis.md`** — 293-line Fable audit of all 10 codebase areas vs the charter. None of the three 'done' conditions are met. Top gaps ranked. The fastest path to 'done' follows the existing remediation plan order.
 
-- **Three code-refresh relays queued after the fence, plans final and critic-converged:** `refresh-cut-vs-screen` (3 rounds), `refresh-canvas-display` (3 rounds, F7 redesigned display-only so a node edit never changes the cut), `refresh-editing-shortcuts` (4 rounds, the 4th at Lee's request). Run in that order, one at a time. Cut-vs-screen must land before canvas (canvas precondition greps `drawnLeaves`).
-
 - **Two owner-reported regressions (Lee, 2026-09-24) parked, need console text from a recurrence:** the first-Start-of-session bug (fixed v0.8.18) is back, surfacing as a disconnect; disconnect/reconnect often hangs. ROADMAP Parking Lot → `### Deferred from kerf-fence-single-reset (2026-09-24)`. The first touches charter gate 1.
 
 - **One DECISIONS proposal owed to Lee:** Ctrl+Shift+V = Flip Vertical, Alt+V = Paste in Place (Lee ruled 2026-09-22; entry wording in the editing plan's F3 implementer note; propose at that relay's close). The single-reset fence pin was approved and written 2026-09-24.
@@ -43,6 +41,10 @@ in this project has already been ruled on, usually for a reason that is not obvi
 - **Fence single-reset is on master (caa0dcc, 2026-09-24) and in no build.** The owner 4-step hardware test in ROADMAP next is still owed; whether and when a build is cut is Lee's call.
 
 - **Charter text-tool amendment approved by Lee 2026-09-25 (DECISIONS, Product rulings); CHARTER.md wording not yet edited.** The Non-goals sentence and the fonts drift tripwire still name built-in font rendering as excluded. The edit is Lee-approved content only.
+
+- **Three relays implemented, awaiting Stage 2 (Razor) — none merged.** Each is on its own branch/worktree under ~/.local/share/marvin/worktrees/kerf/, state in ~/marvin/state/relay/<id>-pack.json (`next_action` says what is left): (1) `kerf-refresh-cut-vs-screen` (R1, 8 commits F1-F7, 882 JS, battery 19/19) — Razor, then behavioral + Jen fidelity vs the jen-spec, then Stage 3.5 (7 Deferrals lines, owner-test steps into ROADMAP next, ARCHITECTURE delta); R2 canvas-display and R3 editing-shortcuts follow it in order. (2) `kerf-evidence-e1a` (Fill+Line sharp rectangle, 09935e4, 847 JS, battery 10/10) — Razor, Stage 3.5. (3) `kerf-safety-s1` (four-door admission, readback-only laser flag, 859 JS, battery 18/18) — Razor must check the modified existing test machineJobLoop.test.tsx:468 is not weakened; Jen CONCERN pass; S1 and S3 ship in the same build.
+
+- **Lifted plans without a critic yet:** `.claude/plans/kerf-evidence-e2.md`, `-e3.md`, `-e5.md` (committed b7b7540). Each needs a Fable critic (reviewer valve reads `fable`) before its relay. E3 is also blocked on Lee's answer (open questions). S1b (buffered START checks, not writes, $32) is next in the safety chain after S1 merges; not yet lifted.
 
 ## Open questions awaiting Lee
 
@@ -56,10 +58,18 @@ in this project has already been ruled on, usually for a reason that is not obvi
 | Given the controller's 127-block planner, is Phase 2A buffered streaming still worth shipping on this machine? | Phase 2A was built to cure stutter caused by stock GRBL's 15-block planner. This vendor fork has 127. The A/B test may show no difference, which would make gate D1c a decision to keep perLine permanently. | 2026-09-05 |
 | Amend the charter to include the text tool? One line: 'built-in text from bundled fonts is in; font management and text-on-path stay out.' (resolved 2026-09-25) | The tree contradicts its own founding document. The ROADMAP parks text behind gate D3 (v1.0), which was skipped rather than opened. | 2026-09-19 |
 | Clipper2 dependency for Phase 4 (gate D2) is STILL OPEN. The row above marked resolved 2026-09-10 is wrong: DECISIONS 2026-09-10 deferred it and says Gate D2 remains open. | Gate D2 — changes real cut geometry output, needs your sign-off before Phase 4 starts | 2026-07-05 |
+| Should the 'laser stopped firing' warning report during jobs, reworded to say only what the controller reported (spindle speed 0 while Run) and naming the last line sent, knowing it will appear on ordinary M4 cuts? Today it can never fire during a job: status polling is paused while a job runs (connection.ts:372). On your controller the condition appears on normal M4 cuts (probe capture, all five reps). Options: (a) yes, status-only wording, fed from the three job status paths (recommended: it is the only in-job evidence the status-only ruling allows); (b) keep it off during jobs and drop E3; (c) only when the drop persists for N reports. Reversible. If ignored, E3 stays parked; nothing else waits on it. | Plan kerf-evidence-e3 cannot run until this is chosen; the parent plan assumed a check that is dead code during jobs | 2026-09-25 |
+| Correct the 2026-09-05 evidence entry that says A:S means the spindle is energised? In the committed capture every status report carrying override values also carries A:S, including Idle reports after an acknowledged M5 (log lines 70, 83), so on your controller A:S does not mean the beam is on. Options: (a) amend the entry with that evidence (recommended: it stops a future fix from keying the pause/beam logic off A:S); (b) leave it until a live session confirms. Reversible (append-and-amend). If ignored, E5's simulator models both readings, labelled. | DECISIONS is the one place a future pause/beam fix will read; an evidence entry the capture contradicts is a trap | 2026-09-25 |
 
 ---
 
 ## Log (newest first)
+
+### 2026-09-25 (gap pass: three relays implemented, plans lifted)
+
+Driven session kerf-gap. R0 done (2579bb1, e48dfac; Lee approved the hand-off/DECISIONS writer after the classifier blocked it). Relays through Stage 1, not reviewed or merged: kerf-refresh-cut-vs-screen (R1), kerf-evidence-e1a, kerf-safety-s1 — all DONE (R1 and S1 with observational concerns recorded in their packs), tests re-run by the orchestrator (882 / 847 / 859 JS), batteries all killed. Lifted with Fable critics: kerf-safety-s1 (round 1 FAIL: a second laser-mode setter in GrblSettingsDialog; round 2 CONCERN, folded), kerf-evidence-e1a (round 1 FAIL on verifiability, round 2 PASS). Lifted without critic: evidence E2, E3, E5 (b7b7540); the lift found the parent's E3 detector cannot fire during a job and that A:S appears on Idle reports in the capture. Stopped at Lee's request for a window restart; no new stages started. The coordinator was briefly unreachable mid-session and has the override line.
+
+Next: Stage 2 Razor on the three relays (packs' next_action), then Fable critics on E2/E3/E5.
 
 ### 2026-09-25 — state reconciliation (R0)
 
