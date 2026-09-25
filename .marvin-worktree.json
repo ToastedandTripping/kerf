@@ -2,12 +2,12 @@
   "version": 3,
   "projectId": "kerf",
   "projectPath": "/home/leesalo/Projects/kerf",
-  "branch": "marvin/session-8b2728",
-  "slug": "session-8b2728",
-  "tmuxName": "marvin_kerf_session-8b2728",
-  "startPoint": "080b4374371005f8b4f08fa022b65c7b6e3cfb94",
-  "createdAt": "2026-09-22T22:41:21.127Z",
+  "branch": "marvin/kerf-gap",
+  "slug": "kerf-gap",
+  "tmuxName": "marvin_kerf_kerf-gap",
+  "startPoint": "259fa201e3190fbf4810d353195cc2bab33e36dd",
+  "createdAt": "2026-09-25T15:23:51.575Z",
   "keep": false,
   "keptAt": null,
-  "briefPath": null
+  "briefPath": "/home/leesalo/.local/share/marvin/monitor-state/briefs/kerf__kerf-gap.md"
 }
