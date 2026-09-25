@@ -456,6 +456,15 @@ export function composeGroupChild(child: DesignObject, group: DesignObject): Des
   };
 }
 
+/** Largest stretch (max singular value) of the linear part [[m0, m2],[m1, m3]]
+ *  of a 2×3 matrix. Unlike column norms, this is exact under skew. PURE. */
+export function matrixMaxStretch(m: ReadonlyArray<number>): number {
+  const [a, b, c, d] = m;
+  const S = a * a + b * b + c * c + d * d;
+  const D = a * d - b * c;
+  return Math.sqrt((S + Math.sqrt(Math.max(0, S * S - 4 * D * D))) / 2);
+}
+
 /** Every leaf of obj's group tree composed to world frame, with its render key
  *  (full id path: "outer/inner/leaf"; a top-level leaf's key is its id). The
  *  same recursion and the same composeGroupChild as gcodeGen's flattenObjects,
