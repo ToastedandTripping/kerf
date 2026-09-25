@@ -121,6 +121,8 @@ class Wire:
     def log(self, direction, text):
         line = f"{self.ts()} {direction} {text}"
         with self._log_lock:
+            if self.logf.closed:  # a reader that outlived the join: drop the line, no traceback
+                return
             self.logf.write(line + "\n")
             self.logf.flush()
 
@@ -381,9 +383,20 @@ def nonzero(xy):
     return abs(xy[0]) > 1e-6 or abs(xy[1]) > 1e-6
 
 
-def preflight(case, args, settings, status, offsets):
+def active_wcs(gcode_lines):
+    """The active work coordinate system (G54-G59) from a $G reply, or None."""
+    for text in gcode_lines:
+        if text.startswith("[GC:"):
+            for word in text[4:].rstrip("]").split():
+                if word in ("G54", "G55", "G56", "G57", "G58", "G59"):
+                    return word
+    return None
+
+
+def preflight(case, args, settings, status, offsets, gcode=None):
     """Every reason the case must not run. Pure. `status` is the startup
-    report; `offsets` is the parsed $# reply, or None when $# is unsupported."""
+    report; `offsets` is the parsed $# reply, or None when $# is unsupported;
+    `gcode` is the $G reply lines, or None when $G is unsupported."""
     reasons = []
     startup_state = state_of(status)
     if case in MOTION_CASES and startup_state not in STARTUP_STATES:
@@ -411,7 +424,11 @@ def preflight(case, args, settings, status, offsets):
             reasons.append("$131 (Y travel) is absent")
         elif not box_fits(args.origin_y, args.box_mm, bed_y):
             reasons.append(f"box on Y ({args.origin_y:g} + {args.box_mm:g} mm) does not fit $131={bed_y:g}")
-        if offsets is not None:
+        if gcode is not None:
+            wcs = active_wcs(gcode)
+            if wcs != "G54":
+                reasons.append(f"active coordinate system is {wcs or 'not reported'} ($G); it must be G54")
+        if offsets is not None and gcode is not None:
             g54 = offsets.get("G54")
             if g54 is None or nonzero(g54):
                 reasons.append(f"G54 work offset is {g54 if g54 is not None else 'not reported'}; it must be zero on X and Y")
@@ -780,7 +797,8 @@ def run_live(wire, args, results):
         return "RESULT COMPLETE", 0
 
     offsets = None if "$#" in unsupported else parse_offsets(replies["$#"])
-    reasons = preflight(args.case, args, settings, startup_report, offsets)
+    gcode = None if "$G" in unsupported else replies["$G"]
+    reasons = preflight(args.case, args, settings, startup_report, offsets, gcode)
     if reasons:
         return "RESULT REFUSED: " + "; ".join(reasons), 3
 
@@ -911,6 +929,10 @@ def header_lines(args):
 
 
 def main(argv=None):
+    raw = sys.argv[1:] if argv is None else argv
+    if "--pause" in raw:
+        refuse_args("--pause is retired: it sent 0x9E, which re-arms the beam. Use --case hold-m4.")
+        return 2
     try:
         args = parse_args(argv)
     except SystemExit as e:  # argparse: --help (0) or a malformed command line (2)

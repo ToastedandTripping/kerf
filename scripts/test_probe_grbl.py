@@ -62,6 +62,9 @@ class FakeSerial:
         self.g_reply = ["[GC:G0 G54 G17 G21 G90 G94 M5 M9 T0 F0 S0]"]
         self.offsets_reply = ["[G54:0.000,0.000,0.000]", "[G92:0.000,0.000,0.000]"]
         self.wco = True
+        self.wco_value = "0.000,0.000,0.000"
+        self.use_wpos = False
+        self.home_error = None
         self.wedge_mode = False
         self.wedged = False
         self.silent = False
@@ -110,8 +113,9 @@ class FakeSerial:
 
     def report(self, state):
         x, y, z = self.mpos
-        wco = "|WCO:0.000,0.000,0.000" if self.wco else ""
-        return f"<{state}|MPos:{x:.3f},{y:.3f},{z:.3f}|FS:0,0{wco}>"
+        wco = f"|WCO:{self.wco_value}" if self.wco else ""
+        field = "WPos" if self.use_wpos else "MPos"
+        return f"<{state}|{field}:{x:.3f},{y:.3f},{z:.3f}|FS:0,0{wco}>"
 
     def _realtime(self, b):
         if b == 0x3F:  # '?'
@@ -142,6 +146,8 @@ class FakeSerial:
                 self.emit(*self.offsets_reply, "ok")
             else:
                 self.emit(self.offsets_reply)
+        elif text == "$H" and self.home_error:
+            self.emit(self.home_error)
         elif text == "$H":
             self.emit(self.report("Home"))
             self.state = self.post_home_state
@@ -254,6 +260,7 @@ class ArgumentRefusals(unittest.TestCase):
         h = Harness(self)
         code = h.run(live_args(h, "hold-m4") + ["--pause"])
         self.assert_refused(h, code, "--case hold-m4")
+        self.assertIn("--pause is retired", h.stderr)
 
     def test_home_required_E2_M20(self):
         h = Harness(self)
@@ -639,6 +646,118 @@ class Faults(unittest.TestCase):
         self.assertIn("rep 2", last)
         rep1_lines = [s.text for s in steps[:rep2] if s.kind == "line"]
         self.assertEqual(after_home(h.fake), rep1_lines)
+
+
+class RazorFixes(unittest.TestCase):
+    def refused(self, h, code, needle):
+        self.assertEqual(code, 3, h.last_line())
+        self.assertTrue(h.last_line().startswith("RESULT REFUSED"), h.last_line())
+        self.assertIn(needle, h.last_line())
+        self.assertEqual(motion_lines(h.fake), [])
+
+    def test_active_wcs_must_be_g54_E2_M37(self):
+        h = Harness(self)
+        h.fake.g_reply = ["[GC:G0 G55 G17 G21 G90 G94 M5 M9 T0 F0 S0]"]
+        code = h.run(live_args(h, "hold-m4", "--smax", "5"))
+        self.refused(h, code, "G55")
+        self.assertEqual(h.fake.counts.get("$H", 0), 0)
+
+    def test_g_unsupported_uses_wco(self):
+        h = Harness(self)
+        h.fake.g_reply = "error:3"
+        h.fake.wco_value = "100.000,50.000,0.000"
+        code = h.run(live_args(h, "hold-m4"))
+        self.refused(h, code, "WCO")
+
+    def test_m4_box_floor_E2_F1(self):
+        h = Harness(self)
+        code = h.run(live_args(h, "hold-m4", "--box-mm", "20"))
+        self.assertEqual(code, 2)
+        self.assertEqual(h.open_calls, [])
+        self.assertIn("--box-mm", h.stderr)
+
+    def test_home_error_goes_to_cleanup_E2_F2(self):
+        h = Harness(self)
+        h.fake.home_error = "error:9"
+        code = h.run(live_args(h, "wedge", "--reps", "1"))
+        self.assertEqual(code, 1)
+        self.assertTrue(h.last_line().startswith("RESULT INCOMPLETE"), h.last_line())
+        self.assertIn("error:9", h.last_line())
+        self.assertIn(("byte", 0x18), h.fake.writes)
+        self.assertEqual(after_home(h.fake), [])
+
+    def test_completion_timeout_not_done_E2_F3(self):
+        h = Harness(self)
+        seg = "G1 X45.000 Y-25.000 F300 S0"
+
+        def run_forever(fake):
+            fake.state = "Run"
+
+        h.fake.line_hooks.append((lambda text, f: text == seg, run_forever))
+        code = h.run(live_args(h, "completion-m4"), COMPLETION_TIMEOUT_S=0.3)
+        self.assertEqual(code, 1)
+        self.assertTrue(h.last_line().startswith("RESULT INCOMPLETE"), h.last_line())
+        self.assertIn(("byte", 0x18), h.fake.writes)
+
+    def test_completion_sends_m5_E2_F4(self):
+        h = Harness(self)
+        code = h.run(live_args(h, "completion-m4"))
+        self.assertEqual(code, 0, h.last_line())
+        lines = after_home(h.fake)
+        self.assertTrue(lines[-2].startswith("G1 "), lines)
+        self.assertEqual(lines[-1], "M5")
+        self.assertTrue(any("OBSERVE completion" in ln for ln in h.log_lines()))
+
+    def test_startup_state_gate_E2_F5(self):
+        h = Harness(self)
+        h.fake.state = "Hold"
+        code = h.run(live_args(h, "wedge", "--reps", "1"))
+        self.refused(h, code, "Hold")
+        self.assertEqual(h.fake.counts.get("$H", 0), 0)
+
+    def test_nonzero_wco_fallback_E2_F6(self):
+        h = Harness(self)
+        h.fake.offsets_reply = "error:3"
+        h.fake.wco_value = "10.000,0.000,0.000"
+        code = h.run(live_args(h, "hold-m4"))
+        self.refused(h, code, "WCO")
+
+    def test_missing_g54_line_E2_F7(self):
+        h = Harness(self)
+        h.fake.offsets_reply = ["[G92:0.000,0.000,0.000]"]
+        code = h.run(live_args(h, "wedge", "--reps", "1"))
+        self.refused(h, code, "G54 work offset is not reported")
+
+    def test_post_home_no_mpos_E2_F8(self):
+        h = Harness(self)
+        h.fake.use_wpos = True
+        code = h.run(live_args(h, "hold-m4"))
+        self.assertEqual(code, 3, h.last_line())
+        self.assertIn("no MPos", h.last_line())
+        self.assertEqual(after_home(h.fake), [])
+
+    def test_idle_after_lead_before_m4_E2_F9(self):
+        h = Harness(self)
+        lead = "G0 X25.000 Y-25.000"
+
+        def moving(fake):
+            fake.state_script[:] = ["Run", "Run", "Idle"]
+
+        h.fake.line_hooks.append((lambda text, f: text == lead, moving))
+        code = h.run(live_args(h, "hold-m4"))
+        self.assertEqual(code, 0, h.last_line())
+        w = h.fake.writes
+        between = w[w.index(("line", lead)) + 1:w.index(("line", "M4 S0"))]
+        self.assertGreaterEqual(between.count(("byte", 0x3F)), 3)
+
+    def test_pause_without_case_E2_F10(self):
+        h = Harness(self)
+        code = h.run(["--pause", "--port", "FAKE", "--log-file", h.log_path])
+        self.assertEqual(code, 2)
+        self.assertEqual(h.open_calls, [])
+        self.assertIn("--pause is retired", h.stderr)
+        self.assertNotIn("--case is required", h.stderr)
+        self.assertFalse(os.path.exists(h.log_path))
 
 
 class LiveMatchesDryRun(unittest.TestCase):
