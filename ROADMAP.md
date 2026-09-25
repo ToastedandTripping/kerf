@@ -15,6 +15,8 @@ next: "REMEDIATION Phase 1 (batches 1.1-1.5, the stop spine: 0x18 immediately, p
 testing: null
 pinned: true
 shipped:
+  - date: 2026-09-25
+    item: "Safety S1: relay kerf-safety-s1 (Standard). Razor raised 3 WARNING (fixed; re-check CLOSED). Jen raised 7 CONCERN (6 applied, C3 owned by S3), and a bounded design-fix check came back CLOSED. START, main FRAME, and the material-test Send and Frame now all go through one admission, `canStartJob(state, ext?)`. The laser-mode flag is set only by a `$32=1` readback that was not overtaken by a settings write: every settings write is detected in `send()` (GRBL-normalized) and invalidated on both sides; a console `$$` re-verifies; a failed readback or a disconnect clears the flag. Material-test refusals are no longer silent: an in-dialog alert plus disabled buttons driven by the same gate. 871 JS tests; batteries 18 + 7 + 3 killed. NOT MET: the power-scale half of the 2026-09-10 START ruling (S4b). MUST SHIP WITH S3: on origin-top machines every material test is refused until S3 mirrors the grid. OWNER HARDWARE TEST: a live `$$` still carries `$32=1`; Enable Laser Mode shows enabled only after its readback."
   - date: 2026-09-24
     item: "Fence single-reset — relay kerf-fence-single-reset (Ted+Razor PASS after one fix pass; 0 CRITICAL, W1 closed). Replaces kerf-fence-reopen's detect-and-re-send: a new submit lock makes the admission check and the job line's write(2) atomic against the stop's admission close (close_admission requires the held guard; flush/tcdrain stays outside). One stop, one 0x18; the in-flight re-send, resend-failed state, refused: in-flight* contracts and the TS STOP re-arm are deleted. Also: the $32=1 pump now publishes the reset banner it consumes. Ordering tests O1-O4, U1/U2, one-reset-per-stop check; M1-M9 and X2 killed by named assertions. 836 JS / 329 Rust. Not in a release; owner hardware test pending."
   - date: 2026-09-24
@@ -539,6 +541,16 @@ verbatim and are not to be edited into summaries — this index points at them.
 - **Golden `stop_result_fixture.json` still carries `inFlightWrite`** (Razor N3). See `### Deferred from kerf-fence-single-reset (2026-09-24)` below.
 - **Admission close can still be written inline, bypassing `close_admission`** (Razor N8). See `### Deferred from kerf-fence-single-reset (2026-09-24)` below.
 - **`close_admission`'s held-lock test assertion also passes on a poisoned lock** (Razor N9). See `### Deferred from kerf-fence-single-reset (2026-09-24)` below.
+- **WPos/MPos conversion and WCO-aware jog envelopes** (astra 2.5 proper). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **`$23` sign inference and automatic homing/unlock**: never. See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **Astra 2.3 (release envelope → corrections) and 2.6 (bounded generation)**; 2.3 waits on `kerf-d9`. See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **Any change to the stop, reset, fence or submit lock** stays out of the safety-gate batches (DECISIONS 2026-09-24 pin). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **`$31` / Min Pwr** (decision `kerf-d11`). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **The Fire button is a powered door outside the admission** (MachinePanel stationary-beam fire). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **Material test `exceedsWorkspace` is a third bounds copy** (UI hint, can disagree with the gate). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **Stale status still shows green Idle/Ready** (Jen C3 on S1). OWNED BY S3; must not ship without it. See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **A malformed `gcodeResult` in the store crashes the job bar** (S1 behavioral evaluator, synthetic injection). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **Material-test button enablement checks the grid outline; the click checks the full program** (Razor N11; fails safe). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
 
 ### Deferred from the 2026-09-05 pause/stop investigation
 
@@ -640,6 +652,21 @@ It is out of scope for this relay (golden files untouched), and no test reads it
 **N8 (NOTE).** The pin holds only while the close goes through `close_admission`. X2i writes `phase` and `admitted_job` inline after a take-and-drop, and it passes all 329 tests, because both fields are `pub(crate)` and nothing forces the stop to use the helper. This is no longer the "narrow a guard's scope and ship green" regression W1 described: it requires deleting the helper call, and review would see that. Making `phase`/`admitted_job` writable only through `SerialSession` methods would close it, but tests poke those fields directly, so that is a refactor and not a fix-pass item.
 
 **N9 (NOTE, test-only).** `try_lock().is_err()` is also true when `submit` is poisoned and not held (`TryLockError::Poisoned`), so after a writer panic the assertion cannot catch a barrier-shaped caller. Production is unaffected (the assertion is `cfg(test)`, and the guard parameter still documents the contract). `matches!(self.submit.try_lock(), Err(TryLockError::WouldBlock))` would be exact.
+
+### Deferred from kerf-safety-s1 (2026-09-25)
+
+**Why these are here:** the first five are the parent plan's Out-of-scope lines (`~/marvin/state/audits/gap-2026-09-24/kerf/PLAN-safety-gate-class.md` §Out of scope). S1's plan named the Fire button and `exceedsWorkspace` lines. The last three were found in review and not fixed in S1.
+
+- WPos/MPos conversion and WCO-aware jog envelopes (astra 2.5 proper). This needs a live frame map from an owner session.
+- `$23` sign inference and automatic homing/unlock: never.
+- Astra 2.3 (release envelope → corrections) and 2.6 (bounded generation): 2.3 waits on decision `kerf-d9`.
+- Any change to the stop, reset, fence or submit lock (DECISIONS 2026-09-24 pin).
+- `$31` / Min Pwr (decision `kerf-d11`).
+- **The Fire button is a powered door outside the admission.** `MachinePanel.tsx` Fire (`M3 S…`, `G4 P0.5`, `M5`) fires the beam stationary for focus and test, by design (M3 is for the stationary beam, DECISIONS 2026-09-10). Its gating is not unified with the four job doors, and it has no laser-mode, bed or stale check. It needs its own review.
+- **Material test `exceedsWorkspace` is a third bounds copy.** `MaterialTestDialog.tsx` keeps it as a UI hint that can disagree with the gate. The gate decides.
+- **Stale status shows a green Idle and Ready** (Jen C3, 2026-09-25). While `statusStale` is true, MachinePanel and StatusBar still show a fresh green "Idle" and "Ready" while START's title says stale. The screen says safe when Kerf does not know. **Owned by S3** (coordinator, 2026-09-25): fold it into S3's scope at lift. S1 and S3 ship in the same build, so no build reaches Lee with green-while-stale unless he has been told.
+- **A malformed `gcodeResult` crashes the job bar.** The S1 behavioral evaluator injected a malformed result through the store and blanked the UI. The injection was synthetic and no production path is known to produce one, but the job bar has no guard. Noted 2026-09-25.
+- **Material-test enablement and the click can disagree at the edge** (Razor N11). The disabled state checks the grid outline's extents, while the click-time gate checks the full grid program. When they disagree the click refuses, so it fails safe.
 
 ## Reference
 

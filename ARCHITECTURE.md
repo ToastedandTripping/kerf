@@ -94,7 +94,11 @@ src/
                                drain to serial_job_end; module-level single active session
       machineStatus.ts       — Status consumer: GrblSnapshot mirror types, monotonic
                                epoch/seq rejection, store writes, 3s eligibility
-      canStartJob.ts         — Pure START gate + moves extents, frameTargets,
+      canStartJob.ts         — The one admission for all four powered doors (START,
+                               main FRAME, material-test Send and Frame): canStartJob
+                               (state, ext?); ext supplied = locally generated program
+                               (skips gcodeResult/gcodeStale, bounds from ext with
+                               originTop). Plus moves extents, frameTargets,
                                isWithinBounds, gcodeExtents (text G-code)
       gcodeGen.ts            — Frontend G-code orchestrator, calls Rust backend via
                                Tauri invoke (hard-fail on engine error — no JS
@@ -238,8 +242,21 @@ src-tauri/tests/
 ```
 
 JobActionBar FRAME, MaterialTestDialog "Send" and MaterialTestDialog "Frame" take the same
-path (beginJobSession → streamJob) without `waitForIdle`. MaterialTestDialog does not call
-`canStartJob`; it checks connection, `jobRunning` and `gcodeExtents` + `isWithinBounds`.
+path (beginJobSession → streamJob) without `waitForIdle`. All four doors pass `canStartJob`
+first (kerf-safety-s1): FRAME with no `ext`, so `gcodeStale` still applies; the material
+test with `ext = gcodeExtents(grid)`. A refusal prints the reason verbatim to the console
+and, in the material test, also as an in-dialog alert; the buttons' disabled state comes
+from the same gate.
+
+**Laser-mode flag (`grblLaserMode`).** Only `applyLaserModeReadback` in `connection.ts`
+sets it true: a `$$` response carrying `$32=1`, and only if no settings write happened
+after that readback began (module-level `settingsGeneration`). Every settings write
+(`$n=`, `$Nn=`, `$RST=`, normalized the way GRBL reads a line) is detected in
+`machineConnection.send()`. The write invalidates the flag before its invoke and again
+after it settles. `enableLaserMode` invalidates explicitly, because its write bypasses
+`send()`. A console `$$` re-verifies `$32` only. The full settings parse runs only from
+`queryGrblSettings` (on connect, and the soft-limit requery). A failed readback and
+`disconnect()` both leave the flag false.
 
 **Job-session lifetime (`jobSession.ts`).** One module-level active session. `beginJobSession`
 refuses while another session is active or a stop is settling, and when `serial_job_begin`
@@ -333,7 +350,7 @@ realtime handles, increments the session epoch and sets phase Idle. `connection.
 `connect()` then starts the status poll, runs `queryGrblSettings()` (`$$`) and one
 `serial_get_status`.
 
-**Settings read on connect** (`queryGrblSettings`):
+**Settings read on connect** (`queryGrblSettings`; the only full parse. A console or dialog `$$` and the Enable Laser Mode readback apply `$32` only):
 
 | Setting | Store field | Read by |
 |---|---|---|
