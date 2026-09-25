@@ -87,6 +87,12 @@ src/
       connection.ts          — machineConnection: connect/disconnect, $$ settings parse,
                                250ms status poll + 3-strike disconnect, send, jog, home,
                                emergencyStop (invokes serial_stop)
+                               The spindle-drop check is `noteSpindleSample` in
+                               `lastSentLine.ts` (total, status only), fed from
+                               `pollStatus` (no job), `send()` in-pump reports
+                               (per-line), `getStatusReport` (drain) and buffered
+                               `status` events. It is reset per job by `startJobEvidence`
+                               and summarised per job by `endJobEvidence`.
       jobStream.ts           — streamJob: shared streaming loop for every G-code send;
                                dispatches on streamingMode (perLine default | buffered);
                                pauseJob (= stop) / resumeJob
