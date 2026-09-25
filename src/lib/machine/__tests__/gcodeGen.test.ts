@@ -1540,11 +1540,11 @@ const E1A_CORNERS = [
 ];
 
 describe("E1a — Fill+Line sharp rectangle is filled and outlined; no fillLine reaches Rust", () => {
-  it("E1a-M1: sharp rectangle on fillLine emits a fill object with the closed 4-corner contour plus a line overlay", () => {
+  it("E1a-M1: sharp rectangle on fillLine emits a maskFill object with the closed 4-corner contour plus a line overlay", () => {
     const { objects } = toCutObjectsForTest([e1aRect("r1")], e1aFillLineLayers());
     expect(objects).toHaveLength(2);
     expect(objects[0].id).toBe("r1");
-    expect(objects[0].layer.mode).toBe("fill");
+    expect(objects[0].layer.mode).toBe("maskFill");
     expect(objects[0].paths).toEqual([{ points: E1A_CORNERS, closed: true }]);
     expect(objects[1].id).toBe("r1_line_overlay");
     expect(objects[1].layer.mode).toBe("line");
@@ -1565,16 +1565,37 @@ describe("E1a — Fill+Line sharp rectangle is filled and outlined; no fillLine 
     expect(overlay!.paths[0].points).toHaveLength(4);
   });
 
-  it("E1a-M3: rotated sharp rectangle lowers to fill and carries rotation on fill and overlay", () => {
+  it("E1a-M3: rotated sharp rectangle lowers to maskFill and carries rotation on fill and overlay", () => {
     const { objects } = toCutObjectsForTest([e1aRect("r1", {}, 30)], e1aFillLineLayers());
     const fillObj = objects.find((o) => o.id === "r1");
     const overlay = objects.find((o) => o.id === "r1_line_overlay");
-    expect(fillObj!.layer.mode).toBe("fill");
+    expect(fillObj!.layer.mode).toBe("maskFill");
     expect(fillObj!.rotation).toBe(30);
     expect(overlay!.layer.mode).toBe("line");
     expect(overlay!.rotation).toBe(30);
     // Contour stays in world coordinates before rotation (Rust rotates once).
     expect(fillObj!.paths[0].points).toEqual(E1A_CORNERS);
+  });
+
+  it("E1a-M6: a sharp rectangle rotated 30 or 90 degrees on fillLine never reaches Rust as fill", () => {
+    // The Rust fill arm scans R(+r)*AABB(R(-r)*rect): 6.72 mm outside at 30,
+    // half unfilled and 7.5 mm outside at 90 (Razor probe, C1).
+    for (const rot of [30, 90]) {
+      const { objects } = toCutObjectsForTest([e1aRect("r1", {}, rot)], e1aFillLineLayers());
+      expect(
+        objects.filter((o) => o.layer.mode === "fill"),
+        `rotation ${rot}`
+      ).toHaveLength(0);
+      expect(objects.find((o) => o.id === "r1")!.layer.mode, `rotation ${rot}`).toBe("maskFill");
+    }
+  });
+
+  it("E1a-M7: a point-less path on fillLine is not filled as its bbox rectangle (type guard)", () => {
+    const pointless: DesignObject = { ...e1aRect("pp1"), type: "path", points: [], closed: true };
+    const { objects } = toCutObjectsForTest([pointless], e1aFillLineLayers());
+    expect(objects).toHaveLength(1);
+    expect(objects[0].paths).toEqual([]);
+    expect(objects.find((o) => o.id === "pp1_line_overlay")).toBeUndefined();
   });
 
   it("E1a-M4: a rectangle carrying its own points on fillLine throws with its id (never silently skipped)", () => {

@@ -436,11 +436,13 @@ function toCutObjects(
     ) {
       effectiveMode = "maskFill";
     }
-    // E1a: lower to fill only when the sharp-rectangle contour branch fired.
-    // A rectangle carrying its own points stays fillLine and trips the
-    // assertNoFillLine invariant (the fill arm would comment-and-skip it).
+    // E1a: lower to maskFill only when the sharp-rectangle contour branch fired,
+    // matching the rounded-rectangle arm. Not "fill": the Rust fill arm scans
+    // R(+r)*AABB(R(-r)*rect), which burns outside a rotated rectangle; maskFill
+    // rasterizes the 4-point contour and rotates it once. A rectangle carrying
+    // its own points stays fillLine and trips the assertNoFillLine invariant.
     if (sharpRectContour) {
-      effectiveMode = "fill";
+      effectiveMode = "maskFill";
     }
 
     // Apply kerf offset for closed paths in line mode
