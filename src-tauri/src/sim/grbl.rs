@@ -128,8 +128,16 @@ const BANNER: &str = "Grbl 1.1f ['$' for help]";
 ///   there; this sim accepts a write in every state. It matters because the
 ///   buffered job writes `$32=1` as its first line, possibly while a previous
 ///   job's planner is still draining.
-/// - Bad-number writes. Stock answers `error:2`; here a non-numeric value
-///   falls through to the catch-all `ok` and is not applied.
+/// - Bad-number writes, partly. A value Rust parses as a number but that is
+///   not finite (`NaN`, `inf`) is refused with `error:2` (stock's bad number
+///   format) and not applied. A value that does not parse as a number at all
+///   falls through to the catch-all `ok` and is not applied (stock:
+///   `error:2`). Exponent forms such as `1e3` are accepted and stored as
+///   written (stock refuses them).
+/// - Unknown setting numbers (stock `error:3`) are accepted, appended to the
+///   table and shown by `$$`. Negative values (stock `error:4`) are accepted
+///   and applied. `$$` is answered in every state, Run and Hold included
+///   (stock `error:8`).
 /// - `$RST`, the override-refresh cycle of the `A:` field, `S` versus `C`
 ///   for M4, and whether `$` lines still ack during a wedge.
 /// - `0x18` always resets and always clears the spindle. DECISIONS
@@ -162,9 +170,10 @@ fn normalise_laser_flag(v: &str) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SimProfile {
     /// Stock GRBL 1.1: 128-byte RX buffer, 15-block planner, and `A:S`
-    /// reported while the spindle is on (stock-source intent: A:S = spindle
-    /// energised; absence means "not reported"; omission semantics are
-    /// unverified on hardware).
+    /// reported while the sim's spindle flag is set (stock-source intent;
+    /// absence means "not reported"; omission semantics are unverified on
+    /// hardware). A reporting rule of the sim, not a beam signal: per
+    /// DECISIONS 2026-09-25 nothing may read `A:S` as one.
     #[default]
     Stock,
     /// Planner and buffer sizes only, captured from the owner's controller
@@ -300,8 +309,11 @@ struct Faults {
     /// `$32=1` gate in `serial_stream_job`, which checks for `ok` only.
     ignore_setting: Option<u32>,
     /// One-shot laser-switch wedge: the next M3/M4 line (not M5) arms
-    /// `GrblBrain::wedged`, after which lines are accepted and executed but
-    /// never acknowledged until `0x18`; `?` still answers. The arming line
+    /// `GrblBrain::wedged` when that line is PARSED (its newline arrives),
+    /// not when the planner accepts it. From then until `0x18`, every line
+    /// not yet acknowledged gets no `ok`: lines sent after it, the arming
+    /// line itself, and lines sent BEFORE it that are still parked behind a
+    /// full planner. They are still accepted and executed; `?` still answers. The arming line
     /// is itself unacknowledged, matching the probe's wedge message shape
     /// ("Idle x3 with no ok for: M4 ..."): a modelling choice pending a
     /// hardware capture. `$`-system and empty lines still ack during a wedge;
@@ -655,7 +667,10 @@ impl GrblBrain {
                 // reject/ignore faults); anything else unrecognized is
                 // accepted harmlessly (see "Not modelled" on SEED_SETTINGS).
                 if let Some((n, v)) = parse_setting_write(rest) {
-                    if self.faults.reject_setting == Some(n) {
+                    if !v.parse::<f64>().is_ok_and(|f| f.is_finite()) {
+                        // Non-finite (NaN, inf): stock's bad number format.
+                        self.push_line("error:2");
+                    } else if self.faults.reject_setting == Some(n) {
                         self.push_line("error:3");
                     } else {
                         if self.faults.ignore_setting != Some(n) {
@@ -739,12 +754,15 @@ impl GrblBrain {
         if self.homing_remaining.is_some() {
             return;
         }
-        // `A:` accessory field, per profile (see `SimProfile`). Stock follows
-        // stock-source intent (A:S = spindle energised; absence = "not
-        // reported"; omission semantics unverified on hardware). Captured127
-        // reproduces the capture: A:S on every report, which on that
-        // controller cannot be read as beam-on or beam-off. The
-        // override-refresh cycle and `S` versus `C` are not modelled.
+        // `A:` accessory field, per profile (see `SimProfile`). Stock emits
+        // A:S while the sim's spindle flag is set (stock-source intent;
+        // omission semantics unverified on hardware). Captured127 emits A:S
+        // on every report; the capture shows it only on reports carrying
+        // overrides (53 of 122), so this profile never produces the
+        // A:-absent report the controller sends most of the time. Per
+        // DECISIONS 2026-09-25, A:S is not a beam signal under either
+        // profile and nothing may treat it as one. The override-refresh
+        // cycle and `S` versus `C` are not modelled.
         // Both arms inline, one line each: mutation-battery anchors
         // (E5-M4/M5, E5-M9).
         #[rustfmt::skip]
@@ -1730,9 +1748,10 @@ mod tests {
         assert!(!port.laser_mode());
     }
 
-    // E5-M4/M5: Stock reports `A:S` only while the spindle is on.
+    // E5-M4/M5: Stock emits `A:S` only while the sim's spindle flag is set.
+    // A sim reporting rule, not a beam signal (DECISIONS 2026-09-25).
     #[test]
-    fn stock_status_reports_a_s_only_while_spindle_on() {
+    fn stock_status_a_field_follows_sim_spindle_flag() {
         let mut port = fresh(SimConfig::default());
         port.write_all(b"?").unwrap();
         let off = read_line_blocking(&mut port, 5).unwrap();
@@ -1746,9 +1765,10 @@ mod tests {
         assert!(on.ends_with("|A:S>"), "spindle on: A:S, got {on}");
     }
 
-    // E5-M9: Captured127 reports `A:S` even after an acknowledged M5.
+    // E5-M9: Captured127 emits `A:S` even after an acknowledged M5, so it
+    // cannot be read as beam state.
     #[test]
-    fn captured_profile_reports_a_s_after_acknowledged_m5() {
+    fn captured_profile_emits_a_field_after_acknowledged_m5() {
         let mut port = fresh(SimConfig::for_profile(SimProfile::Captured127));
         send_line(&mut port, "M4 S500");
         assert_eq!(read_reply(&mut port, 5), vec!["ok"]);
@@ -1810,5 +1830,44 @@ mod tests {
         assert!(banner.contains("Grbl"), "got: {banner}");
         send_line(&mut port, "G1 X3");
         assert_eq!(read_reply(&mut port, 5), vec!["ok"]);
+    }
+
+    // E5-M13: a non-finite value is refused as a bad number and not applied.
+    #[test]
+    fn non_finite_setting_value_answers_error_2_and_is_not_applied() {
+        let mut port = fresh(SimConfig::default());
+        send_line(&mut port, "$32=0");
+        assert_eq!(read_reply(&mut port, 5), vec!["ok"]);
+        for bad in ["$32=NaN", "$32=inf"] {
+            send_line(&mut port, bad);
+            assert_eq!(read_reply(&mut port, 5), vec!["error:2"], "{bad}");
+            assert!(!port.laser_mode(), "{bad} must not turn laser mode on");
+        }
+        let dump = dump_settings(&mut port);
+        assert!(dump.contains(&"$32=0".to_string()), "got: {dump:?}");
+    }
+
+    // W1 (documented behaviour, no battery id): the wedge arms when the M4
+    // line is PARSED, so a line sent before it and still parked behind a
+    // full planner is never acknowledged either.
+    #[test]
+    fn wedge_arms_at_parse_so_parked_earlier_line_is_never_acked() {
+        let mut port = fresh(SimConfig {
+            planner_depth: 1,
+            line_ticks: 2,
+            ..SimConfig::default()
+        });
+        send_line(&mut port, "G1 X1");
+        assert_eq!(read_reply(&mut port, 5), vec!["ok"]);
+        send_line(&mut port, "G1 X2"); // parked: the planner is full
+        assert_eq!(port.pending_len(), 1);
+        port.set_wedge_after_spindle_cmd();
+        send_line(&mut port, "M4 S500");
+        assert_eq!(
+            read_line_blocking(&mut port, 20),
+            None,
+            "G1 X2, sent before the M4, is never acked"
+        );
+        assert_eq!(port.pending_len(), 0, "G1 X2 was still promoted");
     }
 }

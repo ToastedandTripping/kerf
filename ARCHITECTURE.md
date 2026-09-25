@@ -163,13 +163,17 @@ src-tauri/src/
                                applied: the START ruling's acknowledged-but-not-accepted
                                case). Writes are accepted in every state (stock error:8
                                outside Idle/Alarm is not modelled), and 0x18 always
-                               clears the spindle. `set_wedge_after_spindle_cmd` (lines
-                               accepted, never acked, `?` answers, until 0x18).
+                               clears the spindle. `set_wedge_after_spindle_cmd` arms when
+                               the M3/M4 line is parsed: from then until 0x18 every line
+                               not yet acked, parked ones sent before it included, is
+                               accepted and executed but never acked; `?` answers.
+                               Non-finite setting values answer error:2.
                                `SimProfile::{Stock, Captured127}` (128/15 vs 65535/127).
                                `A:` field per profile: Stock `A:S` while the spindle is
                                on (stock-source intent); Captured127 `A:S` on every
-                               report, as the 2026-09-14 capture shows, where it cannot
-                               be read as beam-on or beam-off. Host/model evidence only;
+                               report (the 2026-09-14 capture shows it only on reports
+                               carrying overrides). Not a beam signal under either
+                               profile (DECISIONS 2026-09-25). Host/model evidence only;
                                never certifies the owner's controller.
     scripted_port.rs         — Deterministic test double with scripted read steps,
                                ordered I/O trace, hold points, session-event observer
