@@ -396,6 +396,30 @@ function toCutObjects(
       if (synth) paths.push(synth);
     }
 
+    // E1a: a sharp (cornerRadius 0), point-less rectangle on a fillLine layer
+    // gets a closed four-corner contour in world coordinates before rotation
+    // (rotation travels on base.rotation; each Rust arm applies it once). Only
+    // fillLine: fill/offsetFill sharp rectangles keep their AABB path untouched.
+    let sharpRectContour = false;
+    if (
+      paths.length === 0 &&
+      layer.mode === "fillLine" &&
+      obj.type === "rectangle" &&
+      !((obj.cornerRadius || 0) > 0)
+    ) {
+      const { x: rx, y: ry, width: rw, height: rh } = obj.transform;
+      paths.push({
+        points: [
+          { x: rx, y: ry },
+          { x: rx + rw, y: ry },
+          { x: rx + rw, y: ry + rh },
+          { x: rx, y: ry + rh },
+        ],
+        closed: true,
+      });
+      sharpRectContour = true;
+    }
+
     // Phase 2: ungrouped fill/fillLine non-rect closed shapes route to maskFill.
     // Rectangles keep the AABB fast path (their bbox IS the shape).
     // offsetFill remains an explicit opt-in dropdown mode.
@@ -411,6 +435,12 @@ function toCutObjects(
       paths.length > 0
     ) {
       effectiveMode = "maskFill";
+    }
+    // E1a: lower to fill only when the sharp-rectangle contour branch fired.
+    // A rectangle carrying its own points stays fillLine and trips the
+    // assertNoFillLine invariant (the fill arm would comment-and-skip it).
+    if (sharpRectContour) {
+      effectiveMode = "fill";
     }
 
     // Apply kerf offset for closed paths in line mode
@@ -588,11 +618,27 @@ function toCutObjects(
     );
   }
 
+  assertNoFillLine(result);
   return { objects: result, warnings };
+}
+
+/** Invariant: the Rust engine has no fillLine arm and skips such objects with
+ *  only a comment. Every fillLine object must have been lowered to fill/maskFill
+ *  plus a line overlay by now; anything left is a loud error, never a silent drop. */
+function assertNoFillLine(objects: CutObject[]): void {
+  for (const o of objects) {
+    if (o.layer.mode === "fillLine") {
+      throw new Error(
+        `internal: object '${o.id}' (${o.objType}) reached the engine as fillLine; it would be silently skipped`
+      );
+    }
+  }
 }
 
 /** Exported for unit testing — do not use in production code outside this module. */
 export { toCutObjects as toCutObjectsForTest };
+/** Exported for unit testing — do not use in production code outside this module. */
+export { assertNoFillLine as assertNoFillLineForTest };
 
 /** Generate image G-code for visible output images, keyed by layer array position.
  *
