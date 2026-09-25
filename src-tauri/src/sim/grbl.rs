@@ -7,9 +7,10 @@
 //!
 //! ## Two-stage buffer model (the whole point)
 //!
-//! Incoming bytes -> a 128-byte RX budget (`GrblBrain::rx_used`, config
-//! `rx_budget`) -> line parser -> planner queue (config `planner_depth`,
-//! default 15) -> executor (each accepted entry counts down `line_ticks`
+//! Incoming bytes -> an RX budget (`GrblBrain::rx_used`, config
+//! `rx_budget`: 128 bytes under the `Stock` profile, 65535 under
+//! `Captured127`) -> line parser -> planner queue (config `planner_depth`:
+//! 15 under `Stock`, 127 under `Captured127`) -> executor (each accepted entry counts down `line_ticks`
 //! before "finishing").
 //!
 //! `ok` is emitted the instant a line is **accepted into the planner**, not
@@ -33,12 +34,15 @@
 //! - Startup banner (`Grbl 1.1f ['$' for help]`) is queued the moment a
 //!   `GrblBrain`/`SimPort` is constructed (modeling "power-on") and again on
 //!   a `0x18` soft reset.
-//! - `ok` / `error:N` — not modeled beyond acceptance semantics above; no
-//!   line in this sim is ever rejected with `error:N` (out of scope: the
-//!   generator only ever emits well-formed G0/G1, see program non-goals).
+//! - `ok` / `error:N` — acceptance semantics above. A line is rejected with
+//!   `error:N` only by a scripted fault: `set_error_at_line` (the Nth
+//!   accepted line) or `set_reject_setting` (`error:3` for one setting
+//!   write). Nothing is rejected on its own merits.
 //! - `ALARM:n` is reachable only via `initial_state`/reset (config surface),
 //!   cleared by `$X`.
-//! - `?` (single realtime byte) -> `<State|MPos:x,y,z|FS:f,s>`. Muted while
+//! - `?` (single realtime byte) -> `<State|MPos:x,y,z|FS:f,s>`, plus an
+//!   `|A:S` accessory field per profile (see `status_probe`): `Stock` emits
+//!   it while the spindle is on, `Captured127` on every report. Muted while
 //!   `$H` homing is in flight, mirroring the muted-`?` window real GRBL
 //!   exhibits (serial_pump's liveness probing tolerates stretches of
 //!   silence for exactly this reason).
@@ -74,7 +78,9 @@
 //! ## Fault injection (Relay 1B)
 //!
 //! `SimPort`'s `set_*` methods (`set_drop_ok_at_line`, `set_error_at_line`,
-//! `set_alarm_after_ticks`, `set_silent`, `set_eof`, `set_write_fail`) script
+//! `set_alarm_after_ticks`, `set_silent`, `set_eof`, `set_write_fail`,
+//! `set_reject_setting`, `set_ignore_setting`, `set_wedge_after_spindle_cmd`)
+//! script
 //! misbehavior that composes with the model above rather than bypassing it
 //! — a dropped `ok` still lets its line execute; an unsolicited alarm still
 //! runs through the normal tick clock. Each maps 1:1 to a `run_pump`
@@ -85,8 +91,10 @@
 //!
 //! ## Explicitly out of scope
 //!
-//! Acceleration/junction planning, G2/G3 arcs, laser-power simulation, and
-//! real `$$` settings semantics (a canned dump is enough).
+//! Acceleration/junction planning, G2/G3 arcs, and laser-power simulation.
+//! `$$` IS modelled as a settings table (see `SEED_SETTINGS` and its
+//! "Not modelled" list). A green run of this sim is host/model evidence
+//! only; it never certifies the owner's controller.
 
 #![cfg_attr(not(test), allow(dead_code))]
 // No production consumer exists yet in this relay — Phase 2 wires a demo
@@ -105,6 +113,79 @@ use std::time::Duration;
 
 /// The GRBL startup/reset banner, verbatim.
 const BANNER: &str = "Grbl 1.1f ['$' for help]";
+
+/// Seed values for the `$$` settings table (`GrblBrain::settings`). `$30` is
+/// max spindle speed (stock default 1000); `$32` is laser mode.
+///
+/// Settings persist across `0x18` (as in GRBL, which keeps them in EEPROM),
+/// so `boot_or_reset` never touches the table. `$32` follows stock
+/// `settings.c`: a value whose integer part is non-zero means laser mode,
+/// and it is stored normalised to `1`/`0`. The only writer is a `$N=V` line;
+/// there is no `$RST` model.
+///
+/// Not modelled (each named, parked, and unknown or different on hardware):
+/// - Setting writes outside Idle/Alarm. Stock refuses `$N=V` with `error:8`
+///   there; this sim accepts a write in every state. It matters because the
+///   buffered job writes `$32=1` as its first line, possibly while a previous
+///   job's planner is still draining.
+/// - Bad-number writes. Stock answers `error:2`; here a non-numeric value
+///   falls through to the catch-all `ok` and is not applied.
+/// - `$RST`, the override-refresh cycle of the `A:` field, `S` versus `C`
+///   for M4, and whether `$` lines still ack during a wedge.
+/// - `0x18` always resets and always clears the spindle. DECISIONS
+///   2026-09-05 records a `0x18` on the owner's controller that failed to
+///   stop the beam (2026-09-02); there is no fixture for that.
+const SEED_SETTINGS: [(u32, &str); 4] = [(0, "10"), (1, "25"), (30, "1000"), (32, "1")];
+
+/// Parses the body of a `$N=V` setting write (`rest` is the line after `$`).
+/// `Some` only when `N` is an integer and `V` parses as a number.
+fn parse_setting_write(rest: &str) -> Option<(u32, String)> {
+    let (n, v) = rest.split_once('=')?;
+    let n: u32 = n.trim().parse().ok()?;
+    let v = v.trim();
+    v.parse::<f64>().ok()?;
+    Some((n, v.to_string()))
+}
+
+/// Stock `$32` semantics: the integer part of the value, non-zero means
+/// laser mode. Returns the normalised stored value, `"1"` or `"0"`.
+fn normalise_laser_flag(v: &str) -> String {
+    let n = v.parse::<f64>().map(|f| f.trunc()).unwrap_or(0.0);
+    if n != 0.0 {
+        "1".to_string()
+    } else {
+        "0".to_string()
+    }
+}
+
+/// Which controller the sim's sizes and `A:` reporting follow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SimProfile {
+    /// Stock GRBL 1.1: 128-byte RX buffer, 15-block planner, and `A:S`
+    /// reported while the spindle is on (stock-source intent: A:S = spindle
+    /// energised; absence means "not reported"; omission semantics are
+    /// unverified on hardware).
+    #[default]
+    Stock,
+    /// Planner and buffer sizes only, captured from the owner's controller
+    /// status/option reports, 2026-09-14 (the public capture's
+    /// `Bf:127,65535`); not a certification of that controller.
+    ///
+    /// The option report in the capture says 65536; every status report that
+    /// carries `Bf:` says 65535 bytes available. `rx_budget` is the
+    /// receiver's usable capacity, so it takes the observed usable figure,
+    /// the stricter of the two: a host that fills to 65536 overflows the sim
+    /// instead of passing.
+    ///
+    /// `A:` field: in the capture, `A:S` was present on every status report
+    /// that carried overrides (53 of 53), including Idle reports after an
+    /// acknowledged `M5` and before any `M3`/`M4`, and absent on every report
+    /// without overrides (69 of 69), including Run reports mid-cut with
+    /// spindle speed non-zero. On that controller it cannot be read as
+    /// beam-on or beam-off. This profile emits `A:S` on every report; the
+    /// override-refresh cycle is not modelled.
+    Captured127,
+}
 
 /// GRBL machine state, as reported in `<State|...>` status lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,6 +231,24 @@ pub struct SimConfig {
     pub initial_state: MachineState,
     /// Enforce the F13 abort-volley invariant (see module docs). Default on.
     pub strict_hold_invariant: bool,
+    /// Which controller's sizes and `A:` reporting to follow. Default `Stock`.
+    pub profile: SimProfile,
+}
+
+impl SimConfig {
+    /// Default config with `rx_budget`/`planner_depth` set from the profile.
+    pub fn for_profile(p: SimProfile) -> SimConfig {
+        let (rx_budget, planner_depth) = match p {
+            SimProfile::Stock => (128, 15),
+            SimProfile::Captured127 => (65535, 127),
+        };
+        SimConfig {
+            rx_budget,
+            planner_depth,
+            profile: p,
+            ..SimConfig::default()
+        }
+    }
 }
 
 impl Default for SimConfig {
@@ -161,6 +260,7 @@ impl Default for SimConfig {
             homing_ticks: 3,
             initial_state: MachineState::Idle,
             strict_hold_invariant: true,
+            profile: SimProfile::Stock,
         }
     }
 }
@@ -191,6 +291,22 @@ struct Faults {
     /// see `GrblBrain::accept_ok`). Models a firmware ack glitch: the line
     /// still executes, but the host never hears back.
     drop_ok_at_line: Option<u32>,
+    /// Answer `error:3` to a `$N=V` write whose `N` equals this, and do not
+    /// apply it. Other settings are unaffected. Wins over `ignore_setting`.
+    reject_setting: Option<u32>,
+    /// Answer `ok` to a `$N=V` write whose `N` equals this, and do NOT apply
+    /// it. DECISIONS 2026-09-10: "a controller that acknowledges a settings
+    /// write is not a controller that accepted it". Consumer: the Rust
+    /// `$32=1` gate in `serial_stream_job`, which checks for `ok` only.
+    ignore_setting: Option<u32>,
+    /// One-shot laser-switch wedge: the next M3/M4 line (not M5) arms
+    /// `GrblBrain::wedged`, after which lines are accepted and executed but
+    /// never acknowledged until `0x18`; `?` still answers. The arming line
+    /// is itself unacknowledged, matching the probe's wedge message shape
+    /// ("Idle x3 with no ok for: M4 ..."): a modelling choice pending a
+    /// hardware capture. `$`-system and empty lines still ack during a wedge;
+    /// that is not modelled and is unknown on hardware.
+    wedge_after_spindle_cmd: bool,
     /// Reply `error:{1}` instead of `ok` for the Nth accepted line (`.0`).
     error_at_line: Option<(u32, u32)>,
     /// Raise an unsolicited `ALARM:1` after N more ticks elapse (e.g. a
@@ -330,6 +446,12 @@ pub struct GrblBrain {
     /// the wire" the way `MockPort`'s shared `written` buffer does for
     /// plain writes (serial.rs:469).
     realtime_log: Vec<u8>,
+    /// The `$$` settings table, seeded from `SEED_SETTINGS`. Persists across
+    /// `0x18`.
+    settings: Vec<(u32, String)>,
+    /// Laser-switch wedge in effect (see `Faults::wedge_after_spindle_cmd`).
+    /// Cleared by `0x18`.
+    wedged: bool,
 }
 
 impl GrblBrain {
@@ -349,6 +471,11 @@ impl GrblBrain {
             accepted_count: 0,
             faults: Faults::default(),
             realtime_log: Vec::new(),
+            settings: SEED_SETTINGS
+                .iter()
+                .map(|(n, v)| (*n, v.to_string()))
+                .collect(),
+            wedged: false,
         };
         brain.boot_or_reset();
         brain
@@ -367,6 +494,7 @@ impl GrblBrain {
         self.homing_remaining = None;
         self.state = self.config.initial_state;
         self.spindle_on = false;
+        self.wedged = false;
         self.push_line(BANNER);
     }
 
@@ -474,6 +602,14 @@ impl GrblBrain {
             }
         }
 
+        if self.faults.wedge_after_spindle_cmd
+            && contains_spindle_sync_mcode(&text)
+            && !contains_spindle_off_mcode(&text)
+        {
+            self.wedged = true;
+            self.faults.wedge_after_spindle_cmd = false;
+        }
+
         if text.is_empty() {
             self.rx_used = self.rx_used.saturating_sub(len);
             self.push_line("ok");
@@ -505,19 +641,49 @@ impl GrblBrain {
                 self.push_line("ok");
             }
             "$" => {
-                // Canned settings dump. Real `$$` semantics are explicitly
-                // out of scope for this program (see program non-goals).
-                for line in ["$0=10", "$1=25", "$32=1"] {
-                    self.push_line(line);
+                // The settings table, in order (see `SEED_SETTINGS`).
+                // Kept on one line: it is a mutation-battery anchor (E5-M1).
+                #[rustfmt::skip]
+                let dump: Vec<String> = self.settings.iter().map(|(n, v)| format!("${n}={v}")).collect();
+                for line in dump {
+                    self.push_line(&line);
                 }
                 self.push_line("ok");
             }
             _ => {
-                // Setting writes ($N=V) and anything else unrecognized:
-                // accept harmlessly. Real `$$` semantics out of scope.
-                self.push_line("ok");
+                // A numeric setting write `$N=V` is applied (subject to the
+                // reject/ignore faults); anything else unrecognized is
+                // accepted harmlessly (see "Not modelled" on SEED_SETTINGS).
+                if let Some((n, v)) = parse_setting_write(rest) {
+                    if self.faults.reject_setting == Some(n) {
+                        self.push_line("error:3");
+                    } else {
+                        if self.faults.ignore_setting != Some(n) {
+                            self.apply_setting(n, v);
+                        }
+                        self.push_line("ok");
+                    }
+                } else {
+                    self.push_line("ok");
+                }
             }
         }
+    }
+
+    /// Update or append setting `n`. `$32` is normalised to `1`/`0`.
+    fn apply_setting(&mut self, n: u32, v: String) {
+        let v = if n == 32 { normalise_laser_flag(&v) } else { v };
+        if let Some(slot) = self.settings.iter_mut().find(|(k, _)| *k == n) {
+            slot.1 = v;
+        } else {
+            self.settings.push((n, v));
+        }
+    }
+
+    /// Laser mode, derived from the one source: the stored `$32` value
+    /// (normalised on write, so it equals `"1"` in laser mode).
+    pub fn laser_mode(&self) -> bool {
+        self.settings.iter().any(|(k, v)| *k == 32 && v == "1")
     }
 
     /// Motion/M-code line: accept into the planner if there's room (free
@@ -547,6 +713,9 @@ impl GrblBrain {
     fn accept_ok(&mut self) {
         self.accepted_count += 1;
         let n = self.accepted_count;
+        if self.wedged {
+            return; // wedge: accepted into the planner, never acked
+        }
         if let Some((target, code)) = self.faults.error_at_line {
             if target == n {
                 self.push_line(&format!("error:{code}"));
@@ -570,19 +739,38 @@ impl GrblBrain {
         if self.homing_remaining.is_some() {
             return;
         }
-        let line = format!("<{}|MPos:0.000,0.000,0.000|FS:0,0>", self.state.as_str());
+        // `A:` accessory field, per profile (see `SimProfile`). Stock follows
+        // stock-source intent (A:S = spindle energised; absence = "not
+        // reported"; omission semantics unverified on hardware). Captured127
+        // reproduces the capture: A:S on every report, which on that
+        // controller cannot be read as beam-on or beam-off. The
+        // override-refresh cycle and `S` versus `C` are not modelled.
+        // Both arms inline, one line each: mutation-battery anchors
+        // (E5-M4/M5, E5-M9).
+        #[rustfmt::skip]
+        let accessory = match self.config.profile {
+            SimProfile::Stock => if self.spindle_on { "|A:S" } else { "" },
+            SimProfile::Captured127 => "|A:S",
+        };
+        let line = format!(
+            "<{}|MPos:0.000,0.000,0.000|FS:0,0{}>",
+            self.state.as_str(),
+            accessory
+        );
         self.push_line(&line);
     }
 
     fn feed_hold(&mut self) {
         if self.state != MachineState::Alarm {
             self.state = MachineState::Hold;
-            // Model firmware automatic laser-off at hold-complete ($32=1).
-            // The sim always models a laser-mode machine ($32=1 in its $$
-            // dump), so auto-off is unconditional. This matches the hardware
-            // behavior confirmed by probe 2026-09-14: FS:0,0 appears after
-            // Hold:0, BEFORE any 0x9E is sent.
-            self.spindle_on = false;
+            // Model firmware automatic laser-off at hold-complete, gated on
+            // laser mode ($32=1, the seeded default). This matches the
+            // hardware behavior confirmed by probe 2026-09-14: FS:0,0
+            // appears after Hold:0, BEFORE any 0x9E is sent. Under $32=0 the
+            // spindle stays on through the hold.
+            if self.laser_mode() {
+                self.spindle_on = false;
+            }
         }
     }
 
@@ -756,6 +944,11 @@ impl SimPort {
         self.brain.lock().unwrap().spindle_energized()
     }
 
+    /// Laser mode from the `$32` setting (delegated to GrblBrain).
+    pub fn laser_mode(&self) -> bool {
+        self.brain.lock().unwrap().laser_mode()
+    }
+
     // -- Fault injection (Relay 1B) -----------------------------------------
     // Every setter locks the shared brain, so a fault armed via ANY
     // `try_clone()`'d handle is observed by all of them — the same handle
@@ -791,6 +984,25 @@ impl SimPort {
     /// The port vanished (write side): every write returns `Err`.
     pub fn set_write_fail(&self, fail: bool) {
         self.brain.lock().unwrap().faults.write_fail = fail;
+    }
+
+    /// Answer `error:3` to a `$n=V` write and do not apply it.
+    pub fn set_reject_setting(&self, n: u32) {
+        self.brain.lock().unwrap().faults.reject_setting = Some(n);
+    }
+
+    /// Answer `ok` to a `$n=V` write and do NOT apply it: the START ruling's
+    /// named failure (DECISIONS 2026-09-10, "a controller that acknowledges
+    /// a settings write is not a controller that accepted it"). Consumer:
+    /// the Rust `$32=1` gate, which checks for `ok` only and never reads back.
+    pub fn set_ignore_setting(&self, n: u32) {
+        self.brain.lock().unwrap().faults.ignore_setting = Some(n);
+    }
+
+    /// Arm the one-shot laser-switch wedge (see `Faults`): after the next
+    /// M3/M4 line, lines are accepted but never acked until `0x18`.
+    pub fn set_wedge_after_spindle_cmd(&self) {
+        self.brain.lock().unwrap().faults.wedge_after_spindle_cmd = true;
     }
 
     /// Every realtime byte this brain has received, in arrival order — the
@@ -1359,5 +1571,244 @@ mod tests {
         b.write_all(b"?").unwrap();
         let status = read_line_from_dyn(&mut *a, 5).expect("clone A must observe B's write");
         assert!(status.starts_with('<'), "got: {status}");
+    }
+
+    // -- E5: settings table, reject/ignore faults, profiles, A:, wedge -------
+
+    /// Reads every line the sim answers with until a line that is `ok` or
+    /// starts with `error:` (inclusive), retrying on timeout up to
+    /// `max_ticks` reads. Returns the lines in order.
+    fn read_reply(port: &mut SimPort, max_ticks: u32) -> Vec<String> {
+        let mut acc = Vec::new();
+        let mut buf = [0u8; 256];
+        for _ in 0..max_ticks {
+            match port.read(&mut buf) {
+                Ok(n) => {
+                    acc.extend_from_slice(&buf[..n]);
+                    let text = String::from_utf8_lossy(&acc).to_string();
+                    let lines: Vec<String> = text
+                        .split('\n')
+                        .map(|l| l.trim().to_string())
+                        .filter(|l| !l.is_empty())
+                        .collect();
+                    if text.ends_with('\n')
+                        && lines
+                            .last()
+                            .is_some_and(|l| l == "ok" || l.starts_with("error:"))
+                    {
+                        return lines;
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::TimedOut => continue,
+                Err(e) => panic!("unexpected read error: {e}"),
+            }
+        }
+        panic!(
+            "no ok/error reply within {max_ticks} reads; got {:?}",
+            String::from_utf8_lossy(&acc)
+        );
+    }
+
+    fn dump_settings(port: &mut SimPort) -> Vec<String> {
+        send_line(port, "$$");
+        read_reply(port, 5)
+    }
+
+    fn fresh(config: SimConfig) -> SimPort {
+        let mut port = SimPort::new(config);
+        let _ = read_line_blocking(&mut port, 5); // banner
+        port
+    }
+
+    // E5-M1: a `$32=0` write is applied, and `$$` reports the table.
+    #[test]
+    fn setting_write_32_0_is_applied_and_reported_by_dump() {
+        let mut port = fresh(SimConfig::default());
+        send_line(&mut port, "$32=0");
+        assert_eq!(read_reply(&mut port, 5), vec!["ok"]);
+        let dump = dump_settings(&mut port);
+        assert!(dump.contains(&"$32=0".to_string()), "got: {dump:?}");
+        assert!(!dump.contains(&"$32=1".to_string()), "got: {dump:?}");
+        assert!(!port.laser_mode());
+    }
+
+    // E5-C1 (control): the default table says `$32=1`, in seed order.
+    #[test]
+    fn default_dump_is_the_seeded_table_with_laser_mode_on() {
+        let mut port = fresh(SimConfig::default());
+        let dump = dump_settings(&mut port);
+        assert_eq!(dump, vec!["$0=10", "$1=25", "$30=1000", "$32=1", "ok"]);
+        assert!(port.laser_mode());
+    }
+
+    // E5-M2: under `$32=0` the hold does not auto-stop the spindle; under
+    // the default `$32=1` it does.
+    #[test]
+    fn hold_auto_off_is_gated_on_laser_mode() {
+        let mut port = fresh(SimConfig::default());
+        send_line(&mut port, "$32=0");
+        assert_eq!(read_reply(&mut port, 5), vec!["ok"]);
+        send_line(&mut port, "M4 S500");
+        assert_eq!(read_reply(&mut port, 5), vec!["ok"]);
+        send_line(&mut port, "G1 X10 F500");
+        assert_eq!(read_reply(&mut port, 5), vec!["ok"]);
+        port.write_all(b"!").unwrap();
+        assert_eq!(port.machine_state(), MachineState::Hold);
+        assert!(
+            port.spindle_energized(),
+            "$32=0: the spindle stays on through the hold"
+        );
+
+        let mut laser = fresh(SimConfig::default());
+        send_line(&mut laser, "M4 S500");
+        assert_eq!(read_reply(&mut laser, 5), vec!["ok"]);
+        send_line(&mut laser, "G1 X10 F500");
+        assert_eq!(read_reply(&mut laser, 5), vec!["ok"]);
+        laser.write_all(b"!").unwrap();
+        assert!(!laser.spindle_energized(), "$32=1: hold auto-stops");
+    }
+
+    // E5-M3: a rejected write answers `error:3` and is not applied.
+    #[test]
+    fn rejected_setting_write_answers_error_3_and_is_not_applied() {
+        let mut port = fresh(SimConfig::default());
+        port.set_reject_setting(30);
+        send_line(&mut port, "$30=500");
+        assert_eq!(read_reply(&mut port, 5), vec!["error:3"]);
+        let dump = dump_settings(&mut port);
+        assert!(dump.contains(&"$30=1000".to_string()), "got: {dump:?}");
+        assert!(!dump.contains(&"$30=500".to_string()), "got: {dump:?}");
+    }
+
+    // E5-C2 (control): the reject fault names one setting only.
+    #[test]
+    fn reject_fault_leaves_other_settings_writable() {
+        let mut port = fresh(SimConfig::default());
+        port.set_reject_setting(30);
+        send_line(&mut port, "$32=0");
+        assert_eq!(read_reply(&mut port, 5), vec!["ok"]);
+        assert!(!port.laser_mode(), "$32=0 applied under a $30 reject");
+    }
+
+    // E5-M11: the START ruling's named failure — acked, not applied.
+    #[test]
+    fn ignored_setting_write_is_acked_and_not_applied() {
+        let mut port = fresh(SimConfig::default());
+        port.set_ignore_setting(32);
+        send_line(&mut port, "$32=0");
+        assert_eq!(read_reply(&mut port, 5), vec!["ok"]);
+        let dump = dump_settings(&mut port);
+        assert!(dump.contains(&"$32=1".to_string()), "got: {dump:?}");
+        assert!(!dump.contains(&"$32=0".to_string()), "got: {dump:?}");
+        assert!(port.laser_mode(), "ignored write leaves laser mode on");
+
+        // Other settings are unaffected by the fault.
+        send_line(&mut port, "$30=500");
+        assert_eq!(read_reply(&mut port, 5), vec!["ok"]);
+        let dump = dump_settings(&mut port);
+        assert!(dump.contains(&"$30=500".to_string()), "got: {dump:?}");
+    }
+
+    // E5-M12: `$32` follows stock semantics — integer part, normalised.
+    #[test]
+    fn laser_flag_is_normalised_on_write() {
+        let mut port = fresh(SimConfig::default());
+        send_line(&mut port, "$32=0");
+        assert_eq!(read_reply(&mut port, 5), vec!["ok"]);
+        send_line(&mut port, "$32=2");
+        assert_eq!(read_reply(&mut port, 5), vec!["ok"]);
+        let dump = dump_settings(&mut port);
+        assert!(dump.contains(&"$32=1".to_string()), "got: {dump:?}");
+        assert!(!dump.contains(&"$32=2".to_string()), "got: {dump:?}");
+        assert!(port.laser_mode());
+
+        send_line(&mut port, "$32=0.5");
+        assert_eq!(read_reply(&mut port, 5), vec!["ok"]);
+        let dump = dump_settings(&mut port);
+        assert!(dump.contains(&"$32=0".to_string()), "got: {dump:?}");
+        assert!(!dump.contains(&"$32=0.5".to_string()), "got: {dump:?}");
+        assert!(!port.laser_mode());
+    }
+
+    // E5-M4/M5: Stock reports `A:S` only while the spindle is on.
+    #[test]
+    fn stock_status_reports_a_s_only_while_spindle_on() {
+        let mut port = fresh(SimConfig::default());
+        port.write_all(b"?").unwrap();
+        let off = read_line_blocking(&mut port, 5).unwrap();
+        assert!(off.starts_with("<Idle|"), "got: {off}");
+        assert!(!off.contains("A:"), "spindle off: no A: field, got {off}");
+
+        send_line(&mut port, "M4 S500");
+        assert_eq!(read_reply(&mut port, 5), vec!["ok"]);
+        port.write_all(b"?").unwrap();
+        let on = read_line_blocking(&mut port, 5).unwrap();
+        assert!(on.ends_with("|A:S>"), "spindle on: A:S, got {on}");
+    }
+
+    // E5-M9: Captured127 reports `A:S` even after an acknowledged M5.
+    #[test]
+    fn captured_profile_reports_a_s_after_acknowledged_m5() {
+        let mut port = fresh(SimConfig::for_profile(SimProfile::Captured127));
+        send_line(&mut port, "M4 S500");
+        assert_eq!(read_reply(&mut port, 5), vec!["ok"]);
+        send_line(&mut port, "M5");
+        assert_eq!(read_reply(&mut port, 5), vec!["ok"]);
+        assert!(!port.spindle_energized());
+        port.write_all(b"?").unwrap();
+        let status = read_line_blocking(&mut port, 5).unwrap();
+        assert!(status.ends_with("|A:S>"), "got: {status}");
+    }
+
+    // E5-M8: profile sizes. 100 x 13-byte lines, no reads (so no ticks).
+    #[test]
+    fn profiles_set_planner_and_rx_sizes() {
+        let captured = SimPort::new(SimConfig::for_profile(SimProfile::Captured127));
+        let mut w = captured.try_clone().unwrap();
+        for _ in 0..100 {
+            w.write_all(b"G1 X0.1 F500\n").unwrap();
+        }
+        assert_eq!(captured.planner_len(), 100);
+        assert_eq!(captured.pending_len(), 0);
+        assert_eq!(captured.overflow_count(), 0);
+
+        // The Stock branch overflows the 128-byte budget by design (85
+        // parked lines x 13 bytes) and asserts only planner and pending
+        // counts; do not "fix" it by adding an overflow assertion or
+        // shrinking the write.
+        let stock = SimPort::new(SimConfig::for_profile(SimProfile::Stock));
+        let mut w = stock.try_clone().unwrap();
+        for _ in 0..100 {
+            w.write_all(b"G1 X0.1 F500\n").unwrap();
+        }
+        assert_eq!(stock.planner_len(), 15);
+        assert_eq!(stock.pending_len(), 85);
+    }
+
+    // E5-M10: the wedge arms on M3/M4 only, never on M5.
+    #[test]
+    fn wedge_arms_on_spindle_on_not_on_m5() {
+        let mut port = fresh(SimConfig::default());
+        port.set_wedge_after_spindle_cmd();
+        send_line(&mut port, "M5");
+        assert_eq!(read_reply(&mut port, 5), vec!["ok"]);
+        send_line(&mut port, "G1 X1");
+        assert_eq!(read_reply(&mut port, 5), vec!["ok"]);
+
+        send_line(&mut port, "M4 S500");
+        // The arming line itself is never acked; `?` still answers.
+        assert_eq!(read_line_blocking(&mut port, 10), None, "M4 must not ack");
+        port.write_all(b"?").unwrap();
+        let status = read_line_blocking(&mut port, 5).unwrap();
+        assert!(status.starts_with('<'), "got: {status}");
+        send_line(&mut port, "G1 X2");
+        assert_eq!(read_line_blocking(&mut port, 10), None, "wedged: no ok");
+
+        // 0x18 clears it.
+        port.write_all(&[0x18]).unwrap();
+        let banner = read_line_blocking(&mut port, 5).unwrap();
+        assert!(banner.contains("Grbl"), "got: {banner}");
+        send_line(&mut port, "G1 X3");
+        assert_eq!(read_reply(&mut port, 5), vec!["ok"]);
     }
 }
