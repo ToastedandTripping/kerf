@@ -99,7 +99,7 @@ All of them go through `machineConnection.send()` (`connection.ts:286-340`). Tha
 ### 4. `src/components/panels/GrblSettingsDialog.tsx` (`saveSetting` only)
 
 - Delete the `key === 32` branch at `:115-116`. It is the second setter.
-- In its place, after the `send`, call `await machineConnection.readbackGrblSettings()` when `key === 32`, so the dialog's result is what the controller reports.
+- Add nothing in its place. Every save ends in `loadSettings()` (`:128`), which sends `$$` through `send()` (`:73`). The new `$$` hook (§5) therefore sets the flag from what the controller reports. A second, explicit readback would only duplicate it.
 - The `key === 30` branch (`:113-114`, which sets S-max from the requested value) is S4b's to fix ("generator mirrors update only from the readback"). It is left alone here and named in the report.
 
 ### 5. `src/lib/machine/connection.ts`
@@ -112,7 +112,9 @@ These are the only edits: `send`, `enableLaserMode`, `queryGrblSettings`, a new 
   - `$X`, `$H`, `$$`, `$#`, `$I`, `$G`, `$C`, `$J=` and G-code are not writes.
 - **One chokepoint, in `send()`:**
   - Before the `invoke`, if `isGrblSettingsWrite(command)`, call `invalidateGrblSettings()`. That covers the console, the settings dialog and the soft-limit buttons with no caller edits. `Console.tsx` is not edited.
-  - After the `invoke`, if `command.trim() === "$$"`, feed the responses to the readback parser (below). A console `$$` then re-verifies, which makes the existing "Run $$ in the console to retry" copy (`:217`) true.
+  - If `command.trim() === "$$"`, capture `const gen = settingsGeneration` **before** the `invoke`. After it returns, pass the responses to `parseSettingsResponses(responses, gen)`, the parse-only function below. It sends nothing, so there is no second `$$`.
+  - A console `$$` then re-verifies, and so does the settings dialog's reload. That makes the existing "Run $$ in the console to retry" copy (`:217`) true.
+  - A refused or errored `$$` has no `$32` line, so the flag ends up false.
   - Per-line job lines never match the classifier, so the cost there is one regex test.
 - **`invalidateGrblSettings()`:**
   - Increments `settingsGeneration`.
@@ -124,13 +126,15 @@ These are the only edits: `send`, `enableLaserMode`, `queryGrblSettings`, a new 
   - It prints only the existing `$32=<v> (laser mode ...)` info line, when a `$32` line is present. It prints no warning of its own.
   - The connect warning at `:205-214` stays where it is. So does the assertion at `connection.test.ts:383` that the warning is absent on a failed parse.
   - S4b swaps what feeds this setter (the native snapshot). It does not add a second setter.
-- **`readbackGrblSettings()`:** the existing `$$` send and parse body of `queryGrblSettings` (`:625-709`) moves here unchanged, applying `$20-22`, `$30`, `$110/111`, `$120/121` and `$130/131` as today, with two differences:
-  - The `$32` branch (`:668-673`) routes through `applyLaserModeReadback(outcome.responses, gen)`, with `gen` captured before the `invoke`.
+- **`parseSettingsResponses(responses: string[], gen: number): boolean`** (private). This is the existing per-line parse loop of `queryGrblSettings` (`:636-704`) moved unchanged. It applies `$20-22`, `$30`, `$110/111`, `$120/121` and `$130/131` as today, and returns `parsedAny`. It has one difference: the `$32` branch (`:668-673`) routes through `applyLaserModeReadback(responses, gen)`. It sends nothing.
+- **`readbackGrblSettings()`:** sends `$$` via its own `invoke` (as `:627` does today), with `gen` captured before the `invoke`. It then calls `parseSettingsResponses(outcome.responses, gen)`, with two further points:
+  - The `$32` decision happens inside `parseSettingsResponses`.
   - The `catch` calls `applyLaserModeReadback([], gen)`, so a readback that never returned leaves the flag **false**. Today it leaves the flag as it was, so a reconnect whose `$$` rejects would keep a stale `true`.
   - It returns `parsedAny` as today.
 - **`queryGrblSettings()`** becomes `setMachineHomed(false)` followed by `return this.readbackGrblSettings()`. The pinned homing reset stays inside it, so `machineSafety.test.ts:201` and the soft-limit buttons are unchanged.
 - **`enableLaserMode()`:**
-  - After the `$32=1` send (which itself invalidates through `send()`'s classifier), call `readbackGrblSettings()`. It does **not** call `queryGrblSettings`, so homing is not reset.
+  - Its `$32=1` write bypasses `send()` today: it has its own `invoke` at `:599` and its own "sent" line at `:598`. So first call `invalidateGrblSettings()` explicitly, then send as today. Before this fix the plan wrongly said the classifier covered this write.
+  - Then call `readbackGrblSettings()`. It does **not** call `queryGrblSettings`, so homing is not reset.
   - It returns the flag afterwards. If the flag is false, it prints the existing "may not have been accepted" warning, naming what the readback showed.
 - **Out of bounds for this batch:** do not touch `emergencyStop`, `softReset`, `feedHold`, `jog`, `jogTo`, the `FS:` block, the `connect()` body, or any part of `send()` except the two hooks above.
 - **X5 residual (stated, not fixed):** `invalidateGrblSettings` runs before the `invoke`, but invoke order is not a guaranteed wire order across concurrent Tauri commands. The native snapshot (S4a) closes that gap.
@@ -140,7 +144,7 @@ These are the only edits: `send`, `enableLaserMode`, `queryGrblSettings`, a new 
 Battery spec `kerf-safety-s1`.
 
 - `test_command` is `["npx","vitest","run","src/lib/machine/__tests__/canStartJob.test.ts","src/lib/machine/__tests__/connection.test.ts","src/components/panels/__tests__/machineJobLoop.test.tsx"]`. The baseline must be green (the battery refuses a red one).
-- Every id below is one contiguous find/replace (`mutation-battery.mjs:1553-1560`) and must be **killed**.
+- Every id below is one contiguous find/replace (`mutation-battery.mjs:1553-1560`) and must be **killed**. Every `find` occurs exactly once in its file (`MUTANT_ANCHOR_AMBIGUOUS`). S1-M1/S1-M2 (the two MaterialTestDialog gate calls) and S1-M3/S1-M10 (`handleFrame`) have identical natural anchors, so their `find` strings carry distinguishing surrounding context.
 - The battery has no "stays green" outcome. A *control* (C) is therefore a test that is green at baseline and whose named wrong variant turns it red. Its id appears in the journal as a killed mutant, like any other.
 - Drive the rendered bar and dialog through `serialTraceHarness.ts`, and `connection.ts` through its existing mocks. A test-local copy of the gate is forbidden.
 
@@ -160,7 +164,7 @@ An assertion on `disabled` alone leaves these mutants alive, because after this 
 | S1-M4 | Main FRAME button is disabled when `statusStale=true` | `frameDisabled` without the gate (restore the hand-rolled expression) |
 | S1-M5 | Connected with `grblLaserMode=true`, the console sends `$32=0`, and START (rendered) then refuses | Make `send()` skip the invalidate call |
 | S1-C1 | The console sends `$X` and `grblLaserMode` is unchanged | Make `isGrblSettingsWrite` return true for any `$`-prefixed command |
-| S1-M6 | `enableLaserMode()`: `ok`, then a `$$` readback showing `$32=0`, leaves the flag false | Set the flag on the `ok` (restore `:602-603`) |
+| S1-M6 | `enableLaserMode()`: `ok`, then a `$$` readback showing `$32=0`, leaves the flag false | Replace the `readbackGrblSettings()` call in `enableLaserMode` with `useStore.getState().setGrblLaserMode(true)` |
 | S1-M7 | A material grid that fits only in the wrong frame, with `originTop=true`, refuses | Drop `originTop` from the material bounds path |
 | S1-M8 | A readback with **no** `$32` line, after the flag was true, leaves the flag false | Make `applyLaserModeReadback` return early (flag untouched) when no `$32` line is present |
 | S1-M9 | A stale readback (invalidation lands before the `invoke` resolves, then `$32=1` comes back) leaves the flag false | Drop the `genAtStart === settingsGeneration` term |
@@ -168,12 +172,12 @@ An assertion on `disabled` alone leaves these mutants alive, because after this 
 | S1-C3 | The material grid is admitted with bed verified, laser on, idle and **no design G-code generated** | Skip-list without the `ext` branch (with `ext` supplied, the `gcodeResult` check still applies) |
 | S1-C4 | `enableLaserMode()` leaves `machineHomed` unchanged (`machineSafety.test.ts:201` keeps pinning the connect reset) | Make `enableLaserMode` call `queryGrblSettings` |
 | S1-M10 | Main FRAME handler with `gcodeStale=true` makes zero sends | Pass `movesExtents(moves)` as `ext` in `handleFrame` |
-| S1-M11 | The settings dialog saves `$32=1`, the controller answers `error:3`, the readback shows `$32=0`, and the flag stays false | Restore the `:116` requested-value setter |
-| S1-M12 | The settings dialog saves `$N0=G21` and the flag becomes false (invalidated) | Remove the `$N` alternative from `isGrblSettingsWrite` |
+| S1-M12 | `connection.test.ts`, at the `send()` level: with the flag true, `machineConnection.send("$N0=G21")` sets it false | Remove the `$N` alternative from `isGrblSettingsWrite` |
+| S1-M15 | `connection.test.ts`: `send("$$")` starts; an invalidation lands before its `invoke` resolves; the responses contain `$32=1`; the flag stays false | Move the `gen` capture in `send()`'s `$$` hook to after the `invoke` |
 | S1-M13 | A readback whose `invoke` rejects, after the flag was true, leaves the flag false | Remove `applyLaserModeReadback([], gen)` from the `catch` |
 | S1-M14 | A console `$$` whose responses contain `$32=1`, after an invalidation, leaves the flag true | Remove the `$$` hook from `send()` |
 
-`GrblSettingsDialog`'s tests live wherever that dialog is tested today. Ted names the file. If no test file exists, S1-M11 and S1-M12 go in `machineJobLoop.test.tsx` through the rendered dialog, and the report says so. A ninth file is not added without a waiver.
+There is no dialog-level mutant. The dialog's trailing `$$` re-verifies through the hook, so a dialog end-state assertion cannot see a restored requested-value setter (critic round 2). Deleting that setter is covered by Razor reading the diff and by S1-M14/S1-M15 on the hook it now relies on. No dialog test file is needed, and the count stays at 8.
 
 ## Verification
 
@@ -241,3 +245,11 @@ Critic: `kerf-safety-s1-critic.md` (Fable), verdict FAIL on core 3, with X1 and 
 10. **Nits.** 23 files; `:66-93`; read at `3a0d735`.
 
 Rejected: the critic's alternative for 1 (keep the Console hook, add a ninth file with a waiver). The `send()` chokepoint covers every write path with fewer edits, and the critic offered it as the primary fix.
+
+**Round 2 (critic CONCERN, FAIL lifted).** Residuals 1-6 folded:
+1. `enableLaserMode` invalidates explicitly, because its write bypasses `send()`. The false sentence is corrected.
+2. The `$$` hook captures the generation before the `invoke` and uses the parse-only `parseSettingsResponses`. S1-M15 is added.
+3. S1-M6's wrong variant is now a replacement, not an insertion.
+4. S1-M11 is dropped (unkillable through the dialog). S1-M12 moves to the `send()` level.
+5. The anchor-uniqueness rule is stated.
+6. The dialog's explicit readback is removed, because `loadSettings()` (`:73`, `:128`, verified) already re-reads.
