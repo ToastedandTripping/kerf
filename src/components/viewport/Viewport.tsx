@@ -26,7 +26,13 @@ import {
 } from "../../lib/tools/toolHandler";
 import { measureDistance, measureAngleDeg, formatMeasureLabel } from "../../lib/measure";
 
-import { PX_PER_MM, MIN_ZOOM, MAX_ZOOM } from "../../lib/constants";
+import {
+  PX_PER_MM,
+  MIN_ZOOM,
+  MAX_ZOOM,
+  ROTATE_HANDLE_OFFSET_PX,
+  screenPxToMm,
+} from "../../lib/constants";
 import { drawnLeaves, orientedHandlePoints } from "../../lib/geometry";
 import { applyObjectRotation, applyTextImageTransform, renderImageObject } from "./renderHelpers";
 import { clearTextures, evictTextures, setTextureReadyListener } from "./textureCache";
@@ -374,19 +380,9 @@ export function Viewport() {
       const selColor = parseInt(layerColor.replace("#", ""), 16);
       g.setStrokeStyle({ width: 1 / camera.zoom, color: selColor, alpha: 0.8 });
       if (rot !== 0) {
-        // Draw rotated bounding box
-        const cx = px + pw / 2;
-        const cy = py + ph / 2;
-        const cos = Math.cos(rot);
-        const sin = Math.sin(rot);
-        const corners = [
-          [-pw / 2, -ph / 2],
-          [pw / 2, -ph / 2],
-          [pw / 2, ph / 2],
-          [-pw / 2, ph / 2],
-        ].map(
-          ([dx, dy]) => [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos] as [number, number]
-        );
+        // Draw rotated bounding box (R2 core-16: the same corners the handles use)
+        const o = orientedHandlePoints(t, 0);
+        const corners = [o.nw, o.ne, o.se, o.sw].map((c) => [c.x * PX_PER_MM, c.y * PX_PER_MM]);
         g.moveTo(corners[0][0], corners[0][1]);
         for (let i = 1; i < 4; i++) g.lineTo(corners[i][0], corners[i][1]);
         g.closePath().stroke();
@@ -421,7 +417,7 @@ export function Viewport() {
         const hs = handleSize / 2;
         const edgeSize = 4 / camera.zoom;
         const ehs = edgeSize / 2;
-        const rotateOffsetMm = 20 / camera.zoom;
+        const rotateOffsetMm = screenPxToMm(ROTATE_HANDLE_OFFSET_PX, camera.zoom);
 
         if (selectedTransforms.length === 1) {
           // R1b: single-select — draw handles on the ROTATED rectangle
@@ -496,7 +492,7 @@ export function Viewport() {
           }
 
           // Rotation handle
-          const rotY = by - 20 / camera.zoom;
+          const rotY = by - ROTATE_HANDLE_OFFSET_PX / camera.zoom;
           const rotR = 4 / camera.zoom;
           g.setStrokeStyle({ width: 0.5 / camera.zoom, color: 0x4a90e2, alpha: 0.6 });
           g.moveTo(bx + bw / 2, by)

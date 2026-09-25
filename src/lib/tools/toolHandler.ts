@@ -11,7 +11,7 @@ import {
 } from "../geometry";
 import { computeAABB } from "../geometry";
 import { findNearestSnapPoint, snapThresholdMm, ellipseDiameter } from "../measure";
-import { PX_PER_MM } from "../constants";
+import { PX_PER_MM, ROTATE_HANDLE_OFFSET_PX, screenPxToMm } from "../constants";
 
 // Handle types for resize/rotate
 export type HandleType = "nw" | "n" | "ne" | "w" | "e" | "sw" | "s" | "se" | "rotate" | null;
@@ -348,9 +348,9 @@ export function hitTestHandle(worldX: number, worldY: number, zoom: number): Han
   const store = useStore.getState();
   if (store.selectedIds.length === 0) return null;
 
-  const handleSize = Math.max(12, 8) / zoom; // minimum 12 screen-pixel hit target
+  const handleSize = screenPxToMm(12, zoom); // 12 screen-pixel hit target, in mm
   const hs = handleSize / 2;
-  const rotateOffset = 20 / zoom; // mm above top-center in local-y
+  const rotateOffset = screenPxToMm(ROTATE_HANDLE_OFFSET_PX, zoom); // mm above top-center in local-y
 
   // --- Single-select: use oriented (rotated) handle anchors ---
   if (store.selectedIds.length === 1) {
@@ -400,7 +400,7 @@ export function hitTestHandle(worldX: number, worldY: number, zoom: number): Han
   if (!bbox) return null;
 
   // Rotation handle (above top center)
-  const rotHandleY = bbox.y - 20 / zoom;
+  const rotHandleY = bbox.y - rotateOffset;
   if (Math.abs(worldX - (bbox.x + bbox.w / 2)) < hs * 2 && Math.abs(worldY - rotHandleY) < hs * 2) {
     return "rotate";
   }
@@ -1340,7 +1340,7 @@ function handlePenDown(worldX: number, worldY: number, _e: React.PointerEvent) {
   const firstPt = penState.points[0];
   const zoom = store.camera.zoom;
   const dist = Math.hypot(x - firstPt.x, y - firstPt.y);
-  if (penState.points.length >= 3 && dist < PEN_CLOSE_RADIUS / zoom) {
+  if (penState.points.length >= 3 && dist < screenPxToMm(PEN_CLOSE_RADIUS, zoom)) {
     commitPen(true);
     return;
   }
@@ -1503,7 +1503,7 @@ export function hitTestNodeHandles(
   const obj = store.objects.find((o) => o.id === pathId);
   if (!obj || !obj.points) return null;
 
-  const hitRadius = NODE_HIT_RADIUS / zoom;
+  const hitRadius = screenPxToMm(NODE_HIT_RADIUS, zoom);
 
   // Hit test handles first (they're on top visually)
   for (let i = 0; i < obj.points.length; i++) {
