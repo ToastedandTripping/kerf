@@ -38,6 +38,40 @@ function markDescendantsDirty(obj: DesignObject) {
   }
 }
 
+// refresh-cut-vs-screen F6: remap layerIndex at every group depth — the cut
+// reads each LEAF's layer, so a top-level-only remap cut grouped parts with
+// the swapped-in layer's power and speed. No `children` key on leaves.
+function remapLayerIndexDeep(
+  objects: DesignObject[],
+  map: ReadonlyMap<number, number>
+): DesignObject[] {
+  return objects.map((o) => {
+    const next: DesignObject = { ...o, layerIndex: map.get(o.layerIndex) ?? o.layerIndex };
+    if (o.children !== undefined) next.children = remapLayerIndexDeep(o.children, map);
+    return next;
+  });
+}
+
+// refresh-cut-vs-screen F7: apply a layer-index PERMUTATION to live state.
+// Reorder undo/redo use this rather than a layers+objects snapshot: layer edits
+// are not undoable and some imports are not either, so a snapshot would revert
+// them; a permutation commutes with both, and LIFO order means every earlier
+// objects snapshot meets the numbering it was taken under.
+function applyLayerIndexMap(state: AppState, map: ReadonlyMap<number, number>): Partial<AppState> {
+  const layers = state.layers
+    .map((l) => ({ ...l, index: map.get(l.index) ?? l.index }))
+    .sort((a, b) => a.index - b.index);
+  const objects = remapLayerIndexDeep(state.objects, map);
+  return {
+    layers,
+    objects,
+    objectsById: buildObjectsById(objects),
+    activeLayerIndex: map.get(state.activeLayerIndex) ?? state.activeLayerIndex,
+    isDirty: true,
+    gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
+  };
+}
+
 // --- P4: Module-level cursor position (removed from Zustand to avoid 60 set() calls/sec) ---
 let _cursorPosition = { x: 0, y: 0 };
 let _cursorListeners: Array<() => void> = [];
@@ -306,33 +340,28 @@ export const useStore = create<AppState>((set, get) => ({
       isDirty: true,
       gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
     })),
-  reorderLayers: (fromIndex, toIndex) =>
-    set((state) => {
-      const newLayers = [...state.layers];
-      const fromPos = newLayers.findIndex((l) => l.index === fromIndex);
-      const toPos = newLayers.findIndex((l) => l.index === toIndex);
-      if (fromPos === -1 || toPos === -1 || fromPos === toPos) return state;
-      const [moved] = newLayers.splice(fromPos, 1);
-      newLayers.splice(toPos, 0, moved);
-      const indexMap = new Map<number, number>();
-      const reindexed = newLayers.map((l, i) => {
-        indexMap.set(l.index, i);
-        return { ...l, index: i };
-      });
-      const objects = state.objects.map((o) => ({
-        ...o,
-        layerIndex: indexMap.get(o.layerIndex) ?? o.layerIndex,
-      }));
-      const activeLayerIndex = indexMap.get(state.activeLayerIndex) ?? state.activeLayerIndex;
-      return {
-        layers: reindexed,
-        objects,
-        objectsById: buildObjectsById(objects),
-        activeLayerIndex,
-        isDirty: true,
-        gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale,
-      };
-    }),
+  reorderLayers: (fromIndex, toIndex) => {
+    // Belt-and-braces: close any open property-edit snapshot under the
+    // pre-reorder numbering (no-op when none is open).
+    get().commitPropertyEdit();
+    const state = get();
+    const newLayers = [...state.layers];
+    const fromPos = newLayers.findIndex((l) => l.index === fromIndex);
+    const toPos = newLayers.findIndex((l) => l.index === toIndex);
+    if (fromPos === -1 || toPos === -1 || fromPos === toPos) return;
+    const [moved] = newLayers.splice(fromPos, 1);
+    newLayers.splice(toPos, 0, moved);
+    const indexMap = new Map<number, number>();
+    newLayers.forEach((l, i) => indexMap.set(l.index, i));
+    const inverse = new Map<number, number>();
+    for (const [from, to] of indexMap) inverse.set(to, from);
+    set((s) => applyLayerIndexMap(s, indexMap));
+    get().pushCommand({
+      type: "reorder-layers",
+      undo: () => set((s) => applyLayerIndexMap(s, inverse)),
+      redo: () => set((s) => applyLayerIndexMap(s, indexMap)),
+    });
+  },
   // F15: updateLineOverlay is a direct generation-input writer — stales G-code.
   // Lazily initialises lineOverlay with defaults if absent (lifecycle: entering
   // fillLine mode initialises it only if absent; a mode change AWAY from fillLine

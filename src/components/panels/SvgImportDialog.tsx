@@ -6,6 +6,8 @@ import {
   buildGroupObject,
   applyMatrix2x3,
   multiplyMatrix2x3,
+  matrixMaxStretch,
+  CURVE_CHORD_TOLERANCE_MM,
   type Matrix2x3,
 } from "../../lib/geometry";
 import type { DesignObject, PathPoint } from "../../app/types";
@@ -943,8 +945,15 @@ function parseSvgElementForImport(
       // (≥2-point) contour, GROUPED when there is more than one, so the cut
       // contains no bridge segment through the workpiece. Per-subpath closed
       // flags replace the old whole-string trailing-Z regex.
+      // lib-1: arc tolerance in the d string's own units — divide the mm
+      // tolerance by the element matrix's largest stretch times the global scale.
+      const stretch = matrixMaxStretch(matrix) * scale;
+      const tol =
+        stretch > 0 && Number.isFinite(stretch)
+          ? CURVE_CHORD_TOLERANCE_MM / stretch
+          : CURVE_CHORD_TOLERANCE_MM;
       const pathObjects: DesignObject[] = [];
-      for (const sub of parsePathD(d)) {
+      for (const sub of parsePathD(d, tol)) {
         if (sub.points.length < 2) continue;
         const points: PathPoint[] = sub.points.map((p) => {
           const tp = applyMatrix2x3(matrix, p.x, p.y);

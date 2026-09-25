@@ -87,6 +87,12 @@ src/
       connection.ts          — machineConnection: connect/disconnect, $$ settings parse,
                                250ms status poll + 3-strike disconnect, send, jog, home,
                                emergencyStop (invokes serial_stop)
+                               The spindle-drop check is `noteSpindleSample` in
+                               `lastSentLine.ts` (total, status only), fed from
+                               `pollStatus` (no job), `send()` in-pump reports
+                               (per-line), `getStatusReport` (drain) and buffered
+                               `status` events. It is reset per job by `startJobEvidence`
+                               and summarised per job by `endJobEvidence`.
       jobStream.ts           — streamJob: shared streaming loop for every G-code send;
                                dispatches on streamingMode (perLine default | buffered);
                                pauseJob (= stop) / resumeJob
@@ -94,7 +100,11 @@ src/
                                drain to serial_job_end; module-level single active session
       machineStatus.ts       — Status consumer: GrblSnapshot mirror types, monotonic
                                epoch/seq rejection, store writes, 3s eligibility
-      canStartJob.ts         — Pure START gate + moves extents, frameTargets,
+      canStartJob.ts         — The one admission for all four powered doors (START,
+                               main FRAME, material-test Send and Frame): canStartJob
+                               (state, ext?); ext supplied = locally generated program
+                               (skips gcodeResult/gcodeStale, bounds from ext with
+                               originTop). Plus moves extents, frameTargets,
                                isWithinBounds, gcodeExtents (text G-code)
       gcodeGen.ts            — Frontend G-code orchestrator, calls Rust backend via
                                Tauri invoke (hard-fail on engine error — no JS
@@ -118,6 +128,8 @@ src/
     geometry/
       index.ts               — Shared geometry utilities: 2x3 affine helpers,
                                composeGroupChild(Transform), buildGroupObject,
+                               composedLeaves/drawnLeaves (render = cut composition),
+                               matrixMaxStretch (SVG arc tolerance in real mm),
                                computeAABB/rotatedExtents/pointsBBox, move/scale/points
                                partials, orientedHandlePoints, offsetRingByDistance,
                                adaptive bezier sampler + CURVE_CHORD_TOLERANCE_MM
@@ -261,8 +273,21 @@ src-tauri/tests/
 ```
 
 JobActionBar FRAME, MaterialTestDialog "Send" and MaterialTestDialog "Frame" take the same
-path (beginJobSession → streamJob) without `waitForIdle`. MaterialTestDialog does not call
-`canStartJob`; it checks connection, `jobRunning` and `gcodeExtents` + `isWithinBounds`.
+path (beginJobSession → streamJob) without `waitForIdle`. All four doors pass `canStartJob`
+first (kerf-safety-s1): FRAME with no `ext`, so `gcodeStale` still applies; the material
+test with `ext = gcodeExtents(grid)`. A refusal prints the reason verbatim to the console
+and, in the material test, also as an in-dialog alert; the buttons' disabled state comes
+from the same gate.
+
+**Laser-mode flag (`grblLaserMode`).** Only `applyLaserModeReadback` in `connection.ts`
+sets it true: a `$$` response carrying `$32=1`, and only if no settings write happened
+after that readback began (module-level `settingsGeneration`). Every settings write
+(`$n=`, `$Nn=`, `$RST=`, normalized the way GRBL reads a line) is detected in
+`machineConnection.send()`. The write invalidates the flag before its invoke and again
+after it settles. `enableLaserMode` invalidates explicitly, because its write bypasses
+`send()`. A console `$$` re-verifies `$32` only. The full settings parse runs only from
+`queryGrblSettings` (on connect, and the soft-limit requery). A failed readback and
+`disconnect()` both leave the flag false.
 
 **Job-session lifetime (`jobSession.ts`).** One module-level active session. `beginJobSession`
 refuses while another session is active or a stop is settling, and when `serial_job_begin`
@@ -320,9 +345,19 @@ Undo/redo uses a command pattern with snapshot capture (`pushObjectsUndo`). Imag
 per-command map keyed by object id, and restore uses that map with live objects taking
 precedence. Stack capped at 50.
 
-**Known gap: nested groups.** A group inside a group does not render in the viewport but is
-cut. `Viewport.tsx` renders group children one level deep (`renderObject` has no `group`
-case), while `gcodeGen.ts` `flattenObjects` recurses to any depth.
+**Nested groups render to any depth** (kerf-refresh-cut-vs-screen F1). The Viewport draws
+`drawnLeaves(obj, layers)` for each top-level object. That is `composedLeaves` (the same
+recursion and `composeGroupChild` as `gcodeGen.ts` `flattenObjects`, keyed by id path
+`outer/inner/leaf`), filtered by the cut's own per-leaf rule: it skips `!leaf.visible` and
+a leaf whose layer (by `l.index`, falling back to `layers[0]`) is hidden. Unlike the cut,
+it does NOT skip `output === false`: output-off objects stay drawn as reference. Texture
+eviction walks image ids at any depth.
+
+**Layer reorder is one undo command** (F6/F7). `reorderLayers` remaps `layerIndex` through
+every descendant (`remapLayerIndexDeep`) and pushes a `reorder-layers` command whose
+undo and redo apply the inverse or forward index permutation to LIVE state
+(`applyLayerIndexMap`). It never restores a layers or objects snapshot, so edits that
+are not commands (layer power and speed, imports) are kept across undo.
 
 ### Rendering
 
@@ -356,7 +391,7 @@ realtime handles, increments the session epoch and sets phase Idle. `connection.
 `connect()` then starts the status poll, runs `queryGrblSettings()` (`$$`) and one
 `serial_get_status`.
 
-**Settings read on connect** (`queryGrblSettings`):
+**Settings read on connect** (`queryGrblSettings`; the only full parse. A console or dialog `$$` and the Enable Laser Mode readback apply `$32` only):
 
 | Setting | Store field | Read by |
 |---|---|---|

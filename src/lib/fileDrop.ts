@@ -1,4 +1,5 @@
 import { useStore } from "../app/store";
+import { detectImageDpi } from "./fileOps/imageImport";
 
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "bmp", "gif", "webp"]);
 
@@ -10,7 +11,7 @@ export function handleFileDrop(files: FileList) {
     const ext = file.name.split(".").pop()?.toLowerCase() || "";
 
     if (IMAGE_EXTENSIONS.has(ext)) {
-      importDroppedImage(file);
+      void importDroppedImage(file, ext);
     } else if (ext === "svg") {
       importDroppedSvg(file);
     } else if (ext === "dxf") {
@@ -24,7 +25,15 @@ export function handleFileDrop(files: FileList) {
   }
 }
 
-function importDroppedImage(file: File) {
+async function importDroppedImage(file: File, ext: string) {
+  // F3: read embedded DPI like File > Import Image. Detection can never cancel
+  // the import — only this metadata read is guarded.
+  let dpi: number | undefined;
+  try {
+    dpi = detectImageDpi(new Uint8Array(await file.arrayBuffer()), ext) ?? undefined;
+  } catch {
+    dpi = undefined; // metadata is best-effort; the dialog falls back to "300 (assumed)"
+  }
   const reader = new FileReader();
   reader.onload = () => {
     const base64 = reader.result as string;
@@ -32,7 +41,7 @@ function importDroppedImage(file: File) {
     img.onload = () => {
       import("../app/App")
         .then(({ openImageImport }) => {
-          openImageImport(base64, file.name, img.width, img.height);
+          openImageImport(base64, file.name, img.width, img.height, undefined, undefined, dpi);
         })
         .catch(console.error);
     };

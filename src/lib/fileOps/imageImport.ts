@@ -2,6 +2,12 @@ import { useStore, generateId } from "../../app/store";
 import type { DesignObject } from "../../app/types";
 import { MM_PER_INCH } from "../constants";
 
+/** The one embedded-DPI detector shared by File > Import Image and drag-drop:
+ *  PNG pHYs only (JPEG density is not read on either path). */
+export function detectImageDpi(data: Uint8Array, ext: string): number | null {
+  return ext === "png" ? parsePngPhysDpi(data) : null;
+}
+
 /**
  * Parse PNG pHYs chunk to extract embedded DPI metadata.
  * pHYs chunk: 4 bytes X-ppu, 4 bytes Y-ppu, 1 byte unit (1 = meter).
@@ -60,7 +66,7 @@ export function importImageData(data: Uint8Array, ext: string) {
   const mime = mimeMap[ext] || "image/png";
 
   // For PNG files, attempt to read embedded DPI from pHYs chunk before decoding.
-  const detectedDpi = ext === "png" ? parsePngPhysDpi(data) : null;
+  const detectedDpi = detectImageDpi(data, ext);
 
   let binary = "";
   for (let i = 0; i < data.length; i++) {

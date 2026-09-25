@@ -16,7 +16,15 @@ testing: null
 pinned: true
 shipped:
   - date: 2026-09-25
+    item: "Evidence E3: relay kerf-evidence-e3 (Standard). Decision (B) per the coordinator under Lee's 2026-09-25 delegation. Razor: 0 CRITICAL, 2 WARNING (fixed; re-check CLOSED). The spindle-drop check now runs during jobs, fed from all four status paths. Each positive-to-0 transition prints a grey info line with the time, the last job line sent, S and F. Every job ends with a tally, 'N of M status reports during Run showed spindle 0', printed even at 0 of N, with the first and last report. In buffered mode the last-line field is marked approximate. The check can never throw into send(). The old 'laser may have stopped firing' wording is gone (status-only ruling 2026-09-10). 903 JS tests. OWNER (E4 card): note the wall-clock time of any laser-dark moment and copy the tally and nearby drop lines. A zero tally means no reported drop, never that the beam fired."
+  - date: 2026-09-25
+    item: "Evidence E2: relay kerf-evidence-e2 (Standard). Razor raised 0 CRITICAL, 2 WARNING (fixed; re-check CLOSED): the active coordinate system was unchecked, and eight safety gates were unpinned. `scripts/probe-grbl.py` was rewritten fail-closed, with `scripts/test_probe_grbl.py` (52 tests against a scripted fake controller) and `docs/qualification-card.md`. CLI contract: `--case` is required. `--pause` is retired (exit 2). Preflight refuses powered cases unless `$32=1` reads back, `$30`/`$130`/`$131` are present, `--smax` <= `$30`, the box fits, the offset is zero (`$#` G54/G92, else the status WCO), and `$G` reports G54 active. Every motion case needs `--home` ($22=1). hold-m4/stop-m4 refuse feeds above 600 mm/min and reps > 1. A controller that answers `?` is not reset at startup. Every fault, Ctrl-C, dead port or exception sends 0x18 first. The RESULT line is written last, by the main thread. Exit codes 0/1/2/3. OWNER: runs the card; nothing here was run against hardware."
+  - date: 2026-09-25
     item: "Evidence E1a — relay kerf-evidence-e1a (Ted+Razor; the first review found 1 CRITICAL, fixed, and the re-check CLOSED it). A sharp-cornered rectangle on a Fill+Line layer used to be silently skipped by the engine (`; unknown layer mode`). It now gets a closed 4-corner contour, lowered to maskFill plus a cut outline. A new invariant, `assertNoFillLine`, makes any fillLine object that reaches the engine a loud error instead. The CRITICAL: lowering to `fill` would have burned up to 6.7 mm outside the cut line on a rotated rectangle, because the Rust fill arm scans the rotated AABB. maskFill measured 0 mm spill at 0/30/90/180 degrees (Rust scratch probe). 849 JS tests; battery 14/14 killed. OWNER CARD (E4): a Fill+Line rectangle burned on scrap shows a filled interior and a cut outline."
+  - date: 2026-09-25
+    item: "Safety S1: relay kerf-safety-s1 (Standard). Razor raised 3 WARNING (fixed; re-check CLOSED). Jen raised 7 CONCERN (6 applied, C3 owned by S3), and a bounded design-fix check came back CLOSED. START, main FRAME, and the material-test Send and Frame now all go through one admission, `canStartJob(state, ext?)`. The laser-mode flag is set only by a `$32=1` readback that was not overtaken by a settings write: every settings write is detected in `send()` (GRBL-normalized) and invalidated on both sides; a console `$$` re-verifies; a failed readback or a disconnect clears the flag. Material-test refusals are no longer silent: an in-dialog alert plus disabled buttons driven by the same gate. 871 JS tests; batteries 18 + 7 + 3 killed. NOT MET: the power-scale half of the 2026-09-10 START ruling (S4b). MUST SHIP WITH S3: on origin-top machines every material test is refused until S3 mirrors the grid. OWNER HARDWARE TEST: a live `$$` still carries `$32=1`; Enable Laser Mode shows enabled only after its readback."
+  - date: 2026-09-25
+    item: "Cut vs screen: relay kerf-refresh-cut-vs-screen (Complex; Razor 0 CRITICAL, missing F5/F1 tests added in the fix pass, re-check CLOSED; behavioral all 9 steps PASS; Jen 1 concern, pre-existing). F1: nested groups render to any depth with the cut's own per-leaf visibility, so traced letters with holes are visible. F2: SVG arcs are tessellated to 0.05 mm in real millimetres whatever the units. F3: a dropped PNG uses its embedded DPI. F4: SVG export keeps image and text flips. F5: flipped or rotated text is cut and converted as drawn. F6: layer reorder carries group children. F7: Ctrl+Z after a reorder undoes the reorder instead of moving objects onto another layer's power and speed. 886 JS tests. NOT MET for rotated text and images on the canvas (drawn off their box) or flipped images after a move: R2 canvas-display owns those."
   - date: 2026-09-24
     item: "Fence single-reset — relay kerf-fence-single-reset (Ted+Razor PASS after one fix pass; 0 CRITICAL, W1 closed). Replaces kerf-fence-reopen's detect-and-re-send: a new submit lock makes the admission check and the job line's write(2) atomic against the stop's admission close (close_admission requires the held guard; flush/tcdrain stays outside). One stop, one 0x18; the in-flight re-send, resend-failed state, refused: in-flight* contracts and the TS STOP re-arm are deleted. Also: the $32=1 pump now publishes the reset banner it consumes. Ordering tests O1-O4, U1/U2, one-reset-per-stop check; M1-M9 and X2 killed by named assertions. 836 JS / 329 Rust. Not in a release; owner hardware test pending."
   - date: 2026-09-24
@@ -549,6 +557,32 @@ verbatim and are not to be edited into summaries — this index points at them.
 - **Production-body stop verification against the simulator** (relay-plan D2); goes with the next batch that touches the stop. See `### Deferred from kerf-evidence-e1a (2026-09-25)` below.
 - **Move the committed probe log out of the public tree, and the controller-model comment at `probe-grbl.py:53`** (decision `kerf-d12`). See `### Deferred from kerf-evidence-e1a (2026-09-25)` below.
 - **Any change to the stop, fence or submit lock** stays out of the evidence batches (DECISIONS 2026-09-24). See `### Deferred from kerf-evidence-e1a (2026-09-25)` below.
+- **WPos/MPos conversion and WCO-aware jog envelopes** (astra 2.5 proper). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **`$23` sign inference and automatic homing/unlock**: never. See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **Astra 2.3 (release envelope → corrections) and 2.6 (bounded generation)**; 2.3 waits on `kerf-d9`. See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **Any change to the stop, reset, fence or submit lock** stays out of the safety-gate batches (DECISIONS 2026-09-24 pin). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **`$31` / Min Pwr** (decision `kerf-d11`). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **The Fire button is a powered door outside the admission** (MachinePanel stationary-beam fire). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **Material test `exceedsWorkspace` is a third bounds copy** (UI hint, can disagree with the gate). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **Stale status still shows green Idle/Ready** (Jen C3 on S1). OWNED BY S3; must not ship without it. See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **A malformed `gcodeResult` in the store crashes the job bar** (S1 behavioral evaluator, synthetic injection). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **Material-test button enablement checks the grid outline; the click checks the full program** (Razor N11; fails safe). See `### Deferred from kerf-safety-s1 (2026-09-25)` below.
+- **Flip on a group, or on a rotated rect or ellipse, does nothing on screen or in the cut** See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
+- **`ungroupSelected` drops a rotated group's rotation** See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
+- **A group's own `visible` flag is ignored by both the cut and (after refresh-cut-vs-screen F1) the canvas** See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
+- **Text layout width mismatch between Pixi and opentype** See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
+- **SVG arcs as cubic handles instead of polylines** See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
+- **Layers panel counts, select-by-layer and the Properties layer badge read top-level objects only** See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
+- **Already-imported SVG arcs keep their old coarse tessellation** See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
+- **Converted-text counters draw as a stacked lighter fill, not holes, on a Fill layer** (Jen C1 on cut-vs-screen; pre-existing; NOT in R2 canvas-display's plan, unowned) See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
+- **On about 6-10% of page loads the canvas never draws** (R1 behavioral evaluator; also on the S1 branch; pre-existing) See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
+- **A text-tool click creates the text box and immediately loses it** (R1 behavioral evaluator; pre-existing) See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
+- **Every wheel zoom logs a passive-event-listener console error** (R1 behavioral evaluator; pre-existing) See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
+- **Canvas render cost with large nested groups** (Razor W4). Composition runs per leaf per render; about 110-129 ms per redraw at 2,000 contours in a benchmark. Browser median was unchanged, but p90 roughly doubled on a loaded machine. OWNER PERF STEP: re-measure on an idle machine See `### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)` below.
+- **Probe contract changed (E2)** — the Tooling paragraph under the 2026-09-05 deferred section describes the pre-E2 probe; the current contract is in docs/qualification-card.md. See `### Deferred from kerf-evidence-e2 (2026-09-25)` below.
+- **Wedge diagnostic "plain command while wedged" retired (E2)** — the probe no longer writes a line before its reset; if session A needs that datum, it needs a new plan that writes the probe line with output isolated only. See `### Deferred from kerf-evidence-e2 (2026-09-25)` below.
+- **Stop and hold at job feed (E2)** — the probe's hold-m4/stop-m4 refuse feeds above 600 mm/min so the event lands inside a 20 mm segment; astra 3.2 steps 8-9 "then admitted job feed" needs a longer segment and a larger checked region, in a new plan. See `### Deferred from kerf-evidence-e2 (2026-09-25)` below.
+- **Spindle-drop evidence now recorded during jobs (E3)** — before E3 the diagnostic ran only when no job was running (polling is suspended during jobs). Kerf's own G-code commands spindle 0 at every scan-line end and path transit, and on the owner's controller Run+FS:0,0 also appeared when the queue emptied (capture 2026-09-14, five repetitions of one M4 program). So drops print at info with time and last line sent, and every job ends with a tally ("N of M status reports during Run showed spindle 0"). Evidence to correlate, not a failure signal; blind to a beam that goes dark while S stays > 0.
 
 ### Deferred from the 2026-09-05 pause/stop investigation
 
@@ -663,6 +697,52 @@ It is out of scope for this relay (golden files untouched), and no test reads it
 - Production-body stop verification against the simulator (relay-plan D2) goes with the next batch that touches the stop.
 - Moving the committed probe log out of the public tree, and the existing controller-model comment at `probe-grbl.py:53` (decision `kerf-d12`).
 - Any change to the stop, fence or submit lock is out (DECISIONS 2026-09-24).
+
+### Deferred from kerf-safety-s1 (2026-09-25)
+
+**Why these are here:** the first five are the parent plan's Out-of-scope lines (`~/marvin/state/audits/gap-2026-09-24/kerf/PLAN-safety-gate-class.md` §Out of scope). S1's plan named the Fire button and `exceedsWorkspace` lines. The last three were found in review and not fixed in S1.
+
+- WPos/MPos conversion and WCO-aware jog envelopes (astra 2.5 proper). This needs a live frame map from an owner session.
+- `$23` sign inference and automatic homing/unlock: never.
+- Astra 2.3 (release envelope → corrections) and 2.6 (bounded generation): 2.3 waits on decision `kerf-d9`.
+- Any change to the stop, reset, fence or submit lock (DECISIONS 2026-09-24 pin).
+- `$31` / Min Pwr (decision `kerf-d11`).
+- **The Fire button is a powered door outside the admission.** `MachinePanel.tsx` Fire (`M3 S…`, `G4 P0.5`, `M5`) fires the beam stationary for focus and test, by design (M3 is for the stationary beam, DECISIONS 2026-09-10). Its gating is not unified with the four job doors, and it has no laser-mode, bed or stale check. It needs its own review.
+- **Material test `exceedsWorkspace` is a third bounds copy.** `MaterialTestDialog.tsx` keeps it as a UI hint that can disagree with the gate. The gate decides.
+- **Stale status shows a green Idle and Ready** (Jen C3, 2026-09-25). While `statusStale` is true, MachinePanel and StatusBar still show a fresh green "Idle" and "Ready" while START's title says stale. The screen says safe when Kerf does not know. **Owned by S3** (coordinator, 2026-09-25): fold it into S3's scope at lift. S1 and S3 ship in the same build, so no build reaches Lee with green-while-stale unless he has been told.
+- **A malformed `gcodeResult` crashes the job bar.** The S1 behavioral evaluator injected a malformed result through the store and blanked the UI. The injection was synthetic and no production path is known to produce one, but the job bar has no guard. Noted 2026-09-25.
+- **Material-test enablement and the click can disagree at the edge** (Razor N11). The disabled state checks the grid outline's extents, while the click-time gate checks the full grid program. When they disagree the click refuses, so it fails safe.
+
+### Deferred from kerf-refresh-cut-vs-screen (2026-09-25)
+
+**Why these are here:** the plan's `## Deferrals`, verbatim (the first seven), then five items found in review and not fixed in this relay.
+
+- **Flip on a group, or on a rotated rect or ellipse, does nothing on screen or in the cut** — `flipObjects` stores a negative scaleX/scaleY on these (geometryActions.ts `flipObjects`, single-select rect/ellipse/group branch and the multi-select branches), but no renderer, cut path or composition reads it (`composeGroupChild` treats scale as a sign-only flag it does not composite; `CutObject` has no scale). Every trace is a group, so mirroring a traced logo for reverse engraving silently does nothing. Found by code reading 2026-09-22 (refresh-cut-vs-screen), not browser-confirmed.
+- **`ungroupSelected` drops a rotated group's rotation** — children land unrotated at their stored offsets; documented in code as pre-existing (geometryActions.ts `ungroupSelected`), not indexed until now. Noted 2026-09-22 (refresh-cut-vs-screen).
+- **A group's own `visible` flag is ignored by both the cut and (after refresh-cut-vs-screen F1) the canvas** — both decide visibility per leaf; no UI sets a group's `visible` today, so this is latent. If an object-visibility toggle is ever added, it must propagate to descendants or both consumers must learn ancestor visibility. Noted 2026-09-22.
+- **Text layout width mismatch between Pixi and opentype** — the canvas draws text with Pixi's metrics while the cut (and Convert to Path) lays glyphs out with opentype's advances, so cut text can sit a font-metric off from the drawn text; mirrored text (F5) inherits the same offset about the box centre. Pre-existing; noted 2026-09-22 (refresh-cut-vs-screen).
+- **SVG arcs as cubic handles instead of polylines** — rejected in refresh-cut-vs-screen F2 because `pointsBBox` is anchors-only; revisit once bounding boxes account for curve extrema, which would also stop tessellated arcs faceting when scaled up inside Kerf. Noted 2026-09-22.
+- **Layers panel counts, select-by-layer and the Properties layer badge read top-level objects only** — `selectByLayer` (store/index.ts), the Layers panel's per-layer object list, count and selected-highlight (LayerPanel.tsx), and the Properties panel's layer indicator (PropertiesPanel.tsx) all filter top-level `objects`; grouped children on another layer are honoured by the cut and (after refresh-cut-vs-screen F1) the canvas but never listed, so hiding a layer can remove half a group that the panel shows under no layer. Selection is top-level by design, so this is a listing gap, not a cut defect. Noted 2026-09-22.
+- **Already-imported SVG arcs keep their old coarse tessellation** — F2 fixes import only; affected objects are repaired by re-importing the source SVG, and nothing marks which objects came from arcs. Noted 2026-09-22 (refresh-cut-vs-screen).
+- **Converted-text counters draw as a stacked lighter fill, not holes, on a Fill layer** (Jen C1 on cut-vs-screen; pre-existing; NOT in R2 canvas-display's plan, unowned).
+- **On about 6-10% of page loads the canvas never draws** (R1 behavioral evaluator; also on the S1 branch; pre-existing).
+- **A text-tool click creates the text box and immediately loses it** (R1 behavioral evaluator; pre-existing).
+- **Every wheel zoom logs a passive-event-listener console error** (R1 behavioral evaluator; pre-existing).
+- **Canvas render cost with large nested groups** (Razor W4). Composition runs per leaf per render; about 110-129 ms per redraw at 2,000 contours in a benchmark. Browser median was unchanged, but p90 roughly doubled on a loaded machine. OWNER PERF STEP: re-measure on an idle machine.
+
+**Owner desktop-app test (Tauri-only), from the plan:**
+1. Trace an image of the word BOB and open the G-code preview. The canvas and the preview show the same letters, holes included (F1).
+2. File > Import Image and drag-drop of the same 600-DPI PNG produce the same size (F3).
+3. Flipped text engraved on scrap reads mirrored, and rotated text engraves as one rotated line (F5).
+4. After reordering layers, a traced group's G-code uses the group's layer power and speed (F6). Then make any edit, reorder, and press Ctrl+Z. Regenerate: the S and F values still match each object's layer (F7).
+
+### Deferred from kerf-evidence-e2 (2026-09-25)
+
+**Why these are here:** the E2 plan's Stage 3.5 obligations, verbatim.
+
+- **Probe contract changed (E2)** — the Tooling paragraph under the 2026-09-05 deferred section describes the pre-E2 probe; the current contract is in docs/qualification-card.md.
+- **Wedge diagnostic "plain command while wedged" retired (E2)** — the probe no longer writes a line before its reset; if session A needs that datum, it needs a new plan that writes the probe line with output isolated only.
+- **Stop and hold at job feed (E2)** — the probe's hold-m4/stop-m4 refuse feeds above 600 mm/min so the event lands inside a 20 mm segment; astra 3.2 steps 8-9 "then admitted job feed" needs a longer segment and a larger checked region, in a new plan.
 
 ## Reference
 
