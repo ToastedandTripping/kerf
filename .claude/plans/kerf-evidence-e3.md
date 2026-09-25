@@ -327,6 +327,15 @@ When `drops > 0` it continues: ` First at ${first.time}, last line sent ${first.
 
 6. **Reversibility and urgency.** Fully reversible: revert one merge. If nothing is decided for a month, this batch waits and nothing else waits on it. But any laser-dark incident in that month arrives with no console data, as the 14 September ones did. The decision is yours; the batch does not start until you choose.
 
+## Decision recorded (2026-09-25)
+
+**Option (B) chosen**: a grey console line for each laser-power-0 report during a job, and an end-of-job tally that always prints, including "0 of N". **Provenance:** the coordinator session answered, citing Lee's 2026-09-25 delegation of technical calls. This is not Lee's own words. The coordinator's reasons were:
+- it keeps every data point for a laser-dark incident;
+- grey stops a long raster from drowning real warnings, which is where (A) fails;
+- a "0 of N" tally shows the recorder ran, which is where (C) and (D) fail.
+
+It fits the "warn, never hide" ruling. A collapse-repeats option, if the grey lines prove to be a flood on hardware, is a follow-up and not part of this relay. The block before Stage 1 is cleared. Sequencing still holds: E3 follows S1 into the session branch.
+
 ## Critic fold (2026-09-25)
 
 Critic: `kerf-evidence-e3-critic.md` (Fable). Verdict FAIL on X3 (the decision brief), with CONCERN on core 1, 3, 6 and 10 and on X6. The code plan was judged sound. Every must-fix was checked against the tree at `10be8a2` (and S1's branch at `df437ce`) before folding.
