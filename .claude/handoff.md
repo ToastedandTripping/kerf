@@ -46,6 +46,8 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - **Lifted plans without a critic yet:** `.claude/plans/kerf-evidence-e2.md`, `-e3.md`, `-e5.md` (committed b7b7540). Each needs a Fable critic (reviewer valve reads `fable`) before its relay. E3 is also blocked on Lee's answer (open questions). S1b (buffered START checks, not writes, $32) is next in the safety chain after S1 merges; not yet lifted.
 
+- S3 owns the green-when-stale status indicator (Jen C3 on kerf-safety-s1, 2026-09-25). No plan owned it, so it is added to S3's scope, to be folded into the plan when S3 is lifted. When status is stale, MachinePanel and StatusBar still show a green Idle and Ready while START's title says stale: the screen says safe when Kerf does not know. S1 and S3 ship in the same build, so no build reaches Lee showing green while stale unless he has been told. The coordinator ruled this on 2026-09-25. Full detail is under C3 in ~/marvin/state/relay/kerf-safety-s1-jen-review.md.
+
 ## Open questions awaiting Lee
 
 | Question                                                                                            | Why it matters                                                                        | Raised     |
