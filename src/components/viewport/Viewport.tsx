@@ -54,6 +54,9 @@ export function Viewport() {
   // Adding it to the selectionOverlay dep array causes the overlay to redraw with the live
   // measure preview. Mirrors the rotationReadout pattern exactly.
   const [measureTick, setMeasureTick] = useState(0);
+  // R2 F1: flips once when the live Pixi app has built its refs. A scalar, so
+  // it is safe from React Error 185; every canvas effect depends on it.
+  const [pixiReady, setPixiReady] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
   const appRef = useRef<Application | null>(null);
   const worldRef = useRef<Container | null>(null);
@@ -110,6 +113,9 @@ export function Viewport() {
     if (!canvasRef.current || appRef.current) return;
 
     const app = new Application();
+    // R2 F1: set synchronously by cleanup. Under StrictMode the first mount's
+    // app is disposed before its init resolves; it must never go live.
+    let disposed = false;
     const initPromise = app
       .init({
         preference: "webgl",
@@ -120,7 +126,7 @@ export function Viewport() {
         autoDensity: true,
       })
       .then(() => {
-        if (!canvasRef.current) return;
+        if (disposed || !canvasRef.current) return;
         canvasRef.current.appendChild(app.canvas as HTMLCanvasElement);
         appRef.current = app;
 
@@ -156,18 +162,25 @@ export function Viewport() {
           y: cy - (workspaceHeight * PX_PER_MM) / 2,
           zoom: 1,
         });
+        setPixiReady(true);
       })
       .catch((err) => console.error("Pixi.js init failed:", err));
 
     return () => {
+      disposed = true;
       initPromise
         .then(() => {
           app.destroy(true);
-          appRef.current = null;
-          // Clear module-level caches — textures belong to the destroyed GPU context
-          for (const tex of textureCache.values()) tex.destroy(true);
-          textureCache.clear();
-          contentHashCache.clear();
+          // R2 F1: only the app that owns the shared state may clear it. A
+          // StrictMode app that never went live must not touch the live one's.
+          if (appRef.current === app) {
+            appRef.current = null;
+            displayCacheRef.current.clear();
+            contentHashCache.clear();
+            // Clear module-level caches — textures belong to the destroyed GPU context
+            for (const tex of textureCache.values()) tex.destroy(true);
+            textureCache.clear();
+          }
         })
         .catch((err) => console.error("Pixi.js destroy failed:", err));
     };
@@ -175,15 +188,15 @@ export function Viewport() {
 
   // Update world transform when camera changes
   useEffect(() => {
-    if (!worldRef.current) return;
+    if (!pixiReady || !worldRef.current) return;
     worldRef.current.x = camera.x;
     worldRef.current.y = camera.y;
     worldRef.current.scale.set(camera.zoom);
-  }, [camera]);
+  }, [camera, pixiReady]);
 
   // Draw grid
   useEffect(() => {
-    if (!gridRef.current) return;
+    if (!pixiReady || !gridRef.current) return;
     const g = gridRef.current;
     g.clear();
     if (!gridVisible) return;
@@ -210,11 +223,11 @@ export function Viewport() {
     for (let y = 0; y <= h; y += majorStep) {
       g.moveTo(0, y).lineTo(w, y).stroke();
     }
-  }, [gridVisible, gridSize, workspaceWidth, workspaceHeight]);
+  }, [gridVisible, gridSize, workspaceWidth, workspaceHeight, pixiReady]);
 
   // Draw workspace boundary
   useEffect(() => {
-    if (!workspaceRef.current) return;
+    if (!pixiReady || !workspaceRef.current) return;
     const g = workspaceRef.current;
     g.clear();
     const w = workspaceWidth * PX_PER_MM;
@@ -225,11 +238,11 @@ export function Viewport() {
     // Workspace border
     g.setStrokeStyle({ width: 1, color: 0xffffff, alpha: 0.15 });
     g.rect(0, 0, w, h).stroke();
-  }, [workspaceWidth, workspaceHeight]);
+  }, [workspaceWidth, workspaceHeight, pixiReady]);
 
   // Draw objects with persistent cache (diff against previous state)
   useEffect(() => {
-    if (!objectsContainerRef.current) return;
+    if (!pixiReady || !objectsContainerRef.current) return;
     const container = objectsContainerRef.current;
     const cache = displayCacheRef.current;
 
@@ -332,21 +345,21 @@ export function Viewport() {
         textureCache.delete(id);
       }
     }
-  }, [objects, layers]);
+  }, [objects, layers, pixiReady]);
 
   // Draw temporary drawing object
   useEffect(() => {
-    if (!drawingLayerRef.current) return;
+    if (!pixiReady || !drawingLayerRef.current) return;
     const g = drawingLayerRef.current;
     g.clear();
     if (drawingObject) {
       renderObject(g, drawingObject);
     }
-  }, [drawingObject]);
+  }, [drawingObject, pixiReady]);
 
   // Draw selection indicators + handles + marquee (P7: uses derived slice)
   useEffect(() => {
-    if (!selectionOverlayRef.current) return;
+    if (!pixiReady || !selectionOverlayRef.current) return;
     const g = selectionOverlayRef.current;
     g.clear();
     g.removeChildren();
@@ -614,7 +627,7 @@ export function Viewport() {
         }
       }
     }
-  }, [selectedTransforms, camera.zoom, activeTool, nodeEditState, measureTick]);
+  }, [selectedTransforms, camera.zoom, activeTool, nodeEditState, measureTick, pixiReady]);
 
   // Track marquee box for HTML overlay rendering
   const marqueeRef = useRef<{
