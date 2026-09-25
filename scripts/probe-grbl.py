@@ -1,42 +1,93 @@
 #!/usr/bin/env python3
 """
 probe-grbl.py — drive a GRBL-family controller through the command sequences
-Kerf sends, at Kerf's speed, and record every byte on the wire.
+Kerf sends, one named case per invocation, and record every byte on the wire.
 
-Purpose: reproduce the "controller stops answering commands after a laser
-switch, still answers '?' until reset" wedge seen on the owner's machine
-(2026-09-05), and pin which sequence triggers it. Also (optional) records what
-the firmware does on feed hold + spindle-stop override, byte by byte.
+Purpose: capture the "controller stops answering commands after a laser
+switch, still answers '?' until reset" wedge, and record status-only evidence
+of what the controller reports around a feed hold, a stop and a completion.
+The procedure lives in docs/qualification-card.md. Read it before a live run.
 
-Usage (on the Mac, with Kerf CLOSED so the port is free):
-    python3 -m pip install --user pyserial
-    python3 probe-grbl.py                 # auto-picks the single /dev/cu.usb* port
-    python3 probe-grbl.py --port /dev/cu.usbserial-1420
-    python3 probe-grbl.py --reps 8        # more repetitions per variant
-    python3 probe-grbl.py --pause         # also run the feed-hold experiment (beam at S10 on scrap)
+Usage (with Kerf CLOSED so the port is free):
+    python3 -m pip install --user pyserial     # live runs only
+    python3 probe-grbl.py --case wedge --dry-run --home --origin-x 20 --origin-y 20 \\
+        --x-dir 1 --y-dir -1                   # print the matrix, open nothing
+    python3 probe-grbl.py --case settings --port PORT --log-file PATH
+    python3 probe-grbl.py --case direction --home --x-dir 1 --y-dir -1 \\
+        --port PORT --log-file PATH
 
-Safety:
-  - Laser power never exceeds --smax (default 10, i.e. ~1% of a 1000-scale S).
-  - Every variant ends with M5. Any alarm/error aborts the run with M5 + reset.
-  - Ctrl-C sends soft reset (0x18) then M5.
-  - Moves stay inside a 60 mm box next to home. Put scrap under the head anyway.
+Rules:
+  - --case is required; there is no default case.
+  - --port and --log-file are required for live runs. An existing log file is
+    refused. No log is ever written to a default name.
+  - --home is required for every motion case (direction, wedge, hold-m4,
+    stop-m4, completion-m4) and refused for settings. The probe homes at the
+    start of the invocation and at no other time. It never sends $X.
+  - --smax defaults to 0. Positive power is only ever an explicit choice.
+  - Every powered case refuses before motion unless the controller reported
+    $32=1 and $30; the boxed cases also need $130, $131, a zero G54/G92 offset
+    and a box that fits the bed.
+  - --pause is retired (it sent 0x9E, which re-arms the beam). The probe
+    never sends 0x9E and never sends '~'.
+  - A fault or Ctrl-C sends the realtime reset (0x18) first, then only a
+    capture and one '?'. No M5, no $X, no $H, no next variant.
 
-Output: probe-YYYYMMDD-HHMMSS.log (full wire trace) + summary on stdout.
+Exit codes: 0 RESULT COMPLETE; 1 RESULT INCOMPLETE; 2 the command line was
+refused (no port opened, no log written); 3 RESULT REFUSED (no case line sent).
+A log is complete only if its last line is "RESULT COMPLETE".
 """
 
 import argparse
-import glob
+import os
 import queue
 import re
 import sys
 import threading
 import time
-from datetime import datetime
 
-try:
+# ---------------------------------------------------------------------------
+# Constants. Timing constants are module-level so tests can patch them.
+# Tests never patch TIMING_MARGIN_S or SEGMENT_MM.
+# ---------------------------------------------------------------------------
+
+DTR_SETTLE_S = 1.5
+BANNER_WAIT_S = 2.5
+PROBE_EVERY_S = 1.0
+IDLE_TICKS = 3
+HARD_TIMEOUT_S = 90.0
+HOME_TIMEOUT_S = 60.0
+CLEANUP_CAPTURE_S = 2.5
+HOLD_DELAY_S = 1.0
+HOLD_OBSERVE_S = 5.0
+STOP_DELAY_S = 1.0
+READER_JOIN_S = 1.0
+STATUS_WAIT_S = 1.0
+QUERY_TIMEOUT_S = 5.0
+COMPLETION_TIMEOUT_S = 30.0
+OBSERVE_EVERY_S = 0.25
+
+SEGMENT_MM = 20
+TIMING_MARGIN_S = 1.0
+POSITION_TOL_MM = 5.0
+BOX_FLOOR_M4_MM = 30.0
+
+CASES = ("settings", "direction", "wedge", "hold-m4", "stop-m4", "completion-m4")
+MOTION_CASES = ("direction", "wedge", "hold-m4", "stop-m4", "completion-m4")
+BOXED_CASES = ("wedge", "hold-m4", "stop-m4", "completion-m4")
+M4_CASES = ("hold-m4", "stop-m4", "completion-m4")
+ONE_REP_CASES = ("hold-m4", "stop-m4")
+POWERED_CASES = ("wedge", "hold-m4", "stop-m4", "completion-m4")
+STARTUP_STATES = ("Idle", "Alarm")
+BOXED_PREAMBLE = ["G21", "G90", "M5"]
+
+
+def open_serial(port, baud):
+    """The only place pyserial is imported, so --help and --dry-run work
+    without it."""
     import serial  # pyserial
-except ImportError:
-    sys.exit("pyserial is missing. Run:  python3 -m pip install --user pyserial")
+
+    return serial.Serial(port, baud, timeout=0.05)
+
 
 # ---------------------------------------------------------------------------
 # Wire layer: a reader thread timestamps every line; writes are logged too.
@@ -44,7 +95,7 @@ except ImportError:
 
 class Wire:
     def __init__(self, port, baud, logf):
-        self.ser = serial.Serial(port, baud, timeout=0.05)
+        self.ser = open_serial(port, baud)
         # DTR toggle: Arduino/ESP32 boards reset the MCU on the DTR falling
         # edge (100nF cap to RESET).  Deassert first so the assert always
         # produces an edge, then wait for the bootloader to hand off to GRBL.
@@ -54,12 +105,13 @@ class Wire:
         self.ser.dtr = False
         time.sleep(0.05)
         self.ser.dtr = True
-        time.sleep(1.5)
+        time.sleep(DTR_SETTLE_S)
         self.logf = logf
         self.q = queue.Queue()
         self.t0 = time.monotonic()
         self._stop = False
         self._buf = b""
+        self._log_lock = threading.Lock()
         self.th = threading.Thread(target=self._reader, daemon=True)
         self.th.start()
 
@@ -68,8 +120,9 @@ class Wire:
 
     def log(self, direction, text):
         line = f"{self.ts()} {direction} {text}"
-        self.logf.write(line + "\n")
-        self.logf.flush()
+        with self._log_lock:
+            self.logf.write(line + "\n")
+            self.logf.flush()
 
     def _reader(self):
         while not self._stop:
@@ -112,22 +165,40 @@ class Wire:
         return lines
 
     def close(self):
+        """Stops and JOINS the reader before the port closes, so no reader
+        line can be logged after the caller's last line. Returns False if the
+        reader did not stop within READER_JOIN_S."""
         self._stop = True
-        time.sleep(0.1)  # let the reader notice before the port goes away
+        self.th.join(READER_JOIN_S)
+        joined = not self.th.is_alive()
         try:
             self.ser.close()
-        except Exception:
-            pass
+        except Exception as e:  # already closed or port gone: nothing left to do
+            self.log("!!", f"close: {e}")
+        return joined
 
 
 STATE_RE = re.compile(r"^<([A-Za-z]+)(?::\d+)?\|")
-POS_RE = re.compile(r"[MW]Pos:([-\d.]+),([-\d.]+)")
-ACC_RE = re.compile(r"\|A:([A-Z]+)")
+MPOS_RE = re.compile(r"MPos:([-\d.]+),([-\d.]+)")
+WCO_RE = re.compile(r"WCO:([-\d.]+),([-\d.]+)")
+OFFSET_RE = re.compile(r"^\[(G5[4-9]|G28|G30|G92):([-\d.]+),([-\d.]+)")
+SETTING_RE = re.compile(r"^\$(\d+)=([-\d.]+)")
+XY_WORD_RE = re.compile(r"([XY])(-?[\d.]+)")
+S_WORD_RE = re.compile(r"S(-?[\d.]+)")
 
 
 def state_of(report):
+    if not report:
+        return None
     m = STATE_RE.match(report)
     return m.group(1) if m else None
+
+
+def xy_of(regex, report):
+    if not report:
+        return None
+    m = regex.search(report)
+    return (float(m.group(1)), float(m.group(2))) if m else None
 
 
 class Wedge(Exception):
@@ -136,6 +207,18 @@ class Wedge(Exception):
 
 class Alarm(Exception):
     pass
+
+
+class Fault(Exception):
+    """A case fault that is neither a wedge nor an alarm (an error: reply)."""
+
+
+class Refused(Exception):
+    """A controller check failed after the port opened. Nothing more is sent."""
+
+
+class Incomplete(Exception):
+    """The run cannot continue, without a fault to clean up after."""
 
 
 class Probe:
@@ -150,8 +233,9 @@ class Probe:
         self.hard_timeout = hard_timeout
         self.last_report = None
 
-    def command(self, line):
+    def command(self, line, timeout=None):
         """Returns (ms until terminal, terminal). Raises Wedge / Alarm."""
+        hard_timeout = self.hard_timeout if timeout is None else timeout
         t_sent = time.monotonic()
         self.w.send_line(line)
         consecutive_idle = 0
@@ -161,8 +245,8 @@ class Probe:
                 text, t = self.w.q.get(timeout=0.05)
             except queue.Empty:
                 now = time.monotonic()
-                if now - t_sent > self.hard_timeout:
-                    raise Wedge(f"no terminal after {self.hard_timeout:.0f}s for: {line}")
+                if now - t_sent > hard_timeout:
+                    raise Wedge(f"no terminal after {hard_timeout:.0f}s for: {line}")
                 if now - last_rx >= self.probe_every:
                     self.w.send_byte(ord("?"), "?")
                     last_rx = now  # one probe per silent second, like Kerf
@@ -192,20 +276,23 @@ class Probe:
                 raise Wedge(f"unexpected reset banner while waiting for: {line}")
             # [MSG:...] and other chatter: keep waiting
 
-    def status(self):
+    def status(self, timeout=None):
         """One '?' and its report (or None)."""
+        wait = STATUS_WAIT_S if timeout is None else timeout
         while not self.w.q.empty():
             try:
                 self.w.q.get_nowait()
             except queue.Empty:
                 break
         self.w.send_byte(ord("?"), "?")
-        end = time.monotonic() + 1.0
+        end = time.monotonic() + wait
         while time.monotonic() < end:
             try:
                 text, _ = self.w.q.get(timeout=0.05)
             except queue.Empty:
                 continue
+            if text == "__EOF__":
+                raise Wedge("port closed")
             if text.startswith("<"):
                 self.last_report = text
                 return text
@@ -222,78 +309,159 @@ class Probe:
 
 
 # ---------------------------------------------------------------------------
-# Controller bring-up
+# Controller queries (raw, recorded in the log by the reader)
 # ---------------------------------------------------------------------------
 
-def reset_and_unlock(w, p, why):
-    w.log("##", f"soft reset ({why})")
-    w.send_byte(0x18, "RESET")
-    lines = w.drain(2.5)
-    banner = [l for l in lines if l.lower().startswith("grbl")]
-    if not banner:
-        w.log("##", "no banner after reset; continuing anyway")
-    # Homing-enabled builds lock into Alarm after a reset; unlock keeps position.
-    try:
-        p.command("$X")
-    except (Wedge, Alarm) as e:
-        w.log("##", f"$X after reset: {e}")
-    try:
-        p.command("M5")
-    except (Wedge, Alarm) as e:
-        w.log("##", f"M5 after reset: {e}")
-
-
-def read_settings(p):
-    """Returns dict of $n -> value from $$."""
-    settings = {}
-    # $$ answers with many lines then ok; collect them via the queue.
+def query(p, line):
+    """Sends a $ query and collects its reply lines. Returns (lines, error),
+    where error is None on ok, the error: text, or "no reply"."""
     w = p.w
     while not w.q.empty():
-        w.q.get_nowait()
-    w.send_line("$$")
-    end = time.monotonic() + 5.0
+        try:
+            w.q.get_nowait()
+        except queue.Empty:
+            break
+    w.send_line(line)
+    lines = []
+    end = time.monotonic() + QUERY_TIMEOUT_S
     while time.monotonic() < end:
         try:
             text, _ = w.q.get(timeout=0.05)
         except queue.Empty:
             continue
-        m = re.match(r"^\$(\d+)=([-\d.]+)", text)
+        if text == "__EOF__":
+            raise Wedge("port closed")
+        if text == "ok":
+            return lines, None
+        if text.startswith("error:"):
+            return lines, text
+        if text.startswith("<"):
+            continue
+        lines.append(text)
+    return lines, "no reply"
+
+
+def parse_settings(lines):
+    settings = {}
+    for text in lines:
+        m = SETTING_RE.match(text)
         if m:
             settings[int(m.group(1))] = float(m.group(2))
-        elif text == "ok":
-            break
     return settings
 
 
-def read_build_info(p):
-    w = p.w
-    while not w.q.empty():
-        w.q.get_nowait()
-    w.send_line("$I")
-    info = []
-    end = time.monotonic() + 3.0
-    while time.monotonic() < end:
-        try:
-            text, _ = w.q.get(timeout=0.05)
-        except queue.Empty:
-            continue
-        if text == "ok":
-            break
-        info.append(text)
-    return info
+def parse_offsets(lines):
+    offsets = {}
+    for text in lines:
+        m = OFFSET_RE.match(text)
+        if m:
+            offsets[m.group(1)] = (float(m.group(2)), float(m.group(3)))
+    return offsets
 
 
 # ---------------------------------------------------------------------------
-# The experiment matrix
+# Pure checks
 # ---------------------------------------------------------------------------
 
-def build_variants(sx, sy, smax, feed):
-    """Each variant: (name, [lines], settle_ms_after_mcodes).
-    Coordinates are inside a 60 mm box next to home; sx/sy carry the machine's
-    sign convention (from $23) so 'toward the bed' is always correct."""
-    def P(x, y):
-        return f"X{sx * x:.3f} Y{sy * y:.3f}"
+def segment_outlasts(feed, delay):
+    """True when the SEGMENT_MM move at `feed` mm/min lasts longer than the
+    hold/stop delay plus margin, so the event lands during motion."""
+    return SEGMENT_MM * 60 / feed > delay + TIMING_MARGIN_S
 
+
+def box_fits(origin, box, bed):
+    return 0 <= origin and origin + box <= bed
+
+
+def position_in_bed(mpos, x_dir, y_dir, bed, tol):
+    return all(-tol <= d * m <= b + tol for m, d, b in zip(mpos, (x_dir, y_dir), bed))
+
+
+def nonzero(xy):
+    return abs(xy[0]) > 1e-6 or abs(xy[1]) > 1e-6
+
+
+def preflight(case, args, settings, status, offsets):
+    """Every reason the case must not run. Pure. `status` is the startup
+    report; `offsets` is the parsed $# reply, or None when $# is unsupported."""
+    reasons = []
+    startup_state = state_of(status)
+    if case in MOTION_CASES and startup_state not in STARTUP_STATES:
+        reasons.append(f"startup state is {startup_state or 'unknown'}, not one of {', '.join(STARTUP_STATES)}")
+    if case in MOTION_CASES and settings.get(22) != 1:
+        reasons.append("$22 (homing) is absent or not 1; the home step needs homing enabled")
+    s30 = settings.get(30)
+    if s30 is None:
+        reasons.append("$30 (max spindle/power scale) is absent; there is no default ceiling")
+    elif args.smax > s30:
+        reasons.append(f"--smax {args.smax} exceeds $30={s30:g}")
+    if case in POWERED_CASES and settings.get(32) != 1:
+        reasons.append(
+            "$32 (laser mode) is absent or not 1; without laser mode GRBL keeps the "
+            "beam energised through rapids, so the traverse would run with the beam on"
+        )
+    if case in BOXED_CASES:
+        bed_x = settings.get(130)
+        bed_y = settings.get(131)
+        if bed_x is None:
+            reasons.append("$130 (X travel) is absent")
+        elif not box_fits(args.origin_x, args.box_mm, bed_x):
+            reasons.append(f"box on X ({args.origin_x:g} + {args.box_mm:g} mm) does not fit $130={bed_x:g}")
+        if bed_y is None:
+            reasons.append("$131 (Y travel) is absent")
+        elif not box_fits(args.origin_y, args.box_mm, bed_y):
+            reasons.append(f"box on Y ({args.origin_y:g} + {args.box_mm:g} mm) does not fit $131={bed_y:g}")
+        if offsets is not None:
+            g54 = offsets.get("G54")
+            if g54 is None or nonzero(g54):
+                reasons.append(f"G54 work offset is {g54 if g54 is not None else 'not reported'}; it must be zero on X and Y")
+            g92 = offsets.get("G92")
+            if g92 is None or nonzero(g92):
+                reasons.append(f"G92 offset is {g92 if g92 is not None else 'not reported'}; it must be zero on X and Y")
+        else:
+            wco = xy_of(WCO_RE, status)
+            if wco is None:
+                reasons.append("work offset unreadable: $# is unsupported and the status report carries no WCO: field")
+            elif nonzero(wco):
+                reasons.append(f"WCO work offset is {wco}; it must be zero on X and Y")
+    return reasons
+
+
+# ---------------------------------------------------------------------------
+# The case plans. One builder; the dry run prints it and the live run executes it.
+# ---------------------------------------------------------------------------
+
+class Step:
+    """kind: home | line | idle | byte | mark | window | reset | poll | variant | variant_end | rep"""
+
+    def __init__(self, kind, text="", value=None, delay=0.0, seconds=0.0, settle_ms=0, rep=0):
+        self.kind = kind
+        self.text = text
+        self.value = value
+        self.delay = delay
+        self.seconds = seconds
+        self.settle_ms = settle_ms
+        self.rep = rep
+
+    def __repr__(self):
+        return f"Step({self.kind!r}, {self.text!r})"
+
+
+def line(text):
+    return Step("line", text)
+
+
+def byte_step(value, label, delay):
+    return Step("byte", label, value=value, delay=delay)
+
+
+def mark(what):
+    return Step("mark", what)
+
+
+def build_variants(P, smax, feed):
+    """Each variant: (name, [lines], settle_ms_after_mcodes). P(u, v) maps the
+    0-60 frame into the operator's box and signs."""
     S = smax
     V = []
     # 1. The exact job preamble Kerf sends (zero-length feed move with F/S0, then M4).
@@ -328,220 +496,469 @@ def build_variants(sx, sy, smax, feed):
     return V
 
 
-def run_variant(p, name, lines, settle_ms, rep, results):
-    w = p.w
-    w.log("##", f"--- variant {name} rep {rep} ---")
-    timings = []
-    try:
-        for line in lines:
-            if line == "@IDLE":
-                p.wait_idle()
-                continue
-            ms, term = p.command(line)
-            timings.append((line, ms, term))
-            if term != "ok":
-                results.append((name, rep, "ERROR", f"{term} for {line}"))
-                w.log("##", f"error {term} for {line}; M5 + reset")
-                reset_and_unlock(w, p, "error")
-                return
-            if settle_ms and line.startswith("M"):
-                time.sleep(settle_ms / 1000)
-        p.wait_idle()
-        slow = [(l, ms) for (l, ms, _) in timings if ms > 500]
-        results.append((name, rep, "PASS", f"slowest ok {max(ms for _, ms, _ in timings):.0f} ms"
-                        + (f"; slow lines: {slow}" if slow else "")))
-    except Wedge as e:
-        results.append((name, rep, "WEDGE", str(e)))
-        w.log("##", f"WEDGE: {e}")
-        # Is the controller still answering '?' while ignoring lines? Record it.
-        r = p.status()
-        w.log("##", f"status while wedged: {r}")
-        # Does it ignore a plain command too, or only laser ones?
-        try:
-            w.send_line("G4 P0")
-            end = time.monotonic() + 3.0
-            got = None
-            while time.monotonic() < end:
-                try:
-                    text, _ = w.q.get(timeout=0.05)
-                    if text == "ok" or text.startswith("error"):
-                        got = text
-                        break
-                except queue.Empty:
-                    pass
-            w.log("##", f"plain command while wedged answered: {got}")
-        except Exception:
-            pass
-        reset_and_unlock(w, p, "wedge")
-    except Alarm as e:
-        results.append((name, rep, "ALARM", str(e)))
-        w.log("##", f"ALARM: {e}")
-        reset_and_unlock(w, p, "alarm")
+def resolved_reps(args):
+    if args.reps is not None:
+        return args.reps
+    return 1 if args.case in ONE_REP_CASES else 5
 
 
-def run_pause_experiment(p, sx, sy, smax, mode, results):
-    """Feed hold + spindle-stop override, observed through '?' (the A: field
-    says whether the spindle output is energized) rather than eyes."""
-    w = p.w
-    name = f"pause_{mode}"
-    w.log("##", f"--- {name} ---")
-    def P(x, y):
-        return f"X{sx * x:.3f} Y{sy * y:.3f}"
-    try:
-        p.command("M5")
-        p.command(f"G0 {P(10, 10)}")
-        p.wait_idle()
-        p.command(f"{mode} S{smax}")
-        # A slow crawl: ~70 mm at 300 mm/min = 14 s of motion to pause inside.
-        p.command(f"G1 {P(60, 60)} F300 S{smax}")
-        time.sleep(3.0)
-        w.send_byte(0x21, "FEED_HOLD !")
-        trace = []
-        for _ in range(8):  # 2 s of reports at 250 ms
-            time.sleep(0.25)
-            r = p.status()
-            trace.append(r)
-        w.send_byte(0x9E, "SPINDLE_STOP_OVR 0x9E")
-        for _ in range(12):  # 3 s more
-            time.sleep(0.25)
-            r = p.status()
-            trace.append(r)
-        # Anything the firmware said (e.g. [MSG:Restoring spindle]) is in the log.
-        def acc(r):
-            if not r:
-                return "?"
-            m = ACC_RE.search(r)
-            return f"{state_of(r)}/A:{m.group(1) if m else '-'}"
-        results.append((name, 1, "TRACE", " ".join(acc(r) for r in trace)))
-    except (Wedge, Alarm) as e:
-        results.append((name, 1, "FAIL", str(e)))
-    finally:
-        reset_and_unlock(w, p, "end of pause experiment")
+def build_case_plan(case, args, x_dir, y_dir):
+    """The whole ordered step list for one case. Pure."""
+    steps = []
+    if case == "settings":
+        return steps
+    steps.append(Step("home"))
+    if case == "direction":
+        for text in ["G21", "G91", "M5"]:
+            steps.append(line(text))
+        steps.append(line(f"G1 X{x_dir * 1:.3f} F300"))
+        steps.append(line(f"G1 X{-x_dir * 1:.3f} F300"))
+        steps.append(line(f"G1 Y{y_dir * 1:.3f} F300"))
+        steps.append(line(f"G1 Y{-y_dir * 1:.3f} F300"))
+        steps.append(line("G90"))
+        steps.append(Step("idle", seconds=60.0))
+        return steps
+
+    box = args.box_mm
+    ox, oy = args.origin_x, args.origin_y
+
+    def P(u, v):
+        return f"X{x_dir * (ox + u * box / 60):.3f} Y{y_dir * (oy + v * box / 60):.3f}"
+
+    def Q(dx, dy):
+        return f"X{x_dir * (ox + dx):.3f} Y{y_dir * (oy + dy):.3f}"
+
+    for text in BOXED_PREAMBLE:
+        steps.append(line(text))
+    smax, feed = args.smax, args.feed
+    reps = resolved_reps(args)
+
+    if case == "wedge":
+        variants = build_variants(P, smax, feed)
+        for rep in range(1, reps + 1):
+            steps.append(Step("rep", rep=rep))
+            for name, lines, settle in variants:
+                steps.append(Step("variant", name, settle_ms=settle, rep=rep))
+                for text in lines:
+                    if text == "@IDLE":
+                        steps.append(Step("idle", seconds=60.0))
+                    else:
+                        steps.append(line(text))
+                steps.append(Step("idle", seconds=60.0))
+                steps.append(Step("variant_end", name, rep=rep))
+        return steps
+
+    # The three M4 cases: an unscaled SEGMENT_MM segment from Q(5, 5) to Q(25, 5).
+    for rep in range(1, reps + 1):
+        steps.append(Step("rep", rep=rep))
+        steps.append(line(f"G0 {Q(5, 5)}"))
+        steps.append(Step("idle", seconds=60.0))
+        steps.append(line(f"M4 S{smax}"))
+        steps.append(line(f"G1 {Q(5 + SEGMENT_MM, 5)} F{feed} S{smax}"))
+        steps.append(mark("last ack"))
+        if case == "hold-m4":
+            steps.append(byte_step(0x21, "FEED_HOLD !", HOLD_DELAY_S))
+            steps.append(mark("hold"))
+            steps.append(Step("window", seconds=HOLD_OBSERVE_S))
+            steps.append(Step("reset", "designed reset after hold", delay=0.0))
+        elif case == "stop-m4":
+            steps.append(Step("reset", "stop", delay=STOP_DELAY_S))
+        else:
+            steps.append(line("M5"))
+            steps.append(Step("poll", seconds=COMPLETION_TIMEOUT_S))
+            steps.append(mark("completion"))
+    return steps
+
+
+def format_plan(steps):
+    out = []
+    for s in steps:
+        if s.kind == "home":
+            out += ["[home] M5 (only if the controller reports Idle)", "[home] $H",
+                    "[home] wait for Idle, then check state and position"]
+        elif s.kind == "line":
+            out.append(s.text)
+        elif s.kind == "idle":
+            out.append("[wait for Idle]")
+        elif s.kind == "byte":
+            out.append(f"[after {s.delay:g} s] <{s.text} 0x{s.value:02X}>")
+        elif s.kind == "mark":
+            out.append(f"## OBSERVE {s.text}: note whether motion ceased")
+        elif s.kind == "window":
+            out.append(f"[observe: '?' every {OBSERVE_EVERY_S * 1000:.0f} ms for {s.seconds:g} s]")
+        elif s.kind == "reset":
+            out.append(f"[after {s.delay:g} s] <RESET 0x18> (designed: {s.text}), then capture + one '?'")
+        elif s.kind == "poll":
+            out.append(f"[poll '?' until Idle, max {s.seconds:g} s]")
+        elif s.kind == "variant":
+            out.append(f"--- variant {s.text} rep {s.rep} ---")
+        elif s.kind == "rep":
+            out.append(f"[rep {s.rep}: '?' must report Idle]")
+    return out
 
 
 # ---------------------------------------------------------------------------
+# Cleanup: the one fault path. Reset first, nothing after but a capture.
+# ---------------------------------------------------------------------------
 
-def pick_port():
-    cands = sorted(glob.glob("/dev/cu.usb*") + glob.glob("/dev/cu.wchusb*") + glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*"))
-    if len(cands) == 1:
-        return cands[0]
-    if not cands:
-        sys.exit("No serial port found. Is the laser plugged in and Kerf closed?")
-    sys.exit("Several ports found, pass one with --port:\n  " + "\n  ".join(cands))
+def cleanup(wire, reason):
+    if wire is not None:
+        try:
+            wire.log("##", f"cleanup ({reason}): realtime reset first")
+            wire.send_byte(0x18, "RESET")
+            wire.drain(CLEANUP_CAPTURE_S)
+            wire.send_byte(ord("?"), "?")
+            wire.drain(CLEANUP_CAPTURE_S)
+        except Exception as exc:  # a dead port must still reach the RESULT line
+            try:
+                wire.log("!!", f"cleanup: {exc}")
+            except Exception:  # the log itself failed; the RESULT line is still returned
+                pass
+    return f"RESULT INCOMPLETE: {reason}"
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--port")
-    ap.add_argument("--baud", type=int, default=115200)
-    ap.add_argument("--reps", type=int, default=5)
-    ap.add_argument("--smax", type=int, default=10, help="max S value ever sent (default 10)")
+def designed_reset_capture(p):
+    lines = p.w.drain(CLEANUP_CAPTURE_S)
+    p.w.send_byte(ord("?"), "?")
+    lines += p.w.drain(CLEANUP_CAPTURE_S)
+    reports = [text for text in lines if text.startswith("<")]
+    return reports[-1] if reports else None
+
+
+def observe(p, text):
+    p.w.log("##", f"OBSERVE {text}: note whether motion ceased")
+    print(f"## OBSERVE {text}: note whether motion ceased")
+
+
+# ---------------------------------------------------------------------------
+# The live runner
+# ---------------------------------------------------------------------------
+
+def run_home(p, args, results):
+    before = p.status()
+    if state_of(before) == "Idle":
+        _, term = p.command("M5")
+        if term != "ok":
+            raise Fault(f"home step: {term} for M5")
+    _, term = p.command("$H", timeout=HOME_TIMEOUT_S)
+    if term != "ok":
+        raise Fault(f"home step: {term} for $H")
+    end = time.monotonic() + HOME_TIMEOUT_S
+    report = p.status()
+    while state_of(report) != "Idle" and time.monotonic() < end:
+        time.sleep(0.2)
+        report = p.status()
+    home_state = state_of(report)
+    reasons = []
+    if home_state != "Idle":
+        reasons.append(f"state after homing is {home_state or 'unreported'}, not Idle")
+    if args.case in BOXED_CASES and home_state == "Idle":
+        mpos = xy_of(MPOS_RE, report)
+        bed = (p.settings.get(130, 0.0), p.settings.get(131, 0.0))
+        if mpos is None:
+            reasons.append("post-home status report carries no MPos")
+        elif not position_in_bed(mpos, args.x_dir, args.y_dir, bed, POSITION_TOL_MM):
+            reasons.append(
+                f"post-home position MPos {mpos[0]:g},{mpos[1]:g} lies outside the bed on "
+                f"--x-dir {args.x_dir} --y-dir {args.y_dir} (tolerance {POSITION_TOL_MM:g} mm)"
+            )
+    if reasons:
+        raise Refused("; ".join(reasons))
+    results.append(("home", 1, "OK", report))
+
+
+def execute_step(wire, p, args, step, ctx, results):
+    kind = step.kind
+    if kind == "home":
+        run_home(p, args, results)
+    elif kind == "line":
+        _, term = p.command(step.text)
+        if term != "ok":
+            raise Fault(f"{term} for {step.text}")
+        if ctx["settle_ms"] and step.text.startswith("M"):
+            time.sleep(ctx["settle_ms"] / 1000)
+    elif kind == "idle":
+        p.wait_idle(step.seconds)
+    elif kind == "byte":
+        time.sleep(step.delay)
+        wire.send_byte(step.value, step.text)
+    elif kind == "mark":
+        observe(p, step.text)
+    elif kind == "window":
+        end = time.monotonic() + step.seconds
+        trace = []
+        while time.monotonic() < end:
+            time.sleep(OBSERVE_EVERY_S)
+            trace.append(state_of(p.status()) or "?")
+        results.append((args.case, ctx["rep"], "TRACE", " ".join(trace)))
+    elif kind == "reset":
+        time.sleep(step.delay)
+        wire.send_byte(0x18, "RESET designed")
+        if step.text == "stop":
+            observe(p, "stop")
+        capture = designed_reset_capture(p)
+        results.append((args.case, ctx["rep"], "RESET",
+                        f"state after designed reset: {state_of(capture) or 'no report'} ({capture})"))
+    elif kind == "poll":
+        end = time.monotonic() + step.seconds
+        while True:
+            report = p.status()
+            if state_of(report) == "Idle":
+                break
+            if time.monotonic() >= end:
+                raise Wedge(f"no Idle within {step.seconds:g} s of completion")
+            time.sleep(OBSERVE_EVERY_S)
+    elif kind == "variant":
+        ctx["variant"] = step.text
+        ctx["settle_ms"] = step.settle_ms
+        wire.log("##", f"--- variant {step.text} rep {step.rep} ---")
+    elif kind == "variant_end":
+        results.append((step.text, step.rep, "PASS", "all lines acknowledged"))
+        print(f"  [{step.rep}] {step.text}: PASS")
+        ctx["variant"] = None
+        ctx["settle_ms"] = 0
+    elif kind == "rep":
+        ctx["rep"] = step.rep
+        rep_state = state_of(p.status())
+        if rep_state != "Idle":
+            raise Incomplete(f"controller not Idle before rep {step.rep} (the probe never unlocks); state {rep_state}")
+
+
+def run_steps(wire, p, args, settings, steps, results):
+    ctx = {"variant": None, "settle_ms": 0, "rep": 1}
+    for step in steps:
+        try:
+            execute_step(wire, p, args, step, ctx, results)
+        except Refused as r:
+            return f"RESULT REFUSED: {r}", 3
+        except Incomplete as i:
+            return f"RESULT INCOMPLETE: {i}", 1
+        except (Wedge, Alarm, Fault) as e:
+            label = type(e).__name__.upper()
+            where = f" in {ctx['variant']} rep {ctx['rep']}" if ctx["variant"] else ""
+            results.append((ctx["variant"] or args.case, ctx["rep"], label, str(e)))
+            wire.log("##", f"{label}{where}: {e}")
+            fault_result = cleanup(wire, f"{label.lower()}{where}: {e}")
+            return fault_result, 1
+    return "RESULT COMPLETE", 0
+
+
+def run_live(wire, args, results):
+    p = Probe(wire, IDLE_TICKS, PROBE_EVERY_S, HARD_TIMEOUT_S)
+    wire.log("##", "open; draining for banner")
+    wire.drain(BANNER_WAIT_S)
+    # Ask before resetting: a controller that reports a state is never reset.
+    startup_report = p.status(BANNER_WAIT_S)
+    if startup_report is None:
+        wire.log("##", "no status report; one startup reset")
+        wire.send_byte(0x18, "RESET startup")
+        wire.drain(BANNER_WAIT_S)
+        startup_report = p.status(BANNER_WAIT_S)
+        if startup_report is None:
+            return "RESULT INCOMPLETE: controller not answering", 1
+    wire.log("##", f"startup state: {state_of(startup_report)} ({startup_report})")
+    results.append(("startup", 1, state_of(startup_report) or "?", startup_report))
+
+    info, _ = query(p, "$I")
+    results.append(("$I", 1, "OK", f"{len(info)} line(s)"))
+    settings_lines, s_err = query(p, "$$")
+    settings = parse_settings(settings_lines)
+    p.settings = settings
+    wire.log("##", f"settings: {settings}")
+    unsupported = []
+    replies = {}
+    for q in ("$G", "$#"):
+        q_lines, q_err = query(p, q)
+        replies[q] = q_lines
+        if q_err is not None:
+            unsupported.append(q)
+            wire.log("##", f"{q} unsupported ({q_err})")
+            results.append((q, 1, "UNSUPPORTED", q_err))
+        else:
+            results.append((q, 1, "OK", " ".join(q_lines)))
+    if args.case == "settings":
+        return "RESULT COMPLETE", 0
+
+    offsets = None if "$#" in unsupported else parse_offsets(replies["$#"])
+    reasons = preflight(args.case, args, settings, startup_report, offsets)
+    if reasons:
+        return "RESULT REFUSED: " + "; ".join(reasons), 3
+
+    live_steps = build_case_plan(args.case, args, args.x_dir, args.y_dir)
+    return run_steps(wire, p, args, settings, live_steps, results)
+
+
+def finish(wire, logf, result, code, results):
+    """Summary, then join the reader, then the RESULT line last, from this thread."""
+    summary = [f"{name} rep {rep} {verdict}: {detail}" for name, rep, verdict, detail in results]
+    print("\n=== SUMMARY ===")
+    for text in summary:
+        print(text)
+    if wire is not None:
+        wire.log("##", "SUMMARY " + " || ".join(summary))
+        if not wire.close():
+            result, code = "RESULT INCOMPLETE: reader thread did not stop", 1
+    else:
+        logf.write("## SUMMARY " + " || ".join(summary) + "\n")
+    logf.write(result + "\n")
+    logf.close()
+    print(result)
+    return code
+
+
+# ---------------------------------------------------------------------------
+# Command line
+# ---------------------------------------------------------------------------
+
+def refuse_args(message):
+    print(f"probe-grbl: refused: {message}", file=sys.stderr)
+
+
+def parse_args(argv):
+    ap = argparse.ArgumentParser(
+        description="GRBL probe. Procedure: docs/qualification-card.md",
+        epilog="Exit codes: 0 complete, 1 incomplete, 2 command line refused, 3 refused by controller checks.",
+    )
+    ap.add_argument("--case", required=True, choices=CASES)
+    ap.add_argument("--dry-run", action="store_true", help="print the matrix; open no port")
+    ap.add_argument("--port", help="serial port (required unless --dry-run)")
+    ap.add_argument("--log-file", help="new log path (required unless --dry-run; must not exist)")
+    ap.add_argument("--origin-x", type=float, help="box origin X in mm (boxed cases)")
+    ap.add_argument("--origin-y", type=float, help="box origin Y in mm (boxed cases)")
+    ap.add_argument("--x-dir", type=int, choices=(-1, 1), help="sign of X toward the bed (never inferred)")
+    ap.add_argument("--y-dir", type=int, choices=(-1, 1), help="sign of Y toward the bed (never inferred)")
+    ap.add_argument("--box-mm", type=float, default=60.0)
+    ap.add_argument("--home", action="store_true", help="home first; required for every motion case")
+    ap.add_argument("--smax", type=int, default=0, help="max S value ever sent (default 0)")
     ap.add_argument("--feed", type=int, default=12000)
-    ap.add_argument("--pause", action="store_true", help="also run the feed-hold experiment")
-    ap.add_argument("--no-home", action="store_true", help="skip $H (not recommended)")
-    args = ap.parse_args()
+    ap.add_argument("--baud", type=int, default=115200)
+    ap.add_argument("--reps", type=int, default=None)
+    ap.add_argument("--stop-on-fault", action="store_true", help="accepted; a fault always ends the run")
+    ap.add_argument("--pause", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--no-home", action="store_true", help=argparse.SUPPRESS)
+    return ap.parse_args(argv)
 
-    port = args.port or pick_port()
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    logname = f"probe-{stamp}.log"
-    logf = open(logname, "w")
-    w = Wire(port, args.baud, logf)
-    p = Probe(w)
-    results = []
 
-    print(f"port {port}, log {logname}")
-    print("Ctrl-C at any time: sends reset + M5.")
+def check_args(args):
+    """Returns 2 for a refused command line, else None. Prints the reason."""
+    if args.pause:
+        refuse_args("--pause is retired: it sent 0x9E, which re-arms the beam. Use --case hold-m4.")
+        return 2
+    if args.no_home:
+        refuse_args("--no-home is retired: the probe never homes on its own; motion cases require --home.")
+        return 2
+    if args.case == "settings" and args.home:
+        refuse_args("--home is refused for --case settings, which never moves.")
+        return 2
+    if args.case in MOTION_CASES and not args.home:
+        refuse_args(f"--home is required for --case {args.case}: every motion case starts from a fresh home.")
+        return 2
+    if not args.dry_run and not args.port:
+        refuse_args("--port is required for a live run.")
+        return 2
+    if not args.dry_run and not args.log_file:
+        refuse_args("--log-file is required for a live run.")
+        return 2
+    if not args.dry_run and os.path.exists(args.log_file):
+        refuse_args(f"--log-file {args.log_file} already exists; logs are never overwritten.")
+        return 2
+    if args.case != "settings" and (args.x_dir is None or args.y_dir is None):
+        refuse_args(f"--x-dir and --y-dir are required for --case {args.case}; directions are never inferred.")
+        return 2
+    if args.case in BOXED_CASES and (args.origin_x is None or args.origin_y is None):
+        refuse_args(f"--origin-x and --origin-y are required for --case {args.case}.")
+        return 2
+    if args.box_mm <= 0:
+        refuse_args("--box-mm must be greater than 0.")
+        return 2
+    if args.case in M4_CASES and args.box_mm < BOX_FLOOR_M4_MM:
+        refuse_args(f"--box-mm must be at least {BOX_FLOOR_M4_MM:g} for --case {args.case}.")
+        return 2
+    if args.smax < 0:
+        refuse_args("--smax must be 0 or more.")
+        return 2
+    if args.feed <= 0:
+        refuse_args("--feed must be greater than 0.")
+        return 2
+    if args.reps is not None and args.reps < 1:
+        refuse_args("--reps must be at least 1.")
+        return 2
+    if args.case in ONE_REP_CASES and args.reps is not None and args.reps > 1:
+        refuse_args(f"--reps {args.reps} is refused for --case {args.case}: one repetition per invocation, each from a fresh home.")
+        return 2
+    if args.case in ONE_REP_CASES:
+        delay = HOLD_DELAY_S if args.case == "hold-m4" else STOP_DELAY_S
+        if not segment_outlasts(args.feed, delay):
+            refuse_args(
+                f"--feed {args.feed} is too fast for --case {args.case}: the {SEGMENT_MM} mm segment "
+                f"would end before the event is sent. Use --feed 300."
+            )
+            return 2
+    return None
+
+
+def header_lines(args):
+    origin = f"{args.origin_x:g},{args.origin_y:g}" if args.origin_x is not None and args.origin_y is not None else "-"
+    dirs = f"{args.x_dir},{args.y_dir}" if args.x_dir is not None and args.y_dir is not None else "-"
+    out = [
+        f"probe-grbl case={args.case} reps={resolved_reps(args)} smax={args.smax} feed={args.feed} "
+        f"origin={origin} dirs={dirs} box={args.box_mm:g} home={'yes' if args.home else 'no'}",
+        'A run is complete only if its last line is "RESULT COMPLETE". Any other ending, including no RESULT line, is INCOMPLETE.',
+    ]
+    if args.smax == 0 or args.dry_run:
+        out.append("This run cannot establish positive-power behaviour (S0 or dry run).")
+    return out
+
+
+def main(argv=None):
+    try:
+        args = parse_args(argv)
+    except SystemExit as e:  # argparse: --help (0) or a malformed command line (2)
+        return e.code if isinstance(e.code, int) else 2
+    refused = check_args(args)
+    if refused is not None:
+        return refused
+
+    header = header_lines(args)
+    if args.dry_run:
+        for text in header:
+            print(f"## {text}")
+        for text in format_plan(build_case_plan(args.case, args, args.x_dir, args.y_dir)):
+            print(text)
+        return 0
 
     try:
-        w.log("##", "open; waiting for banner")
-        banner = w.drain(2.5)
-        if not any(l.lower().startswith("grbl") for l in banner):
-            w.send_byte(0x18, "RESET")
-            banner = w.drain(2.5)
-        w.log("##", f"banner: {banner}")
-        try:
-            p.command("$X")
-        except (Wedge, Alarm) as e:
-            w.log("##", f"$X: {e}")
+        logf = open(args.log_file, "x")
+    except OSError as e:
+        refuse_args(f"--log-file {args.log_file} cannot be created: {e}")
+        return 2
+    for text in header:
+        logf.write(f"## {text}\n")
+    logf.flush()
+    print(f"port {args.port}, log {args.log_file}")
+    print("Ctrl-C at any time: realtime reset (0x18) first, nothing after it.")
 
-        info = read_build_info(p)
-        settings = read_settings(p)
-        print("build:", " | ".join(info))
-        for k in (20, 21, 22, 23, 30, 32, 110, 111, 120, 121, 130, 131):
-            if k in settings:
-                print(f"  ${k}={settings[k]:g}")
-        w.log("##", f"settings: {settings}")
-
-        # Sign convention from the homing direction mask: bit set = homes toward
-        # the negative end, so the bed lies in +; clear = homes at the positive end, bed lies in -.
-        mask = int(settings.get(23, 0))
-        sx = 1 if (mask & 1) else -1
-        sy = 1 if (mask & 2) else -1
-        print(f"  bed lies toward X{'+' if sx > 0 else '-'} Y{'+' if sy > 0 else '-'} from home ($23={mask})")
-
-        if not args.no_home and settings.get(22, 0) == 1:
-            print("homing...")
-            ms, term = p.command("$H")
-            if term != "ok":
-                sys.exit(f"homing failed: {term}")
-        p.command("G21")
-        p.command("G90")
-        p.command("M5")
-        # Sanity move: 10 mm into the bed. An alarm here means the sign guess is wrong.
-        ms, term = p.command(f"G0 X{sx * 10:.3f} Y{sy * 10:.3f}")
-        if term != "ok":
-            sys.exit(f"sanity move refused: {term}. Check $23 / bed direction.")
-        p.wait_idle()
-
-        variants = build_variants(sx, sy, args.smax, args.feed)
-        for rep in range(1, args.reps + 1):
-            for name, lines, settle in variants:
-                run_variant(p, name, lines, settle, rep, results)
-                print(f"  [{rep}/{args.reps}] {name}: {results[-1][2]}")
-
-        if args.pause:
-            print("pause experiment (beam at S%d on scrap)..." % args.smax)
-            run_pause_experiment(p, sx, sy, args.smax, "M3", results)
-            run_pause_experiment(p, sx, sy, args.smax, "M4", results)
-
-        p.command("M5")
-        p.command(f"G0 X{sx * 0:.3f} Y{sy * 0:.3f}")
-        p.wait_idle()
-
+    result = "RESULT INCOMPLETE: ended before a result was reached"
+    code = 1
+    wire = None
+    results = []
+    try:
+        wire = Wire(args.port, args.baud, logf)
+        result, code = run_live(wire, args, results)
     except KeyboardInterrupt:
-        print("\ninterrupted: reset + M5")
-        try:
-            reset_and_unlock(w, p, "Ctrl-C")
-        except Exception:
-            pass
+        print("\ninterrupted: realtime reset")
+        result = cleanup(wire, "interrupted (Ctrl-C)")
+        code = 1
     except Exception as e:
-        w.log("!!", f"fatal: {e}")
+        if wire is not None:
+            wire.log("!!", f"fatal: {e}")
         print("fatal:", e)
-        try:
-            reset_and_unlock(w, p, "fatal")
-        except Exception:
-            pass
+        result = cleanup(wire, f"fatal: {e}")
+        code = 1
     finally:
-        # Summary
-        print("\n=== SUMMARY ===")
-        by = {}
-        for name, rep, verdict, detail in results:
-            by.setdefault(name, []).append((rep, verdict, detail))
-        for name, rows in by.items():
-            verdicts = [v for _, v, _ in rows]
-            print(f"{name}: " + ", ".join(verdicts))
-            for rep, v, d in rows:
-                if v != "PASS":
-                    print(f"    rep {rep} {v}: {d}")
-        summary_lines = [f"{n}: {', '.join(v for _, v, _ in r)}" for n, r in by.items()]
-        w.log("##", "SUMMARY " + " || ".join(summary_lines))
-        for name, rep, verdict, detail in results:
-            if verdict != "PASS":
-                w.log("##", f"{name} rep {rep} {verdict}: {detail}")
-        w.close()
-        logf.close()
-        print(f"\nfull trace: {logname}  (send me this file)")
+        code = finish(wire, logf, result, code, results)
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
