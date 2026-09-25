@@ -53,9 +53,11 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - **Three code-refresh relays queued after the fence, plans final and critic-converged:** `refresh-cut-vs-screen` (3 rounds), `refresh-canvas-display` (3 rounds, F7 redesigned display-only so a node edit never changes the cut), `refresh-editing-shortcuts` (4 rounds, the 4th at Lee's request). Run in that order, one at a time. Cut-vs-screen must land before canvas (canvas precondition greps `drawnLeaves`).
 
-- **Two DECISIONS proposals owed to Lee at relay close:** (1) Ctrl+Shift+V = Flip Vertical, Alt+V = Paste in Place (Lee ruled 2026-09-22; entry wording in the editing plan's F3 implementer note); (2) the fence pin (plan's Out-of-scope section, critic A1 wording: up to two 0x18 per stop by design, refusal never maps to complete, never triggers a TS stop).
+- **Fence is now one stop, one reset (relay `kerf-fence-single-reset`, merged into this session branch as fd311af, 2026-09-24).** Per Lee ("figure out the right way to patch this and not try to design work around"), the fence-reopen relay's detect-and-re-send was replaced by a submission critical section: the admission check and the job line's `write(2)` are atomic against the stop's admission close, so no job line can land after the reset and no second reset exists. Ted+Razor PASS after one fix pass (W1: stop must hold the lock while closing admission, now asserted). 836 JS / 329 Rust; gate READY. **Owner hardware test required** (4 steps in ROADMAP `next`). Not yet on master; `/save` merges the session branch. NEXT: refresh-cut-vs-screen relay.
 
-- **Fence relay `kerf-fence-reopen` CLOSED and merged into this session branch (66c950a, 2026-09-24).** Razor PASS: 0 CRITICAL / 0 WARNING / 4 NOTE, 19/19 requirements covered; Stage 4.5 gate READY (build, lint, prettier, tsc, 842 JS, clippy, fmt, 326 Rust). N2 and N4 parked in ROADMAP (`### Deferred from kerf-fence-reopen (2026-09-24)`); N1 (T1 refused-branch mutant is killed by T2 `endState`, not the plan-named T1 assertions) is recorded in the Razor review. **Owner hardware test required** before this counts as verified: the four steps in ROADMAP `next` (stop mid-frame, frame again, full job on scrap, idle `$$`/jog/home). Not yet on master; `/save` merges the session branch. NEXT: refresh-cut-vs-screen relay.
+- **Two DECISIONS proposals owed to Lee:** (1) Ctrl+Shift+V = Flip Vertical, Alt+V = Paste in Place (Lee ruled 2026-09-22; entry wording in the editing plan's F3 implementer note; propose at that relay's close). (2) The single-reset fence pin (wording in `.claude/plans/fence-single-reset.md` → Standing decisions touched): job-line admission and write are one critical section with the stop's admission close; the stop waits at most one `write(2)` after POLLOUT, never on the controller, an ack, or transmission. The earlier two-resets pin is withdrawn: the design it described no longer exists.
+
+- **Two owner-reported regressions (Lee, 2026-09-24) parked, need console text from a recurrence:** the first-Start-of-session bug (fixed v0.8.18) is back, surfacing as a disconnect; disconnect/reconnect often hangs. ROADMAP Parking Lot → `### Deferred from kerf-fence-single-reset (2026-09-24)`. The first touches charter gate 1.
 
 ## Open questions awaiting Lee
 
@@ -72,6 +74,10 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-09-24 (fence single-reset)
+
+**Lee rejected the fence-reopen relay's second reset as designing around the race.** Plan `fence-single-reset` (Fable critic r1: approve with changes, all folded) replaced it with a `submit` lock around admission check + one `write(2)`; both serial handles are dup'd fds of one tty (serialport `try_clone` = `F_DUPFD_CLOEXEC`), so a line enqueued before admission closes precedes the stop's single 0x18. Relay `kerf-fence-single-reset`: Ted DONE (10 files, +578/-800), Razor WARNING W1 (a take-and-drop barrier in the stop passed every test), Ted fix f785143 (`close_admission` requires the held guard + cfg(test) held-lock assertion; X2 replays killed), Razor re-check PASS. Also fixed: the `$32=1` pump now publishes the reset banner it consumes. Merged into the session branch as fd311af. Lee reported two regressions mid-relay (first-Start disconnect back; disconnect/reconnect hangs); parked with leads.
 
 ### 2026-09-24 (fence relay close)
 
