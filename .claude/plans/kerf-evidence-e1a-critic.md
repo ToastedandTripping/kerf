@@ -132,3 +132,45 @@ The throw names the object id and type and says what would have happened; it lan
 5. **Citations:** `synthesizeFillContour` is `:156-191`, rounded arm `:171-189`, `return null` `:190`. `groupBuf` condition is `:293-297` (comment `:288-292`).
 6. **E1a-M2:** split into M2a (drop `closed: true`) and M2b (drop the fourth corner), or pick one; the battery needs one edit per id.
 7. **Completeness (small):** state that text on `fillLine` is reachable only via `generateGcode` (`:868-901`; skipped at `:280-283` through `toCutObjectsForTest`); assert the overlay's `rotation === 30` in M3; cite `MachinePanel.tsx:157-190` as the catching caller instead of asking Ted to find it; name the store import for the browser step; the kerf-offset Parking Lot line points at Gate D2.
+
+## Recheck (round 2) — 2026-09-25
+
+Plan re-read in full after the fold. Tree unchanged (`3a0d735`, no code diff since `4e9c1e2`). Every fold checked against the tree, not against the fold note.
+
+### Folds verified
+
+| Must-fix | What the plan now says | Tree check | Holds? |
+|---|---|---|---|
+| 1 (M4 one-site) | `assertNoFillLine` is module-level, called on `result` immediately before `toCutObjects` returns (`:591`), exported as `assertNoFillLineForTest` beside `:595`; M4 kills "delete the call" with a rectangle carrying `points` | `:591` is `return { objects: result, warnings }`; `:595` is the `toCutObjectsForTest` export. Trace of the fixture through the unmutated code: rectangle → not `isNonRectShape` (`:286`) → skips `groupBuf` (`:293-297`) → `obj.points.length >= 2` pushes one sampled closed path (`:377-386`) → synthesis skipped (`paths.length !== 0`, `:391-397`) → new contour branch does not fire (same guard) → effective-mode: non-rect no, rounded no (`cornerRadius` 0), `sharpRectContour` false → emitted at `:507` as `fillLine` (plus an overlay, since `hasClosed`) → the call at the return throws. With the call deleted: no throw, output carries `fillLine`, test red. One `find`/`replace`. | ✓ real, single-site kill |
+| 2 (predicate) | Lower iff the branch fired (`sharpRectContour`), never on type; rectangle-with-points stays `fillLine` and throws; `gcode_gen.rs:897-908` named as the route avoided | `:897-908` is the `; fill skipped: non-rectangular paths` comment-and-skip. Under the predicate no object with a non-4-point path can be handed to the `fill` arm by this batch. | ✓ |
+| 3 (M5) | Synthetic list to the exported function; message asserts `'r1' (rectangle)` verbatim; also asserts no throw on a clean list; mutant removes the `throw` | Exported pure function, one-line mutant. | ✓ |
+| 4 (frame) | "world coordinates before rotation … do not subtract x/y" | Matches `object_to_path` `:1346-1382` and `rotate_segment` `:1328-1339`. | ✓ |
+| 5 (citations) | `:156-190`, `:171-189`, `:190`, `:293-297` | Function body `:156-190` (brace `:191`), rounded arm `:171-189`, `return null` `:190`, `groupBuf` condition `:293-297`. New citations `:893-908`, `:936-975`, `:496-504`, `:1328-1339`, `gcode.rs:82-98`, `MachinePanel.tsx:157-190`, `:374-385`, `:868-901`, `:280-283`, `:225` all checked. | ✓ |
+| 6 (M2 split) | M2a flips `closed: true` → `false`; M2b drops the fourth corner | Two ids, one edit each. | ✓ (see residual A on anchor uniqueness) |
+| 7 (small) | Text via `generateGcode`; M3 asserts overlay rotation; caller cited; browser imports named with the `:225` signature; Gate D2 on the Parking Lot line; per-type sweep is now control C4 | All present. `useStore` is exported from `src/app/store/index.ts`; `toCutObjectsForTest(objects, layers, scanMotion?)` at `:225-229`. | ✓ |
+
+**Every mutant id is one contiguous edit:** M1 (delete the branch), M2a (one literal), M2b (one corner), M3 (one assignment), M4 (one call), M5 (one `throw`). No id stacks two sites. Confirmed against `mutation-battery.mjs:1555` (one `find`/`replace` per id).
+
+**Each mutant still turns its test red, traced:** M1 → no contour, `paths=[]`, no lowering, no overlay; the M1 assertion on `fill` + 4 corners fails (and the invariant throws, also red). M2a → overlay path `closed: false`; also the overlay is no longer emitted at all (`hasClosed` false at `:512`), so the "overlay has `closed: true`" assertion fails on a missing object — red either way. M2b → 3 points; assertion on 4 fails. M3 → mode stays `fillLine` → the invariant throws inside `toCutObjectsForTest` → red. M4 → traced above. M5 → no throw on the synthetic list → red.
+
+**C4 is a real control.** It runs every object type through the production `toCutObjects` (text through `generateGcode`, correctly) and asserts two things the invariant could break — no throw, and no `fillLine` in the output — on the unmutated tree. It is non-tautological because each fixture reaches a different exit (`fill`, `maskFill` ×5, coalesced `maskFill`, two per-child `fill`s) and any of them left as `fillLine` would fail it. It is the regression guard the round-1 X1 question asked for ("any type that cut before now made to throw"): every type that cut before exits as `maskFill` and never meets the throw. One clarification on semantics, residual B below.
+
+### Verdicts on the dimensions that changed
+
+- **3. Completeness — PASS** (was CONCERN). The lowering predicate is branch-scoped; the rectangle-with-points case is named and routed to the loud path; text reachability is stated; overlay rotation asserted.
+- **9. Verifiability — PASS** (was FAIL). Six single-site mutants, each traced red; the invariant has a data-fed wiring test (M4) and a direct unit test (M5); C1-C4 are real controls; the repro is executable at this stage.
+- **2. Approach soundness — PASS** (unchanged; wording hazard closed).
+- **10. Maintainability — PASS** (citations corrected).
+- **X1 — PASS** (unchanged; the predicate closes the one silent route round 1 named).
+
+All other dimensions unchanged from round 1 (PASS).
+
+### Residual must-fix (none gating)
+
+- **A. Anchor uniqueness for the battery spec (Ted, when writing the spec):** the battery refuses a `find` that occurs other than exactly once (`MUTANT_ANCHOR_AMBIGUOUS`, `mutation-battery.mjs:1773-1779`). `closed: true` occurs many times in `gcodeGen.ts` (`:169`, `:188`, `:480`, and the new contour), and `effectiveMode = "maskFill"` twice. Each `find` must carry enough surrounding lines to be unique — for M2a, the whole pushed-contour literal; for M3, the `sharpRectContour` guard line with its assignment. Not a plan defect; a note so the first battery run is not refused.
+- **B. Journal wording (plan Verification, line 90):** "Battery journal: every E1a-M* is red and every E1a-C* is green" — the journal records per-mutant `killed` / `survived` / `errored` / `CONTROL_RED` (the unmutated baseline being red), not per-C-id lines. Reword to: "the vitest run shows every E1a-C* green; the battery journal shows every E1a-M* `killed`, with `survived`, `errored` and `CONTROL_RED` all 0". Otherwise the done-condition asks the coordinator to grep the journal for ids that never appear in it.
+- **C. `sharpRectContour` declaration (Change step 1, one sentence):** declare `let sharpRectContour = false` *before* the branch and set it `true` inside, so M1's deletion of the branch leaves compilable code and the kill is semantic, not a `tsc` failure. Either is red; the semantic one is the honest one.
+
+### Overall
+
+**PASS.** The round-1 defects were all in the evidence plan, and the fold repaired them by the two decisions the review asked for (lower iff the branch fired; exported invariant at `toCutObjects`'s return) plus the rectangle-with-points fixture that makes the wiring falsifiable. The change is unchanged and remains verified against the Rust arms. Three residuals, none gating, all one line each.

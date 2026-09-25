@@ -46,7 +46,7 @@ Only the parent's own safety S4c edits `gcodeGen.ts` or `gcodeGen.test.ts`, and 
 1. **A closed four-corner contour for a sharp, point-less rectangle headed to `fillLine`, and for no other mode.**
    - Immediately after the existing synthesis block (`:390-396`), add a branch. Its condition is `paths.length === 0 && layer.mode === "fillLine" && obj.type === "rectangle" && !((obj.cornerRadius || 0) > 0)`.
    - When the condition holds, push `{ points: [(x,y), (x+w,y), (x+w,y+h), (x,y+h)], closed: true }` from `obj.transform.x/y/width/height`. These are **world coordinates before rotation**, the same frame `object_to_path`/`rotate_segment` and the rounded-rectangle arm use. Rotation travels on `base.rotation`, and each Rust arm applies it once. Do not subtract x/y.
-   - Record that this branch fired in a local, e.g. `const sharpRectContour = true`.
+   - Declare `let sharpRectContour = false;` before the branch and set it to `true` inside it, so deleting the branch (E1a-M1) still compiles and the kill is semantic, not a `tsc` failure.
    - **Why this does not go inside `synthesizeFillContour`:** that function also serves `fill` and `offsetFill`. Returning corners there would change every sharp rectangle on those layers, which E1a has no mandate or golden coverage for.
 2. **Lower to `fill` if and only if that branch fired.**
    - In the effective-mode block (`:402-414`), set `effectiveMode = "fill"` when `sharpRectContour` is true, never on `obj.type` alone.
@@ -65,7 +65,7 @@ Only the parent's own safety S4c edits `gcodeGen.ts` or `gcodeGen.test.ts`, and 
 
 Text is converted before `toCutObjects` (`generateGcode` `:868-901`; `toCutObjects` skips raw text at `:280-283`). The text fixture below therefore goes through `generateGcode` with the file's existing text-conversion mocks (`describe` at `:1090`), or it is omitted with the reason stated.
 
-Mutation battery spec `kerf-evidence-e1a`. Each id is **one** contiguous find/replace (`mutation-battery.mjs:1555`), and no mutant is stacked.
+Mutation battery spec `kerf-evidence-e1a`. Each id is **one** contiguous find/replace (`mutation-battery.mjs:1555`), and no mutant is stacked. Every `find` string must be unique in its file (`MUTANT_ANCHOR_AMBIGUOUS`, `:1773-1779`). `closed: true` and `effectiveMode = "maskFill"` occur several times in `gcodeGen.ts`, so their anchors carry surrounding context.
 
 | Id | Assertion | Wrong variant (one edit) |
 |---|---|---|
@@ -75,10 +75,10 @@ Mutation battery spec `kerf-evidence-e1a`. Each id is **one** contiguous find/re
 | E1a-M3 | Sharp rectangle on `fillLine` at rotation 30: the fill CutObject has mode `fill` and `rotation === 30`, and the overlay has `rotation === 30` | Remove the `effectiveMode = "fill"` assignment for the sharp-rectangle case |
 | E1a-M4 | A rectangle **carrying `points`** (a closed 5-point contour) on a `fillLine` layer makes `toCutObjectsForTest` throw, with its id in the message | Delete the `assertNoFillLine(result)` call at the return |
 | E1a-M5 | `assertNoFillLineForTest` fed a synthetic list containing one `fillLine` CutObject `{ id: "r1", objType: "rectangle" }` throws a message containing `'r1' (rectangle)` verbatim, and does not throw for a list with none | Remove the `throw` inside `assertNoFillLine` |
-| E1a-C1 | (control) Rounded rectangle on `fillLine`: CutObjects unchanged (`maskFill` + overlay) | — |
-| E1a-C2 | (control) The existing fillLine tests at `:307-380` stay green unmodified | — |
-| E1a-C3 | (control) Sharp rectangle on a **`fill`** layer and on an **`offsetFill`** layer: CutObjects identical to before this batch (`paths = []`) | — |
-| E1a-C4 | (control) Across one fixture per object type on a `fillLine` layer, `toCutObjectsForTest` does **not** throw and no output CutObject has `mode: "fillLine"`. Fixtures: sharp rectangle, rounded rectangle, ellipse, closed path, open path, line, a group of two sharp rectangles, a group of two closed paths, and text via `generateGcode` (see above). This proves the invariant makes no type that cut before throw. | — |
+| E1a-C1 | (control) Rounded rectangle on `fillLine`: CutObjects unchanged (`maskFill` + overlay) | Widen the lowering to rounded rectangles (routes them to `fill`) |
+| E1a-C2 | (control) The existing fillLine tests at `:307-380` stay green unmodified | Change the overlay block's `layer.mode === "fillLine"` to `"fill"` |
+| E1a-C3 | (control) Sharp rectangle on a **`fill`** layer and on an **`offsetFill`** layer: CutObjects identical to before this batch (`paths = []`) | Drop `layer.mode === "fillLine"` from the new branch's condition |
+| E1a-C4 | (control) Across one fixture per object type on a `fillLine` layer, `toCutObjectsForTest` does **not** throw and no output CutObject has `mode: "fillLine"`. Fixtures: sharp rectangle, rounded rectangle, ellipse, closed path, open path, line, a group of two sharp rectangles, a group of two closed paths, and text via `generateGcode` (see above). This proves the invariant makes no type that cut before throw. | Make `assertNoFillLine` also throw on `maskFill` |
 
 ## Verification
 
@@ -87,7 +87,7 @@ Mutation battery spec `kerf-evidence-e1a`. Each id is **one** contiguous find/re
 - `npm test`: the baseline measured at relay start, plus the new tests, none weakened.
 - `npm run lint`, with no new warnings.
 - `npm run format:check`
-- Battery journal: every E1a-M* is red and every E1a-C* is green.
+- The vitest run shows every E1a-C* test green at baseline. The battery journal shows every E1a-M* **and** E1a-C* wrong variant `killed`, with `survived`, `errored` and `CONTROL_RED` all 0. Each C-id carries a wrong variant (below) so that it appears in the journal.
 - **Rust:** not touched. `env -u KERF_UPDATE_GOLDEN ~/.cargo/bin/cargo test --manifest-path src-tauri/Cargo.toml --features sim engine::gcode_gen` is run once and recorded green, to show the fill arm's existing tests still hold. The end-to-end emitted-G-code proof belongs to E1b.
 - **Browser** (`npm run dev` + Chrome DevTools MCP): in `evaluate_script`, `const { useStore } = await import('/src/app/store/index.ts')` and `const g = await import('/src/lib/machine/gcodeGen.ts')`. Set layer 0's mode to `fillLine`, draw a rectangle with the rectangle tool, then run `g.toCutObjectsForTest(...)` over `useStore.getState().objects`/`layers` (Ted reads its signature at `:225`). It must return a `fill` and a `line` object. The Rust engine is not browser-reachable. State that.
 - **Hardware-only (named):** a Fill+Line rectangle burned on scrap shows a filled interior and a cut outline. This check goes on the owner's card through E4.
@@ -124,3 +124,5 @@ Critic `kerf-evidence-e1a-critic.md` (Fable): FAIL, narrowly, on verifiability. 
    - The per-type sweep is now control E1a-C4 (no type that cut before is made to throw).
 
 Rejected: none.
+
+**Round 2 (recheck PASS).** Residuals A-C folded: the anchor-uniqueness note, the journal wording (each C-id now has a wrong variant), and `let sharpRectContour = false` declared before the branch.
