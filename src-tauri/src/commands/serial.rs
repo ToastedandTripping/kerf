@@ -3436,14 +3436,17 @@ mod sim_integration {
     }
     // -- E5: laser-switch wedge driven through the REAL pumps ---------------
 
-    /// The sim armed with the one-shot laser-switch wedge, a small planner
-    /// clock, and its banner drained. Returns (sim, writer, reader, pending).
-    fn wedge_armed_sim() -> (
+    /// (sim, writer, reader, pending) for the wedge tests.
+    type WedgeRig = (
         SimPort,
         Box<dyn SerialPort>,
         BufReader<Box<dyn SerialPort>>,
         Vec<u8>,
-    ) {
+    );
+
+    /// The sim armed with the one-shot laser-switch wedge, a small planner
+    /// clock, and its banner drained.
+    fn wedge_armed_sim() -> WedgeRig {
         let sim = SimPort::new(SimConfig {
             line_ticks: 1,
             ..SimConfig::default()
