@@ -51,6 +51,11 @@ Pause currently sends 0x9E after waiting for a full hold, including when that wa
 
 Kerf compensation expands holes without accounting for which side is waste, and Offset Fill closes open paths and discards split regions. Patching the single-ring algorithm in place was rejected as high risk of the next hole, split or collapse defect. Approving a region-offset engine was deferred rather than refused: it is a program of its own, it changes cut dimensions, and it is entirely independent of the live stopping failures, so mixing them slows the part that matters. The standing Gate D2 architect call is unchanged by this and remains open.
 
+### The built-in text tool is in scope; the charter's exclusion of built-in font rendering is amended to allow it.
+*2026-09-25, Lee*
+
+The text tool (four bundled fonts, converted to paths at G-code time) shipped in v0.8.29 at Lee's direct request while the charter still listed built-in font rendering as a non-goal and the ROADMAP parked text behind gate D3. Lee resolved the contradiction in favour of the tree rather than removing the feature. The amendment put to him read: built-in text from bundled fonts is in; font management and text-on-path stay out. A drift review must not flag the text tool as a reintroduced exclusion. The CHARTER.md wording itself is changed only in an edit Lee approves, per the charter's own rule.
+
 ---
 
 ## Engineering pins
@@ -149,6 +154,11 @@ A time-correlated optical sensor was recommended and an enclosed camera with a s
 *2026-09-10, Lee*
 
 Accepting containment on a restricted workflow was available and was rejected; shipping after a short non-reproduction was rejected outright. The defect has already demonstrated it can hit the same spot twice and then vanish for a whole run, so a session that sees nothing cannot distinguish a fixed intermittent failure from one that did not occur that day. Containment remains a possible fallback but must never be reported as the wedge being fixed, and taking it would require expressly redefining the blocker and stating the limitation to the operator.
+
+### The owner's laser controller switches the air-assist pump, so Air Assist stays and must actually drive it.
+*2026-09-25, Lee*
+
+Asked whether the Air Assist switch should be removed because nothing might be listening to it, Lee stated as fact that his controller does switch the air pump. So the control is not decorative on this machine: removing it is refused, and any gap between the switch and the command the controller receives is a defect to fix, not a reason to drop the feature. Recorded because a future audit that finds the switch weakly wired could otherwise propose deleting it.
 
 ---
 

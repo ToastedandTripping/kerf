@@ -191,7 +191,9 @@ src-tauri/tests/
   golden/*.gcode             — Frozen G-code snapshots (compared in gcode.rs golden_tests).
                                Phase 3 proves output byte-identical; Phase 4 reviews geometry
                                diffs. Regenerate with KERF_UPDATE_GOLDEN=1 (CI guards it unset).
-  golden/stop_result_fixture.json — StopResult serde shapes, round-tripped in serial.rs tests
+  golden/stop_result_fixture.json — StopResult serde shapes. No test reads this file (Razor N3):
+                               serial.rs b1_stop_result_fixture_round_trip round-trips
+                               in-memory variants only, and no TS test loads it.
 ```
 
 ## Data Flow
