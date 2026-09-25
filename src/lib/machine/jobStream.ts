@@ -167,7 +167,7 @@ async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise
     const s = useStore.getState();
     switch (event.type) {
       case "progress":
-        setLastSentLine(event.lineIndex!, sentLines[event.lineIndex!] ?? "");
+        setLastSentLine(event.lineIndex!, sentLines[event.lineIndex!] ?? "", true);
         if (event.total && event.total > 0) {
           // B3: progress yields a finite sent-lines percentage.
           // 100% does NOT release ownership — draining does that.

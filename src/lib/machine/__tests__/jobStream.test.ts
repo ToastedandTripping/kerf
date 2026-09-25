@@ -734,9 +734,8 @@ describe("spindle-drop evidence during jobs (E3)", () => {
       "G1 X1 S500": ["<Run|MPos:0.000,0.000,0.000|FS:0,0>"],
     });
     expect(dropLines()).toHaveLength(0);
-    expect(tallyLines()).toEqual([
-      "Job: 0 of 2 status reports during Run showed spindle 0 (status only, not beam output).",
-    ]);
+    expect(tallyLines()).toHaveLength(1);
+    expect(tallyLines()[0].startsWith("Job: 2 of 2 status reports during Run")).toBe(true);
   });
 
   it("per-line: exactly one tally line, counting every Run sample", async () => {
@@ -747,7 +746,7 @@ describe("spindle-drop evidence during jobs (E3)", () => {
     });
     expect(dropLines()).toHaveLength(1);
     expect(tallyLines()).toHaveLength(1);
-    expect(tallyLines()[0].startsWith("Job: 1 of 3 status reports during Run")).toBe(true);
+    expect(tallyLines()[0].startsWith("Job: 2 of 3 status reports during Run")).toBe(true);
   });
 
   it("bufferedJobLines mirrors Rust's filter, and a buffered drop names that line", async () => {
@@ -790,7 +789,7 @@ describe("spindle-drop evidence during jobs (E3)", () => {
     expect(useStore.getState().spindleSpeed).toBe(500);
     await runPerLine(PROGRAM, { "G0 X0": [RUN_0] });
     expect(dropLines()).toHaveLength(0);
-    expect(tallyLines()[0]).toContain("Job: 0 of 1 status reports");
+    expect(tallyLines()[0]).toContain("Job: 1 of 1 status reports");
   });
 
   it("after the tally, a no-job drop never names the finished job's line", async () => {
@@ -800,5 +799,45 @@ describe("spindle-drop evidence during jobs (E3)", () => {
     expect(dropLines()).toHaveLength(1);
     expect(dropLines()[0]).toContain("no job line recorded");
     expect(dropLines()[0]).not.toContain("G1 X2");
+  });
+
+  it("the tally counts every Run report at 0, not transitions (W1)", async () => {
+    await runPerLine(PROGRAM, {
+      "G0 X0": [RUN_0],
+      "G1 X1 S500": [RUN_500, RUN_0],
+      "G1 X2 S500": [RUN_0],
+    });
+    // One transition, three zero reports.
+    expect(dropLines()).toHaveLength(1);
+    expect(tallyLines()[0].startsWith("Job: 3 of 4 status reports during Run")).toBe(true);
+  });
+
+  it("First/Last name the first and last zero report, in order", async () => {
+    await runPerLine(PROGRAM, {
+      "G0 X0": [RUN_500],
+      "G1 X1 S500": [RUN_0],
+      "G1 X2 S500": [RUN_0],
+    });
+    const t = tallyLines()[0];
+    expect(t).toContain('last line sent #2 "G1 X1 S500". Last at');
+    expect(t).toMatch(/Last at \d\d:\d\d:\d\d, last line sent #3 "G1 X2 S500"\.$/);
+  });
+
+  it("buffered: the last-sent field says it is approximate (W2)", async () => {
+    await runBuffered("G1 X1 S500", [
+      { type: "progress", lineIndex: 0, total: 1 },
+      { type: "status", report: RUN_500 },
+      { type: "status", report: RUN_0 },
+    ]);
+    expect(dropLines()[0]).toContain(
+      'Last job line sent: #1 "G1 X1 S500" (approximate in buffered mode)'
+    );
+    expect(tallyLines()[0]).toContain("(approximate in buffered mode)");
+  });
+
+  it("per-line: the last-sent field is not marked approximate (W2)", async () => {
+    await runPerLine(PROGRAM, { "G1 X1 S500": [RUN_500, RUN_0] });
+    expect(dropLines()[0]).toContain('Last job line sent: #2 "G1 X1 S500" (the controller');
+    expect(dropLines()[0]).not.toContain("approximate");
   });
 });

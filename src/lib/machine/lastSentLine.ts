@@ -29,14 +29,16 @@ interface Tally {
 }
 
 let prevSpindleSpeed: number | null = null;
-let lastSent: { index: number; text: string } | null = null;
+let lastSent: { index: number; text: string; approximate: boolean } | null = null;
 let tally: Tally = { samples: 0, drops: 0, first: null, last: null };
 
-export function setLastSentLine(index: number, text: string): void {
-  lastSent = { index, text };
+/** `approximate` is true in buffered mode: Rust reports progress at most every
+ *  50 ms, so the recorded line can lag the line actually sent. */
+export function setLastSentLine(index: number, text: string, approximate = false): void {
+  lastSent = { index, text, approximate };
 }
 
-export function getLastSentLine(): { index: number; text: string } | null {
+export function getLastSentLine(): { index: number; text: string; approximate: boolean } | null {
   return lastSent;
 }
 
@@ -118,13 +120,19 @@ export function noteSpindleSample(input: string | SpindleSample): void {
     const s = typeof input === "string" ? parseReportSample(input) : input;
     if (s.spindle === null || !Number.isFinite(s.spindle)) return;
     if (s.state === "run") tally.samples += 1;
-    if (s.state === "run" && prevSpindleSpeed !== null && prevSpindleSpeed > 0 && s.spindle === 0) {
+    // The tally counts every Run report showing spindle 0 (its wording is the
+    // contract); the drop line below fires only on a positive-to-0 transition.
+    const zeroInRun = s.state === "run" && s.spindle === 0;
+    const base = lastSent ? `#${lastSent.index + 1} "${lastSent.text}"` : null;
+    const ref = base && lastSent?.approximate ? `${base} (approximate in buffered mode)` : base;
+    const time = clock();
+    if (zeroInRun) {
       tally.drops += 1;
-      const ref = lastSent ? `#${lastSent.index + 1} "${lastSent.text}"` : null;
-      const time = clock();
       const mark: DropMark = { time, line: ref ?? "none" };
       tally.first ??= mark;
       tally.last = mark;
+    }
+    if (s.state === "run" && prevSpindleSpeed !== null && prevSpindleSpeed > 0 && s.spindle === 0) {
       const where = ref
         ? `${ref} (the controller may still be executing earlier lines)`
         : "no job line recorded";
