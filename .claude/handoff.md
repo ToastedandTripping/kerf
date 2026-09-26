@@ -64,6 +64,8 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - DISK: 93%. Lee's keystrokes: rm -rf ~/.cache/kerf-s1b-ted-target (6.1G) and ~/.cache/kerf-battery-target/kerf-safety-s1b (5.0G; S1b is merged, so no longer needed). The destructive guard blocks the agent.
 
+- S3c MOTION TRUST (coordinator 2026-09-26, option a): plan, critic and relay AFTER the engine batch. Scope: a motion-in-flight flag set by Home and by console motion, cleared by the first post-ack idle report (Razor W2 on S3), and a jog that requires $H since connect when $22=1 (Razor W1). The $22=0 behaviour stays the one open decision (Lee's fact question, via the coordinator). Owner evidence, capture 2026-09-14 lines 25-28: $20=0, $21=1, $22=1, $23=1. S3 merges after its fix pass, with W1/W2 disclosed in the ROADMAP and the release notes.
+
 ## Open questions awaiting Lee
 
 | Question                                                                                            | Why it matters                                                                        | Raised     |
