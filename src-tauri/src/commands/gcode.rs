@@ -1709,4 +1709,1189 @@ mod golden_tests {
             .sum();
         assert!(modes >= 1, "vacuous: no mode line across the corpus");
     }
+
+    // ── safety leadin: every path starts G0 + mode line; no burning G1 stands still ─
+
+    const SECTION_MARKERS: [&str; 5] = [
+        "; Cut:",
+        "; Engrave:",
+        "; Offset Fill:",
+        "; Mask Fill:",
+        "; Pass ",
+    ];
+
+    /// The section marker `line` starts with, if any.
+    fn starts_section(line: &str) -> Option<&'static str> {
+        SECTION_MARKERS
+            .iter()
+            .copied()
+            .find(|m| line.starts_with(m))
+    }
+
+    /// One step of a motor at the owner's $100/$101 = 80 steps/mm. A literal on
+    /// purpose, never the engine's MIN_G1_AXIS_MM, so a mutant of the engine
+    /// constant cannot move this yardstick.
+    const STEP_MM: f64 = 0.0125;
+
+    /// What a controller reading the program so far would believe.
+    #[derive(Clone, Debug, Default)]
+    struct LeadinState {
+        pos: (f64, f64),
+        positioned: bool,
+        armed: bool,
+        spindle_on: bool,
+        section: &'static str,
+    }
+
+    impl LeadinState {
+        fn step(&mut self, line: &str) {
+            if let Some(m) = starts_section(line) {
+                self.section = m;
+            }
+            let resets = starts_section(line).is_some() || has_word(line, 'M', 5.0);
+            if resets {
+                self.positioned = false;
+                self.armed = false;
+            }
+            if has_word(line, 'M', 5.0) {
+                self.spindle_on = false;
+            }
+            if is_mode_line(line) {
+                self.armed = true;
+                self.spindle_on = true;
+            }
+            let g0 = has_word(line, 'G', 0.0);
+            if (g0 || has_word(line, 'G', 1.0)) && has_xy(line) {
+                self.pos = g1_target(line, self.pos);
+                if g0 {
+                    self.positioned = true;
+                }
+            }
+        }
+
+        /// A mask fill that has left the laser enabled: an `M5` here is a seal.
+        fn sealable(&self) -> bool {
+            self.section == "; Mask Fill:" && self.spindle_on
+        }
+    }
+
+    /// The modal X/Y target of a motion line from `pos`.
+    fn g1_target(line: &str, pos: (f64, f64)) -> (f64, f64) {
+        let mut t = pos;
+        for (c, v) in words(line) {
+            if c == 'X' {
+                t.0 = v;
+            } else if c == 'Y' {
+                t.1 = v;
+            }
+        }
+        t
+    }
+
+    /// True when a move from `from` to `to` (as written) is at least one step on some axis.
+    fn g1_moves_text(from: (f64, f64), to: (f64, f64)) -> bool {
+        (to.0 - from.0).abs() >= STEP_MM || (to.1 - from.1).abs() >= STEP_MM
+    }
+
+    fn is_g1_xy(line: &str) -> bool {
+        has_word(line, 'G', 1.0) && has_xy(line)
+    }
+
+    fn is_positive_g1(line: &str) -> bool {
+        is_g1_xy(line) && s_word(line).is_some_and(|s| s > 0.0)
+    }
+
+    fn is_g0_xy(line: &str) -> bool {
+        has_word(line, 'G', 0.0) && has_xy(line)
+    }
+
+    fn is_mode_s0(line: &str) -> bool {
+        is_mode_line(line) && s_word(line) == Some(0.0)
+    }
+
+    fn f_word(line: &str) -> Option<f64> {
+        words(line)
+            .into_iter()
+            .find(|&(c, _)| c == 'F')
+            .map(|(_, v)| v)
+    }
+
+    fn same_f_and_s(b: &str, a: &str) -> bool {
+        f_word(b) == f_word(a) && s_word(b) == s_word(a)
+    }
+
+    fn is_boundary(line: &str) -> bool {
+        line.is_empty() || starts_section(line).is_some() || line.starts_with("; KERF:FOOTER_BEGIN")
+    }
+
+    /// I-SEAM, I-ARM, I-DISP and I-STEP over one program. Each line is checked
+    /// against the state BEFORE it.
+    fn leadin_violations(label: &str, gcode: &str) -> Vec<String> {
+        let mut st = LeadinState::default();
+        let mut out = Vec::new();
+        for (i, line) in gcode.lines().enumerate() {
+            let n = i + 1;
+            if starts_section(line).is_some() && st.spindle_on {
+                out.push(format!(
+                    "I-SEAM {label} line {n}: section starts with the laser enabled: {line:?}"
+                ));
+            }
+            if is_positive_g1(line) && !(st.positioned && st.armed) {
+                out.push(format!(
+                    "I-ARM {label} line {n}: burning G1 without a G0 and mode line since the last M5: {line:?}"
+                ));
+            }
+            if is_g1_xy(line) {
+                let t = g1_target(line, st.pos);
+                if (t.0 - st.pos.0).abs() < 1e-9 && (t.1 - st.pos.1).abs() < 1e-9 {
+                    out.push(format!(
+                        "I-DISP {label} line {n}: G1 with zero displacement: {line:?}"
+                    ));
+                }
+            }
+            if is_positive_g1(line)
+                && matches!(st.section, "; Cut:" | "; Engrave:" | "; Offset Fill:")
+                && !g1_moves_text(st.pos, g1_target(line, st.pos))
+            {
+                out.push(format!(
+                    "I-STEP {label} line {n}: burning G1 moves less than one step: {line:?}"
+                ));
+            }
+            st.step(line);
+        }
+        out
+    }
+
+    #[derive(Debug, Default, PartialEq)]
+    struct LeadinDiff {
+        start: usize,
+        retarget: usize,
+        delete: usize,
+        seal: usize,
+    }
+
+    /// Classify a regeneration. Accepted changes: S (a G0 + S0 mode line inserted
+    /// before an unarmed burn), R (the first burn after an inserted start moves
+    /// by less than a step), M (an M5 sealing a mask fill at a boundary), D (a
+    /// G1 that does not move the fixed program's head removed).
+    fn classify_leadin_diff(before: &str, after: &str) -> Result<LeadinDiff, String> {
+        let bl: Vec<&str> = before.lines().collect();
+        let al: Vec<&str> = after.lines().collect();
+        let (mut i, mut j) = (0usize, 0usize);
+        let mut b_st = LeadinState::default();
+        let mut a_st = LeadinState::default();
+        let mut just_started = false;
+        let mut diff = LeadinDiff::default();
+        while i < bl.len() || j < al.len() {
+            if i >= bl.len() {
+                return Err(format!(
+                    "after line {}: {:?} is not a leadin change (before has ended)",
+                    j + 1,
+                    al[j]
+                ));
+            }
+            let b = bl[i];
+            if j >= al.len() {
+                let bt = g1_target(b, b_st.pos);
+                if is_g1_xy(b) && !g1_moves_text(a_st.pos, bt) {
+                    b_st.step(b);
+                    i += 1;
+                    diff.delete += 1;
+                    continue;
+                }
+                return Err(format!(
+                    "before line {}: {:?} is not a leadin change (after has ended)",
+                    i + 1,
+                    b
+                ));
+            }
+            let a = al[j];
+            if b == a {
+                b_st.step(b);
+                a_st.step(a);
+                i += 1;
+                j += 1;
+                just_started = false;
+                continue;
+            }
+            let (bt, at) = (g1_target(b, b_st.pos), g1_target(a, a_st.pos));
+            let may_delete = is_g1_xy(b) && !g1_moves_text(a_st.pos, bt);
+            let may_start = is_positive_g1(b) && !(b_st.positioned && b_st.armed);
+            let may_seal = a == "M5" && b_st.sealable() && is_boundary(b);
+            let may_retarget = just_started && same_f_and_s(b, a) && !g1_moves_text(bt, at);
+            if may_start && is_g0_xy(a) && j + 1 < al.len() && is_mode_s0(al[j + 1]) {
+                a_st.step(a);
+                a_st.step(al[j + 1]);
+                j += 2;
+                diff.start += 1;
+                just_started = true;
+                continue;
+            }
+            if may_retarget && is_positive_g1(b) && is_positive_g1(a) {
+                b_st.step(b);
+                a_st.step(a);
+                i += 1;
+                j += 1;
+                diff.retarget += 1;
+                just_started = false;
+                continue;
+            }
+            if may_seal {
+                a_st.step(a);
+                j += 1;
+                diff.seal += 1;
+                continue;
+            }
+            if may_delete {
+                b_st.step(b);
+                i += 1;
+                diff.delete += 1;
+                continue;
+            }
+            return Err(format!(
+                "before line {} / after line {}: {:?} -> {:?} is not a leadin change",
+                i + 1,
+                j + 1,
+                b,
+                a
+            ));
+        }
+        Ok(diff)
+    }
+
+    /// Number of section or footer markers `before` reaches while a mask fill
+    /// has left the laser enabled: the seals a correct regeneration inserts.
+    fn expected_seals(before: &str) -> usize {
+        let mut st = LeadinState::default();
+        let mut n = 0;
+        for line in before.lines() {
+            if (starts_section(line).is_some() || line.starts_with("; KERF:FOOTER_BEGIN"))
+                && st.sealable()
+            {
+                n += 1;
+            }
+            st.step(line);
+        }
+        n
+    }
+
+    /// T-L3: the classifier accepts each known class with the right counts.
+    #[test]
+    fn leadin_diff_accepts_only_known_classes() {
+        let ld = |start, retarget, delete, seal| LeadinDiff {
+            start,
+            retarget,
+            delete,
+            seal,
+        };
+        // A1: a duplicate G1 removed
+        let b = "; Cut: a\nG0 X0.000 Y0.000\nM3 S0\nG1 X5.000 Y0.000 F1200 S600\nG1 X5.000 Y0.000 F1200 S600\nM5";
+        let a = "; Cut: a\nG0 X0.000 Y0.000\nM3 S0\nG1 X5.000 Y0.000 F1200 S600\nM5";
+        assert_eq!(classify_leadin_diff(b, a), Ok(ld(0, 0, 1, 0)), "A1");
+        // A2: a start inserted
+        let b = "; Cut: a\nG1 X10.000 Y90.000 F1200 S600\nM5";
+        let a = "; Cut: a\nG0 X7.000 Y90.000\nM3 S0\nG1 X10.000 Y90.000 F1200 S600\nM5";
+        assert_eq!(classify_leadin_diff(b, a), Ok(ld(1, 0, 0, 0)), "A2");
+        // A3: a start inserted and the first burn retargeted
+        let b = "; Cut: a\nG1 X10.001 Y90.000 F1200 S600\nM5";
+        assert_eq!(classify_leadin_diff(b, a), Ok(ld(1, 1, 0, 0)), "A3");
+        // A4: a mask fill sealed
+        let b = "; Mask Fill: m\nM3 S0\nG0 X0.000 Y10.000 S0\nG1 X40.000 F1200 S1000\n\n; Cut: c";
+        let a =
+            "; Mask Fill: m\nM3 S0\nG0 X0.000 Y10.000 S0\nG1 X40.000 F1200 S1000\nM5\n\n; Cut: c";
+        assert_eq!(classify_leadin_diff(b, a), Ok(ld(0, 0, 0, 1)), "A4");
+        // A5: path_all_coincide
+        let b = "; Cut: z\nG1 X20.000 Y80.000 F1200 S600\nG1 X20.000 Y80.000 F1200 S600\nM5";
+        let a = "; Cut: z\nG0 X20.000 Y80.000\nM3 S0\nM5";
+        assert_eq!(classify_leadin_diff(b, a), Ok(ld(1, 0, 2, 0)), "A5");
+        // A6: identical
+        let p = "; Cut: a\nG0 X0.000 Y0.000\nM3 S0\nG1 X5.000 Y0.000 F1200 S600\nM5";
+        assert_eq!(classify_leadin_diff(p, p), Ok(ld(0, 0, 0, 0)), "A6");
+    }
+
+    /// T-L3b: everything else is rejected, naming the offending line.
+    #[test]
+    fn leadin_diff_rejects_everything_else() {
+        let armed = "; Cut: a\nG0 X0.000 Y0.000\nM3 S0";
+        let cases: Vec<(&str, String, String, &str)> = vec![
+            (
+                "R1",
+                format!("{armed}\nG1 X5.000 Y0.000 F1200 S600\nM5"),
+                format!("{armed}\nM5"),
+                "before line 4",
+            ),
+            (
+                "R2",
+                format!("{armed}\nG1 X5.000 Y0.000 F1200 S600\nM5"),
+                format!("{armed}\nG0 X0.000 Y0.000\nM3 S0\nG1 X5.000 Y0.000 F1200 S600\nM5"),
+                "before line 4",
+            ),
+            (
+                "R3",
+                format!("{armed}\nG1 X5.000 Y0.000 F1200 S600\n\n; Cut: b"),
+                format!("{armed}\nG1 X5.000 Y0.000 F1200 S600\nM5\n\n; Cut: b"),
+                "after line 5",
+            ),
+            (
+                "R4",
+                format!("{armed}\nG1 X5.000 Y0.000 F1200 S600\nM5"),
+                format!("{armed}\nG1 X5.001 Y0.000 F1200 S600\nM5"),
+                "before line 4",
+            ),
+            (
+                "R5",
+                "; Cut: a\nG1 X10.001 Y90.000 F1200 S600\nM5".to_string(),
+                "; Cut: a\nG0 X7.000 Y90.000\nM3 S0\nG1 X10.000 Y90.000 F1200 S500\nM5".to_string(),
+                "before line 2",
+            ),
+            (
+                "R6",
+                format!("{armed}\nG1 X5.000 Y0.000 F1200 S600\nM5"),
+                format!("{armed}\nG1 X5.000 Y0.000 F1200 S600\nG1 X7.000 Y0.000 F1200 S600\nM5"),
+                "after line 5",
+            ),
+            (
+                "R7",
+                "; Cut: a\nG1 X10.000 Y90.000 F1200 S600\nM5".to_string(),
+                "; Cut: a\nM3 S0\nG1 X10.000 Y90.000 F1200 S600\nM5".to_string(),
+                "before line 2",
+            ),
+            (
+                "R8",
+                "; Mask Fill: m\nM3 S0\nG1 X40.000 F1200 S1000\nM5\n\n; Cut: c".to_string(),
+                "; Mask Fill: m\nM3 S0\nG1 X40.000 F1200 S1000\nM5\nM5\n\n; Cut: c".to_string(),
+                "after line 5",
+            ),
+            (
+                "R9",
+                format!("{armed}\nG1 X5.000 Y0.000 F1200 S600\nM5"),
+                "; Cut: a\nM3 S0\nG1 X5.000 Y0.000 F1200 S600\nM5".to_string(),
+                "before line 2",
+            ),
+        ];
+        for (id, before, after, needle) in cases {
+            match classify_leadin_diff(&before, &after) {
+                Ok(d) => panic!("{id}: {before:?} -> {after:?} must be rejected, got {d:?}"),
+                Err(e) => assert!(
+                    e.contains(needle),
+                    "{id}: error must name {needle:?}, got {e:?}"
+                ),
+            }
+        }
+    }
+
+    /// T-L3c: the checker flags each known-bad shape, and only those.
+    #[test]
+    fn leadin_checker_flags_known_bad_programs() {
+        let has = |v: &[String], id: &str| v.iter().any(|m| m.starts_with(id));
+        // K1: clean
+        let k1 = "; Cut: a\nG0 X0.000 Y0.000\nM3 S0\nG1 X5.000 Y0.000 F1200 S600\nM5\n\n; Cut: b";
+        assert_eq!(leadin_violations("K1", k1), Vec::<String>::new(), "K1");
+        // K2: burn straight after the marker
+        let k2 = leadin_violations("K2", "; Cut: a\nG1 X5.000 Y0.000 F1200 S600\nM5");
+        assert!(has(&k2, "I-ARM"), "K2: {k2:?}");
+        // K3: the M5 resets arming within a section
+        let k3 = leadin_violations(
+            "K3",
+            "; Cut: a\nG0 X0.000 Y0.000\nM3 S0\nG1 X5.000 Y0.000 F1200 S600\nM5\nG0 X10.000 Y0.000\nG1 X15.000 Y0.000 F1200 S600\nM5",
+        );
+        assert_eq!(k3.len(), 1, "K3: {k3:?}");
+        assert!(
+            k3[0].starts_with("I-ARM K3 line 7"),
+            "K3: second burn must be I-ARM: {k3:?}"
+        );
+        // K4: a repeated G1
+        let k4 = leadin_violations(
+            "K4",
+            "; Cut: a\nG0 X0.000 Y0.000\nM3 S0\nG1 X5.000 Y0.000 F1200 S600\nG1 X5.000 Y0.000 F1200 S600\nM5",
+        );
+        assert!(has(&k4, "I-DISP"), "K4: {k4:?}");
+        // K5: sub-step burn in a vector section
+        let k5 = leadin_violations(
+            "K5",
+            "; Cut: a\nG0 X0.000 Y0.000\nM3 S0\nG1 X0.010 Y0.000 F1200 S600\nM5",
+        );
+        assert!(has(&k5, "I-STEP"), "K5: {k5:?}");
+        // K6: a mask fill hands the next section an enabled laser
+        let k6 = leadin_violations(
+            "K6",
+            "; Mask Fill: m\nM3 S0\nG0 X0.000 Y10.000 S0\nG1 X40.000 F1200 S1000\n\n; Cut: c",
+        );
+        assert!(has(&k6, "I-SEAM"), "K6: {k6:?}");
+        // K7: a sub-step raster burn is out of I-STEP's scope
+        let k7 = leadin_violations(
+            "K7",
+            "; Mask Fill: m\nM3 S0\nG0 X0.000 Y10.000 S0\nG1 X0.010 F1200 S1000\nM5",
+        );
+        assert_eq!(k7, Vec::<String>::new(), "K7");
+    }
+
+    /// One leadin matrix program and what it must satisfy.
+    struct LeadinFixture {
+        gcode: String,
+        /// P2: the path perimeter (times passes) the burn must cover.
+        perimeter: Option<f64>,
+        /// P3: the requested lead-in length.
+        lead_in: Option<f64>,
+        /// P1: whether anything must burn.
+        expect_burn: bool,
+    }
+
+    fn pts_perimeter(pts: &[(f64, f64)], closed: bool) -> f64 {
+        let mut p = 0.0;
+        for w in pts.windows(2) {
+            p += ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt();
+        }
+        if closed && pts.len() > 2 {
+            let (f, l) = (pts[0], pts[pts.len() - 1]);
+            p += ((f.0 - l.0).powi(2) + (f.1 - l.1).powi(2)).sqrt();
+        }
+        p
+    }
+
+    fn obj_perimeter(obj: &CutObject) -> f64 {
+        let seg = crate::engine::gcode_gen::object_to_path(obj);
+        let pts: Vec<(f64, f64)> = seg.points.iter().map(|p| (p.x, p.y)).collect();
+        pts_perimeter(&pts, seg.closed)
+    }
+
+    fn leadin_path_obj(id: &str, pts: &[(f64, f64)], layer: CutLayer) -> CutObject {
+        let min_x = pts.iter().map(|p| p.0).fold(f64::MAX, f64::min);
+        let min_y = pts.iter().map(|p| p.1).fold(f64::MAX, f64::min);
+        let max_x = pts.iter().map(|p| p.0).fold(f64::MIN, f64::max);
+        let max_y = pts.iter().map(|p| p.1).fold(f64::MIN, f64::max);
+        let mut obj = rect_obj(id, min_x, min_y, max_x - min_x, max_y - min_y, layer);
+        obj.obj_type = "path".to_string();
+        obj.paths = vec![PathSegment {
+            points: pts.iter().map(|&(x, y)| Point { x, y }).collect(),
+            closed: true,
+        }];
+        obj
+    }
+
+    fn rounded_obj(id: &str, x: f64, y: f64, w: f64, h: f64, r: f64, layer: CutLayer) -> CutObject {
+        let mut obj = rect_obj(id, x, y, w, h, layer);
+        obj.corner_radius = Some(r);
+        obj
+    }
+
+    /// 17 fixtures x {constant, variable} = 34 programs, labelled
+    /// `<label>_<power_mode>`. Labels and parameters must not change between a
+    /// before-snapshot and its after-snapshot.
+    async fn leadin_matrix() -> Vec<(String, LeadinFixture)> {
+        let mut out = Vec::new();
+        for pm in ["constant", "variable"] {
+            let name = |label: &str| format!("{label}_{pm}");
+            let line = |lead_in: f64| {
+                let mut l = arm_layer("line", pm);
+                l.lead_in = lead_in;
+                l
+            };
+            let fx = |gcode: String, perimeter: Option<f64>, lead_in: Option<f64>, expect_burn| {
+                LeadinFixture {
+                    gcode,
+                    perimeter,
+                    lead_in,
+                    expect_burn,
+                }
+            };
+
+            // pill_leadin
+            let obj = rounded_obj("pill", 10.0, 10.0, 10.0, 20.0, 5.0, line(3.0));
+            let p = obj_perimeter(&obj);
+            out.push((
+                name("pill_leadin"),
+                fx(arm_vector(vec![obj]).await, Some(p), Some(3.0), true),
+            ));
+
+            // pill_after_maskfill: depends on the A4b partition (commands/gcode.rs:75-110) emitting the mask fill first
+            let outer = rect_path(0.0, 0.0, 40.0, 40.0);
+            let hole = rect_path(15.0, 15.0, 10.0, 10.0);
+            let mut ml = arm_layer("maskFill", pm);
+            ml.interval = 5.0;
+            let mut mask_obj = rect_obj("mf_fill", 0.0, 0.0, 40.0, 40.0, ml);
+            mask_obj.obj_type = "path".to_string();
+            mask_obj.paths = vec![outer, hole];
+            mask_obj.layer_index = Some(0);
+            let mut pill = rounded_obj("pill", 50.0, 10.0, 10.0, 20.0, 5.0, line(3.0));
+            pill.layer_index = Some(0);
+            let p = obj_perimeter(&pill);
+            out.push((
+                name("pill_after_maskfill"),
+                fx(
+                    arm_vector(vec![pill, mask_obj]).await,
+                    Some(p),
+                    Some(3.0),
+                    true,
+                ),
+            ));
+
+            // pill_radius_clamp
+            let obj = rounded_obj("pill", 10.0, 10.0, 10.0, 20.0, 8.0, line(3.0));
+            let p = obj_perimeter(&obj);
+            out.push((
+                name("pill_radius_clamp"),
+                fx(arm_vector(vec![obj]).await, Some(p), Some(3.0), true),
+            ));
+
+            // pill_wide
+            let mut l = line(3.0);
+            l.lead_out = 2.0;
+            let obj = rounded_obj("pill", 10.0, 10.0, 20.0, 10.0, 5.0, l);
+            let p = obj_perimeter(&obj);
+            out.push((
+                name("pill_wide"),
+                fx(arm_vector(vec![obj]).await, Some(p), Some(3.0), true),
+            ));
+
+            // rounded_plain_2pass
+            let mut l = line(0.0);
+            l.passes = 2;
+            let obj = rounded_obj("rr", 10.0, 10.0, 30.0, 20.0, 3.0, l);
+            let p = obj_perimeter(&obj) * 2.0;
+            out.push((
+                name("rounded_plain_2pass"),
+                fx(arm_vector(vec![obj]).await, Some(p), None, true),
+            ));
+
+            // rounded_perf (control)
+            let mut l = line(2.0);
+            l.perforation_cut = 3.0;
+            l.perforation_skip = 2.0;
+            let obj = rounded_obj("rr", 10.0, 10.0, 30.0, 20.0, 3.0, l);
+            out.push((
+                name("rounded_perf"),
+                fx(arm_vector(vec![obj]).await, None, None, true),
+            ));
+
+            // rounded_tabs (control)
+            let mut l = line(0.0);
+            l.tab_spacing = 8.0;
+            l.tab_width = 2.0;
+            let obj = rounded_obj("rr", 10.0, 10.0, 30.0, 20.0, 3.0, l);
+            out.push((
+                name("rounded_tabs"),
+                fx(arm_vector(vec![obj]).await, None, None, true),
+            ));
+
+            // path_dup_first
+            let pts = [
+                (10.0, 10.0),
+                (10.0, 10.0),
+                (30.0, 10.0),
+                (30.0, 30.0),
+                (10.0, 30.0),
+            ];
+            let obj = leadin_path_obj("dup", &pts, line(3.0));
+            out.push((
+                name("path_dup_first"),
+                fx(
+                    arm_vector(vec![obj]).await,
+                    Some(pts_perimeter(&pts, true)),
+                    Some(3.0),
+                    true,
+                ),
+            ));
+
+            // path_near_dup_first
+            let pts = [
+                (10.0, 10.0),
+                (10.0008, 10.0),
+                (30.0, 10.0),
+                (30.0, 30.0),
+                (10.0, 30.0),
+            ];
+            let obj = leadin_path_obj("neardup", &pts, line(3.0));
+            out.push((
+                name("path_near_dup_first"),
+                fx(
+                    arm_vector(vec![obj]).await,
+                    Some(pts_perimeter(&pts, true)),
+                    Some(3.0),
+                    true,
+                ),
+            ));
+
+            // path_all_coincide
+            let pts = [(20.0, 20.0); 4];
+            let obj = leadin_path_obj("z", &pts, line(3.0));
+            out.push((
+                name("path_all_coincide"),
+                fx(arm_vector(vec![obj]).await, None, None, false),
+            ));
+
+            // substep_junction
+            let pts = [
+                (10.0, 10.0),
+                (30.0, 10.0),
+                (30.0098, 10.0),
+                (30.0098, 30.0),
+                (10.0, 30.0),
+            ];
+            let obj = leadin_path_obj("junction", &pts, line(0.0));
+            out.push((
+                name("substep_junction"),
+                fx(
+                    arm_vector(vec![obj]).await,
+                    Some(pts_perimeter(&pts, true)),
+                    None,
+                    true,
+                ),
+            ));
+
+            // boundary_rounding
+            let pts = [
+                (10.0006, 10.0),
+                (10.0133, 10.0),
+                (30.0, 10.0),
+                (30.0, 30.0),
+                (10.0, 30.0),
+            ];
+            let obj = leadin_path_obj("rounding", &pts, line(0.0));
+            out.push((
+                name("boundary_rounding"),
+                fx(
+                    arm_vector(vec![obj]).await,
+                    Some(pts_perimeter(&pts, true)),
+                    None,
+                    true,
+                ),
+            ));
+
+            // rect_perf_on_corner
+            let mut l = line(0.0);
+            l.perforation_cut = 30.0;
+            l.perforation_skip = 5.0;
+            out.push((
+                name("rect_perf_on_corner"),
+                fx(
+                    arm_vector(vec![arm_line_obj("perf", l)]).await,
+                    None,
+                    None,
+                    true,
+                ),
+            ));
+
+            // rect_tab_on_corner
+            let mut l = line(0.0);
+            l.tab_spacing = 30.0;
+            l.tab_width = 2.0;
+            out.push((
+                name("rect_tab_on_corner"),
+                fx(
+                    arm_vector(vec![arm_line_obj("tabs", l)]).await,
+                    None,
+                    None,
+                    true,
+                ),
+            ));
+
+            // tiny_extensions
+            let mut l = line(0.005);
+            l.overcut = 0.005;
+            l.lead_out = 0.005;
+            out.push((
+                name("tiny_extensions"),
+                fx(
+                    arm_vector(vec![arm_line_obj("tiny", l)]).await,
+                    None,
+                    None,
+                    true,
+                ),
+            ));
+
+            // zero_width_fill
+            let mut l = arm_layer("fill", pm);
+            l.interval = 2.0;
+            l.overscan = 0.0;
+            let obj = rect_obj("zw", 10.0, 10.0, 0.0, 10.0, l);
+            out.push((
+                name("zero_width_fill"),
+                fx(arm_vector(vec![obj]).await, None, None, false),
+            ));
+
+            // offset_fill_rounded
+            let mut l = arm_layer("offsetFill", pm);
+            l.interval = 2.0;
+            let obj = rounded_obj("of", 10.0, 10.0, 20.0, 20.0, 3.0, l);
+            out.push((
+                name("offset_fill_rounded"),
+                fx(arm_vector(vec![obj]).await, None, None, true),
+            ));
+        }
+        out
+    }
+
+    const LEADIN_MATRIX_OUT: &str =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/target/leadin-matrix-out");
+    const LEADIN_BEFORE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/target/leadin-before");
+
+    /// T-L5: write every leadin and arm matrix program to
+    /// `target/leadin-matrix-out/`. Run explicitly (`-- --ignored`) to snapshot
+    /// before and after the engine change.
+    #[tokio::test]
+    #[ignore]
+    async fn leadin_matrix_snapshot() {
+        let dir = std::path::Path::new(LEADIN_MATRIX_OUT);
+        if dir.exists() {
+            std::fs::remove_dir_all(dir).expect("clear leadin-matrix-out");
+        }
+        std::fs::create_dir_all(dir).expect("create leadin-matrix-out");
+        let leadin = leadin_matrix().await;
+        for (label, fx) in &leadin {
+            std::fs::write(dir.join(format!("leadin__{label}.gcode")), &fx.gcode)
+                .unwrap_or_else(|e| panic!("write {label}: {e}"));
+        }
+        let arm = arm_matrix().await;
+        for (label, prog) in &arm {
+            std::fs::write(dir.join(format!("arm__{label}.gcode")), &prog.gcode)
+                .unwrap_or_else(|e| panic!("write {label}: {e}"));
+        }
+        assert_eq!(leadin.len(), 34, "leadin matrix must hold 34 programs");
+        assert_eq!(arm.len(), 24, "arm matrix must hold 24 programs");
+        assert_eq!(
+            gcode_files(dir).len(),
+            58,
+            "must write exactly 58 distinct files"
+        );
+        let no_burn: Vec<&str> = leadin
+            .iter()
+            .filter(|(_, f)| !f.expect_burn)
+            .map(|(l, _)| l.as_str())
+            .collect();
+        assert_eq!(no_burn.len(), 4, "expect_burn false: {no_burn:?}");
+        assert!(no_burn
+            .iter()
+            .all(|l| l.starts_with("path_all_coincide_") || l.starts_with("zero_width_fill_")));
+        let perims = leadin.iter().filter(|(_, f)| f.perimeter.is_some()).count();
+        assert_eq!(perims, 18, "perimeter is Some for 18 programs");
+        let leads: Vec<&str> = leadin
+            .iter()
+            .filter(|(_, f)| f.lead_in.is_some())
+            .map(|(l, _)| l.as_str())
+            .collect();
+        assert_eq!(
+            leads.len(),
+            12,
+            "lead_in is Some for 12 programs: {leads:?}"
+        );
+        for l in &leads {
+            assert!(
+                [
+                    "pill_leadin_",
+                    "pill_after_maskfill_",
+                    "pill_radius_clamp_",
+                    "pill_wide_",
+                    "path_dup_first_",
+                    "path_near_dup_first_"
+                ]
+                .iter()
+                .any(|p| l.starts_with(p)),
+                "unexpected lead_in fixture {l}"
+            );
+        }
+    }
+
+    /// Expected per-fixture classifier counts: (start, retarget, delete, seal,
+    /// delete is a minimum).
+    fn leadin_expected(fixture: &str) -> (usize, usize, usize, usize, bool) {
+        match fixture {
+            "pill_leadin" => (1, 0, 6, 0, false),
+            "pill_after_maskfill" => (1, 0, 6, 1, false),
+            "pill_radius_clamp" => (1, 0, 6, 0, false),
+            "pill_wide" => (0, 0, 7, 0, false),
+            "rounded_plain_2pass" => (0, 0, 10, 0, false),
+            "rounded_perf" => (0, 0, 0, 0, false),
+            "rounded_tabs" => (0, 0, 0, 0, false),
+            "path_dup_first" => (1, 0, 0, 0, false),
+            "path_near_dup_first" => (1, 1, 0, 0, false),
+            "path_all_coincide" => (1, 0, 4, 0, false),
+            "substep_junction" => (0, 0, 1, 0, false),
+            "boundary_rounding" => (0, 0, 1, 0, false),
+            "rect_perf_on_corner" => (0, 0, 1, 0, false),
+            "rect_tab_on_corner" => (0, 0, 1, 0, false),
+            "tiny_extensions" => (0, 0, 3, 0, false),
+            "zero_width_fill" => (0, 0, 1, 0, true),
+            "offset_fill_rounded" => (0, 0, 4, 0, true),
+            other => panic!("no expectation for leadin fixture {other:?}"),
+        }
+    }
+
+    /// T-L4: one-shot proof that the regeneration changed only classified
+    /// lines. Needs `target/leadin-before` (the goldens) and
+    /// `target/leadin-before/matrix` (the T-L5 snapshot at Commit 1), and the
+    /// after-snapshot in `target/leadin-matrix-out`.
+    #[test]
+    #[ignore]
+    fn leadin_regeneration_is_classified() {
+        let before_dir = std::path::Path::new(LEADIN_BEFORE);
+        assert!(
+            before_dir.is_dir(),
+            "{} is missing: snapshot the before state first",
+            before_dir.display()
+        );
+        let before_g = gcode_files(before_dir);
+        let after_g = gcode_files(&golden_dir());
+        assert!(before_g.len() >= 16, "before goldens: {}", before_g.len());
+        let before_m = gcode_files(&before_dir.join("matrix"));
+        let after_m = gcode_files(std::path::Path::new(LEADIN_MATRIX_OUT));
+        assert_eq!(before_m.len(), 58, "before matrix must hold 58 files");
+        assert_eq!(after_m.len(), 58, "after matrix must hold 58 files");
+
+        let mut errors = Vec::new();
+        for (corpus, before, after) in [
+            ("golden", &before_g, &after_g),
+            ("matrix", &before_m, &after_m),
+        ] {
+            assert_eq!(
+                before.keys().collect::<Vec<_>>(),
+                after.keys().collect::<Vec<_>>(),
+                "{corpus}: before and after file sets differ"
+            );
+            for (name, b) in before {
+                let a = &after[name];
+                let d = match classify_leadin_diff(b, a) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        errors.push(format!("{corpus} {name}: Err {e}"));
+                        continue;
+                    }
+                };
+                println!(
+                    "{corpus} {name}: start={} retarget={} delete={} seal={}",
+                    d.start, d.retarget, d.delete, d.seal
+                );
+                let expect = if let Some(rest) = name.strip_prefix("leadin__") {
+                    let label = rest.trim_end_matches(".gcode");
+                    let fixture = label
+                        .strip_suffix("_constant")
+                        .or_else(|| label.strip_suffix("_variable"))
+                        .expect("leadin label ends in a power mode");
+                    let (s, r, del, seal, del_min) = leadin_expected(fixture);
+                    let del_ok = if del_min {
+                        d.delete >= del
+                    } else {
+                        d.delete == del
+                    };
+                    (
+                        d.start == s && d.retarget == r && del_ok && d.seal == seal,
+                        format!(
+                            "start={s} retarget={r} delete{}{del} seal={seal}",
+                            if del_min { ">=" } else { "=" }
+                        ),
+                    )
+                } else {
+                    let seal = expected_seals(b);
+                    (
+                        d.start == 0 && d.retarget == 0 && d.delete == 0 && d.seal == seal,
+                        format!("start=0 retarget=0 delete=0 seal={seal}"),
+                    )
+                };
+                if !expect.0 {
+                    errors.push(format!("{corpus} {name}: got {d:?}, expected {}", expect.1));
+                }
+            }
+        }
+        assert!(
+            errors.is_empty(),
+            "leadin regeneration:\n{}",
+            errors.join("\n")
+        );
+    }
+
+    /// P1, P2 and P3 over one leadin fixture.
+    fn leadin_properties(label: &str, fx: &LeadinFixture) -> Vec<String> {
+        struct Section {
+            marker: &'static str,
+            g0: bool,
+            mode: bool,
+            m5: bool,
+            first_burn_after_mode: Option<f64>,
+        }
+        let mut st = LeadinState::default();
+        let mut sections: Vec<Section> = Vec::new();
+        let mut positives = 0usize;
+        let mut burned = 0.0_f64;
+        for line in fx.gcode.lines() {
+            if let Some(m) = starts_section(line) {
+                sections.push(Section {
+                    marker: m,
+                    g0: false,
+                    mode: false,
+                    m5: false,
+                    first_burn_after_mode: None,
+                });
+            }
+            if line.starts_with("; KERF:FOOTER_BEGIN") {
+                // The footer is not a section: stop attributing lines to the last one.
+                sections.push(Section {
+                    marker: "footer",
+                    g0: false,
+                    mode: false,
+                    m5: false,
+                    first_burn_after_mode: None,
+                });
+            }
+            if let Some(sec) = sections.last_mut() {
+                if is_g0_xy(line) {
+                    sec.g0 = true;
+                }
+                if has_word(line, 'M', 5.0) {
+                    sec.m5 = true;
+                }
+                if is_positive_g1(line) {
+                    let t = g1_target(line, st.pos);
+                    let len = ((t.0 - st.pos.0).powi(2) + (t.1 - st.pos.1).powi(2)).sqrt();
+                    if sec.marker == "; Cut:" {
+                        burned += len;
+                        if sec.mode && sec.first_burn_after_mode.is_none() {
+                            sec.first_burn_after_mode = Some(len);
+                        }
+                    }
+                }
+                if is_mode_line(line) {
+                    sec.mode = true;
+                }
+            }
+            if is_positive_g1(line) {
+                positives += 1;
+            }
+            st.step(line);
+        }
+        let real: Vec<&Section> = sections.iter().filter(|s| s.marker != "footer").collect();
+        let cuts: Vec<&&Section> = real.iter().filter(|s| s.marker == "; Cut:").collect();
+        let mut out = Vec::new();
+        if fx.expect_burn {
+            if positives == 0 {
+                out.push(format!("P1 {label}: burns nothing"));
+            }
+        } else {
+            if positives != 0 {
+                out.push(format!(
+                    "P1 {label}: {positives} burning G1s where nothing may burn"
+                ));
+            }
+            for s in &real {
+                if s.marker == "; Pass " {
+                    continue;
+                }
+                if !(s.g0 && s.mode && s.m5) {
+                    out.push(format!(
+                        "P1 {label}: {} section lacks a G0 ({}), a mode line ({}) or an M5 ({})",
+                        s.marker, s.g0, s.mode, s.m5
+                    ));
+                }
+            }
+        }
+        if let Some(p) = fx.perimeter {
+            let lead: f64 = if fx.lead_in.is_some() {
+                cuts.iter().filter_map(|s| s.first_burn_after_mode).sum()
+            } else {
+                0.0
+            };
+            let net = burned - lead;
+            if net < p - 0.1 {
+                out.push(format!(
+                    "P2 {label}: burned {net:.4} mm (excluding lead-in) < perimeter {p:.4} - 0.1"
+                ));
+            }
+        }
+        if let Some(l) = fx.lead_in {
+            if cuts.is_empty() {
+                out.push(format!("P3 {label}: no ; Cut: section"));
+            }
+            for s in &cuts {
+                if !s.mode {
+                    out.push(format!("P3 {label}: ; Cut: section has no mode line"));
+                } else {
+                    match s.first_burn_after_mode {
+                        None => out.push(format!(
+                            "P3 {label}: no burning G1 after the section's mode line"
+                        )),
+                        Some(len) if (len - l).abs() > 0.002 => out.push(format!(
+                            "P3 {label}: lead-in G1 is {len:.4} mm, requested {l}"
+                        )),
+                        Some(_) => {}
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// T-L1: every leadin fixture and every arm fixture, both power modes, holds
+    /// I-SEAM, I-ARM, I-DISP, I-STEP, P1-P3 and engine-arm's I1/I2.
+    #[tokio::test]
+    async fn leadin_invariants_every_fixture() {
+        let leadin = leadin_matrix().await;
+        let arm = arm_matrix().await;
+        assert_eq!(leadin.len(), 34, "leadin matrix must hold 34 programs");
+        assert_eq!(arm.len(), 24, "arm matrix must hold 24 programs");
+        let mut report: Vec<String> = Vec::new();
+        for (label, fx) in &leadin {
+            let mut v = leadin_violations(label, &fx.gcode);
+            v.extend(leadin_properties(label, fx));
+            if !v.is_empty() {
+                report.push(format!("{label}:\n  {}", v.join("\n  ")));
+            }
+        }
+        for (label, prog) in &arm {
+            let label = format!("arm__{label}");
+            let v = leadin_violations(&label, &prog.gcode);
+            if !v.is_empty() {
+                report.push(format!("{label}:\n  {}", v.join("\n  ")));
+            }
+        }
+        assert!(
+            report.is_empty(),
+            "leadin violations:\n{}",
+            report.join("\n")
+        );
+        for (label, fx) in &leadin {
+            assert_never_arms(label, &fx.gcode);
+        }
+        for (label, prog) in &arm {
+            assert_never_arms(label, &prog.gcode);
+        }
+    }
+
+    /// T-L2: the committed corpus holds the leadin invariants. Guards a future
+    /// regeneration; kills no code mutant (it reads committed files).
+    #[test]
+    fn committed_goldens_hold_leadin_invariants() {
+        let files = gcode_files(&golden_dir());
+        assert!(
+            files.len() >= 16,
+            "expected at least 16 goldens, found {}",
+            files.len()
+        );
+        let positives: usize = files
+            .values()
+            .map(|t| t.lines().filter(|l| is_positive_g1(l)).count())
+            .sum();
+        assert!(positives >= 1, "vacuous: no burning G1 across the corpus");
+        let all: Vec<String> = files
+            .iter()
+            .flat_map(|(name, text)| leadin_violations(name, text))
+            .collect();
+        assert!(
+            all.is_empty(),
+            "golden leadin violations:\n{}",
+            all.join("\n")
+        );
+    }
+
+    /// The Stage 2.5 fixtures (Razor W1, D1-D4): each puts a non-burning move
+    /// within a step of the next burn target, so deleting the matching
+    /// `moved_to` lets a sub-step or stationary burning G1 through. Kept out of
+    /// `leadin_matrix` so the T-L4/T-L5 snapshot sets stay as recorded.
+    async fn leadin_moved_to_matrix() -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for pm in ["constant", "variable"] {
+            let name = |label: &str| format!("{label}_{pm}");
+            // D1: zero-width fill with overscan (scan_pen.moved_to)
+            let mut l = arm_layer("fill", pm);
+            l.interval = 2.0;
+            l.overscan = 1.0;
+            let obj = rect_obj("zwo", 10.0, 10.0, 0.0, 10.0, l);
+            out.push((
+                name("zero_width_fill_overscan"),
+                arm_vector(vec![obj]).await,
+            ));
+            // D2b: perforation skip ends 0.005 before a corner
+            let mut l = arm_layer("line", pm);
+            l.perforation_cut = 25.0;
+            l.perforation_skip = 4.995;
+            out.push((
+                name("perf_skip_end_near_corner"),
+                arm_vector(vec![arm_line_obj("perfb", l)]).await,
+            ));
+            // D3b: tab ends 0.005 before a corner
+            let mut l = arm_layer("line", pm);
+            l.tab_spacing = 28.0;
+            l.tab_width = 1.995;
+            out.push((
+                name("tab_end_near_corner"),
+                arm_vector(vec![arm_line_obj("tabb", l)]).await,
+            ));
+            // D4: path ends inside a tab, tiny overcut (laser-off endpoint)
+            let mut l = arm_layer("line", pm);
+            l.tab_spacing = 97.0;
+            l.tab_width = 5.0;
+            l.overcut = 0.005;
+            out.push((
+                name("end_in_tab_tiny_overcut"),
+                arm_vector(vec![arm_line_obj("tabend", l)]).await,
+            ));
+        }
+        out
+    }
+
+    /// T-L6: the four position updates are pinned (Razor W1).
+    #[tokio::test]
+    async fn leadin_moved_to_fixtures_hold_invariants() {
+        let progs = leadin_moved_to_matrix().await;
+        assert_eq!(progs.len(), 8, "moved_to matrix must hold 8 programs");
+        let mut report = Vec::new();
+        for (label, g) in &progs {
+            let v = leadin_violations(label, g);
+            if !v.is_empty() {
+                report.push(format!("{label}:\n  {}", v.join("\n  ")));
+            }
+            let burns = g.lines().filter(|l| is_positive_g1(l)).count();
+            let zero_width = label.starts_with("zero_width_fill_overscan");
+            if zero_width != (burns == 0) {
+                report.push(format!("{label}: {burns} burning G1s"));
+            }
+            assert_never_arms(label, g);
+        }
+        assert!(
+            report.is_empty(),
+            "moved_to violations:\n{}",
+            report.join("\n")
+        );
+    }
+
+    /// The first G0 after the preamble's home move: the path's entry point.
+    fn entry_g0(g: &str) -> String {
+        g.lines()
+            .find(|l| l.starts_with("G0 X") && !l.contains("; home"))
+            .expect("program has an entry G0")
+            .to_string()
+    }
+
+    /// T-L7: lead-in direction rules (Razor N1, D5/D6). An off-axis point within
+    /// 0.001 mm of the start does not steer the lead-in, and an open path's
+    /// lead-in runs straight back along its first segment.
+    #[tokio::test]
+    async fn leadin_direction_rules() {
+        for pm in ["constant", "variable"] {
+            let mut l = arm_layer("line", pm);
+            l.lead_in = 3.0;
+            let with = [
+                (10.0, 10.0),
+                (10.0, 9.9992),
+                (30.0, 10.0),
+                (30.0, 30.0),
+                (10.0, 30.0),
+            ];
+            let without = [(10.0, 10.0), (30.0, 10.0), (30.0, 30.0), (10.0, 30.0)];
+            let gw = arm_vector(vec![leadin_path_obj("w", &with, l.clone())]).await;
+            let go = arm_vector(vec![leadin_path_obj("w", &without, l.clone())]).await;
+            assert_eq!(entry_g0(&go), "G0 X10.000 Y93.000", "{pm}: closed entry");
+            assert_eq!(
+                entry_g0(&gw),
+                entry_g0(&go),
+                "{pm}: a near-duplicate steered the lead-in"
+            );
+            let mut o = leadin_path_obj("open", &[(10.0, 10.0), (30.0, 10.0), (30.0, 30.0)], l);
+            o.paths[0].closed = false;
+            let g = arm_vector(vec![o]).await;
+            assert_eq!(
+                entry_g0(&g),
+                "G0 X7.000 Y90.000",
+                "{pm}: open lead-in goes straight back"
+            );
+        }
+    }
 }
