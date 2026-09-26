@@ -42,9 +42,11 @@ Constant power was the default for every shipped layer except Engrave, so nearly
 The remediation plan recommended a restricted envelope — constant-power and Fire, Offset Fill, non-zero kerf and the affected compound ordering shown as unavailable until qualified — on the grounds that explicit refusal removes exposure without putting a new geometry engine on the safety-critical path. Lee chose to preserve every feature instead, accepting a larger program and a longer road to clearing both blockers. The consequence is that the geometry corrections move from refused-at-the-boundary to must-be-fixed-before-release, and plan batch 2.3 must be re-specified from a gate into a set of corrections.
 
 ### Pause is hold-only, and becomes stop wherever a dark hold has not been observed on hardware.
-*2026-09-10, Lee*
+*2026-09-10, Lee, amended 2026-09-25*
 
 Pause currently sends 0x9E after waiting for a full hold, including when that wait times out, and that byte is the one confirmed to re-arm the beam. The accessory-flag alternative was rejected as the primary because the flag may describe modal enable rather than emitted light, and a toggle sent on stale information restores output. Hold-only removes the known restoring action from the ordinary pause path immediately rather than gating it on a flag whose meaning is still unverified. Explicit fallback: where a resumable dark hold cannot be qualified, pause means stop. Combined with the status-only evidence ruling, that fallback is effectively permanent for now.
+
+**Amended, per Lee, 2026-09-25:** The status-only evidence entry was amended on this date to accept the witness-card procedure as evidence of a dark hold, so the stop fallback is no longer permanent by construction. It remains in force: pause means stop until a dark hold has been qualified by that procedure and Lee schedules the pause work.
 
 ### The geometry and topology program is deferred; the region-offset dependency decision stays open and unmade.
 *2026-09-10, Lee*
@@ -55,6 +57,11 @@ Kerf compensation expands holes without accounting for which side is waste, and 
 *2026-09-25, Lee*
 
 The text tool (four bundled fonts, converted to paths at G-code time) shipped in v0.8.29 at Lee's direct request while the charter still listed built-in font rendering as a non-goal and the ROADMAP parked text behind gate D3. Lee resolved the contradiction in favour of the tree rather than removing the feature. The amendment put to him read: built-in text from bundled fonts is in; font management and text-on-path stay out. A drift review must not flag the text tool as a reintroduced exclusion. The CHARTER.md wording itself is changed only in an edit Lee approves, per the charter's own rule.
+
+### The Pause button stays as it is (it stops the job) until a dark hold is qualified; a plan to make it work exists.
+*2026-09-25, per Lee*
+
+Lee, 2026-09-25, in the coordinator window, verbatim: "Leave the pause botton [sic] for now but ensure we have a plan to make it function in the future." This records a ruling he already gave. It decided kerf-f2, which asked whether the button should be relabelled 'STOP (no resume)' or removed: neither ships, and the button keeps stopping the job with no resume, the fallback the 2026-09-10 hold-only entry requires. Lee gave no further reason; none is recorded here. The plan to make Pause work is .claude/plans/pause-resume-future.md (a84a9b5), parked until Lee schedules it; the evidence it needs became possible with the 2026-09-25 amendment to the status-only evidence entry (3b2bf76), which allows a witness-card qualification. A future session must not relabel, remove or re-wire Pause outside that plan.
 
 ---
 
@@ -146,9 +153,11 @@ machine behaviour.
 Read from the machine 2026-09-05: `[VER:1.1f.20220810:]`, vendor string "CV master-release 3.0.4", `[OPT:VHL,127,65536]` — a 127-block planner and 65536-byte RX buffer against stock GRBL's 15 and 128. Two consequences. (a) Behaviours observed on this machine that stock source says are impossible are real and must be handled, not argued away: the intermittent laser-switch wedge (controller stops acking line commands after `M3`/`M4` while still answering `?` with `Idle`, until `0x18`) is one such, and a `0x18` that failed to stop the beam on 2026-09-02 is another. (b) Phase 2A's premise is questionable here — a 127-block planner means per-line streaming may already keep this controller fed, so the stutter buffered mode was built to cure may not exist on this hardware. Record the planner depth alongside any gate D1c A/B result.
 
 ### Hardware evidence for this program is status-only; optical shutdown cannot be qualified, and powered release stays blocked on that basis.
-*2026-09-10, Lee*
+*2026-09-10, Lee, amended 2026-09-25*
 
 A time-correlated optical sensor was recommended and an enclosed camera with a synchronised marker offered as a weaker fallback with an explicitly limited acceptance criterion. Lee chose status-only. The consequence is stated rather than hidden: a status report says what the software commanded and never what the beam emitted, and that gap is precisely what let two reviews pass a defect that re-arms the laser. Most of the program is unaffected — the wedge trigger comes off a serial trace, and Phases 0 through 2 close on tests — but any claim that the beam went dark is unqualifiable, so hold-only pause cannot be qualified and powered release stays blocked. If measurement never becomes available, the honest cost is a release that stays blocked, not confidence that was invented.
+
+**Amended, per Lee, 2026-09-25:** A dark hold may be qualified by the witness-card procedure: low power on scrap card, with a deliberate control burn beside the test so the test could have failed, and a time-correlated optical sensor as the step-up if any mark is doubtful. Status reports alone still cannot show the beam is dark. The limits are part of the ruling. The procedure qualifies only what the test shows: emission above the card's marking threshold, over the dwell, mode and controller tested, and nothing about timing or emission too weak to mark. Every test is run by Lee at the machine with fire precautions in place. Nothing is built or scheduled on the strength of this amendment; the pause work stays parked in the future pause/resume plan until Lee schedules it, and until a witness test has actually been run and accepted, everything this entry blocks stays blocked.
 
 ### The laser-switch wedge requires a captured trigger and a prevention before release; a quiet run is not closure.
 *2026-09-10, Lee*
