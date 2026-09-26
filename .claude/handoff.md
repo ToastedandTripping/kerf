@@ -62,6 +62,8 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - S3 relay next (plan PASS, 13ec69d): 14 files, 36 ids, with the Position Laser mapping moved from S5 (coordinator option c) and S3-M32 kept (coordinator). The close report must flag the first Position Laser on an origin-top machine as a watch-it-move test before any burn.
 
+- LEDGER READBACK (coordinator 2026-09-26): the marvin ledger tooling can lose an update. kerf-safety-s3's ledger_add was dropped by another session's write at 01:18:09Z and has been re-added. Until marvin fixes it, read each entry back from /home/leesalo/marvin/state/relay-ledger.json after every ledger write, and re-add it if it is gone. Checker: scratchpad ledger-check.py (ids as args). As of 01:40Z all 10 of this session's entries are present.
+
 ## Open questions awaiting Lee
 
 | Question                                                                                            | Why it matters                                                                        | Raised     |
