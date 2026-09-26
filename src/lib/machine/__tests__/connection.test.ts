@@ -8,7 +8,21 @@ vi.mock("@tauri-apps/api/core", () => ({
 import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../../app/store";
 import { DEFAULT_LAYERS } from "../../../app/types";
-import { machineConnection, _testResetPollFailures, isGrblSettingsWrite } from "../connection";
+import {
+  machineConnection,
+  _testResetPollFailures,
+  _testResetJogAndBedState,
+  isGrblSettingsWrite,
+  getBedSource,
+} from "../connection";
+import {
+  JOG_REASON_AXIS,
+  JOG_REASON_JOB,
+  JOG_REASON_OFFSET,
+  JOG_REASON_PENDING,
+  JOG_REASON_STALE,
+  JOG_REASON_TARGET,
+} from "../jogBounds";
 import { _testResetJobEvidence } from "../lastSentLine";
 import { resetStatusConsumer } from "../machineStatus";
 import { SerialTraceRecorder } from "../../../lib/machine/__tests__/serialTraceHarness";
@@ -1024,5 +1038,391 @@ describe("S1 — readback-only laser-mode flag", () => {
     mockInvoke.mockResolvedValue(undefined);
     await machineConnection.disconnect();
     expect(useStore.getState().grblLaserMode).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S3 — jog frame: every refusal sends nothing; one jog in flight at a time.
+// Drives the real machineConnection; asserts the actual serial_send strings.
+// ---------------------------------------------------------------------------
+describe("S3 — jog frame", () => {
+  let statusQueue: Array<() => Promise<unknown>>;
+
+  function jogReady(patch: Record<string, unknown> = {}) {
+    seedConnectedStore();
+    useStore.setState({
+      jobRunning: false,
+      statusStale: false,
+      positionKind: "machine",
+      workspaceVerified: true,
+      workCoordOffset: { x: 0, y: 0 },
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+      originTop: false,
+      machinePosition: { x: 100, y: 100, z: 0 },
+      ...patch,
+    });
+  }
+
+  function sends(): string[] {
+    return mockInvoke.mock.calls
+      .filter((c) => c[0] === "serial_send")
+      .map((c) => (c[1] as { command: string }).command);
+  }
+
+  beforeEach(() => {
+    _testResetPollFailures();
+    _testResetJogAndBedState();
+    resetStatusConsumer();
+    snapshotSeq = 0;
+    mockInvoke.mockReset();
+    localStorage.clear();
+    statusQueue = [];
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "serial_send") return { responses: ["ok"], drained: [] };
+      if (cmd === "serial_get_status") {
+        const next = statusQueue.shift();
+        if (next) return next();
+        return makeStatusOutcome("<Idle|MPos:100.000,100.000,0.000|FS:0,0>");
+      }
+      return undefined;
+    });
+    jogReady();
+  });
+
+  const idle = () => makeStatusOutcome("<Idle|MPos:100.000,100.000,0.000|FS:0,0>");
+
+  it("A3-5: a relative jog sends $J=G21 G91 with the clipped distance", async () => {
+    await machineConnection.jog("x", 10);
+    expect(sends()).toEqual(["$J=G21 G91 X10.000 F1000"]);
+  });
+
+  it("jogTo in the envelope sends $J=G21 G90", async () => {
+    await machineConnection.jogTo(10, 150);
+    expect(sends()).toEqual(["$J=G21 G90 X10.000 Y150.000 F3000"]);
+  });
+
+  it("A3-6: origin-top jogTo(10, 150) (today's positive Y) is refused, nothing sent", async () => {
+    jogReady({ originTop: true, machinePosition: { x: 100, y: -100, z: 0 } });
+    await machineConnection.jogTo(10, 150);
+    expect(sends()).toEqual([]);
+    expect(consoleTexts()).toContain(JOG_REASON_TARGET);
+    // Positive sibling: the mirrored target is inside the bed and goes out.
+    await machineConnection.jogTo(10, -150);
+    expect(sends()).toEqual(["$J=G21 G90 X10.000 Y-150.000 F3000"]);
+  });
+
+  it("A3-1 at the connection: origin-top Y=-248.913, bed 250, -1 sends -1 (never +248.913)", async () => {
+    jogReady({
+      originTop: true,
+      workspaceHeight: 250,
+      machinePosition: { x: 0, y: -248.913, z: 0 },
+    });
+    await machineConnection.jog("Y", -1);
+    expect(sends()).toEqual(["$J=G21 G91 Y-1.000 F1000"]);
+  });
+
+  it("D1: two jogs with no poll between them make exactly one send", async () => {
+    await machineConnection.jog("X", 1);
+    await machineConnection.jog("X", 1);
+    expect(sends()).toHaveLength(1);
+    expect(consoleTexts()).toContain(JOG_REASON_PENDING);
+  });
+
+  it("D1: a poll in flight across the acknowledgement does not release the jog", async () => {
+    let release!: (v: unknown) => void;
+    statusQueue.push(
+      () =>
+        new Promise((r) => {
+          release = r;
+        })
+    );
+    const poll = machineConnection.pollStatus(); // invoke begins before the jog
+    await machineConnection.jog("X", 1); // sent and acknowledged
+    release(idle());
+    await poll;
+    await machineConnection.jog("X", 1);
+    expect(sends()).toHaveLength(1);
+    // Positive half: a poll begun after the acknowledgement that reports Idle releases it.
+    await machineConnection.pollStatus();
+    await machineConnection.jog("X", 1);
+    expect(sends()).toHaveLength(2);
+  });
+
+  it("D1: a busy poll never releases the jog, whatever the store's state says", async () => {
+    await machineConnection.pollStatus(); // a real report first, so status is fresh
+    expect(useStore.getState().statusStale).toBe(false);
+    await machineConnection.jog("X", 1);
+    statusQueue.push(async () => makeStatusOutcome("", [], { busy: true }));
+    await machineConnection.pollStatus();
+    expect(useStore.getState().machineState).toBe("idle");
+    expect(useStore.getState().statusStale).toBe(false);
+    useStore.setState({ consoleLines: [] });
+    await machineConnection.jog("X", 1);
+    expect(sends()).toHaveLength(1);
+    expect(consoleTexts()).toEqual([JOG_REASON_PENDING]);
+    await machineConnection.pollStatus(); // a real Idle report
+    await machineConnection.jog("X", 1);
+    expect(sends()).toHaveLength(2);
+  });
+
+  it("stale status refuses, nothing sent", async () => {
+    jogReady({ statusStale: true });
+    await machineConnection.jog("X", 1);
+    expect(sends()).toEqual([]);
+    expect(consoleTexts()).toContain(JOG_REASON_STALE);
+  });
+
+  it("an unknown position kind refuses as stale, nothing sent", async () => {
+    jogReady({ statusStale: false, positionKind: null });
+    await machineConnection.jog("X", 1);
+    expect(sends()).toEqual([]);
+    expect(consoleTexts()).toContain(JOG_REASON_STALE);
+  });
+
+  it("a work offset refuses a WPos relative jog and any absolute jog", async () => {
+    jogReady({ positionKind: "work", workCoordOffset: { x: 100, y: -100 } });
+    await machineConnection.jog("X", 1);
+    expect(sends()).toEqual([]);
+    expect(consoleTexts()).toContain(JOG_REASON_OFFSET);
+    jogReady({ positionKind: "machine", workCoordOffset: { x: 100, y: -100 } });
+    await machineConnection.jogTo(10, 10);
+    expect(sends()).toEqual([]);
+    expect(consoleTexts()).toContain(JOG_REASON_OFFSET);
+    // Positive sibling: a relative jog on an MPos report is exact whatever the offset.
+    await machineConnection.jog("X", 1);
+    expect(sends()).toEqual(["$J=G21 G91 X1.000 F1000"]);
+  });
+
+  it("a running job refuses the jog, nothing sent", async () => {
+    jogReady({ jobRunning: true });
+    await machineConnection.jog("X", 1);
+    expect(sends()).toEqual([]);
+    expect(consoleTexts()).toContain(JOG_REASON_JOB);
+  });
+
+  it("an axis other than X/Y refuses, nothing sent", async () => {
+    await machineConnection.jog("Z", 1);
+    expect(sends()).toEqual([]);
+    expect(consoleTexts()).toContain(JOG_REASON_AXIS);
+  });
+
+  it("S3-M32: Set Origin records WCO = MPos on ok, and jogTo then refuses", async () => {
+    jogReady({ originTop: true, machinePosition: { x: 120, y: -80, z: 0 } });
+    await machineConnection.setOrigin();
+    expect(sends()).toEqual(["G92 X0 Y0"]);
+    expect(useStore.getState().workCoordOffset).toEqual({ x: 120, y: -80 });
+    await machineConnection.jogTo(10, -10);
+    expect(sends()).toEqual(["G92 X0 Y0"]);
+    expect(consoleTexts()).toContain(JOG_REASON_OFFSET);
+  });
+
+  it.each([
+    ["a WPos report", { positionKind: "work" }],
+    ["a stale status", { statusStale: true }],
+    ["an unknown position kind", { positionKind: null }],
+  ] as const)(
+    "N5: Set Origin on %s leaves the offset unknown and jogTo refuses",
+    async (_l, patch) => {
+      jogReady({ machinePosition: { x: 20, y: 30, z: 0 }, workCoordOffset: { x: 0, y: 0 } });
+      useStore.setState(patch);
+      await machineConnection.setOrigin();
+      const wco = useStore.getState().workCoordOffset;
+      expect(Number.isNaN(wco.x) && Number.isNaN(wco.y)).toBe(true);
+      jogReady({ workCoordOffset: wco });
+      await machineConnection.jogTo(10, 10);
+      expect(sends()).toEqual(["G92 X0 Y0"]);
+      expect(consoleTexts()).toContain(JOG_REASON_OFFSET);
+    }
+  );
+
+  it("Set Origin with no ok leaves the offset alone", async () => {
+    jogReady({ machinePosition: { x: 20, y: 30, z: 0 }, workCoordOffset: { x: 5, y: -5 } });
+    mockInvoke.mockImplementation(async () => ({ responses: ["error:9"], drained: [] }));
+    await machineConnection.setOrigin();
+    expect(useStore.getState().workCoordOffset).toEqual({ x: 5, y: -5 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S3 — remembered bed (kerf-f1 b): one click per machine, not per session.
+// ---------------------------------------------------------------------------
+describe("S3 — remembered bed", () => {
+  const KEYED = ["$3=0", "$23=0", "$32=0", "$100=80", "$101=80", "ok"];
+
+  function mockMachine(settings: string[]) {
+    mockInvoke.mockImplementation(async (cmd: string, args?: { command?: string }) => {
+      if (cmd === "serial_connect") return "Grbl 1.1h ['$' for help]";
+      if (cmd === "serial_send" && args?.command === "$$")
+        return { responses: settings, drained: [] };
+      if (cmd === "serial_send") return { responses: ["ok"], drained: [] };
+      if (cmd === "serial_get_status")
+        return makeStatusOutcome("<Idle|MPos:0.000,0.000,0.000|FS:0,0>");
+      return undefined;
+    });
+  }
+
+  async function connectWith(port: string, settings: string[]) {
+    mockMachine(settings);
+    const p = machineConnection.connect(port, 115200);
+    await vi.advanceTimersByTimeAsync(0);
+    await p;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers(); // no 250 ms poller
+    _testResetPollFailures();
+    _testResetJogAndBedState();
+    resetStatusConsumer();
+    snapshotSeq = 0;
+    mockInvoke.mockReset();
+    localStorage.clear();
+    seedConnectedStore();
+    useStore.setState({
+      machineConnected: false,
+      workspaceVerified: false,
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+    });
+  });
+
+  afterEach(async () => {
+    await machineConnection.disconnect();
+    vi.useRealTimers();
+  });
+
+  async function confirmThenReconnect(opts: {
+    between?: () => Promise<void>;
+    port2?: string;
+    settings2?: string[];
+  }) {
+    await connectWith("/dev/ttyUSB0", KEYED);
+    expect(useStore.getState().workspaceVerified).toBe(false);
+    if (opts.between) await opts.between();
+    machineConnection.confirmBedSize(300, 200);
+    expect(useStore.getState().workspaceVerified).toBe(true);
+    await machineConnection.disconnect();
+    useStore.setState({ workspaceWidth: 500, workspaceHeight: 300, consoleLines: [] });
+    await connectWith(opts.port2 ?? "/dev/ttyUSB0", opts.settings2 ?? KEYED);
+  }
+
+  it("kerf-f1 (b): a confirmed bed is re-applied on reconnect with no click", async () => {
+    await confirmThenReconnect({});
+    const raw = localStorage.getItem("kerf-bed-confirmations");
+    expect(raw).not.toBeNull();
+    expect(JSON.parse(raw!)[0]).toMatchObject({ w: 300, h: 200 });
+    const st = useStore.getState();
+    expect(st.workspaceVerified).toBe(true);
+    expect([st.workspaceWidth, st.workspaceHeight]).toEqual([300, 200]);
+    expect(getBedSource()).toBe("remembered");
+    expect(
+      consoleTexts().some((t) =>
+        t.startsWith("Using the bed size you confirmed for this machine before: 300 × 200 mm")
+      )
+    ).toBe(true);
+  });
+
+  it("a different port does not inherit the bed", async () => {
+    await confirmThenReconnect({ port2: "/dev/ttyUSB1" });
+    expect(useStore.getState().workspaceVerified).toBe(false);
+  });
+
+  it("a different $100 does not inherit the bed", async () => {
+    await confirmThenReconnect({ settings2: KEYED.map((l) => (l === "$100=80" ? "$100=160" : l)) });
+    expect(useStore.getState().workspaceVerified).toBe(false);
+  });
+
+  it("control: a flipped $32 still inherits the bed", async () => {
+    await confirmThenReconnect({ settings2: KEYED.map((l) => (l === "$32=0" ? "$32=1" : l)) });
+    expect(useStore.getState().workspaceVerified).toBe(true);
+  });
+
+  it("a key-setting write before the confirm makes it session-only", async () => {
+    await confirmThenReconnect({
+      between: async () => {
+        await machineConnection.send("$100=80");
+      },
+    });
+    expect(useStore.getState().workspaceVerified).toBe(false);
+  });
+
+  it("control: a $32=1 write before the confirm does not forget the key", async () => {
+    await confirmThenReconnect({
+      between: async () => {
+        await machineConnection.send("$32=1");
+      },
+    });
+    expect(useStore.getState().workspaceVerified).toBe(true);
+  });
+
+  it("a controller-verified bed does not survive disconnect into a machine that reports none", async () => {
+    await connectWith("/dev/ttyUSB0", ["$100=80", "$101=80", "$130=400", "$131=415", "ok"]);
+    expect(useStore.getState().workspaceVerified).toBe(true);
+    expect(getBedSource()).toBe("machine");
+    await machineConnection.disconnect();
+    await connectWith("/dev/ttyUSB1", ["$100=80", "$101=80", "ok"]);
+    expect(useStore.getState().workspaceVerified).toBe(false);
+  });
+
+  it("with no readable settings a confirm is session-only and says so", async () => {
+    await connectWith("/dev/ttyUSB0", ["error:9"]);
+    machineConnection.confirmBedSize(300, 200);
+    expect(getBedSource()).toBe("session");
+    expect(localStorage.getItem("kerf-bed-confirmations")).toBeNull();
+    expect(consoleTexts().some((t) => t.includes("confirmed for this session"))).toBe(true);
+  });
+
+  it("N6: a failed save says session-only once, never 'will remember'", async () => {
+    await connectWith("/dev/ttyUSB0", KEYED);
+    const spy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("quota");
+    });
+    try {
+      useStore.setState({ consoleLines: [] });
+      expect(machineConnection.confirmBedSize(300, 200)).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(getBedSource()).toBe("session");
+    const texts = consoleTexts();
+    expect(texts.some((t) => t.includes("will remember"))).toBe(false);
+    expect(texts.filter((t) => t.includes("confirmed for this session"))).toHaveLength(1);
+    expect(useStore.getState().workspaceVerified).toBe(true);
+  });
+
+  it.each([
+    [0, 200],
+    [300, -1],
+    [NaN, 200],
+  ])("N7: confirmBedSize(%s, %s) refuses and changes nothing", async (w, h) => {
+    await connectWith("/dev/ttyUSB0", KEYED);
+    expect(machineConnection.confirmBedSize(w, h)).toBe(false);
+    expect(useStore.getState().workspaceVerified).toBe(false);
+    expect(localStorage.getItem("kerf-bed-confirmations")).toBeNull();
+    expect(consoleTexts()).toContain(
+      "Bed size not set — enter a width and height in mm, both above 0."
+    );
+  });
+
+  it("malformed storage reads as nothing remembered", async () => {
+    localStorage.setItem("kerf-bed-confirmations", "{not json");
+    await connectWith("/dev/ttyUSB0", KEYED);
+    expect(useStore.getState().workspaceVerified).toBe(false);
+  });
+
+  it("S3-M28: a reconnect starts stale until a poll, and a jog refuses", async () => {
+    const travel = ["$100=80", "$101=80", "$130=400", "$131=415", "ok"];
+    await connectWith("/dev/ttyUSB0", travel);
+    await machineConnection.pollStatus();
+    expect(useStore.getState().statusStale).toBe(false);
+    await machineConnection.disconnect();
+    await connectWith("/dev/ttyUSB0", travel);
+    const st = useStore.getState();
+    expect(st.positionKind).toBe("machine"); // the init status query set it
+    expect(st.statusStale).toBe(true);
+    mockInvoke.mockClear();
+    await machineConnection.jog("X", 1);
+    expect(mockInvoke.mock.calls.filter((c) => c[0] === "serial_send")).toHaveLength(0);
+    expect(consoleTexts()).toContain(JOG_REASON_STALE);
   });
 });

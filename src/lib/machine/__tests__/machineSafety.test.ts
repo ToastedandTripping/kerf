@@ -12,7 +12,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../../app/store";
 import { DEFAULT_LAYERS } from "../../../app/types";
-import { machineConnection, _testResetPollFailures } from "../connection";
+import { machineConnection, _testResetPollFailures, _testResetJogAndBedState } from "../connection";
+import { JOG_REASON_BED } from "../jogBounds";
 import { resetStatusConsumer } from "../machineStatus";
 import {
   canStartJob,
@@ -56,6 +57,7 @@ function consoleTexts(): string[] {
 
 beforeEach(() => {
   _testResetPollFailures();
+  _testResetJogAndBedState();
   resetStatusConsumer();
   mockInvoke.mockReset();
   localStorage.clear();
@@ -334,7 +336,12 @@ describe("canStartJob — unverified bed blocks START", () => {
 // ---- Jog clamp + alarm guard (Workstream D) ----
 describe("jog clamp + alarm guard", () => {
   it("blocks jog in alarm state and emits warning", async () => {
-    useStore.setState({ machineState: "alarm", machinePosition: { x: 50, y: 50, z: 0 } });
+    useStore.setState({
+      machineState: "alarm",
+      machinePosition: { x: 50, y: 50, z: 0 },
+      statusStale: false,
+      positionKind: "machine",
+    });
     await machineConnection.jog("X", 10);
     // invoke should NOT have been called with serial_send
     expect(mockInvoke).not.toHaveBeenCalled();
@@ -347,6 +354,8 @@ describe("jog clamp + alarm guard", () => {
       machinePosition: { x: 490, y: 50, z: 0 },
       workspaceWidth: 500,
       workspaceHeight: 300,
+      statusStale: false,
+      positionKind: "machine",
     });
     mockInvoke.mockResolvedValueOnce({ responses: ["ok"], drained: [] });
     await machineConnection.jog("X", 50); // 490+50=540, clamped to 500, delta=10
@@ -360,6 +369,8 @@ describe("jog clamp + alarm guard", () => {
       machinePosition: { x: 5, y: 50, z: 0 },
       workspaceWidth: 500,
       workspaceHeight: 300,
+      statusStale: false,
+      positionKind: "machine",
     });
     mockInvoke.mockResolvedValueOnce({ responses: ["ok"], drained: [] });
     await machineConnection.jog("X", -20); // 5-20=-15, clamped to 0, delta=-5
@@ -372,6 +383,8 @@ describe("jog clamp + alarm guard", () => {
       machineState: "idle",
       machinePosition: { x: 0, y: 50, z: 0 },
       workspaceWidth: 500,
+      statusStale: false,
+      positionKind: "machine",
     });
     await machineConnection.jog("X", -10); // 0-10=-10, clamped to 0, delta=0 → no send
     expect(mockInvoke).not.toHaveBeenCalled();
@@ -588,25 +601,23 @@ describe("WARNING-2 regression — FRAME blocked on unverified workspace", () =>
   });
 });
 
-// ---- WARNING-1: jog clamp skipped when workspace unverified ----
-describe("WARNING-1 — jog clamp skipped when workspaceVerified=false", () => {
-  it("skips clamp and sends full distance when workspace is unverified", async () => {
-    // Machine is near the edge but workspace is unverified — the client-side
-    // clamp must NOT mis-clamp what might be a valid jog in the real frame.
+// ---- WARNING-1 (retired by S3, kerf-f1): an unverified bed refuses the jog ----
+// The raw full-distance send this block used to pin is gone: with the bed
+// unconfirmed Kerf cannot know where the edge is, so a jog sends nothing.
+describe("WARNING-1 — jog refused when workspaceVerified=false (kerf-f1)", () => {
+  it("refuses and sends nothing when the bed is unverified (kerf-f1)", async () => {
     useStore.setState({
       machineState: "idle",
       machinePosition: { x: 490, y: 50, z: 0 },
       workspaceWidth: 500,
       workspaceHeight: 300,
       workspaceVerified: false,
+      statusStale: false,
+      positionKind: "machine",
     });
-    mockInvoke.mockResolvedValueOnce({ responses: ["ok"], drained: [] });
-    await machineConnection.jog("X", 50); // would clamp to 10 if verified
-    const sendArg = mockInvoke.mock.calls[0]?.[1]?.command as string;
-    // When unverified: full distance passes through, GRBL/$20 is the backstop
-    expect(sendArg).toContain("X50");
-    // Must NOT have clamped to X10
-    expect(sendArg).not.toContain("X10");
+    await machineConnection.jog("X", 50);
+    expect(mockInvoke.mock.calls.filter((c) => c[0] === "serial_send")).toHaveLength(0);
+    expect(consoleTexts()).toContain(JOG_REASON_BED);
   });
 
   it("still applies clamp when workspace is verified (regression guard)", async () => {
@@ -616,6 +627,8 @@ describe("WARNING-1 — jog clamp skipped when workspaceVerified=false", () => {
       workspaceWidth: 500,
       workspaceHeight: 300,
       workspaceVerified: true,
+      statusStale: false,
+      positionKind: "machine",
     });
     mockInvoke.mockResolvedValueOnce({ responses: ["ok"], drained: [] });
     await machineConnection.jog("X", 50); // 490+50=540, clamped to 500, delta=10

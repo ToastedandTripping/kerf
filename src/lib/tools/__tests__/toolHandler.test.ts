@@ -5,13 +5,16 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockRejectedValue(new Error("Rust backend not available")),
 }));
 
+import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../../app/store";
+import { _testResetJogAndBedState } from "../../machine/connection";
 import type { DesignObject } from "../../../app/types";
 import {
   getSelectionBBox,
   hitTestHandle,
   _testPointToSegmentDist,
   _testHitTest,
+  handleViewportPointerDown,
 } from "../toolHandler";
 
 function makeRect(
@@ -218,5 +221,46 @@ describe("toolHandler geometry helpers (TN2)", () => {
       const handle = hitTestHandle(50, 50, 1);
       expect(handle).toBe("se");
     });
+  });
+});
+
+describe("S3 — Position Laser frame (moved from parent S5)", () => {
+  const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+  const event = { button: 0, shiftKey: false } as unknown as React.PointerEvent;
+
+  function sends(): string[] {
+    return mockInvoke.mock.calls
+      .filter((c) => c[0] === "serial_send")
+      .map((c) => (c[1] as { command: string }).command);
+  }
+
+  beforeEach(() => {
+    _testResetJogAndBedState();
+    mockInvoke.mockReset();
+    mockInvoke.mockImplementation(async (cmd: string) =>
+      cmd === "serial_send" ? { responses: ["ok"], drained: [] } : undefined
+    );
+    useStore.setState({
+      activeTool: "positionLaser",
+      machineConnected: true,
+      machineState: "idle",
+      jobRunning: false,
+      statusStale: false,
+      positionKind: "machine",
+      workspaceVerified: true,
+      workCoordOffset: { x: 0, y: 0 },
+      workspaceWidth: 500,
+      workspaceHeight: 300,
+      consoleLines: [],
+    });
+  });
+
+  it.each([
+    [true, "$J=G21 G90 X120.000 Y-100.000 F3000"],
+    [false, "$J=G21 G90 X120.000 Y200.000 F3000"],
+  ] as const)("originTop=%s: canvas (120, 100) jogs to the machine frame", async (top, line) => {
+    useStore.setState({ originTop: top });
+    handleViewportPointerDown(120, 100, event);
+    await vi.waitFor(() => expect(sends()).toEqual([line]));
   });
 });
