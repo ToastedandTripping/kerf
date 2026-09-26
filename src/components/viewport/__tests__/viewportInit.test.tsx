@@ -491,3 +491,17 @@ describe("Viewport draw wiring (R2 Stage 2.5)", () => {
     }
   });
 });
+
+describe("camera at go-live (R2 Stage 2.5, Razor RW1)", () => {
+  for (const strict of [false, true]) {
+    it("world is positioned by the centred camera at go-live, strict=" + strict, async () => {
+      useStore.setState({ camera: { x: 0, y: 0, zoom: 1 } });
+      const live = await mountLive(strict);
+      const w = worldOf(live);
+      const cam = useStore.getState().camera;
+      expect(cam.x).toBeCloseTo(400 - (500 * PX_PER_MM) / 2, 6);
+      expect(w.x).toBeCloseTo(cam.x, 6);
+      expect(w.y).toBeCloseTo(cam.y, 6);
+    });
+  }
+});

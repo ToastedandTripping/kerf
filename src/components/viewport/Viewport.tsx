@@ -185,7 +185,11 @@ export function Viewport() {
     };
   }, []);
 
-  // Update world transform when camera changes
+  // Update world transform when camera changes.
+  // pixiReady is a real dependency, not lint: init's setCamera arrives through
+  // zustand (sync lane) and renders BEFORE setPixiReady (a useState update from
+  // a promise, default lane). This effect first runs with pixiReady false and
+  // returns; without the dep it never reruns and the world sits at (0, 0).
   useEffect(() => {
     if (!pixiReady || !worldRef.current) return;
     worldRef.current.x = camera.x;
