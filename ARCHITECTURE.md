@@ -209,6 +209,8 @@ src-tauri/src/
                                it to maskFill plus a `line` overlay (a sharp rectangle gets
                                a synthesized 4-corner contour), and `assertNoFillLine`
                                throws otherwise.
+                               Every mode line is `{M3|M4} S0`; power rides only on `G1`
+                               words that carry X or Y (safety engine-arm, 2026-09-26).
     mask_fill.rs             — The one shared raster scanner (~1170 lines + tests):
                                scan_mask_to_gcode (MaskScanParams; binary or grayscale S)
                                used by image engrave and maskFill; fill_compound_mask
@@ -322,8 +324,8 @@ sessions until the old one settles. Callbacks from a cancelled session are disca
    contour. Every `M3`/`M4` mode line both emit carries `S0`; positive S appears only on `G1`
    words with motion, so the material test never arms a stationary beam (safety S2,
    2026-09-25). The border follows the chosen power mode. This output does not pass through
-   the Rust engine, `limits.rs`, `assembleGcode` or the golden fixtures, and the engine's own
-   standalone mode lines still carry positive S (ROADMAP Parking Lot, S2 Deferral 1).
+   the Rust engine, `limits.rs`, `assembleGcode` or the golden fixtures, and the Rust
+   engine's mode lines carry `S0` as well (safety engine-arm, 2026-09-26).
 
 ### Serial Lock Order
 
