@@ -1080,3 +1080,14 @@ function categorizeConnectionError(raw: string): ConnectionError {
 export function _testResetPollFailures(): void {
   consecutivePollFailures = 0;
 }
+
+// S3 test-only reset: module-level jog-in-flight and bed-memory state would
+// otherwise leak between tests that share this module instance.
+// Not imported anywhere in production code.
+export function _testResetJogAndBedState(): void {
+  jogPending = false;
+  jogTick = 0;
+  connectedPort = null;
+  bedKey = null;
+  bedSource = null;
+}
