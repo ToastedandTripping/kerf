@@ -115,6 +115,7 @@ src/
       machineStateDisplay.ts — State colours/labels, GRBL alarm descriptions
       knownDevices.ts        — USB VID/PID table for auto-detect priority sorting
       textGcode.ts           — textToGcode: text → G-code lines (font outline extraction)
+      materialTestGcode.ts   — generateMaterialTestGcode / generateFrameGcode (pure, no store)
       __tests__/             — G-code, connection, streaming, status, gate, keep-awake and
                                safety tests; serialTraceHarness.ts
     tools/
@@ -303,11 +304,15 @@ sessions until the old one settles. Callbacks from a cancelled session are disca
 1. The Rust engine via `gcodeGen.ts` (`generate_gcode`, `generate_image_gcode`), joined by
    `assembleGcode` under its laser-safety contract.
 2. JobActionBar FRAME: an M5-bracketed G0 program built from `frameTargets(moves)`.
-3. `MaterialTestDialog.tsx`: `generateMaterialTestGcode` and `generateFrameGcode` write
-   their own preamble and footer and compute S as `(power / 100) * grblSValueMax`; labels
-   come from `textGcode.ts` `textToGcode`, which emits its own G0 / M3-or-M4 / G1 / M5
-   per glyph contour. This output does not pass through the Rust engine, `limits.rs`,
-   `assembleGcode` or the golden fixtures.
+3. The material test: `src/lib/machine/materialTestGcode.ts` (`generateMaterialTestGcode`,
+   `generateFrameGcode`, pure and store-free, called by `MaterialTestDialog.tsx`) writes its
+   own preamble and footer and computes S as `(power / 100) * grblSValueMax`; labels come
+   from `textGcode.ts` `textToGcode`, which emits its own G0 / mode / G1 / M5 per glyph
+   contour. Every `M3`/`M4` mode line both emit carries `S0`; positive S appears only on `G1`
+   words with motion, so the material test never arms a stationary beam (safety S2,
+   2026-09-25). The border follows the chosen power mode. This output does not pass through
+   the Rust engine, `limits.rs`, `assembleGcode` or the golden fixtures, and the engine's own
+   standalone mode lines still carry positive S (ROADMAP Parking Lot, S2 Deferral 1).
 
 ### Serial Lock Order
 
