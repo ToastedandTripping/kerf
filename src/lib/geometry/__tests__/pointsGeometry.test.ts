@@ -20,6 +20,10 @@ import {
   orientedHandlePoints,
   POINTS_EPSILON,
   MIN_SCALE_TARGET,
+  rotatePathPoint,
+  pathPointsToWorld,
+  worldDeltaToLocal,
+  pointsPartialKeepingPlacement,
 } from "../index";
 import { assertPointsInvariant } from "./pointsInvariant";
 
@@ -550,5 +554,117 @@ describe("orientedHandlePoints (R1a)", () => {
     // se local (+5,+3): world = (5 + 5·0 − 3·1, 3 + 5·1 + 3·0) = (2, 8)
     expect(h.se.x).toBeCloseTo(2, 9);
     expect(h.se.y).toBeCloseTo(8, 9);
+  });
+});
+
+describe("node edit on rotated paths (F7)", () => {
+  type XY = { x: number; y: number };
+  const DEG = 30;
+  const R = (v: XY): XY => {
+    const r = (DEG * Math.PI) / 180;
+    return { x: v.x * Math.cos(r) - v.y * Math.sin(r), y: v.x * Math.sin(r) + v.y * Math.cos(r) };
+  };
+  const centre = (pts: PathPoint[]): XY => {
+    const bb = pointsBBox(pts);
+    return { x: bb.x + bb.width / 2, y: bb.y + bb.height / 2 };
+  };
+  /** Every anchor and handle of a points array, in order. */
+  const flat = (pts: PathPoint[]): XY[] =>
+    pts.flatMap((p) => [
+      { x: p.x, y: p.y },
+      ...(p.handleIn ? [p.handleIn] : []),
+      ...(p.handleOut ? [p.handleOut] : []),
+    ]);
+
+  // Node 1's handleOut deliberately overshoots the anchor bbox (10..40 on each
+  // axis): a c' computed from a handle-inclusive bbox would be caught here.
+  const FIXTURE: PathPoint[] = [
+    { x: 10, y: 10 },
+    { x: 40, y: 10, handleOut: { x: 60, y: -20 } },
+    { x: 40, y: 40 },
+  ];
+
+  it("pathPointsToWorld: same reference at 0; rotatePathPoint about the transform centre at 30", () => {
+    const flat0 = makePath("w0", FIXTURE, 0);
+    expect(pathPointsToWorld(flat0)).toBe(flat0.points);
+    const obj = makePath("w30", FIXTURE, DEG);
+    const world = pathPointsToWorld(obj);
+    expect(world).toHaveLength(3);
+    for (let i = 0; i < 3; i++) {
+      const e = rotatePathPoint(FIXTURE[i], 25, 25, DEG);
+      expect(world[i].x).toBeCloseTo(e.x, 12);
+      expect(world[i].y).toBeCloseTo(e.y, 12);
+    }
+    const eh = rotatePathPoint(FIXTURE[1], 25, 25, DEG).handleOut!;
+    expect(world[1].handleOut!.x).toBeCloseTo(eh.x, 12);
+    expect(world[1].handleOut!.y).toBeCloseTo(eh.y, 12);
+    expect(world[0].handleIn).toBeUndefined();
+  });
+
+  it("worldDeltaToLocal is the inverse rotation of a vector", () => {
+    const l = worldDeltaToLocal(25, -7, DEG);
+    const back = R(l);
+    expect(Math.abs(back.x - 25)).toBeLessThan(1e-12);
+    expect(Math.abs(back.y + 7)).toBeLessThan(1e-12);
+  });
+
+  it("a node edit equals the unrotated-frame edit plus one uniform translation (I - R)(c0 - c')", () => {
+    const obj = makePath("u", FIXTURE, DEG);
+    const c0 = { x: 25, y: 25 };
+    const L = worldDeltaToLocal(25, -7, DEG);
+    const U = FIXTURE.map((p) => ({ ...p }));
+    U[2] = { x: FIXTURE[2].x + L.x, y: FIXTURE[2].y + L.y };
+    const partial = pointsPartialKeepingPlacement(obj, U, c0);
+    const result = partial.points!;
+    expect(partial.transform.rotation).toBe(DEG);
+
+    // Tolerance provenance: measured at plan time, the formula's own error on
+    // this kind of fixture is at most 7.1e-15 mm (world, untouched anchors and
+    // handle; round-3 critic run). 1e-12 on stored-frame differences is about
+    // three orders of margin; 1e-9 on world positions is about six, absorbing
+    // the extra forward rotation. Tightening is fine; loosening needs a measurement.
+    const r = flat(result);
+    const u = flat(U);
+    expect(r).toHaveLength(u.length);
+    const d0 = { x: r[0].x - u[0].x, y: r[0].y - u[0].y };
+    for (let i = 1; i < r.length; i++) {
+      expect(Math.abs(r[i].x - u[i].x - d0.x)).toBeLessThan(1e-12);
+      expect(Math.abs(r[i].y - u[i].y - d0.y)).toBeLessThan(1e-12);
+    }
+    const cU = centre(U); // anchors-only centre, never handle-inclusive
+    const v = { x: c0.x - cU.x, y: c0.y - cU.y };
+    const Rv = R(v);
+    expect(Math.abs(d0.x - (v.x - Rv.x))).toBeLessThan(1e-12);
+    expect(Math.abs(d0.y - (v.y - Rv.y))).toBeLessThan(1e-12);
+
+    const before = pathPointsToWorld(obj);
+    const after = pathPointsToWorld({ ...obj, ...partial });
+    expect(Math.abs(after[1].handleOut!.x - before[1].handleOut!.x)).toBeLessThan(1e-9);
+    expect(Math.abs(after[1].handleOut!.y - before[1].handleOut!.y)).toBeLessThan(1e-9);
+  });
+
+  it("world placement: untouched nodes stay put, the dragged node moves by the world delta", () => {
+    const obj = makePath("wp", FIXTURE, DEG);
+    const before = pathPointsToWorld(obj);
+    const L = worldDeltaToLocal(25, -7, DEG);
+    const edited = FIXTURE.map((p) => ({ ...p }));
+    edited[2] = { x: FIXTURE[2].x + L.x, y: FIXTURE[2].y + L.y };
+    const partial = pointsPartialKeepingPlacement(obj, edited, { x: 25, y: 25 });
+    const after = pathPointsToWorld({ ...obj, ...partial });
+    for (const i of [0, 1]) {
+      expect(Math.abs(after[i].x - before[i].x)).toBeLessThan(1e-9);
+      expect(Math.abs(after[i].y - before[i].y)).toBeLessThan(1e-9);
+    }
+    expect(Math.abs(after[2].x - (before[2].x + 25))).toBeLessThan(1e-9);
+    expect(Math.abs(after[2].y - (before[2].y - 7))).toBeLessThan(1e-9);
+  });
+
+  it("at rotation 0 it deep-equals pointsPartial", () => {
+    const obj = makePath("z", FIXTURE, 0);
+    const edited = FIXTURE.map((p) => ({ ...p }));
+    edited[2] = { x: 70, y: 33 };
+    expect(pointsPartialKeepingPlacement(obj, edited, { x: 25, y: 25 })).toEqual(
+      pointsPartial(obj, edited)
+    );
   });
 });

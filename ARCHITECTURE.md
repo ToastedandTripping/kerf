@@ -68,6 +68,13 @@ src/
       CommandPalette.tsx     — Ctrl+K fuzzy command search
     viewport/
       Viewport.tsx           — Pixi.js 8 WebGL canvas, persistent display cache, selection handles
+      renderHelpers.ts       — placeSprite / applyTextImageTransform / rotationPlacement /
+                               applyObjectRotation / renderImageObject: one placement rule for
+                               rotated and flipped text, images and Graphics (pivot at centre)
+      textureCache.ts        — module-private image texture cache: getReadyTexture (decode,
+                               then a pending/failed state; never an empty outline),
+                               isTextureFailed (crossed-box placeholder), evictTextures,
+                               clearTextures (generation bump), setTextureReadyListener
       Rulers.tsx             — mm rulers along canvas edges
 
   lib/
