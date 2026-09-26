@@ -82,6 +82,10 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 ## Log (newest first)
 
+### 2026-09-26 (fleet paused)
+
+The coordinator paused the fleet, relaying Lee: "want to disengage it for the moment and save and update all the projects it was working on." I pushed marvin/kerf-gap to origin for the first time, as a backup. That push triggers no CI or build, since ci.yml runs only on master pushes and PRs, and build.yml only on v* tags. I did not merge to master: Lee's approval for the /save merge of S3 and engine-leadin is still open. The owed list and NEXT, in order, still read true from 4f8059f. Nothing deployed.
+
 ### 2026-09-26 hand-off discharge
 DONE and removed from Owed: the green-when-stale indicator shipped in S3 (377a63f); DECISIONS proposals (1) kerf-f2 and (2) S3's two entries are written (0419473, 2fefa32), and (3) Ctrl+Shift+V stays owed at R3's close under its own Owed line; Lee removed both disk caches on 2026-09-26 (only ~/.cache/kerf-engine-arm-target remains, kept for E1b).
 
