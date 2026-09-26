@@ -2598,4 +2598,186 @@ mod golden_tests {
             errors.join("\n")
         );
     }
+
+    /// P1, P2 and P3 over one leadin fixture.
+    fn leadin_properties(label: &str, fx: &LeadinFixture) -> Vec<String> {
+        struct Section {
+            marker: &'static str,
+            g0: bool,
+            mode: bool,
+            m5: bool,
+            first_burn_after_mode: Option<f64>,
+        }
+        let mut st = LeadinState::default();
+        let mut sections: Vec<Section> = Vec::new();
+        let mut positives = 0usize;
+        let mut burned = 0.0_f64;
+        for line in fx.gcode.lines() {
+            if let Some(m) = starts_section(line) {
+                sections.push(Section {
+                    marker: m,
+                    g0: false,
+                    mode: false,
+                    m5: false,
+                    first_burn_after_mode: None,
+                });
+            }
+            if line.starts_with("; KERF:FOOTER_BEGIN") {
+                // The footer is not a section: stop attributing lines to the last one.
+                sections.push(Section {
+                    marker: "footer",
+                    g0: false,
+                    mode: false,
+                    m5: false,
+                    first_burn_after_mode: None,
+                });
+            }
+            if let Some(sec) = sections.last_mut() {
+                if is_g0_xy(line) {
+                    sec.g0 = true;
+                }
+                if has_word(line, 'M', 5.0) {
+                    sec.m5 = true;
+                }
+                if is_positive_g1(line) {
+                    let t = g1_target(line, st.pos);
+                    let len = ((t.0 - st.pos.0).powi(2) + (t.1 - st.pos.1).powi(2)).sqrt();
+                    if sec.marker == "; Cut:" {
+                        burned += len;
+                        if sec.mode && sec.first_burn_after_mode.is_none() {
+                            sec.first_burn_after_mode = Some(len);
+                        }
+                    }
+                }
+                if is_mode_line(line) {
+                    sec.mode = true;
+                }
+            }
+            if is_positive_g1(line) {
+                positives += 1;
+            }
+            st.step(line);
+        }
+        let real: Vec<&Section> = sections.iter().filter(|s| s.marker != "footer").collect();
+        let cuts: Vec<&&Section> = real.iter().filter(|s| s.marker == "; Cut:").collect();
+        let mut out = Vec::new();
+        if fx.expect_burn {
+            if positives == 0 {
+                out.push(format!("P1 {label}: burns nothing"));
+            }
+        } else {
+            if positives != 0 {
+                out.push(format!(
+                    "P1 {label}: {positives} burning G1s where nothing may burn"
+                ));
+            }
+            for s in &real {
+                if s.marker == "; Pass " {
+                    continue;
+                }
+                if !(s.g0 && s.mode && s.m5) {
+                    out.push(format!(
+                        "P1 {label}: {} section lacks a G0 ({}), a mode line ({}) or an M5 ({})",
+                        s.marker, s.g0, s.mode, s.m5
+                    ));
+                }
+            }
+        }
+        if let Some(p) = fx.perimeter {
+            let lead: f64 = if fx.lead_in.is_some() {
+                cuts.iter().filter_map(|s| s.first_burn_after_mode).sum()
+            } else {
+                0.0
+            };
+            let net = burned - lead;
+            if net < p - 0.1 {
+                out.push(format!(
+                    "P2 {label}: burned {net:.4} mm (excluding lead-in) < perimeter {p:.4} - 0.1"
+                ));
+            }
+        }
+        if let Some(l) = fx.lead_in {
+            if cuts.is_empty() {
+                out.push(format!("P3 {label}: no ; Cut: section"));
+            }
+            for s in &cuts {
+                if !s.mode {
+                    out.push(format!("P3 {label}: ; Cut: section has no mode line"));
+                } else {
+                    match s.first_burn_after_mode {
+                        None => out.push(format!(
+                            "P3 {label}: no burning G1 after the section's mode line"
+                        )),
+                        Some(len) if (len - l).abs() > 0.002 => out.push(format!(
+                            "P3 {label}: lead-in G1 is {len:.4} mm, requested {l}"
+                        )),
+                        Some(_) => {}
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// T-L1: every leadin fixture and every arm fixture, both power modes, holds
+    /// I-SEAM, I-ARM, I-DISP, I-STEP, P1-P3 and engine-arm's I1/I2.
+    #[tokio::test]
+    async fn leadin_invariants_every_fixture() {
+        let leadin = leadin_matrix().await;
+        let arm = arm_matrix().await;
+        assert_eq!(leadin.len(), 34, "leadin matrix must hold 34 programs");
+        assert_eq!(arm.len(), 24, "arm matrix must hold 24 programs");
+        let mut report: Vec<String> = Vec::new();
+        for (label, fx) in &leadin {
+            let mut v = leadin_violations(label, &fx.gcode);
+            v.extend(leadin_properties(label, fx));
+            if !v.is_empty() {
+                report.push(format!("{label}:\n  {}", v.join("\n  ")));
+            }
+        }
+        for (label, prog) in &arm {
+            let label = format!("arm__{label}");
+            let v = leadin_violations(&label, &prog.gcode);
+            if !v.is_empty() {
+                report.push(format!("{label}:\n  {}", v.join("\n  ")));
+            }
+        }
+        assert!(
+            report.is_empty(),
+            "leadin violations:\n{}",
+            report.join("\n")
+        );
+        for (label, fx) in &leadin {
+            assert_never_arms(label, &fx.gcode);
+        }
+        for (label, prog) in &arm {
+            assert_never_arms(label, &prog.gcode);
+        }
+    }
+
+    /// T-L2: the committed corpus holds the leadin invariants. Guards a future
+    /// regeneration; kills no code mutant (it reads committed files).
+    #[test]
+    fn committed_goldens_hold_leadin_invariants() {
+        let files = gcode_files(&golden_dir());
+        assert!(
+            files.len() >= 16,
+            "expected at least 16 goldens, found {}",
+            files.len()
+        );
+        let positives: usize = files
+            .values()
+            .map(|t| t.lines().filter(|l| is_positive_g1(l)).count())
+            .sum();
+        assert!(positives >= 1, "vacuous: no burning G1 across the corpus");
+        let all: Vec<String> = files
+            .iter()
+            .flat_map(|(name, text)| leadin_violations(name, text))
+            .collect();
+        assert!(
+            all.is_empty(),
+            "golden leadin violations:\n{}",
+            all.join("\n")
+        );
+    }
 }
