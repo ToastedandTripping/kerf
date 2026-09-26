@@ -165,6 +165,19 @@ describe("textureCache (R2 F5)", () => {
     expect(decodes).toHaveLength(2);
   });
 
+  it("a Texture.from that throws marks the id failed and notifies (N2)", async () => {
+    vi.mocked(Texture.from).mockImplementationOnce(() => {
+      throw new Error("gpu");
+    });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    getReadyTexture("t", URL_A);
+    decodes[0].resolve();
+    await flush();
+    expect(isTextureFailed("t")).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(err).toHaveBeenCalled();
+  });
+
   it("clearTextures destroys every cached texture", async () => {
     getReadyTexture("a", URL_A);
     decodes[0].resolve();

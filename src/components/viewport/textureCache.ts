@@ -72,8 +72,17 @@ function settle(id: string, gen: number, img: HTMLImageElement | null) {
   // texture is created on this path, so there is nothing to destroy.
   if (gen !== generation || !pending.has(id)) return;
   pending.delete(id);
+  let tex: Texture | null = null;
   if (img) {
-    textureCache.set(id, Texture.from(img));
+    try {
+      tex = Texture.from(img);
+    } catch (err) {
+      // Not silent: logged, and the id is marked failed so the placeholder draws.
+      console.error("Image texture creation failed:", err);
+    }
+  }
+  if (tex) {
+    textureCache.set(id, tex);
   } else {
     // Not silent: the caller draws the crossed-box placeholder for a failed id.
     failed.add(id);
