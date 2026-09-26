@@ -252,18 +252,15 @@ function readRememberedBed(key: string): { w: number; h: number } | null {
   return hit ? { w: hit.w, h: hit.h } : null;
 }
 
-function writeRememberedBed(key: string, w: number, h: number): void {
+/** Returns false when storage refused the write; the caller says so (N6). */
+function writeRememberedBed(key: string, w: number, h: number): boolean {
   try {
     const rest = readBedEntries().filter((e) => e.key !== key);
     const next = [{ key, w, h }, ...rest].slice(0, BED_CONFIRMATIONS_CAP);
     localStorage.setItem(BED_CONFIRMATIONS_KEY, JSON.stringify(next));
+    return true;
   } catch {
-    useStore
-      .getState()
-      .addConsoleLine(
-        "Couldn't save the bed size for next time -- it applies to this session only.",
-        "warning"
-      );
+    return false;
   }
 }
 
@@ -822,7 +819,8 @@ export const machineConnection = {
     const responses = await this.send("G92 X0 Y0");
     const store = useStore.getState();
     const { workCoordOffset } = store;
-    if (workCoordOffset.x !== 0 || workCoordOffset.y !== 0) {
+    const offsetKnown = Number.isFinite(workCoordOffset.x) && Number.isFinite(workCoordOffset.y);
+    if (offsetKnown && (workCoordOffset.x !== 0 || workCoordOffset.y !== 0)) {
       store.addConsoleLine(
         `Work origin set. Previous offset was X${workCoordOffset.x.toFixed(3)} Y${workCoordOffset.y.toFixed(3)}. Run G92.1 to clear offset.`,
         "info"
@@ -830,11 +828,15 @@ export const machineConnection = {
     }
     // No ok: the controller did not take the G92, so the known offset stands.
     if (!responses.includes("ok")) return;
-    const pos = store.machinePosition;
-    const mpos =
-      store.positionKind === "machine"
-        ? { x: pos.x, y: pos.y }
-        : { x: pos.x + workCoordOffset.x, y: pos.y + workCoordOffset.y };
+    // N5: only a fresh machine-frame report gives the exact MPos. Otherwise the
+    // offset is unknown (NaN, never 0) until the next WCO: field, so jogTo's
+    // offset refusal applies instead of a zero it cannot vouch for.
+    const trusted = !store.statusStale && store.positionKind === "machine";
+    if (!trusted) {
+      store.setWorkCoordOffset({ x: NaN, y: NaN });
+      return;
+    }
+    const mpos = store.machinePosition;
     store.setWorkCoordOffset({ x: mpos.x, y: mpos.y }); // S3: G92 X0 Y0 makes WCO equal to MPos
   },
 
@@ -972,33 +974,44 @@ export const machineConnection = {
     }
   },
 
-  /** Query $$ and apply $30/$32/$120-131. Returns true when the response
-   * parsed as settings (at least one `$N=V` line) — the $32 warning and the
-   * "unverified" fallback in connect() key off this. */
-  /** S3 kerf-f1 (b): the operator's bed confirmation, the only writer of the memory. */
-  confirmBedSize(w: number, h: number): void {
+  /** S3 kerf-f1 (b): the operator's bed confirmation, the only writer of the
+   *  memory. Returns false (and says why) when the size is refused. */
+  confirmBedSize(w: number, h: number): boolean {
     const store = useStore.getState();
     if (!validBedSize(w, h)) {
-      store.addConsoleLine(`Bed size not set: ${w} × ${h} mm is not a valid size.`, "error");
-      return;
+      store.addConsoleLine(
+        "Bed size not set — enter a width and height in mm, both above 0.",
+        "error"
+      );
+      return false;
     }
     store.setWorkspaceSize(w, h);
     store.setWorkspaceVerified(true);
-    markBed(bedKey ? "confirmed" : "session");
-    if (bedKey) {
-      writeRememberedBed(bedKey, w, h);
+    if (bedKey && writeRememberedBed(bedKey, w, h)) {
+      markBed("confirmed");
       store.addConsoleLine(
         `Bed size ${w} × ${h} mm confirmed. Kerf will remember it for this machine.`,
         "info"
       );
+    } else if (bedKey) {
+      markBed("session");
+      store.addConsoleLine(
+        `Bed size ${w} × ${h} mm confirmed for this session. Kerf couldn't save it for next time, so it will ask again next time you connect.`,
+        "warning"
+      );
     } else {
+      markBed("session");
       store.addConsoleLine(
         `Bed size ${w} × ${h} mm confirmed for this session. Kerf couldn't read this machine's settings, so it will ask again next time you connect.`,
         "info"
       );
     }
+    return true;
   },
 
+  /** Query $$ and apply $30/$32/$120-131. Returns true when the response
+   * parsed as settings (at least one `$N=V` line) — the $32 warning and the
+   * "unverified" fallback in connect() key off this. */
   async queryGrblSettings(): Promise<boolean> {
     // New connection: machineHomed resets — must home again this session for soft limits
     useStore.getState().setMachineHomed(false);

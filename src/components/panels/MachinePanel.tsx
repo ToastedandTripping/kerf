@@ -170,10 +170,11 @@ export function MachinePanel() {
         <span style={{ color: "var(--text-muted)", fontSize: "9px" }}>mm</span>
         <button
           onClick={() => {
-            const w = Math.max(1, Number(bedWInput) || 1);
-            const h = Math.max(1, Number(bedHInput) || 1);
-            machineConnection.confirmBedSize(w, h);
-            setConfirmBedOpen(false);
+            // N7: the raw entry goes to confirmBedSize, which refuses a
+            // non-positive or non-numeric size in plain words; inputs stay open.
+            const w = bedWInput.trim() === "" ? NaN : Number(bedWInput);
+            const h = bedHInput.trim() === "" ? NaN : Number(bedHInput);
+            if (machineConnection.confirmBedSize(w, h)) setConfirmBedOpen(false);
           }}
           style={{
             fontSize: "9px",
@@ -743,8 +744,14 @@ export function MachinePanel() {
               }}
             >
               <span>
-                Work origin offset: X{workCoordOffset.x.toFixed(3)} Y{workCoordOffset.y.toFixed(3)}{" "}
-                from machine zero
+                {Number.isFinite(workCoordOffset.x) && Number.isFinite(workCoordOffset.y) ? (
+                  <>
+                    Work origin offset: X{workCoordOffset.x.toFixed(3)} Y
+                    {workCoordOffset.y.toFixed(3)} from machine zero
+                  </>
+                ) : (
+                  "Work origin offset set — size unknown until the machine reports it"
+                )}
               </span>
               <button
                 onClick={() => machineConnection.send("G92.1")}

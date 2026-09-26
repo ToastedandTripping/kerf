@@ -10,6 +10,7 @@ import {
   JOG_REASON_EDGE,
   JOG_REASON_JOB,
   JOG_REASON_NOT_CONNECTED,
+  JOG_REASON_NUMBER,
   JOG_REASON_OFFSET,
   JOG_REASON_OUTSIDE,
   JOG_REASON_STALE,
@@ -85,6 +86,22 @@ describe("clipJog", () => {
     }
     expect(cases).toBeGreaterThanOrEqual(200);
     expect(sent).toBeGreaterThan(cases / 2);
+  });
+});
+
+describe("clipJog non-finite input (N1)", () => {
+  const base = { axis: "X" as const, distance: 1, position: 10, bed: 500, originTop: false };
+  it.each([
+    ["position NaN", { position: NaN }],
+    ["bed NaN", { bed: NaN }],
+    ["distance NaN", { distance: NaN }],
+    ["distance Infinity", { distance: Infinity }],
+    ["bed Infinity", { bed: Infinity }],
+  ])("%s refuses", (_l, patch) => {
+    expect(clipJog({ ...base, ...patch })).toEqual({ kind: "refuse", reason: JOG_REASON_NUMBER });
+  });
+  it("finite input still sends (positive sibling)", () => {
+    expect(clipJog(base)).toEqual({ kind: "send", distance: 1 });
   });
 });
 

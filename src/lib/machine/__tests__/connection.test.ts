@@ -1217,17 +1217,30 @@ describe("S3 — jog frame", () => {
     expect(consoleTexts()).toContain(JOG_REASON_OFFSET);
   });
 
-  it("Set Origin on a WPos report records WPos + old offset; no ok leaves the offset alone", async () => {
-    jogReady({
-      positionKind: "work",
-      machinePosition: { x: 20, y: 30, z: 0 },
-      workCoordOffset: { x: 5, y: -5 },
-    });
-    await machineConnection.setOrigin();
-    expect(useStore.getState().workCoordOffset).toEqual({ x: 25, y: 25 });
+  it.each([
+    ["a WPos report", { positionKind: "work" }],
+    ["a stale status", { statusStale: true }],
+    ["an unknown position kind", { positionKind: null }],
+  ] as const)(
+    "N5: Set Origin on %s leaves the offset unknown and jogTo refuses",
+    async (_l, patch) => {
+      jogReady({ machinePosition: { x: 20, y: 30, z: 0 }, workCoordOffset: { x: 0, y: 0 } });
+      useStore.setState(patch);
+      await machineConnection.setOrigin();
+      const wco = useStore.getState().workCoordOffset;
+      expect(Number.isNaN(wco.x) && Number.isNaN(wco.y)).toBe(true);
+      jogReady({ workCoordOffset: wco });
+      await machineConnection.jogTo(10, 10);
+      expect(sends()).toEqual(["G92 X0 Y0"]);
+      expect(consoleTexts()).toContain(JOG_REASON_OFFSET);
+    }
+  );
+
+  it("Set Origin with no ok leaves the offset alone", async () => {
+    jogReady({ machinePosition: { x: 20, y: 30, z: 0 }, workCoordOffset: { x: 5, y: -5 } });
     mockInvoke.mockImplementation(async () => ({ responses: ["error:9"], drained: [] }));
     await machineConnection.setOrigin();
-    expect(useStore.getState().workCoordOffset).toEqual({ x: 25, y: 25 });
+    expect(useStore.getState().workCoordOffset).toEqual({ x: 5, y: -5 });
   });
 });
 
@@ -1357,6 +1370,38 @@ describe("S3 — remembered bed", () => {
     expect(getBedSource()).toBe("session");
     expect(localStorage.getItem("kerf-bed-confirmations")).toBeNull();
     expect(consoleTexts().some((t) => t.includes("confirmed for this session"))).toBe(true);
+  });
+
+  it("N6: a failed save says session-only once, never 'will remember'", async () => {
+    await connectWith("/dev/ttyUSB0", KEYED);
+    const spy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("quota");
+    });
+    try {
+      useStore.setState({ consoleLines: [] });
+      expect(machineConnection.confirmBedSize(300, 200)).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(getBedSource()).toBe("session");
+    const texts = consoleTexts();
+    expect(texts.some((t) => t.includes("will remember"))).toBe(false);
+    expect(texts.filter((t) => t.includes("confirmed for this session"))).toHaveLength(1);
+    expect(useStore.getState().workspaceVerified).toBe(true);
+  });
+
+  it.each([
+    [0, 200],
+    [300, -1],
+    [NaN, 200],
+  ])("N7: confirmBedSize(%s, %s) refuses and changes nothing", async (w, h) => {
+    await connectWith("/dev/ttyUSB0", KEYED);
+    expect(machineConnection.confirmBedSize(w, h)).toBe(false);
+    expect(useStore.getState().workspaceVerified).toBe(false);
+    expect(localStorage.getItem("kerf-bed-confirmations")).toBeNull();
+    expect(consoleTexts()).toContain(
+      "Bed size not set — enter a width and height in mm, both above 0."
+    );
   });
 
   it("malformed storage reads as nothing remembered", async () => {

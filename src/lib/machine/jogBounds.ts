@@ -19,6 +19,8 @@ export const JOG_REASON_OUTSIDE =
   "The head is outside the bed Kerf knows about — home the machine first";
 export const JOG_REASON_EDGE = "Already at the edge of the bed";
 export const JOG_REASON_TARGET = "That spot is outside the bed";
+export const JOG_REASON_NUMBER =
+  "Kerf can't read the head position, bed size or jog step — try again in a moment";
 
 export type JogAxis = "X" | "Y";
 
@@ -64,6 +66,8 @@ export function clipJog(req: {
   bed: number;
   originTop: boolean;
 }): JogResult {
+  const finite = [req.position, req.bed, req.distance].every(Number.isFinite);
+  if (!finite) return refuse(JOG_REASON_NUMBER);
   const [lo, hi] = jogEnvelope(req.axis, req.bed, req.originTop);
   if (req.position < lo || req.position > hi) return refuse(JOG_REASON_OUTSIDE);
   const room = req.distance < 0 ? req.position - lo : hi - req.position;

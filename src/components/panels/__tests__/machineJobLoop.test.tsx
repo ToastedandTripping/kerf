@@ -1139,6 +1139,22 @@ describe("S3 — MachinePanel and StatusBar", () => {
     expect([st.workspaceWidth, st.workspaceHeight]).toEqual([300, 200]);
   });
 
+  it("N7: an empty width is refused in plain words, the inputs stay open, nothing remembered", async () => {
+    mockPanelMachine(KEYED);
+    useStore.setState({ machineConnected: false, workspaceVerified: false });
+    await machineConnection.connect("/dev/ttyUSB0", 115200);
+    const { getByText, getByDisplayValue } = render(<MachinePanel />);
+    fireEvent.click(getByText("Set bed size"));
+    fireEvent.change(getByDisplayValue("500"), { target: { value: "" } });
+    fireEvent.click(getByText("Confirm"));
+    expect(useStore.getState().workspaceVerified).toBe(false);
+    expect(localStorage.getItem("kerf-bed-confirmations")).toBeNull();
+    expect(consoleTexts()).toContain(
+      "Bed size not set — enter a width and height in mm, both above 0."
+    );
+    getByText("The width and height the laser head can reach, in mm.");
+  });
+
   it("a remembered bed shows who set it, with a Change button that opens the inputs", async () => {
     mockPanelMachine(KEYED);
     useStore.setState({ machineConnected: false, workspaceVerified: false });
