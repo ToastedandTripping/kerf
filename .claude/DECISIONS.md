@@ -63,6 +63,11 @@ The text tool (four bundled fonts, converted to paths at G-code time) shipped in
 
 Lee, 2026-09-25, in the coordinator window, verbatim: "Leave the pause botton [sic] for now but ensure we have a plan to make it function in the future." This records a ruling he already gave. It decided kerf-f2, which asked whether the button should be relabelled 'STOP (no resume)' or removed: neither ships, and the button keeps stopping the job with no resume, the fallback the 2026-09-10 hold-only entry requires. Lee gave no further reason; none is recorded here. The plan to make Pause work is .claude/plans/pause-resume-future.md (a84a9b5), parked until Lee schedules it; the evidence it needs became possible with the 2026-09-25 amendment to the status-only evidence entry (3b2bf76), which allows a witness-card qualification. A future session must not relabel, remove or re-wire Pause outside that plan.
 
+### Jogging refuses until the bed size is confirmed, and a confirmation is remembered per machine.
+*2026-09-26, per Lee (decided by the coordinator under Lee's 2026-09-25 technical delegation as kerf-f1; recorded on Lee's yes)*
+
+The owner's controller runs $20=0 (soft limits off, capture 2026-09-14), so the bed confirmation is the only thing that knows where the edge is: before kerf-safety-s3 an unconfirmed bed sent the raw jog request with no limit, and a verified one could reverse a jog at the edge. The refusal and the confirm step use plain words. The confirmation is remembered per machine, keyed by the port plus the controller's $3, $23, $100, $101, $130 and $131, re-applied only on a full settings read and forgotten when any of those change, a settings read fails, or the operator presses Change. It cannot detect a physical bed change on the same port with the same settings, and that residual is disclosed. A future session must not restore the raw, unclipped jog on an unconfirmed bed.
+
 ---
 
 ## Engineering pins
@@ -206,3 +211,8 @@ In gcode_gen.rs, s_min has exactly one consumer, s_max.max(s_min). ScanLineParam
 *2026-09-25, per coordinator (delegated under Lee's 2026-09-25 technical delegation)*
 
 On the owner's controller, `A:S` was present on every status report that carried override values (53 of 53 in the 2026-09-14 capture), including Idle reports after an acknowledged `M5` (capture lines 70 and 83). It was absent on every report without override values (69 of 69), including 10 Run reports mid-cut with a non-zero spindle speed in `FS:`. It therefore cannot be read as beam-on or beam-off on this controller. **Consequence:** no Kerf code may treat `A:S` (or its absence) as a beam-state signal. That includes any pause, hold, resume, stop or beam-safety logic, and the simulator's `A:` field, which models this observed pattern, not a beam state. This corrects the 2026-09-05 entry on `0x9E`. Evidence, re-countable: `scripts/probe-20260914-153729.log` (captured 2026-09-14), counted 2026-09-25 with `python3 -c "import re;t=open('scripts/probe-20260914-153729.log').read();r=re.findall(r'<[A-Za-z:0-9]+\|[^>]*>',t);ov=[x for x in r if '|Ov:' in x];nv=[x for x in r if '|Ov:' not in x];print(len(ov),sum(bool(re.search(r'\|A:[A-Z]*S',x)) for x in ov),len(nv),sum('|A:' in x for x in nv))"`, which prints `53 53 69 0` (122 status reports total).
+
+### The material-test grid and frame were generated in a positive-Y frame regardless of originTop, so on an origin-top machine every Y was beyond home.
+*2026-09-26, per Lee*
+
+Found by the 2026-09-24 gap audit (G7) and held in no register until now. On a machine whose origin is top-left (negative-Y bed), every Y the material test and its frame sent was positive, beyond the home position, so S1 (2026-09-25) had to refuse every material test on those machines. Fixed by kerf-safety-s3 (merged 377a63f), which mirrors the grid, the labels and the frame in Y when originTop is set. A future session reading older burns or bug reports from origin-top machines should read their material-test positions through this correction.
