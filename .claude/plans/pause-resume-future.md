@@ -215,6 +215,7 @@ also needs an amendment to the status-only entry.
 ## 6. Decisions this needs from Lee
 
 **Decision 1. What evidence would you accept that the laser stays dark while a job is paused?**
+- *Answered 2026-09-25 (Lee, relayed by the coordinator):* the witness-card procedure with a control burn, optical sensor as the step-up (option b here). Written as an amendment to the status-only DECISIONS entry, with its limits. Nothing is scheduled from it; this plan stays parked until Lee schedules it.
 - *Today:* Pause stops the job. You chose status-only evidence on 2026-09-10. That ruling says
   "any claim that the beam went dark is unqualifiable", so Pause can never become a real pause
   under it.
