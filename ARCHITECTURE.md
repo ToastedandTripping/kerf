@@ -211,6 +211,10 @@ src-tauri/src/
                                throws otherwise.
                                Every mode line is `{M3|M4} S0`; power rides only on `G1`
                                words that carry X or Y (safety engine-arm, 2026-09-26).
+                               Every line path starts `G0` then `{M3|M4} S0`; every burning
+                               vector `G1` goes through `CutPen`, which refuses a move under one
+                               motor step (0.0125 mm per axis, as written); a mask fill ends `M5`
+                               (safety engine-leadin). Raster and TS emitters are not covered.
     mask_fill.rs             — The one shared raster scanner (~1170 lines + tests):
                                scan_mask_to_gcode (MaskScanParams; binary or grayscale S)
                                used by image engrave and maskFill; fill_compound_mask
