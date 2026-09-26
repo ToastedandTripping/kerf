@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../app/store";
 import { sortPortsByPriority } from "./knownDevices";
+import { noteSpindleSample, resetSpindleDrop } from "./lastSentLine";
 import {
   consumeStatusOutcome,
   resetStatusConsumer,
@@ -71,11 +72,6 @@ let statusPollInterval: ReturnType<typeof setInterval> | null = null;
 let jobPollingSuspended = false;
 let unsubscribeJobRunning: (() => void) | null = null;
 let consecutivePollFailures = 0;
-
-/** Track previous spindle speed for drop-to-zero diagnostic.
- *  Managed by the snapshot consumer now; this variable is retained for
- *  the send() in-pump position-only path (which doesn't go through the consumer). */
-let prevSpindleSpeed: number | null = null;
 
 /** A7: in-flight connect promise for re-entrancy coalescing. If a connect()
  *  is already running (StrictMode double-mount, rapid clicks), subsequent
@@ -281,7 +277,7 @@ export const machineConnection = {
         store.setMachineConnected(true);
         // Reset spindle-drop diagnostic state so a stale value from a previous
         // connection doesn't produce a spurious warning on the first poll.
-        prevSpindleSpeed = null;
+        resetSpindleDrop();
         // B2b: reset the snapshot consumer's epoch/seq watermark so stale
         // snapshots from a previous connection are not silently accepted.
         resetStatusConsumer();
@@ -458,6 +454,7 @@ export const machineConnection = {
         if (r.startsWith("<")) {
           // In-pump status reports: filter from console (a 60s segment would
           // flood it at ~1/sec) — keep the most recent for the DRO below.
+          noteSpindleSample(r);
           lastStatusReport = r;
           continue;
         }
@@ -521,6 +518,7 @@ export const machineConnection = {
   async getStatusReport(): Promise<string> {
     const outcome = await invoke<StatusOutcome>("serial_get_status");
     for (const e of outcome.events) surfaceUnsolicited(e);
+    if (outcome.status.startsWith("<")) noteSpindleSample(outcome.status);
     return outcome.status;
   },
 
@@ -554,31 +552,14 @@ export const machineConnection = {
       // This drives the canStartJob gate (3s eligibility rule).
       store.setStatusStale(!isStatusEligible());
 
-      // Spindle-drop diagnostic: warn on drop-to-zero during active Run.
-      // The consumer writes spindleSpeed to the store; we check it here
-      // because the diagnostic is connection-level, not consumer-level.
+      // Spindle-drop evidence (status only); fed here when no job is running.
       if (accepted && outcome.snapshot) {
         const snap = outcome.snapshot;
-        const currentSpindle = snap.spindle;
-        if (currentSpindle !== null && Number.isFinite(currentSpindle)) {
-          const snapState = snap.state;
-          if (
-            snapState === "run" &&
-            prevSpindleSpeed !== null &&
-            prevSpindleSpeed > 0 &&
-            currentSpindle === 0
-          ) {
-            console.warn(
-              `Spindle speed dropped to 0 during active job (was ${prevSpindleSpeed}). ` +
-                `Laser may have stopped firing.`
-            );
-            store.addConsoleLine(
-              "WARNING: Spindle speed dropped to 0 during active job — laser may have stopped firing",
-              "warning"
-            );
-          }
-          prevSpindleSpeed = currentSpindle;
-        }
+        noteSpindleSample({
+          state: typeof snap.state === "string" ? snap.state : null,
+          feed: snap.feed,
+          spindle: snap.spindle,
+        });
       }
     } catch {
       consecutivePollFailures++;

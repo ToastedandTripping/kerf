@@ -9,6 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../../../app/store";
 import { DEFAULT_LAYERS } from "../../../app/types";
 import { machineConnection, _testResetPollFailures, isGrblSettingsWrite } from "../connection";
+import { _testResetJobEvidence } from "../lastSentLine";
 import { resetStatusConsumer } from "../machineStatus";
 import { SerialTraceRecorder } from "../../../lib/machine/__tests__/serialTraceHarness";
 
@@ -678,6 +679,88 @@ describe("connection.ts (TN3)", () => {
 // ---------------------------------------------------------------------------
 // T6 (RF-15): send() threads the job epoch and surfaces a refusal distinctly.
 // ---------------------------------------------------------------------------
+describe("spindle-drop evidence (E3)", () => {
+  const RUN_500 = "<Run|MPos:0.000,0.000,0.000|FS:1000,500>";
+  const RUN_0 = "<Run|MPos:0.000,0.000,0.000|FS:1000,0>";
+  const dropLines = () => consoleTexts().filter((t) => t.includes("spindle 0 during Run"));
+
+  beforeEach(() => {
+    _testResetPollFailures();
+    resetStatusConsumer();
+    snapshotSeq = 0;
+    mockInvoke.mockReset();
+    seedConnectedStore();
+    // A connect() subscription left by an earlier test would suspend
+    // pollStatus while jobRunning is true (Diagnosis 1).
+    useStore.setState({ jobRunning: false });
+    _testResetJobEvidence();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("pollStatus: Run 500 then Run 0 prints exactly one status-only drop line", async () => {
+    mockInvoke.mockResolvedValueOnce(makeStatusOutcome(RUN_500));
+    await machineConnection.pollStatus();
+    mockInvoke.mockResolvedValueOnce(makeStatusOutcome(RUN_0));
+    await machineConnection.pollStatus();
+    const drops = dropLines();
+    expect(drops).toHaveLength(1);
+    expect(drops[0]).toContain("Status only");
+    expect(drops[0]).toContain("no job line recorded");
+    expect(consoleTexts().some((t) => t.includes("may have stopped firing"))).toBe(false);
+  });
+
+  it("pollStatus: Run 500 then Idle 0 is not a drop", async () => {
+    mockInvoke.mockResolvedValueOnce(makeStatusOutcome(RUN_500));
+    await machineConnection.pollStatus();
+    mockInvoke.mockResolvedValueOnce(makeStatusOutcome("<Idle|MPos:0.000,0.000,0.000|FS:0,0>"));
+    await machineConnection.pollStatus();
+    expect(useStore.getState().spindleSpeed).toBe(0);
+    expect(dropLines()).toHaveLength(0);
+  });
+
+  it("pollStatus: repeated Run 0 after a drop prints no second line", async () => {
+    for (const r of [RUN_500, RUN_0, RUN_0, RUN_0]) {
+      mockInvoke.mockResolvedValueOnce(makeStatusOutcome(r));
+      await machineConnection.pollStatus();
+    }
+    expect(dropLines()).toHaveLength(1);
+  });
+
+  it("getStatusReport (the drain path) feeds the check", async () => {
+    mockInvoke.mockResolvedValueOnce({ status: RUN_500, events: [] });
+    expect(await machineConnection.getStatusReport()).toBe(RUN_500);
+    mockInvoke.mockResolvedValueOnce({ status: RUN_0, events: [] });
+    expect(await machineConnection.getStatusReport()).toBe(RUN_0);
+    expect(dropLines()).toHaveLength(1);
+  });
+
+  it("send(): a throwing diagnostic never reaches send()'s catch", async () => {
+    const realInfo = console.info;
+    vi.spyOn(console, "info").mockImplementation((...args: unknown[]) => {
+      if (String(args[0]).includes("spindle 0")) throw new Error("boom");
+      realInfo(...args);
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const responses = [RUN_500, RUN_0, "ok"];
+    mockInvoke.mockResolvedValue({ responses, drained: [] });
+    const out = await machineConnection.send("G1 X1", { jobEpoch: 7 });
+    expect(out).toEqual(responses);
+    expect(consoleTexts().some((t) => t.startsWith("Send failed"))).toBe(false);
+    expect(consoleTexts()).toContain("ok");
+  });
+
+  it("send(): steady cutting (500, 300, 500) never prints a drop line (control)", async () => {
+    const responses = [RUN_500, "<Run|MPos:0.000,0.000,0.000|FS:1000,300>", RUN_500, "ok"];
+    mockInvoke.mockResolvedValue({ responses, drained: [] });
+    expect(await machineConnection.send("G1 X1", { jobEpoch: 7 })).toEqual(responses);
+    expect(consoleTexts()).toContain("ok");
+    expect(dropLines()).toHaveLength(0);
+  });
+});
+
 describe("connection.send — RF-15 job epoch and refusal", () => {
   beforeEach(() => {
     mockInvoke.mockReset();

@@ -23,6 +23,13 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import { useStore } from "../../app/store";
 import { machineConnection, PERMIT_REFUSED_PREFIX } from "./connection";
 import type { JobSession } from "./jobSession";
+import {
+  bufferedJobLines,
+  endJobEvidence,
+  noteSpindleSample,
+  setLastSentLine,
+  startJobEvidence,
+} from "./lastSentLine";
 
 /**
  * pauseJob — becomes STOP per DECISIONS.md rulings.
@@ -143,13 +150,14 @@ interface JobEvent {
 /**
  * Stream a G-code job using the buffered (character-counting) pump.
  *
- * The Rust side handles the $32=1 gate, RX budget accounting, and the full
- * send/read loop. This function creates a Tauri Channel to receive progress
+ * Rust refuses unless `laserModeVerified` (the readback-set `grblLaserMode`)
+ * is true, and handles RX budget accounting and the full send/read loop. This function creates a Tauri Channel to receive progress
  * events and updates the store accordingly.
  */
 async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise<StreamJobResult> {
   const store = useStore.getState();
   const session = opts.session;
+  const sentLines = bufferedJobLines(gcode);
 
   const channel = new Channel<JobEvent>();
 
@@ -159,6 +167,7 @@ async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise
     const s = useStore.getState();
     switch (event.type) {
       case "progress":
+        setLastSentLine(event.lineIndex!, sentLines[event.lineIndex!] ?? "", true);
         if (event.total && event.total > 0) {
           // B3: progress yields a finite sent-lines percentage.
           // 100% does NOT release ownership — draining does that.
@@ -176,6 +185,7 @@ async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise
         break;
       case "status":
         if (event.report) {
+          noteSpindleSample(event.report);
           // Update DRO position from status report (same as connection.ts)
           const m = event.report.match(/[MW]Pos:([-\d.]+),([-\d.]+),([-\d.]+)/);
           if (m) {
@@ -203,6 +213,7 @@ async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise
     const outcome = await invoke<string>("serial_stream_job", {
       gcode,
       jobEpoch: session.jobId,
+      laserModeVerified: useStore.getState().grblLaserMode,
       channel,
     });
 
@@ -295,6 +306,7 @@ async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise
     }
   }
 
+  endJobEvidence(opts.label); // E3: buffered job end
   // B3: the session handles cleanup.
   await session.end(endState);
 
@@ -312,6 +324,7 @@ async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise
 export async function streamJob(gcode: string, opts: StreamJobOptions): Promise<StreamJobResult> {
   // Mode dispatch: "buffered" routes to the Rust character-counting pump;
   // "perLine" (default) uses the existing TS per-line loop.
+  startJobEvidence();
   const mode = getStreamingMode();
   if (mode === "buffered") {
     return streamJobBuffered(gcode, opts);
@@ -349,6 +362,7 @@ export async function streamJob(gcode: string, opts: StreamJobOptions): Promise<
       break;
     }
 
+    setLastSentLine(i, lines[i]);
     const responses = await machineConnection.send(lines[i], { jobEpoch: session.jobId });
 
     // RF-15: a backend refusal is checked FIRST, before any other
@@ -432,6 +446,7 @@ export async function streamJob(gcode: string, opts: StreamJobOptions): Promise<
     store.addConsoleLine(`${opts.label} aborted`, "error");
   }
 
+  endJobEvidence(opts.label); // E3: per-line job end
   // B3: the session handles cleanup.
   await session.end(endState);
 

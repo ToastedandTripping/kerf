@@ -87,6 +87,12 @@ src/
       connection.ts          — machineConnection: connect/disconnect, $$ settings parse,
                                250ms status poll + 3-strike disconnect, send, jog, home,
                                emergencyStop (invokes serial_stop)
+                               The spindle-drop check is `noteSpindleSample` in
+                               `lastSentLine.ts` (total, status only), fed from
+                               `pollStatus` (no job), `send()` in-pump reports
+                               (per-line), `getStatusReport` (drain) and buffered
+                               `status` events. It is reset per job by `startJobEvidence`
+                               and summarised per job by `endJobEvidence`.
       jobStream.ts           — streamJob: shared streaming loop for every G-code send;
                                dispatches on streamingMode (perLine default | buffered);
                                pauseJob (= stop) / resumeJob
@@ -109,6 +115,7 @@ src/
       machineStateDisplay.ts — State colours/labels, GRBL alarm descriptions
       knownDevices.ts        — USB VID/PID table for auto-detect priority sorting
       textGcode.ts           — textToGcode: text → G-code lines (font outline extraction)
+      materialTestGcode.ts   — generateMaterialTestGcode / generateFrameGcode (pure, no store)
       __tests__/             — G-code, connection, streaming, status, gate, keep-awake and
                                safety tests; serialTraceHarness.ts
     tools/
@@ -162,6 +169,25 @@ src-tauri/src/
                                shared Arc<Mutex> brain, two-stage RX→planner buffer with
                                ok-on-accept, fault injection, strict-hold (M3/M4/M5-in-Hold)
                                invariant. The CI backbone for the streaming stack.
+                               `$$` is a settings table and `$32` is tracked (non-zero
+                               integer part = laser mode, stored as 1/0): the hold
+                               auto-off applies only under `$32=1`. `set_reject_setting`
+                               (error:3, not applied); `set_ignore_setting` (ok, not
+                               applied: the START ruling's acknowledged-but-not-accepted
+                               case). Writes are accepted in every state (stock error:8
+                               outside Idle/Alarm is not modelled), and 0x18 always
+                               clears the spindle. `set_wedge_after_spindle_cmd` arms when
+                               the M3/M4 line is parsed: from then until 0x18 every line
+                               not yet acked, parked ones sent before it included, is
+                               accepted and executed but never acked; `?` answers.
+                               Non-finite setting values answer error:2.
+                               `SimProfile::{Stock, Captured127}` (128/15 vs 65535/127).
+                               `A:` field per profile: Stock `A:S` while the sim's spindle
+                               flag is set (stock-source intent); Captured127 `A:S` on every
+                               report (the 2026-09-14 capture shows it only on reports
+                               carrying overrides). Not a beam signal under either
+                               profile (DECISIONS 2026-09-25). Host/model evidence only;
+                               never certifies the owner's controller.
     scripted_port.rs         — Deterministic test double with scripted read steps,
                                ordered I/O trace, hold points, session-event observer
   engine/
@@ -242,7 +268,8 @@ src-tauri/tests/
    → getStreamingMode() reads localStorage "streamingMode" (default "perLine"):
        perLine  — TS loop: machineConnection.send(line) per line
                   → invoke("serial_send") → run_pump waits for ok/error/ALARM/banner
-       buffered — invoke("serial_stream_job", Channel) → writes $32=1 and requires ok,
+       buffered — invoke("serial_stream_job", Channel) → refuses unless laserModeVerified
+                  (the readback-set flag), writes no setting,
                   then run_buffered_pump; Progress/Console/Status/Finished JobEvents
    → session.drain() → session.end() → invoke("serial_job_end")
 ```
@@ -262,7 +289,10 @@ after that readback began (module-level `settingsGeneration`). Every settings wr
 after it settles. `enableLaserMode` invalidates explicitly, because its write bypasses
 `send()`. A console `$$` re-verifies `$32` only. The full settings parse runs only from
 `queryGrblSettings` (on connect, and the soft-limit requery). A failed readback and
-`disconnect()` both leave the flag false.
+`disconnect()` both leave the flag false. The buffered command `serial_stream_job` receives the flag as `laserModeVerified` (a
+plain `bool`, so a missing key is rejected by Tauri before the body runs) and refuses
+before any serial I/O when it is false; it no longer writes `$32=1` (kerf-safety-s1b). A
+`0x18` does not clear the flag (S4a), and per-line mode has no Rust-side gate (S4a).
 
 **Job-session lifetime (`jobSession.ts`).** One module-level active session. `beginJobSession`
 refuses while another session is active or a stop is settling, and when `serial_job_begin`
@@ -278,11 +308,15 @@ sessions until the old one settles. Callbacks from a cancelled session are disca
 1. The Rust engine via `gcodeGen.ts` (`generate_gcode`, `generate_image_gcode`), joined by
    `assembleGcode` under its laser-safety contract.
 2. JobActionBar FRAME: an M5-bracketed G0 program built from `frameTargets(moves)`.
-3. `MaterialTestDialog.tsx`: `generateMaterialTestGcode` and `generateFrameGcode` write
-   their own preamble and footer and compute S as `(power / 100) * grblSValueMax`; labels
-   come from `textGcode.ts` `textToGcode`, which emits its own G0 / M3-or-M4 / G1 / M5
-   per glyph contour. This output does not pass through the Rust engine, `limits.rs`,
-   `assembleGcode` or the golden fixtures.
+3. The material test: `src/lib/machine/materialTestGcode.ts` (`generateMaterialTestGcode`,
+   `generateFrameGcode`, pure and store-free, called by `MaterialTestDialog.tsx`) writes its
+   own preamble and footer and computes S as `(power / 100) * grblSValueMax`; labels come
+   from `textGcode.ts` `textToGcode`, which emits its own G0 / mode / G1 / M5 per glyph
+   contour. Every `M3`/`M4` mode line both emit carries `S0`; positive S appears only on `G1`
+   words with motion, so the material test never arms a stationary beam (safety S2,
+   2026-09-25). The border follows the chosen power mode. This output does not pass through
+   the Rust engine, `limits.rs`, `assembleGcode` or the golden fixtures, and the engine's own
+   standalone mode lines still carry positive S (ROADMAP Parking Lot, S2 Deferral 1).
 
 ### Serial Lock Order
 
@@ -429,7 +463,7 @@ Every job line carries the admitted epoch: `serial_send` takes `jobEpoch` (absen
 `$H`, jog and settings writes, which are not phase-gated) and `serial_stream_job` requires it.
 **Every job-epoch write goes through `SerialSession::admit_and_write`**: it takes `submit`,
 checks admission, makes the line's single `write()` and drops `submit`; the flush (`tcdrain`)
-follows outside the lock. The sites are the `serial_send` job line, the `$32=1` bracket, and
+follows outside the lock. The sites are the `serial_send` job line and
 the buffered pump's Phase A (`SubmissionGate::admit_write` in `serial_pump.rs`, implemented by
 `JobPermit`, independently of the shared `job_abort` flag). `permit_precheck` before the
 command-lock wait and `try_permit_begin` under `command` before the drain are
@@ -440,8 +474,8 @@ or refused with nothing written; no interleaving puts job bytes after the reset.
 `write(2)` that returns on enqueue, so the stop waits at most one enqueue, bounded by the port
 timeout, and never on the controller, an acknowledgement or transmission) is in the
 `serial_session.rs` module doc. The stream body never clears `job_abort` (`serial_job_begin`
-is its only clearer). The `$32=1` pump publishes a banner it reads while a stop is in flight,
-as `serial_send` does, so a STOP during the `$32=1` exchange still confirms.
+is its only clearer). The buffered pump publishes the reset banner it reads while a stop is in flight, as
+`serial_send` does, so a STOP during a buffered job still confirms.
 
 The only refusal is `refused: not-admitted: …` (nothing written), carried in the existing
 `Err(String)` / outcome contracts. `connection.send()` returns a refusal as `[<string>]`,
