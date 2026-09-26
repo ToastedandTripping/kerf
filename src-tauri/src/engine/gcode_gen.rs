@@ -300,7 +300,7 @@ fn emit_scan_segments(
         }
 
         // Engrave scan line
-        lines.push(format!("{} S{}", params.power_cmd, params.s_max));
+        lines.push(format!("{} S0", params.power_cmd));
         let (esx, esy) = if vertical {
             transform_to_grbl(seg.y, seg.x_end, params)
         } else {
@@ -457,7 +457,9 @@ pub fn generate_gcode(
         // W4: power_min is clamped to power FIRST. See clamp_power_min.
         let s_min = (clamp_power_min(layer.power, layer.power_min) / 100.0 * s_value_max).round();
 
-        // Power mode command
+        // Power mode command. Every mode line below is `{power_cmd} S0`; positive S
+        // rides only on G1 words with motion, so no mode line arms a stationary
+        // beam (DECISIONS 2026-09-10; safety engine-arm).
         let power_cmd = if layer.power_mode == "variable" {
             "M4"
         } else {
@@ -592,7 +594,7 @@ pub fn generate_gcode(
                                     power: 0.0,
                                 });
                                 // Laser on, cut to first point
-                                lines.push(format!("{} S{}", power_cmd, effective_s_max));
+                                lines.push(format!("{} S0", power_cmd));
                                 let d =
                                     ((gpts[0].0 - lix).powi(2) + (gpts[0].1 - liy).powi(2)).sqrt();
                                 cut_distance += d;
@@ -629,7 +631,7 @@ pub fn generate_gcode(
                             });
                             cur_x = gpts[0].0;
                             cur_y = gpts[0].1;
-                            lines.push(format!("{} S{}", power_cmd, effective_s_max));
+                            lines.push(format!("{} S0", power_cmd));
                         }
 
                         // Cut along path with perforation or tab support
@@ -705,7 +707,7 @@ pub fn generate_gcode(
                                             speed: RAPID_SPEED_MM_MIN,
                                             power: 0.0,
                                         });
-                                        lines.push(format!("{} S{}", power_cmd, effective_s_max));
+                                        lines.push(format!("{} S0", power_cmd));
                                         laser_on = true;
                                         next_toggle_dist += perf_cut;
                                     }
@@ -744,7 +746,7 @@ pub fn generate_gcode(
                                         });
                                         cur_x = tx;
                                         cur_y = ty;
-                                        lines.push(format!("{} S{}", power_cmd, effective_s_max));
+                                        lines.push(format!("{} S0", power_cmd));
                                         laser_on = true;
                                         next_toggle_dist = tab_end_dist + tab_spacing;
                                     } else {
@@ -824,7 +826,7 @@ pub fn generate_gcode(
                                 let ox = gpts[0].0 + dx / seg_len * ext;
                                 let oy = gpts[0].1 + dy / seg_len * ext;
                                 if !laser_on {
-                                    lines.push(format!("{} S{}", power_cmd, effective_s_max));
+                                    lines.push(format!("{} S0", power_cmd));
                                 }
                                 cut_distance += ext;
                                 total_distance += ext;
@@ -855,7 +857,7 @@ pub fn generate_gcode(
                                 let lox = gpts[n - 1].0 + dx / seg_len * lead_out;
                                 let loy = gpts[n - 1].1 + dy / seg_len * lead_out;
                                 if !laser_on {
-                                    lines.push(format!("{} S{}", power_cmd, effective_s_max));
+                                    lines.push(format!("{} S0", power_cmd));
                                 }
                                 cut_distance += lead_out;
                                 total_distance += lead_out;
@@ -1100,8 +1102,8 @@ pub fn generate_gcode(
                             cur_y = rsy;
 
                             // Laser on before cutting this ring (F8)
-                            // P2-A Fix #5: use effective_s_max (floored at s_min for M4 mode)
-                            lines.push(format!("{} S{}", power_cmd, effective_s_max));
+                            // Mode at S0; power rides on the G1 words below (safety engine-arm)
+                            lines.push(format!("{} S0", power_cmd));
 
                             // Cut along ring
                             for pt in ring.iter().skip(1) {
@@ -2523,8 +2525,19 @@ mod tests {
         let result = generate_gcode(&[obj], 100.0, 1000.0, false).expect("generate_gcode");
 
         assert!(
-            result.gcode.contains("M4 S400"),
-            "Expected M4 S400 (power=40% of 1000); gcode:\n{}",
+            result.gcode.contains("M4 S0"),
+            "Expected the M4 mode line at S0 (W4's evidence now lives on the G1 words); gcode:\n{}",
+            result.gcode
+        );
+        let g1: Vec<&str> = result
+            .gcode
+            .lines()
+            .filter(|l| l.starts_with("G1 "))
+            .collect();
+        assert!(
+            !g1.is_empty() && g1.iter().all(|l| l.ends_with(" S400")),
+            "Expected every G1 at S400 (power=40% of 1000); W4's evidence lives on the G1 \
+             words. gcode:\n{}",
             result.gcode
         );
         assert!(

@@ -947,8 +947,8 @@ mod golden_tests {
     /// Clamped, power_min becomes 40, s_min becomes 400, and the commanded
     /// value stays S400.
     ///
-    /// So the expected S value in the fixture is **S400**, on an **M4** line:
-    /// 40% of 1000. If this fixture ever reads S600, W4 has regressed; if it
+    /// So the expected S value is **S400** on every `G1`, with the **M4** mode
+    /// line at `S0`. If a `G1` reads S600, W4 has regressed; if the mode line
     /// reads M3, the variable default has regressed.
     #[tokio::test]
     async fn golden_15_line_variable_power_min() {
@@ -966,8 +966,20 @@ mod golden_tests {
         // Asserted inline as well as against the fixture: a golden proves the
         // bytes did not move, but only a named assertion says WHY these bytes.
         assert!(
-            result.gcode.contains("M4 S400"),
-            "expected M4 S400 (power=40% of s_value_max=1000); gcode:\n{}",
+            result.gcode.contains("M4 S0"),
+            "expected the M4 mode line at S0 (W4's evidence now lives on the G1 words); \
+             gcode:\n{}",
+            result.gcode
+        );
+        let g1: Vec<&str> = result
+            .gcode
+            .lines()
+            .filter(|l| l.starts_with("G1 "))
+            .collect();
+        assert!(
+            !g1.is_empty() && g1.iter().all(|l| l.ends_with(" S400")),
+            "expected every G1 at S400 (power=40% of s_value_max=1000); W4's evidence lives \
+             on the G1 words. gcode:\n{}",
             result.gcode
         );
         assert!(
@@ -1529,9 +1541,9 @@ mod golden_tests {
         let before_m = gcode_files(&before_dir.join("matrix"));
         let after_m = gcode_files(std::path::Path::new(ARM_MATRIX_OUT));
 
-        let mut check = |corpus: &str,
-                         before: &std::collections::BTreeMap<String, String>,
-                         after: &std::collections::BTreeMap<String, String>|
+        let check = |corpus: &str,
+                     before: &std::collections::BTreeMap<String, String>,
+                     after: &std::collections::BTreeMap<String, String>|
          -> (usize, usize) {
             assert_eq!(
                 before.keys().collect::<Vec<_>>(),
@@ -1594,5 +1606,107 @@ mod golden_tests {
             g + m >= 1,
             "vacuous: no positive mode line in the before set"
         );
+    }
+
+    /// I1 and I2 over one program. Returns the number of mode lines seen.
+    fn assert_never_arms(ctx: &str, gcode: &str) -> usize {
+        let mut mode_lines = 0;
+        for (i, line) in gcode.lines().enumerate() {
+            let s = s_word(line);
+            if is_mode_line(line) {
+                mode_lines += 1;
+                assert_eq!(
+                    s,
+                    Some(0.0),
+                    "I1 ({ctx}) line {}: every M3/M4 line must carry S0: {line:?}",
+                    i + 1
+                );
+            }
+            if s.is_some_and(|v| v > 0.0) {
+                assert!(
+                    has_word(line, 'G', 1.0) && has_xy(line),
+                    "I2 ({ctx}) line {}: positive S only on a G1 with X or Y: {line:?}",
+                    i + 1
+                );
+            }
+        }
+        mode_lines
+    }
+
+    /// T1: no layer type, in either power mode, arms a stationary beam.
+    #[tokio::test]
+    async fn arm_invariants_every_layer_type() {
+        let matrix = arm_matrix().await;
+        assert_eq!(matrix.len(), 24, "matrix must hold 24 programs");
+        for (label, prog) in &matrix {
+            let modes = assert_never_arms(label, &prog.gcode);
+            assert!(modes >= 1, "I3 ({label}): program has no mode line");
+            let mut section = "";
+            let mut positive_g1 = 0;
+            for (i, line) in prog.gcode.lines().enumerate() {
+                let n = i + 1;
+                for marker in ["; Cut:", "; Offset Fill:", "; Engrave:", "; Mask Fill:"] {
+                    if line.starts_with(marker) {
+                        section = marker;
+                    }
+                }
+                for &(c, v) in &words(line) {
+                    if c == 'M' && (v == 3.0 || v == 4.0) {
+                        assert_eq!(
+                            v, prog.expected_mode,
+                            "I3 ({label}) line {n}: wrong mode letter: {line:?}"
+                        );
+                    }
+                }
+                if !has_word(line, 'G', 1.0) {
+                    continue;
+                }
+                let s = s_word(line);
+                assert!(
+                    s.is_some(),
+                    "I4 ({label}) line {n}: every G1 must carry its own S: {line:?}"
+                );
+                let s = s.unwrap();
+                if s > 0.0 {
+                    positive_g1 += 1;
+                }
+                match (prog.expected_s, section) {
+                    (Some(want), "; Cut:") | (Some(want), "; Offset Fill:") => assert_eq!(
+                        s, want,
+                        "P1 ({label}) line {n}: a {section} G1 must keep its power: {line:?}"
+                    ),
+                    (Some(want), "; Engrave:") => assert!(
+                        s == 0.0 || s == want,
+                        "P1 ({label}) line {n}: an engrave G1 is S0 or S{want}: {line:?}"
+                    ),
+                    _ => assert!(
+                        s <= 1000.0,
+                        "P1 ({label}) line {n}: raster S above s_value_max: {line:?}"
+                    ),
+                }
+            }
+            assert!(
+                positive_g1 >= 1,
+                "P1 ({label}): no G1 carries positive power; the program burns nothing"
+            );
+        }
+    }
+
+    /// T2: the committed corpus never arms. Guards a future regeneration from
+    /// pinning a re-armed program as the new truth. (Kills no code mutant: it
+    /// reads committed files.)
+    #[test]
+    fn committed_goldens_never_arm() {
+        let files = gcode_files(&golden_dir());
+        assert!(
+            files.len() >= 16,
+            "expected at least 16 goldens, found {}",
+            files.len()
+        );
+        let modes: usize = files
+            .iter()
+            .map(|(name, text)| assert_never_arms(name, text))
+            .sum();
+        assert!(modes >= 1, "vacuous: no mode line across the corpus");
     }
 }
