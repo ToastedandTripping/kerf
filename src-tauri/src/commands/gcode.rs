@@ -2204,7 +2204,7 @@ mod golden_tests {
                 fx(arm_vector(vec![obj]).await, Some(p), Some(3.0), true),
             ));
 
-            // pill_after_maskfill
+            // pill_after_maskfill: depends on the A4b partition (commands/gcode.rs:75-110) emitting the mask fill first
             let outer = rect_path(0.0, 0.0, 40.0, 40.0);
             let hole = rect_path(15.0, 15.0, 10.0, 10.0);
             let mut ml = arm_layer("maskFill", pm);
@@ -2779,5 +2779,119 @@ mod golden_tests {
             "golden leadin violations:\n{}",
             all.join("\n")
         );
+    }
+
+    /// The Stage 2.5 fixtures (Razor W1, D1-D4): each puts a non-burning move
+    /// within a step of the next burn target, so deleting the matching
+    /// `moved_to` lets a sub-step or stationary burning G1 through. Kept out of
+    /// `leadin_matrix` so the T-L4/T-L5 snapshot sets stay as recorded.
+    async fn leadin_moved_to_matrix() -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for pm in ["constant", "variable"] {
+            let name = |label: &str| format!("{label}_{pm}");
+            // D1: zero-width fill with overscan (scan_pen.moved_to)
+            let mut l = arm_layer("fill", pm);
+            l.interval = 2.0;
+            l.overscan = 1.0;
+            let obj = rect_obj("zwo", 10.0, 10.0, 0.0, 10.0, l);
+            out.push((
+                name("zero_width_fill_overscan"),
+                arm_vector(vec![obj]).await,
+            ));
+            // D2b: perforation skip ends 0.005 before a corner
+            let mut l = arm_layer("line", pm);
+            l.perforation_cut = 25.0;
+            l.perforation_skip = 4.995;
+            out.push((
+                name("perf_skip_end_near_corner"),
+                arm_vector(vec![arm_line_obj("perfb", l)]).await,
+            ));
+            // D3b: tab ends 0.005 before a corner
+            let mut l = arm_layer("line", pm);
+            l.tab_spacing = 28.0;
+            l.tab_width = 1.995;
+            out.push((
+                name("tab_end_near_corner"),
+                arm_vector(vec![arm_line_obj("tabb", l)]).await,
+            ));
+            // D4: path ends inside a tab, tiny overcut (laser-off endpoint)
+            let mut l = arm_layer("line", pm);
+            l.tab_spacing = 97.0;
+            l.tab_width = 5.0;
+            l.overcut = 0.005;
+            out.push((
+                name("end_in_tab_tiny_overcut"),
+                arm_vector(vec![arm_line_obj("tabend", l)]).await,
+            ));
+        }
+        out
+    }
+
+    /// T-L6: the four position updates are pinned (Razor W1).
+    #[tokio::test]
+    async fn leadin_moved_to_fixtures_hold_invariants() {
+        let progs = leadin_moved_to_matrix().await;
+        assert_eq!(progs.len(), 8, "moved_to matrix must hold 8 programs");
+        let mut report = Vec::new();
+        for (label, g) in &progs {
+            let v = leadin_violations(label, g);
+            if !v.is_empty() {
+                report.push(format!("{label}:\n  {}", v.join("\n  ")));
+            }
+            let burns = g.lines().filter(|l| is_positive_g1(l)).count();
+            let zero_width = label.starts_with("zero_width_fill_overscan");
+            if zero_width != (burns == 0) {
+                report.push(format!("{label}: {burns} burning G1s"));
+            }
+            assert_never_arms(label, g);
+        }
+        assert!(
+            report.is_empty(),
+            "moved_to violations:\n{}",
+            report.join("\n")
+        );
+    }
+
+    /// The first G0 after the preamble's home move: the path's entry point.
+    fn entry_g0(g: &str) -> String {
+        g.lines()
+            .find(|l| l.starts_with("G0 X") && !l.contains("; home"))
+            .expect("program has an entry G0")
+            .to_string()
+    }
+
+    /// T-L7: lead-in direction rules (Razor N1, D5/D6). An off-axis point within
+    /// 0.001 mm of the start does not steer the lead-in, and an open path's
+    /// lead-in runs straight back along its first segment.
+    #[tokio::test]
+    async fn leadin_direction_rules() {
+        for pm in ["constant", "variable"] {
+            let mut l = arm_layer("line", pm);
+            l.lead_in = 3.0;
+            let with = [
+                (10.0, 10.0),
+                (10.0, 9.9992),
+                (30.0, 10.0),
+                (30.0, 30.0),
+                (10.0, 30.0),
+            ];
+            let without = [(10.0, 10.0), (30.0, 10.0), (30.0, 30.0), (10.0, 30.0)];
+            let gw = arm_vector(vec![leadin_path_obj("w", &with, l.clone())]).await;
+            let go = arm_vector(vec![leadin_path_obj("w", &without, l.clone())]).await;
+            assert_eq!(entry_g0(&go), "G0 X10.000 Y93.000", "{pm}: closed entry");
+            assert_eq!(
+                entry_g0(&gw),
+                entry_g0(&go),
+                "{pm}: a near-duplicate steered the lead-in"
+            );
+            let mut o = leadin_path_obj("open", &[(10.0, 10.0), (30.0, 10.0), (30.0, 30.0)], l);
+            o.paths[0].closed = false;
+            let g = arm_vector(vec![o]).await;
+            assert_eq!(
+                entry_g0(&g),
+                "G0 X7.000 Y90.000",
+                "{pm}: open lead-in goes straight back"
+            );
+        }
     }
 }
