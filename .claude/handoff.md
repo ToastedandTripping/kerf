@@ -66,6 +66,8 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - S3c MOTION TRUST (coordinator 2026-09-26, option a): plan, critic and relay AFTER the engine batch. Scope: a motion-in-flight flag set by Home and by console motion, cleared by the first post-ack idle report (Razor W2 on S3), and a jog that requires $H since connect when $22=1 (Razor W1). The $22=0 behaviour stays the one open decision (Lee's fact question, via the coordinator). Owner evidence, capture 2026-09-14 lines 25-28: $20=0, $21=1, $22=1, $23=1. S3 merges after its fix pass, with W1/W2 disclosed in the ROADMAP and the release notes.
 
+- DISK HOLD (coordinator 2026-09-26): 25 GB free, 95%. No new Rust build, worktree or mutation battery until the coordinator reports free space above 35 GB. The engine-arm battery was stopped by PID and its stray copy swept. Engine Ted (ad9d140fc910022d4) is held, with a 6.2 GB target dir. S3's fix pass (a1eb30a822b70dfa1) runs without its battery. S3 does NOT merge until its S3-F battery has run on the fixed tree (owed, not skipped). Freeing space is Lee's keystroke only.
+
 ## Open questions awaiting Lee
 
 | Question                                                                                            | Why it matters                                                                        | Raised     |
