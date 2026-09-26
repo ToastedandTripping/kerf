@@ -68,6 +68,13 @@ src/
       CommandPalette.tsx     — Ctrl+K fuzzy command search
     viewport/
       Viewport.tsx           — Pixi.js 8 WebGL canvas, persistent display cache, selection handles
+      renderHelpers.ts       — placeSprite / applyTextImageTransform / rotationPlacement /
+                               applyObjectRotation / renderImageObject: one placement rule for
+                               rotated and flipped text, images and Graphics (pivot at centre)
+      textureCache.ts        — module-private image texture cache: getReadyTexture (decode,
+                               then a pending/failed state; never an empty outline),
+                               isTextureFailed (crossed-box placeholder), evictTextures,
+                               clearTextures (generation bump), setTextureReadyListener
       Rulers.tsx             — mm rulers along canvas edges
 
   lib/
@@ -87,6 +94,12 @@ src/
       connection.ts          — machineConnection: connect/disconnect, $$ settings parse,
                                250ms status poll + 3-strike disconnect, send, jog, home,
                                emergencyStop (invokes serial_stop)
+                               The spindle-drop check is `noteSpindleSample` in
+                               `lastSentLine.ts` (total, status only), fed from
+                               `pollStatus` (no job), `send()` in-pump reports
+                               (per-line), `getStatusReport` (drain) and buffered
+                               `status` events. It is reset per job by `startJobEvidence`
+                               and summarised per job by `endJobEvidence`.
       jobStream.ts           — streamJob: shared streaming loop for every G-code send;
                                dispatches on streamingMode (perLine default | buffered);
                                pauseJob (= stop) / resumeJob
@@ -94,7 +107,11 @@ src/
                                drain to serial_job_end; module-level single active session
       machineStatus.ts       — Status consumer: GrblSnapshot mirror types, monotonic
                                epoch/seq rejection, store writes, 3s eligibility
-      canStartJob.ts         — Pure START gate + moves extents, frameTargets,
+      canStartJob.ts         — The one admission for all four powered doors (START,
+                               main FRAME, material-test Send and Frame): canStartJob
+                               (state, ext?); ext supplied = locally generated program
+                               (skips gcodeResult/gcodeStale, bounds from ext with
+                               originTop). Plus moves extents, frameTargets,
                                isWithinBounds, gcodeExtents (text G-code)
       gcodeGen.ts            — Frontend G-code orchestrator, calls Rust backend via
                                Tauri invoke (hard-fail on engine error — no JS
@@ -105,6 +122,7 @@ src/
       machineStateDisplay.ts — State colours/labels, GRBL alarm descriptions
       knownDevices.ts        — USB VID/PID table for auto-detect priority sorting
       textGcode.ts           — textToGcode: text → G-code lines (font outline extraction)
+      materialTestGcode.ts   — generateMaterialTestGcode / generateFrameGcode (pure, no store)
       __tests__/             — G-code, connection, streaming, status, gate, keep-awake and
                                safety tests; serialTraceHarness.ts
     tools/
@@ -118,6 +136,8 @@ src/
     geometry/
       index.ts               — Shared geometry utilities: 2x3 affine helpers,
                                composeGroupChild(Transform), buildGroupObject,
+                               composedLeaves/drawnLeaves (render = cut composition),
+                               matrixMaxStretch (SVG arc tolerance in real mm),
                                computeAABB/rotatedExtents/pointsBBox, move/scale/points
                                partials, orientedHandlePoints, offsetRingByDistance,
                                adaptive bezier sampler + CURVE_CHORD_TOLERANCE_MM
@@ -156,6 +176,25 @@ src-tauri/src/
                                shared Arc<Mutex> brain, two-stage RX→planner buffer with
                                ok-on-accept, fault injection, strict-hold (M3/M4/M5-in-Hold)
                                invariant. The CI backbone for the streaming stack.
+                               `$$` is a settings table and `$32` is tracked (non-zero
+                               integer part = laser mode, stored as 1/0): the hold
+                               auto-off applies only under `$32=1`. `set_reject_setting`
+                               (error:3, not applied); `set_ignore_setting` (ok, not
+                               applied: the START ruling's acknowledged-but-not-accepted
+                               case). Writes are accepted in every state (stock error:8
+                               outside Idle/Alarm is not modelled), and 0x18 always
+                               clears the spindle. `set_wedge_after_spindle_cmd` arms when
+                               the M3/M4 line is parsed: from then until 0x18 every line
+                               not yet acked, parked ones sent before it included, is
+                               accepted and executed but never acked; `?` answers.
+                               Non-finite setting values answer error:2.
+                               `SimProfile::{Stock, Captured127}` (128/15 vs 65535/127).
+                               `A:` field per profile: Stock `A:S` while the sim's spindle
+                               flag is set (stock-source intent); Captured127 `A:S` on every
+                               report (the 2026-09-14 capture shows it only on reports
+                               carrying overrides). Not a beam signal under either
+                               profile (DECISIONS 2026-09-25). Host/model evidence only;
+                               never certifies the owner's controller.
     scripted_port.rs         — Deterministic test double with scripted read steps,
                                ordered I/O trace, hold points, session-event observer
   engine/
@@ -166,6 +205,12 @@ src-tauri/src/
                                offsetFill (inward polygon rings); maskFill (delegates to
                                mask_fill.rs). maskFill is internal-only, assigned by
                                gcodeGen.ts for non-rectangular/compound fills
+                               The TS generator never sends `fillLine` to Rust: it lowers
+                               it to maskFill plus a `line` overlay (a sharp rectangle gets
+                               a synthesized 4-corner contour), and `assertNoFillLine`
+                               throws otherwise.
+                               Every mode line is `{M3|M4} S0`; power rides only on `G1`
+                               words that carry X or Y (safety engine-arm, 2026-09-26).
     mask_fill.rs             — The one shared raster scanner (~1170 lines + tests):
                                scan_mask_to_gcode (MaskScanParams; binary or grayscale S)
                                used by image engrave and maskFill; fill_compound_mask
@@ -232,14 +277,31 @@ src-tauri/tests/
    → getStreamingMode() reads localStorage "streamingMode" (default "perLine"):
        perLine  — TS loop: machineConnection.send(line) per line
                   → invoke("serial_send") → run_pump waits for ok/error/ALARM/banner
-       buffered — invoke("serial_stream_job", Channel) → writes $32=1 and requires ok,
+       buffered — invoke("serial_stream_job", Channel) → refuses unless laserModeVerified
+                  (the readback-set flag), writes no setting,
                   then run_buffered_pump; Progress/Console/Status/Finished JobEvents
    → session.drain() → session.end() → invoke("serial_job_end")
 ```
 
 JobActionBar FRAME, MaterialTestDialog "Send" and MaterialTestDialog "Frame" take the same
-path (beginJobSession → streamJob) without `waitForIdle`. MaterialTestDialog does not call
-`canStartJob`; it checks connection, `jobRunning` and `gcodeExtents` + `isWithinBounds`.
+path (beginJobSession → streamJob) without `waitForIdle`. All four doors pass `canStartJob`
+first (kerf-safety-s1): FRAME with no `ext`, so `gcodeStale` still applies; the material
+test with `ext = gcodeExtents(grid)`. A refusal prints the reason verbatim to the console
+and, in the material test, also as an in-dialog alert; the buttons' disabled state comes
+from the same gate.
+
+**Laser-mode flag (`grblLaserMode`).** Only `applyLaserModeReadback` in `connection.ts`
+sets it true: a `$$` response carrying `$32=1`, and only if no settings write happened
+after that readback began (module-level `settingsGeneration`). Every settings write
+(`$n=`, `$Nn=`, `$RST=`, normalized the way GRBL reads a line) is detected in
+`machineConnection.send()`. The write invalidates the flag before its invoke and again
+after it settles. `enableLaserMode` invalidates explicitly, because its write bypasses
+`send()`. A console `$$` re-verifies `$32` only. The full settings parse runs only from
+`queryGrblSettings` (on connect, and the soft-limit requery). A failed readback and
+`disconnect()` both leave the flag false. The buffered command `serial_stream_job` receives the flag as `laserModeVerified` (a
+plain `bool`, so a missing key is rejected by Tauri before the body runs) and refuses
+before any serial I/O when it is false; it no longer writes `$32=1` (kerf-safety-s1b). A
+`0x18` does not clear the flag (S4a), and per-line mode has no Rust-side gate (S4a).
 
 **Job-session lifetime (`jobSession.ts`).** One module-level active session. `beginJobSession`
 refuses while another session is active or a stop is settling, and when `serial_job_begin`
@@ -255,11 +317,15 @@ sessions until the old one settles. Callbacks from a cancelled session are disca
 1. The Rust engine via `gcodeGen.ts` (`generate_gcode`, `generate_image_gcode`), joined by
    `assembleGcode` under its laser-safety contract.
 2. JobActionBar FRAME: an M5-bracketed G0 program built from `frameTargets(moves)`.
-3. `MaterialTestDialog.tsx`: `generateMaterialTestGcode` and `generateFrameGcode` write
-   their own preamble and footer and compute S as `(power / 100) * grblSValueMax`; labels
-   come from `textGcode.ts` `textToGcode`, which emits its own G0 / M3-or-M4 / G1 / M5
-   per glyph contour. This output does not pass through the Rust engine, `limits.rs`,
-   `assembleGcode` or the golden fixtures.
+3. The material test: `src/lib/machine/materialTestGcode.ts` (`generateMaterialTestGcode`,
+   `generateFrameGcode`, pure and store-free, called by `MaterialTestDialog.tsx`) writes its
+   own preamble and footer and computes S as `(power / 100) * grblSValueMax`; labels come
+   from `textGcode.ts` `textToGcode`, which emits its own G0 / mode / G1 / M5 per glyph
+   contour. Every `M3`/`M4` mode line both emit carries `S0`; positive S appears only on `G1`
+   words with motion, so the material test never arms a stationary beam (safety S2,
+   2026-09-25). The border follows the chosen power mode. This output does not pass through
+   the Rust engine, `limits.rs`, `assembleGcode` or the golden fixtures, and the Rust
+   engine's mode lines carry `S0` as well (safety engine-arm, 2026-09-26).
 
 ### Serial Lock Order
 
@@ -297,9 +363,19 @@ Undo/redo uses a command pattern with snapshot capture (`pushObjectsUndo`). Imag
 per-command map keyed by object id, and restore uses that map with live objects taking
 precedence. Stack capped at 50.
 
-**Known gap: nested groups.** A group inside a group does not render in the viewport but is
-cut. `Viewport.tsx` renders group children one level deep (`renderObject` has no `group`
-case), while `gcodeGen.ts` `flattenObjects` recurses to any depth.
+**Nested groups render to any depth** (kerf-refresh-cut-vs-screen F1). The Viewport draws
+`drawnLeaves(obj, layers)` for each top-level object. That is `composedLeaves` (the same
+recursion and `composeGroupChild` as `gcodeGen.ts` `flattenObjects`, keyed by id path
+`outer/inner/leaf`), filtered by the cut's own per-leaf rule: it skips `!leaf.visible` and
+a leaf whose layer (by `l.index`, falling back to `layers[0]`) is hidden. Unlike the cut,
+it does NOT skip `output === false`: output-off objects stay drawn as reference. Texture
+eviction walks image ids at any depth.
+
+**Layer reorder is one undo command** (F6/F7). `reorderLayers` remaps `layerIndex` through
+every descendant (`remapLayerIndexDeep`) and pushes a `reorder-layers` command whose
+undo and redo apply the inverse or forward index permutation to LIVE state
+(`applyLayerIndexMap`). It never restores a layers or objects snapshot, so edits that
+are not commands (layer power and speed, imports) are kept across undo.
 
 ### Rendering
 
@@ -333,7 +409,7 @@ realtime handles, increments the session epoch and sets phase Idle. `connection.
 `connect()` then starts the status poll, runs `queryGrblSettings()` (`$$`) and one
 `serial_get_status`.
 
-**Settings read on connect** (`queryGrblSettings`):
+**Settings read on connect** (`queryGrblSettings`; the only full parse. A console or dialog `$$` and the Enable Laser Mode readback apply `$32` only):
 
 | Setting | Store field | Read by |
 |---|---|---|
@@ -396,7 +472,7 @@ Every job line carries the admitted epoch: `serial_send` takes `jobEpoch` (absen
 `$H`, jog and settings writes, which are not phase-gated) and `serial_stream_job` requires it.
 **Every job-epoch write goes through `SerialSession::admit_and_write`**: it takes `submit`,
 checks admission, makes the line's single `write()` and drops `submit`; the flush (`tcdrain`)
-follows outside the lock. The sites are the `serial_send` job line, the `$32=1` bracket, and
+follows outside the lock. The sites are the `serial_send` job line and
 the buffered pump's Phase A (`SubmissionGate::admit_write` in `serial_pump.rs`, implemented by
 `JobPermit`, independently of the shared `job_abort` flag). `permit_precheck` before the
 command-lock wait and `try_permit_begin` under `command` before the drain are
@@ -407,8 +483,8 @@ or refused with nothing written; no interleaving puts job bytes after the reset.
 `write(2)` that returns on enqueue, so the stop waits at most one enqueue, bounded by the port
 timeout, and never on the controller, an acknowledgement or transmission) is in the
 `serial_session.rs` module doc. The stream body never clears `job_abort` (`serial_job_begin`
-is its only clearer). The `$32=1` pump publishes a banner it reads while a stop is in flight,
-as `serial_send` does, so a STOP during the `$32=1` exchange still confirms.
+is its only clearer). The buffered pump publishes the reset banner it reads while a stop is in flight, as
+`serial_send` does, so a STOP during a buffered job still confirms.
 
 The only refusal is `refused: not-admitted: …` (nothing written), carried in the existing
 `Err(String)` / outcome contracts. `connection.send()` returns a refusal as `[<string>]`,

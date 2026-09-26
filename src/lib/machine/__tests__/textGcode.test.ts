@@ -6,6 +6,7 @@
  * specification. Nothing here asserts that the current output is *desirable*;
  * it asserts that a refactor did not change it. If a deliberate behavior change
  * is made later, these expectations are meant to be updated alongside it.
+ * The S0 mode line is deliberate (safety S2, DECISIONS 2026-09-10).
  *
  * textObjectToPaths is mocked: the real one fetches
  * /fonts/OpenSans-Regular.ttf, which does not resolve under jsdom, and the
@@ -85,7 +86,7 @@ describe("textToGcode — emitted sequence", () => {
     expect(lines).toEqual([
       '; Label: "A"',
       "G0 X10.000 Y20.000",
-      "M4 S800",
+      "M4 S0",
       "G1 X11.000 Y20.000 F1500 S800",
       "G1 X11.000 Y22.000 F1500 S800",
       "M5",
@@ -110,7 +111,7 @@ describe("textToGcode — emitted sequence", () => {
     // Closing move repeats the first sampled point, then the laser goes off.
     expect(lines.slice(-2)).toEqual(["G1 X0.000 Y0.000 F1000 S500", "M5"]);
     expect(lines[1]).toBe("G0 X0.000 Y0.000");
-    expect(lines[2]).toBe("M3 S500");
+    expect(lines[2]).toBe("M3 S0");
   });
 
   it("emits one G0/power-on/M5 cycle per contour", async () => {

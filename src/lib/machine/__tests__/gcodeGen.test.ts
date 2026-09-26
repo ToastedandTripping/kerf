@@ -22,6 +22,7 @@ import { DEFAULT_LAYERS, LINE_OVERLAY_DEFAULTS } from "../../../app/types";
 import {
   generateGcode,
   toCutObjectsForTest,
+  assertNoFillLineForTest,
   stripFramingForTest,
   assembleGcodeForTest,
   type GcodeResult,
@@ -1505,5 +1506,245 @@ describe("Text auto-conversion at G-code generation", () => {
       expect(objects.length).toBeGreaterThan(0);
       expect(objects[0].layer.scanMotion).toBeUndefined();
     }
+  });
+});
+
+// ─── E1a: sharp Fill+Line rectangle; no fillLine reaches Rust ────────────────
+
+function e1aRect(id: string, extra: Partial<DesignObject> = {}, rotation = 0): DesignObject {
+  return {
+    id,
+    type: "rectangle",
+    name: `Rect ${id}`,
+    transform: { x: 10, y: 20, width: 30, height: 15, rotation, scaleX: 1, scaleY: 1 },
+    layerIndex: 0,
+    visible: true,
+    locked: false,
+    fill: null,
+    stroke: "#4a90e2",
+    strokeWidth: 1,
+    opacity: 1,
+    ...extra,
+  };
+}
+
+function e1aFillLineLayers(): Layer[] {
+  return [fillLineLayer(0), ...DEFAULT_LAYERS.slice(1)];
+}
+
+const E1A_CORNERS = [
+  { x: 10, y: 20 },
+  { x: 40, y: 20 },
+  { x: 40, y: 35 },
+  { x: 10, y: 35 },
+];
+
+describe("E1a — Fill+Line sharp rectangle is filled and outlined; no fillLine reaches Rust", () => {
+  it("E1a-M1: sharp rectangle on fillLine emits a maskFill object with the closed 4-corner contour plus a line overlay", () => {
+    const { objects } = toCutObjectsForTest([e1aRect("r1")], e1aFillLineLayers());
+    expect(objects).toHaveLength(2);
+    expect(objects[0].id).toBe("r1");
+    expect(objects[0].layer.mode).toBe("maskFill");
+    expect(objects[0].paths).toEqual([{ points: E1A_CORNERS, closed: true }]);
+    expect(objects[1].id).toBe("r1_line_overlay");
+    expect(objects[1].layer.mode).toBe("line");
+    expect(objects[1].paths).toEqual([{ points: E1A_CORNERS, closed: true }]);
+  });
+
+  it("E1a-M2a: the overlay's contour is closed", () => {
+    const { objects } = toCutObjectsForTest([e1aRect("r1")], e1aFillLineLayers());
+    const overlay = objects.find((o) => o.id === "r1_line_overlay");
+    expect(overlay).toBeDefined();
+    expect(overlay!.paths[0].closed).toBe(true);
+  });
+
+  it("E1a-M2b: the overlay's contour has 4 points", () => {
+    const { objects } = toCutObjectsForTest([e1aRect("r1")], e1aFillLineLayers());
+    const overlay = objects.find((o) => o.id === "r1_line_overlay");
+    expect(overlay).toBeDefined();
+    expect(overlay!.paths[0].points).toHaveLength(4);
+  });
+
+  it("E1a-M3: rotated sharp rectangle lowers to maskFill and carries rotation on fill and overlay", () => {
+    const { objects } = toCutObjectsForTest([e1aRect("r1", {}, 30)], e1aFillLineLayers());
+    const fillObj = objects.find((o) => o.id === "r1");
+    const overlay = objects.find((o) => o.id === "r1_line_overlay");
+    expect(fillObj!.layer.mode).toBe("maskFill");
+    expect(fillObj!.rotation).toBe(30);
+    expect(overlay!.layer.mode).toBe("line");
+    expect(overlay!.rotation).toBe(30);
+    // Contour stays in world coordinates before rotation (Rust rotates once).
+    expect(fillObj!.paths[0].points).toEqual(E1A_CORNERS);
+  });
+
+  it("E1a-M6: a sharp rectangle rotated 30 or 90 degrees on fillLine never reaches Rust as fill", () => {
+    // The Rust fill arm scans R(+r)*AABB(R(-r)*rect): 6.72 mm outside at 30,
+    // half unfilled and 7.5 mm outside at 90 (Razor probe, C1).
+    for (const rot of [30, 90]) {
+      const { objects } = toCutObjectsForTest([e1aRect("r1", {}, rot)], e1aFillLineLayers());
+      expect(
+        objects.filter((o) => o.layer.mode === "fill"),
+        `rotation ${rot}`
+      ).toHaveLength(0);
+      expect(objects.find((o) => o.id === "r1")!.layer.mode, `rotation ${rot}`).toBe("maskFill");
+    }
+  });
+
+  it("E1a-M7: a point-less path on fillLine is not filled as its bbox rectangle (type guard)", () => {
+    const pointless: DesignObject = { ...e1aRect("pp1"), type: "path", points: [], closed: true };
+    const { objects } = toCutObjectsForTest([pointless], e1aFillLineLayers());
+    expect(objects).toHaveLength(1);
+    expect(objects[0].paths).toEqual([]);
+    expect(objects.find((o) => o.id === "pp1_line_overlay")).toBeUndefined();
+  });
+
+  it("E1a-M4: a rectangle carrying its own points on fillLine throws with its id (never silently skipped)", () => {
+    const withPoints = e1aRect("rp1", {
+      points: [
+        { x: 10, y: 20 },
+        { x: 40, y: 20 },
+        { x: 45, y: 28 },
+        { x: 40, y: 35 },
+        { x: 10, y: 35 },
+      ],
+      closed: true,
+    });
+    expect(() => toCutObjectsForTest([withPoints], e1aFillLineLayers())).toThrow(/'rp1'/);
+  });
+
+  it("E1a-M5: assertNoFillLine throws verbatim on a fillLine object and passes a list with none", () => {
+    const [good] = toCutObjectsForTest(
+      [e1aRect("ok")],
+      [{ ...DEFAULT_LAYERS[0], mode: "fill" as const }, ...DEFAULT_LAYERS.slice(1)]
+    ).objects;
+    const bad = {
+      ...good,
+      id: "r1",
+      objType: "rectangle",
+      layer: { ...good.layer, mode: "fillLine" },
+    };
+    type Arg = Parameters<typeof assertNoFillLineForTest>[0];
+    expect(() => assertNoFillLineForTest([good, bad] as Arg)).toThrow("'r1' (rectangle)");
+    expect(() => assertNoFillLineForTest([good] as Arg)).not.toThrow();
+    expect(good.layer.mode).toBe("fill");
+  });
+
+  it("E1a-C1 (control): rounded rectangle on fillLine stays maskFill + overlay", () => {
+    const { objects } = toCutObjectsForTest(
+      [e1aRect("rr1", { cornerRadius: 3 })],
+      e1aFillLineLayers()
+    );
+    expect(objects).toHaveLength(2);
+    expect(objects[0].layer.mode).toBe("maskFill");
+    expect(objects[0].paths[0].closed).toBe(true);
+    expect(objects[0].paths[0].points.length).toBeGreaterThan(4);
+    expect(objects[1].layer.mode).toBe("line");
+    expect(objects[1].id).toBe("rr1_line_overlay");
+  });
+
+  it("E1a-C2 (control): closed path on fillLine still emits maskFill + line overlay", () => {
+    const { objects } = toCutObjectsForTest([makeClosedPath("p1", 0)], e1aFillLineLayers());
+    expect(objects.map((o) => o.layer.mode)).toEqual(["maskFill", "line"]);
+  });
+
+  it("E1a-C3 (control): sharp rectangle on fill and offsetFill layers is unchanged (paths = [], no overlay)", () => {
+    for (const mode of ["fill", "offsetFill"] as const) {
+      const { objects } = toCutObjectsForTest(
+        [e1aRect("r1")],
+        [{ ...DEFAULT_LAYERS[0], mode }, ...DEFAULT_LAYERS.slice(1)]
+      );
+      expect(objects).toHaveLength(1);
+      expect(objects[0].layer.mode).toBe(mode);
+      expect(objects[0].paths).toEqual([]);
+    }
+  });
+
+  it("E1a-C4 (control): every object type on fillLine neither throws nor emits fillLine", () => {
+    const group = (id: string, children: DesignObject[]): DesignObject => ({
+      id,
+      type: "group",
+      name: id,
+      transform: { x: 0, y: 0, width: 50, height: 50, rotation: 0, scaleX: 1, scaleY: 1 },
+      layerIndex: 0,
+      visible: true,
+      locked: false,
+      fill: null,
+      stroke: "#4a90e2",
+      strokeWidth: 1,
+      opacity: 1,
+      children,
+    });
+    const ellipse = e1aRect("e1", { type: "ellipse" });
+    const line: DesignObject = {
+      ...makeOpenPath("l1", 0),
+      type: "line",
+    };
+    const fixtures: Array<[string, DesignObject]> = [
+      ["sharp rectangle", e1aRect("r1")],
+      ["rounded rectangle", e1aRect("rr1", { cornerRadius: 3 })],
+      ["ellipse", ellipse],
+      ["closed path", makeClosedPath("p1", 0)],
+      ["open path", makeOpenPath("op1", 0)],
+      ["line", line],
+      ["group of two sharp rectangles", group("gr", [e1aRect("gr-a"), e1aRect("gr-b")])],
+      [
+        "group of two closed paths",
+        group("gp", [makeClosedPath("gp-a", 0), makeClosedPath("gp-b", 0)]),
+      ],
+    ];
+    for (const [label, obj] of fixtures) {
+      let objects: ReturnType<typeof toCutObjectsForTest>["objects"] = [];
+      expect(() => {
+        objects = toCutObjectsForTest([obj], e1aFillLineLayers()).objects;
+      }, label).not.toThrow();
+      expect(objects.length, label).toBeGreaterThan(0);
+      expect(
+        objects.filter((o) => o.layer.mode === "fillLine"),
+        label
+      ).toHaveLength(0);
+    }
+  });
+
+  it("E1a-C4 (control): text on a fillLine layer, via generateGcode, reaches Rust without fillLine", async () => {
+    mockInvoke.mockReset();
+    mockTextObjectToPaths.mockReset();
+    useStore.setState({
+      objects: [],
+      objectsById: new Map(),
+      selectedIds: [],
+      selectedSet: new Set(),
+      undoStack: [],
+      redoStack: [],
+      consoleLines: [],
+      layers: e1aFillLineLayers(),
+    });
+    mockTextObjectToPaths.mockResolvedValue([
+      {
+        ...makeClosedPath("path-from-text", 0),
+      },
+    ]);
+    mockRustEngine();
+    useStore.getState().addObject({
+      id: "txt-e1a",
+      type: "text",
+      name: "E1a Text",
+      transform: { x: 10, y: 10, width: 20, height: 20, rotation: 0, scaleX: 1, scaleY: 1 },
+      layerIndex: 0,
+      visible: true,
+      locked: false,
+      fill: null,
+      stroke: "#ffffff",
+      strokeWidth: 0,
+      opacity: 1,
+      text: "O",
+      fontSize: 10,
+      fontFamily: "sans-serif",
+    });
+    await generateGcode();
+    expect(mockTextObjectToPaths).toHaveBeenCalledTimes(1);
+    const sent = sentCutObjects();
+    const modes = sent.map((o) => (o.layer as { mode: string }).mode);
+    expect(modes).toContain("line");
+    expect(modes).not.toContain("fillLine");
   });
 });

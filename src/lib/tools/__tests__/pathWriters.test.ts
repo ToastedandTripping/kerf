@@ -24,6 +24,7 @@ import {
   handleViewportPointerMove,
   handleViewportPointerUp,
 } from "../toolHandler";
+import { ROTATE_HANDLE_OFFSET_PX, screenPxToMm } from "../../constants";
 import { orientedHandlePoints } from "../../geometry";
 import { assertPointsInvariant } from "../../geometry/__tests__/pointsInvariant";
 import { flattenObjectsForTest } from "../../machine/gcodeGen";
@@ -254,8 +255,8 @@ describe("handle-resize (select tool pointer pipeline)", () => {
     useStore.getState().setSelectedIds(["p1"]);
     const before = getObj("p1");
 
-    // rotation handle sits 20mm above bbox top-center: (20, -10)
-    handleViewportPointerDown(20, -10, pe());
+    // rotation handle sits ROTATE_HANDLE_OFFSET_PX screen px above bbox top-center (y = 10)
+    handleViewportPointerDown(20, 10 - screenPxToMm(ROTATE_HANDLE_OFFSET_PX, 1), pe());
     handleViewportPointerMove(40, 20, pe()); // swing around the center
     handleViewportPointerUp(40, 20, pe());
 
@@ -299,7 +300,7 @@ describe("handle-resize (select tool pointer pipeline)", () => {
       t: { x: number; y: number; width: number; height: number; rotation?: number },
       key: "e" | "w" | "nw" | "se" | "n" | "s" | "ne" | "sw" | "rotate"
     ) {
-      // zoom=1 so rotateOffset = 20/1 = 20mm
+      // Only e/w/corners are read; they do not depend on the rotate offset argument
       return orientedHandlePoints(t, 20)[key];
     }
 
@@ -401,7 +402,7 @@ describe("handle-resize (select tool pointer pipeline)", () => {
       useStore.getState().setSelectedIds(["p2"]);
 
       const t0 = obj.transform;
-      // zoom=1, rotateOffset=20mm; use orientedHandlePoints to get exact handle positions
+      // use orientedHandlePoints to get exact handle positions (e/w do not depend on the rotate offset)
       const handles0 = orientedHandlePoints(t0, 20);
       const ePos = handles0.e;
       const wPos = handles0.w;

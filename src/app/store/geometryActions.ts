@@ -18,6 +18,7 @@ import {
   buildGroupObject,
   composeGroupChild,
   computeAABB,
+  rotatePathPoint,
 } from "../../lib/geometry";
 
 // Module-level font cache keyed by family name to avoid reloading on every conversion.
@@ -88,6 +89,12 @@ export async function loadFont(fontFamily: string = "sans-serif"): Promise<opent
 /**
  * Convert a single text DesignObject into an array of path DesignObjects (one per glyph).
  * Standalone function — no store dependency.
+ *
+ * The text's flip (negative scaleX/scaleY) and rotation are BAKED into the points:
+ * mirror about the text box centre on each negative axis, then rotate about the
+ * same centre (flip-then-rotate, R·F — as the Viewport draws it). Every contour
+ * comes out with rotation 0 and scale 1, so the cut (which has no scale and
+ * rotates each path about its own centre) and Convert to Path match the screen.
  */
 export async function textObjectToPaths(obj: DesignObject): Promise<DesignObject[]> {
   if (obj.type !== "text" || !obj.text) return [];
@@ -105,6 +112,35 @@ export async function textObjectToPaths(obj: DesignObject): Promise<DesignObject
   const maxLineWidth = Math.max(...lineWidths, fontSize * 2);
 
   const prepared: DesignObject[] = [];
+
+  // refresh-cut-vs-screen F5: flip-then-rotate about the text box centre.
+  const t = obj.transform;
+  const sx = t.scaleX ?? 1;
+  const sy = t.scaleY ?? 1;
+  const rot = t.rotation || 0;
+  const bake = sx < 0 || sy < 0 || rot !== 0;
+  const bcx = t.x + t.width / 2;
+  const bcy = t.y + t.height / 2;
+  const mirror = (p: { x: number; y: number }) => ({
+    x: sx < 0 ? 2 * bcx - p.x : p.x,
+    y: sy < 0 ? 2 * bcy - p.y : p.y,
+  });
+  const bakePoint = (p: {
+    x: number;
+    y: number;
+    handleIn?: { x: number; y: number };
+    handleOut?: { x: number; y: number };
+  }) => {
+    const m: {
+      x: number;
+      y: number;
+      handleIn?: { x: number; y: number };
+      handleOut?: { x: number; y: number };
+    } = mirror(p);
+    if (p.handleIn) m.handleIn = mirror(p.handleIn);
+    if (p.handleOut) m.handleOut = mirror(p.handleOut);
+    return rot !== 0 ? rotatePathPoint(m, bcx, bcy, rot) : m;
+  };
 
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
     const line = lines[lineIndex];
@@ -228,8 +264,9 @@ export async function textObjectToPaths(obj: DesignObject): Promise<DesignObject
       // glyph (O, A, B) groups per glyph so flatten cuts the hole as its own
       // ring (no bridge); single-contour glyphs stay FLAT — no behavior change.
       const contourObjects: DesignObject[] = contours
-        .filter((pts) => pts.length > 1)
-        .map((pts) => {
+        .filter((raw) => raw.length > 1)
+        .map((raw) => {
+          const pts = bake ? raw.map(bakePoint) : raw;
           const bb = pointsBBox(pts);
           return {
             ...obj,
@@ -248,6 +285,7 @@ export async function textObjectToPaths(obj: DesignObject): Promise<DesignObject
               y: bb.y,
               width: bb.width,
               height: bb.height,
+              ...(bake ? { rotation: 0, scaleX: 1, scaleY: 1 } : {}),
             },
           };
         });

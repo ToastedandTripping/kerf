@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from "react";
-import { Application, Container, Graphics, Text, TextStyle, Sprite, Texture } from "pixi.js";
+import { Application, Container, Graphics, Text, TextStyle } from "pixi.js";
 import { useShallow } from "zustand/shallow";
 import { useStore } from "../../app/store";
 import { getDirtyObjectIds, clearDirtyObjectIds, setCursorPosition } from "../../app/store";
@@ -26,24 +26,19 @@ import {
 } from "../../lib/tools/toolHandler";
 import { measureDistance, measureAngleDeg, formatMeasureLabel } from "../../lib/measure";
 
-import { PX_PER_MM, MIN_ZOOM, MAX_ZOOM } from "../../lib/constants";
-import { composeGroupChild, orientedHandlePoints } from "../../lib/geometry";
-
-// Cache for GPU textures keyed by object ID (avoids retaining megabyte-sized base64 strings as Map keys)
-const textureCache = new Map<string, Texture>();
+import {
+  PX_PER_MM,
+  MIN_ZOOM,
+  MAX_ZOOM,
+  ROTATE_HANDLE_OFFSET_PX,
+  screenPxToMm,
+} from "../../lib/constants";
+import { drawnLeaves, orientedHandlePoints, pathPointsToWorld } from "../../lib/geometry";
+import { applyObjectRotation, applyTextImageTransform, renderImageObject } from "./renderHelpers";
+import { clearTextures, evictTextures, setTextureReadyListener } from "./textureCache";
 
 // P8: Content hash cache keyed by display cache key (avoids rebuilding text/image when only transform changes)
 const contentHashCache = new Map<string, string>();
-
-function getOrCreateTexture(id: string, imageData: string): Texture {
-  let tex = textureCache.get(id);
-  if (tex) return tex;
-  const img = new Image();
-  img.src = imageData;
-  tex = Texture.from(img);
-  textureCache.set(id, tex);
-  return tex;
-}
 
 export function Viewport() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -54,6 +49,12 @@ export function Viewport() {
   // Adding it to the selectionOverlay dep array causes the overlay to redraw with the live
   // measure preview. Mirrors the rotationReadout pattern exactly.
   const [measureTick, setMeasureTick] = useState(0);
+  // R2 F1: flips once when the live Pixi app has built its refs. A scalar, so
+  // it is safe from React Error 185; every canvas effect depends on it.
+  const [pixiReady, setPixiReady] = useState(false);
+  // R2 F5: bumped when an image texture finishes decoding (or fails), so the
+  // objects effect reruns and draws it. A scalar, safe from React Error 185.
+  const [textureTick, setTextureTick] = useState(0);
   const canvasRef = useRef<HTMLDivElement>(null);
   const appRef = useRef<Application | null>(null);
   const worldRef = useRef<Container | null>(null);
@@ -110,6 +111,11 @@ export function Viewport() {
     if (!canvasRef.current || appRef.current) return;
 
     const app = new Application();
+    // R2 F1: set synchronously by cleanup. Under StrictMode the first mount's
+    // app is disposed before its init resolves; it must never go live.
+    let disposed = false;
+    // The display cache Map is never replaced, so capturing it here is the same object.
+    const displayCache = displayCacheRef.current;
     const initPromise = app
       .init({
         preference: "webgl",
@@ -120,7 +126,7 @@ export function Viewport() {
         autoDensity: true,
       })
       .then(() => {
-        if (!canvasRef.current) return;
+        if (disposed || !canvasRef.current) return;
         canvasRef.current.appendChild(app.canvas as HTMLCanvasElement);
         appRef.current = app;
 
@@ -156,34 +162,44 @@ export function Viewport() {
           y: cy - (workspaceHeight * PX_PER_MM) / 2,
           zoom: 1,
         });
+        setPixiReady(true);
       })
       .catch((err) => console.error("Pixi.js init failed:", err));
 
     return () => {
+      disposed = true;
       initPromise
         .then(() => {
           app.destroy(true);
-          appRef.current = null;
-          // Clear module-level caches — textures belong to the destroyed GPU context
-          for (const tex of textureCache.values()) tex.destroy(true);
-          textureCache.clear();
-          contentHashCache.clear();
+          // R2 F1: only the app that owns the shared state may clear it. A
+          // StrictMode app that never went live must not touch the live one's.
+          if (appRef.current === app) {
+            appRef.current = null;
+            displayCache.clear();
+            contentHashCache.clear();
+            // Clear module-level caches — textures belong to the destroyed GPU context
+            clearTextures();
+          }
         })
         .catch((err) => console.error("Pixi.js destroy failed:", err));
     };
   }, []);
 
-  // Update world transform when camera changes
+  // Update world transform when camera changes.
+  // pixiReady is a real dependency, not lint: init's setCamera arrives through
+  // zustand (sync lane) and renders BEFORE setPixiReady (a useState update from
+  // a promise, default lane). This effect first runs with pixiReady false and
+  // returns; without the dep it never reruns and the world sits at (0, 0).
   useEffect(() => {
-    if (!worldRef.current) return;
+    if (!pixiReady || !worldRef.current) return;
     worldRef.current.x = camera.x;
     worldRef.current.y = camera.y;
     worldRef.current.scale.set(camera.zoom);
-  }, [camera]);
+  }, [camera, pixiReady]);
 
   // Draw grid
   useEffect(() => {
-    if (!gridRef.current) return;
+    if (!pixiReady || !gridRef.current) return;
     const g = gridRef.current;
     g.clear();
     if (!gridVisible) return;
@@ -210,11 +226,11 @@ export function Viewport() {
     for (let y = 0; y <= h; y += majorStep) {
       g.moveTo(0, y).lineTo(w, y).stroke();
     }
-  }, [gridVisible, gridSize, workspaceWidth, workspaceHeight]);
+  }, [gridVisible, gridSize, workspaceWidth, workspaceHeight, pixiReady]);
 
   // Draw workspace boundary
   useEffect(() => {
-    if (!workspaceRef.current) return;
+    if (!pixiReady || !workspaceRef.current) return;
     const g = workspaceRef.current;
     g.clear();
     const w = workspaceWidth * PX_PER_MM;
@@ -225,11 +241,18 @@ export function Viewport() {
     // Workspace border
     g.setStrokeStyle({ width: 1, color: 0xffffff, alpha: 0.15 });
     g.rect(0, 0, w, h).stroke();
-  }, [workspaceWidth, workspaceHeight]);
+  }, [workspaceWidth, workspaceHeight, pixiReady]);
+
+  // R2 F5: declared ABOVE the objects effect so the listener is in place
+  // before the first objects render can start a texture load.
+  useEffect(() => {
+    setTextureReadyListener(() => setTextureTick((n) => n + 1));
+    return () => setTextureReadyListener(null);
+  }, []);
 
   // Draw objects with persistent cache (diff against previous state)
   useEffect(() => {
-    if (!objectsContainerRef.current) return;
+    if (!pixiReady || !objectsContainerRef.current) return;
     const container = objectsContainerRef.current;
     const cache = displayCacheRef.current;
 
@@ -238,12 +261,8 @@ export function Viewport() {
     clearDirtyObjectIds();
 
     // Build set of IDs that should be visible this frame
-    // For groups, we use composite keys: "groupId/childId"
+    // Group leaves are keyed by full id path: "outer/inner/leaf" (depth 1: "groupId/childId")
     const activeIds = new Set<string>();
-
-    function renderKey(obj: DesignObject, prefix?: string): string {
-      return prefix ? `${prefix}/${obj.id}` : obj.id;
-    }
 
     function ensureDisplayObject(key: string, obj: DesignObject) {
       activeIds.add(key);
@@ -261,9 +280,9 @@ export function Viewport() {
         } else {
           // P8: Content hash for text/image -- skip destroy+rebuild when only transform changed
           const hash = contentHash(obj);
-          if (contentHashCache.get(key) === hash) {
-            // Content unchanged -- just update transform position
-            applyTextImageTransform(existing, obj);
+          // Content unchanged -- just update transform position. R2 F4: template
+          // text (a plain Container) cannot be moved in place and falls through.
+          if (contentHashCache.get(key) === hash && applyTextImageTransform(existing, obj)) {
             return;
           }
           // Content changed -- destroy and rebuild
@@ -306,22 +325,10 @@ export function Viewport() {
     }
 
     for (const obj of objects) {
-      if (!obj.visible) continue;
-      const objLayer = layers[obj.layerIndex];
-      if (objLayer && !objLayer.visible) continue;
-      if (obj.type === "group" && obj.children) {
-        for (const child of obj.children) {
-          // W1b: group composition (translation + rotation; path/line points are
-          // GROUP-LOCAL) lives in lib/geometry's composeGroupChild — the ONE
-          // function shared with gcodeGen's flatten, so screen and cut agree.
-          // Note: nested groups are not rendered (this loop is single-level and
-          // renderObject has no "group" case — pre-existing; the cut DOES
-          // recurse). Do not add viewport recursion in this phase.
-          ensureDisplayObject(renderKey(child, obj.id), composeGroupChild(child, obj));
-        }
-      } else {
-        ensureDisplayObject(renderKey(obj), obj);
-      }
+      // W1b: group composition (translation + rotation; path/line points are
+      // GROUP-LOCAL) lives in lib/geometry's composeGroupChild — the ONE
+      // function shared with gcodeGen's flatten, so screen and cut agree.
+      for (const leaf of drawnLeaves(obj, layers)) ensureDisplayObject(leaf.key, leaf.obj);
     }
 
     // Remove stale entries
@@ -334,37 +341,32 @@ export function Viewport() {
       }
     }
 
-    // Evict unused GPU textures (keyed by object ID)
+    // Evict unused GPU textures (keyed by object ID). Plain recursive id walk
+    // over every object regardless of visibility — images at any group depth.
     const activeImageIds = new Set<string>();
-    for (const obj of objects) {
-      if (obj.imageData) activeImageIds.add(obj.id);
-      if (obj.type === "group" && obj.children) {
-        for (const child of obj.children) {
-          if (child.imageData) activeImageIds.add(child.id);
-        }
-      }
-    }
-    for (const [id, tex] of textureCache) {
-      if (!activeImageIds.has(id)) {
-        tex.destroy(true);
-        textureCache.delete(id);
-      }
-    }
-  }, [objects, layers]);
+    const collectImageIds = (o: DesignObject, set: Set<string>) => {
+      if (o.imageData) set.add(o.id);
+      if (o.children) for (const c of o.children) collectImageIds(c, set);
+    };
+    for (const obj of objects) collectImageIds(obj, activeImageIds);
+    evictTextures(activeImageIds);
+    // textureTick is read only to rerun this effect when a decode settles.
+    void textureTick;
+  }, [objects, layers, pixiReady, textureTick]);
 
   // Draw temporary drawing object
   useEffect(() => {
-    if (!drawingLayerRef.current) return;
+    if (!pixiReady || !drawingLayerRef.current) return;
     const g = drawingLayerRef.current;
     g.clear();
     if (drawingObject) {
       renderObject(g, drawingObject);
     }
-  }, [drawingObject]);
+  }, [drawingObject, pixiReady]);
 
   // Draw selection indicators + handles + marquee (P7: uses derived slice)
   useEffect(() => {
-    if (!selectionOverlayRef.current) return;
+    if (!pixiReady || !selectionOverlayRef.current) return;
     const g = selectionOverlayRef.current;
     g.clear();
     g.removeChildren();
@@ -384,19 +386,9 @@ export function Viewport() {
       const selColor = parseInt(layerColor.replace("#", ""), 16);
       g.setStrokeStyle({ width: 1 / camera.zoom, color: selColor, alpha: 0.8 });
       if (rot !== 0) {
-        // Draw rotated bounding box
-        const cx = px + pw / 2;
-        const cy = py + ph / 2;
-        const cos = Math.cos(rot);
-        const sin = Math.sin(rot);
-        const corners = [
-          [-pw / 2, -ph / 2],
-          [pw / 2, -ph / 2],
-          [pw / 2, ph / 2],
-          [-pw / 2, ph / 2],
-        ].map(
-          ([dx, dy]) => [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos] as [number, number]
-        );
+        // Draw rotated bounding box (R2 core-16: the same corners the handles use)
+        const o = orientedHandlePoints(t, 0);
+        const corners = [o.nw, o.ne, o.se, o.sw].map((c) => [c.x * PX_PER_MM, c.y * PX_PER_MM]);
         g.moveTo(corners[0][0], corners[0][1]);
         for (let i = 1; i < 4; i++) g.lineTo(corners[i][0], corners[i][1]);
         g.closePath().stroke();
@@ -431,7 +423,7 @@ export function Viewport() {
         const hs = handleSize / 2;
         const edgeSize = 4 / camera.zoom;
         const ehs = edgeSize / 2;
-        const rotateOffsetMm = 20 / camera.zoom;
+        const rotateOffsetMm = screenPxToMm(ROTATE_HANDLE_OFFSET_PX, camera.zoom);
 
         if (selectedTransforms.length === 1) {
           // R1b: single-select — draw handles on the ROTATED rectangle
@@ -506,7 +498,7 @@ export function Viewport() {
           }
 
           // Rotation handle
-          const rotY = by - 20 / camera.zoom;
+          const rotY = by - ROTATE_HANDLE_OFFSET_PX / camera.zoom;
           const rotR = 4 / camera.zoom;
           g.setStrokeStyle({ width: 0.5 / camera.zoom, color: 0x4a90e2, alpha: 0.6 });
           g.moveTo(bx + bw / 2, by)
@@ -525,7 +517,8 @@ export function Viewport() {
         // Stale state -- path was deleted
         setNodeEditState({ pathId: null, selectedNodeIndex: null });
       } else {
-        const pts = pathObj.points;
+        // R2 F7: draw nodes where the path is drawn (rotated about its centre).
+        const pts = pathPointsToWorld(pathObj);
         const handleRadius = 4 / camera.zoom;
         const anchorSize = 6 / camera.zoom;
         const ahs = anchorSize / 2;
@@ -632,7 +625,7 @@ export function Viewport() {
         }
       }
     }
-  }, [selectedTransforms, camera.zoom, activeTool, nodeEditState, measureTick]);
+  }, [selectedTransforms, camera.zoom, activeTool, nodeEditState, measureTick, pixiReady]);
 
   // Track marquee box for HTML overlay rendering
   const marqueeRef = useRef<{
@@ -1119,79 +1112,6 @@ function contentHash(obj: DesignObject): string {
   return "";
 }
 
-/** P8: Update position of text/image display object without destroying and rebuilding */
-function applyTextImageTransform(displayObj: Container, obj: DesignObject) {
-  const t = obj.transform;
-  const px = t.x * PX_PER_MM;
-  const py = t.y * PX_PER_MM;
-  const pw = t.width * PX_PER_MM;
-  const ph = t.height * PX_PER_MM;
-  const rot = ((t.rotation || 0) * Math.PI) / 180;
-
-  // Reset pivot/position/rotation first
-  displayObj.pivot.set(0, 0);
-  displayObj.position.set(0, 0);
-  displayObj.rotation = 0;
-
-  if (displayObj instanceof Sprite) {
-    displayObj.x = px;
-    displayObj.y = py;
-    displayObj.width = pw;
-    displayObj.height = ph;
-    const sx = t.scaleX ?? 1;
-    const sy = t.scaleY ?? 1;
-    if (sx < 0) {
-      displayObj.scale.x *= -1;
-      displayObj.x += pw;
-    }
-    if (sy < 0) {
-      displayObj.scale.y *= -1;
-      displayObj.y += ph;
-    }
-  } else if (displayObj instanceof Text) {
-    displayObj.x = px;
-    displayObj.y = py;
-    const sx = t.scaleX ?? 1;
-    const sy = t.scaleY ?? 1;
-    if (sx < 0) {
-      displayObj.scale.x = -1;
-      displayObj.x += pw;
-    } else {
-      displayObj.scale.x = 1;
-    }
-    if (sy < 0) {
-      displayObj.scale.y = -1;
-      displayObj.y += ph;
-    } else {
-      displayObj.scale.y = 1;
-    }
-  } else {
-    // Container (template text) -- update child positions
-    for (const child of displayObj.children) {
-      if (child instanceof Text) {
-        child.x = px;
-        child.y = py;
-      }
-    }
-  }
-
-  // Re-apply rotation if needed
-  if (rot !== 0) {
-    applyObjectRotation(displayObj, t);
-  }
-}
-
-/** Apply rotation transform to a Pixi display object around its bounding box center */
-function applyObjectRotation(displayObj: Container, t: DesignObject["transform"]) {
-  const rot = ((t.rotation || 0) * Math.PI) / 180;
-  if (rot === 0) return;
-  const cx = t.x * PX_PER_MM + (t.width * PX_PER_MM) / 2;
-  const cy = t.y * PX_PER_MM + (t.height * PX_PER_MM) / 2;
-  displayObj.pivot.set(cx, cy);
-  displayObj.position.set(cx, cy);
-  displayObj.rotation = rot;
-}
-
 function getCursor(tool: string): string {
   switch (tool) {
     case "select":
@@ -1423,52 +1343,6 @@ function renderTextObject(obj: DesignObject): Container | null {
   }
 
   return text;
-}
-
-function renderImageObject(obj: DesignObject): Container | null {
-  if (!obj.imageData) return null;
-  const t = obj.transform;
-  const px = t.x * PX_PER_MM;
-  const py = t.y * PX_PER_MM;
-  const pw = t.width * PX_PER_MM;
-  const ph = t.height * PX_PER_MM;
-
-  try {
-    const texture = getOrCreateTexture(obj.id, obj.imageData);
-    const sprite = new Sprite(texture);
-    sprite.x = px;
-    sprite.y = py;
-    sprite.width = pw;
-    sprite.height = ph;
-    sprite.alpha = obj.opacity;
-
-    // Apply flip (scaleX/scaleY from transform)
-    const sx = t.scaleX ?? 1;
-    const sy = t.scaleY ?? 1;
-    if (sx < 0) {
-      sprite.scale.x *= -1;
-      sprite.x += pw;
-    }
-    if (sy < 0) {
-      sprite.scale.y *= -1;
-      sprite.y += ph;
-    }
-
-    return sprite;
-  } catch {
-    // Fallback: draw a placeholder box
-    const g = new Graphics();
-    g.setStrokeStyle({ width: 1, color: 0x999999, alpha: 0.5 });
-    g.rect(px, py, pw, ph).stroke();
-    // X through the box
-    g.moveTo(px, py)
-      .lineTo(px + pw, py + ph)
-      .stroke();
-    g.moveTo(px + pw, py)
-      .lineTo(px, py + ph)
-      .stroke();
-    return g;
-  }
 }
 
 function ContextMenuContent({ x, y, onClose }: { x: number; y: number; onClose: () => void }) {

@@ -16,7 +16,7 @@
  * in-place mutation context is the load-time migration (fresh-parsed JSON, pre-store).
  */
 
-import type { DesignObject, PathPoint, Transform } from "../../app/types";
+import type { DesignObject, Layer, PathPoint, Transform } from "../../app/types";
 
 /**
  * A 2D affine transform in the SVG/PDF convention: [a, b, c, d, e, f], i.e.
@@ -392,6 +392,61 @@ export function pointsPartial(obj: DesignObject, points: PathPoint[]): GeometryP
 }
 
 /**
+ * R2 F7: a path's points as they are drawn and cut, i.e. rotated by
+ * transform.rotation about the transform centre (the same centre
+ * gcode_gen.rs rotates about). Display and hit-testing only; never written
+ * back. Returns obj.points itself when there is no rotation.
+ */
+export function pathPointsToWorld(obj: DesignObject): PathPoint[] {
+  const pts = obj.points ?? [];
+  const deg = obj.transform.rotation || 0;
+  if (deg === 0 || pts.length === 0) return pts;
+  const t = obj.transform;
+  const cx = t.x + t.width / 2;
+  const cy = t.y + t.height / 2;
+  return pts.map((p) => ({ ...p, ...rotatePathPoint(p, cx, cy, deg) }));
+}
+
+/** R2 F7: a world-frame vector expressed in a frame rotated by `rotationDeg` (inverse rotation). */
+export function worldDeltaToLocal(
+  dx: number,
+  dy: number,
+  rotationDeg: number
+): { x: number; y: number } {
+  const r = (rotationDeg * Math.PI) / 180;
+  const cos = Math.cos(r);
+  const sin = Math.sin(r);
+  return { x: dx * cos + dy * sin, y: -dx * sin + dy * cos };
+}
+
+/**
+ * R2 F7: pointsPartial for a node edit on a (possibly rotated) path that keeps
+ * every untouched node where it was on screen and in the cut. An edit that
+ * changes the anchor bbox moves the rotation centre from c0 to c'; translating
+ * all points by t = (I - R)(c0 - c') moves the new centre by exactly t, which
+ * cancels that shift, while transform still equals the anchor bbox (W1b).
+ * Rotation is carried through unchanged. At rotation 0, t is 0 and this is
+ * exactly pointsPartial.
+ */
+export function pointsPartialKeepingPlacement(
+  obj: DesignObject,
+  points: PathPoint[],
+  centreBefore: { x: number; y: number }
+): GeometryPartial {
+  const deg = obj.transform.rotation || 0;
+  if (deg === 0) return pointsPartial(obj, points);
+  const bb = pointsBBox(points); // anchors only, never handle-inclusive
+  const vx = centreBefore.x - (bb.x + bb.width / 2);
+  const vy = centreBefore.y - (bb.y + bb.height / 2);
+  const r = (deg * Math.PI) / 180;
+  const cos = Math.cos(r);
+  const sin = Math.sin(r);
+  const tx = vx - (vx * cos - vy * sin);
+  const ty = vy - (vx * sin + vy * cos);
+  return pointsPartial(obj, translatePoints(points, tx, ty));
+}
+
+/**
  * Compose a group's transform onto one child, producing the world-frame child.
  * THE single shared group-flatten composition — consumed by BOTH the Viewport
  * renderer and gcodeGen's flatten so screen and cut can never disagree (the
@@ -454,6 +509,51 @@ export function composeGroupChild(child: DesignObject, group: DesignObject): Des
     ...child,
     transform: { ...t, x: composed.x, y: composed.y, rotation: composed.rotation },
   };
+}
+
+/** Largest stretch (max singular value) of the linear part [[m0, m2],[m1, m3]]
+ *  of a 2×3 matrix. Unlike column norms, this is exact under skew. PURE. */
+export function matrixMaxStretch(m: ReadonlyArray<number>): number {
+  const [a, b, c, d] = m;
+  const S = a * a + b * b + c * c + d * d;
+  const D = a * d - b * c;
+  return Math.sqrt((S + Math.sqrt(Math.max(0, S * S - 4 * D * D))) / 2);
+}
+
+/** Every leaf of obj's group tree composed to world frame, with its render key
+ *  (full id path: "outer/inner/leaf"; a top-level leaf's key is its id). The
+ *  same recursion and the same composeGroupChild as gcodeGen's flattenObjects,
+ *  so screen and cut agree at every depth. PURE. */
+export function composedLeaves(
+  obj: DesignObject,
+  key: string = obj.id
+): Array<{ key: string; obj: DesignObject }> {
+  if (obj.type === "group" && obj.children) {
+    return obj.children.flatMap((c) => composedLeaves(composeGroupChild(c, obj), `${key}/${c.id}`));
+  }
+  return [{ key, obj }];
+}
+
+/** The leaves the canvas draws for one top-level object: composedLeaves,
+ *  filtered by the cut's own per-leaf rule (gcodeGen.ts:276-279): skip
+ *  !leaf.visible, and skip a leaf whose layer (by l.index, falling back to
+ *  layers[0]) is hidden. Deliberately NOT the cut's `output === false` —
+ *  output-off objects stay on the canvas as reference geometry. A leaf whose
+ *  layer cannot be resolved at all (layers is empty) is DRAWN: the cut throws
+ *  there, so there is no rule to match, and a throw inside the render effect
+ *  is a blank canvas. PURE; never throws. */
+export function drawnLeaves(
+  obj: DesignObject,
+  layers: ReadonlyArray<Layer>
+): Array<{ key: string; obj: DesignObject }> {
+  const out: Array<{ key: string; obj: DesignObject }> = [];
+  for (const leaf of composedLeaves(obj)) {
+    if (!leaf.obj.visible) continue;
+    const ll = layers.find((l) => l.index === leaf.obj.layerIndex) ?? layers[0];
+    if (ll && !ll.visible) continue;
+    out.push(leaf);
+  }
+  return out;
 }
 
 /**

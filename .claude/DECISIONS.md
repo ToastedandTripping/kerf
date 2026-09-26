@@ -42,9 +42,11 @@ Constant power was the default for every shipped layer except Engrave, so nearly
 The remediation plan recommended a restricted envelope — constant-power and Fire, Offset Fill, non-zero kerf and the affected compound ordering shown as unavailable until qualified — on the grounds that explicit refusal removes exposure without putting a new geometry engine on the safety-critical path. Lee chose to preserve every feature instead, accepting a larger program and a longer road to clearing both blockers. The consequence is that the geometry corrections move from refused-at-the-boundary to must-be-fixed-before-release, and plan batch 2.3 must be re-specified from a gate into a set of corrections.
 
 ### Pause is hold-only, and becomes stop wherever a dark hold has not been observed on hardware.
-*2026-09-10, Lee*
+*2026-09-10, Lee, amended 2026-09-25*
 
 Pause currently sends 0x9E after waiting for a full hold, including when that wait times out, and that byte is the one confirmed to re-arm the beam. The accessory-flag alternative was rejected as the primary because the flag may describe modal enable rather than emitted light, and a toggle sent on stale information restores output. Hold-only removes the known restoring action from the ordinary pause path immediately rather than gating it on a flag whose meaning is still unverified. Explicit fallback: where a resumable dark hold cannot be qualified, pause means stop. Combined with the status-only evidence ruling, that fallback is effectively permanent for now.
+
+**Amended, per Lee, 2026-09-25:** The status-only evidence entry was amended on this date to accept the witness-card procedure as evidence of a dark hold, so the stop fallback is no longer permanent by construction. It remains in force: pause means stop until a dark hold has been qualified by that procedure and Lee schedules the pause work.
 
 ### The geometry and topology program is deferred; the region-offset dependency decision stays open and unmade.
 *2026-09-10, Lee*
@@ -55,6 +57,11 @@ Kerf compensation expands holes without accounting for which side is waste, and 
 *2026-09-25, Lee*
 
 The text tool (four bundled fonts, converted to paths at G-code time) shipped in v0.8.29 at Lee's direct request while the charter still listed built-in font rendering as a non-goal and the ROADMAP parked text behind gate D3. Lee resolved the contradiction in favour of the tree rather than removing the feature. The amendment put to him read: built-in text from bundled fonts is in; font management and text-on-path stay out. A drift review must not flag the text tool as a reintroduced exclusion. The CHARTER.md wording itself is changed only in an edit Lee approves, per the charter's own rule.
+
+### The Pause button stays as it is (it stops the job) until a dark hold is qualified; a plan to make it work exists.
+*2026-09-25, per Lee*
+
+Lee, 2026-09-25, in the coordinator window, verbatim: "Leave the pause botton [sic] for now but ensure we have a plan to make it function in the future." This records a ruling he already gave. It decided kerf-f2, which asked whether the button should be relabelled 'STOP (no resume)' or removed: neither ships, and the button keeps stopping the job with no resume, the fallback the 2026-09-10 hold-only entry requires. Lee gave no further reason; none is recorded here. The plan to make Pause work is .claude/plans/pause-resume-future.md (a84a9b5), parked until Lee schedules it; the evidence it needs became possible with the 2026-09-25 amendment to the status-only evidence entry (3b2bf76), which allows a witness-card qualification. A future session must not relabel, remove or re-wire Pause outside that plan.
 
 ---
 
@@ -146,9 +153,11 @@ machine behaviour.
 Read from the machine 2026-09-05: `[VER:1.1f.20220810:]`, vendor string "CV master-release 3.0.4", `[OPT:VHL,127,65536]` — a 127-block planner and 65536-byte RX buffer against stock GRBL's 15 and 128. Two consequences. (a) Behaviours observed on this machine that stock source says are impossible are real and must be handled, not argued away: the intermittent laser-switch wedge (controller stops acking line commands after `M3`/`M4` while still answering `?` with `Idle`, until `0x18`) is one such, and a `0x18` that failed to stop the beam on 2026-09-02 is another. (b) Phase 2A's premise is questionable here — a 127-block planner means per-line streaming may already keep this controller fed, so the stutter buffered mode was built to cure may not exist on this hardware. Record the planner depth alongside any gate D1c A/B result.
 
 ### Hardware evidence for this program is status-only; optical shutdown cannot be qualified, and powered release stays blocked on that basis.
-*2026-09-10, Lee*
+*2026-09-10, Lee, amended 2026-09-25*
 
 A time-correlated optical sensor was recommended and an enclosed camera with a synchronised marker offered as a weaker fallback with an explicitly limited acceptance criterion. Lee chose status-only. The consequence is stated rather than hidden: a status report says what the software commanded and never what the beam emitted, and that gap is precisely what let two reviews pass a defect that re-arms the laser. Most of the program is unaffected — the wedge trigger comes off a serial trace, and Phases 0 through 2 close on tests — but any claim that the beam went dark is unqualifiable, so hold-only pause cannot be qualified and powered release stays blocked. If measurement never becomes available, the honest cost is a release that stays blocked, not confidence that was invented.
+
+**Amended, per Lee, 2026-09-25:** A dark hold may be qualified by the witness-card procedure: low power on scrap card, with a deliberate control burn beside the test so the test could have failed, and a time-correlated optical sensor as the step-up if any mark is doubtful. Status reports alone still cannot show the beam is dark. The limits are part of the ruling. The procedure qualifies only what the test shows: emission above the card's marking threshold, over the dwell, mode and controller tested, and nothing about timing or emission too weak to mark. Every test is run by Lee at the machine with fire precautions in place. Nothing is built or scheduled on the strength of this amendment; the pause work stays parked in the future pause/resume plan until Lee schedules it, and until a witness test has actually been run and accepted, everything this entry blocks stays blocked.
 
 ### The laser-switch wedge requires a captured trigger and a prevention before release; a quiet run is not closure.
 *2026-09-10, Lee*
@@ -172,9 +181,11 @@ Carried across all three prior hand-offs with no progress. Do not re-derive an
 import/transform theory without a reproducing file.
 
 ### `0x9E` is a TOGGLE and GRBL already stops the laser itself at hold-complete — Kerf's pause volley re-arms the beam
-*2026-09-05*
+*2026-09-05, amended 2026-09-25*
 
 Traced to gnea/grbl source and confirmed on the owner's hardware 2026-09-05. `DISABLE_LASER_DURING_HOLD` is default-enabled in stock GRBL 1.1: with `$32=1` the firmware raises its OWN spindle-stop override the moment a feed hold completes, so the laser is already off before Kerf acts. `0x9E` is `EXEC_SPINDLE_OVR_STOP`, a toggle — arriving with the override already up it takes the `SPINDLE_STOP_OVR_RESTORE` branch, emits `[MSG:Restoring spindle]`, and re-energizes the beam. The v0.8.28 `Hold:0` poll (62c7c36) cannot mitigate this: `serial_get_status` `try_lock`s the command lock that the pump holds for the whole job, so the poll always returns the empty sentinel, times out at 3s, and fires the toggle anyway. That commit's premise — "GRBL ignores 0x9E during Hold:1" — is not what the source says; the only gate is `sys.state == STATE_HOLD`. Do not re-derive a fix that sends `0x9E` unconditionally on pause. The correct signal is the `A:` accessory field of the status report (`A:S` = spindle energized): send the byte only if the beam is still on after hold-complete.
+
+**Amended, per coordinator (delegated), 2026-09-25:** The sentence ~~The correct signal is the `A:` accessory field of the status report (`A:S` = spindle energized): send the byte only if the beam is still on after hold-complete.~~ is struck. On the owner's controller `A:S` tracks the presence of override values, not the beam (53/53 with overrides incl. Idle after an acked `M5`; 69/69 without, incl. Run mid-cut). See Evidence corrections, 2026-09-25: "The `A:S` accessory flag does not report whether the beam is on". The rest of this entry (the `0x9E` toggle, `DISABLE_LASER_DURING_HOLD`, never send `0x9E` unconditionally on pause) stands.
 
 ### The GRBL simulator models `0x9E` as unconditional off and has no automatic laser-off at hold — its pause tests certify a protocol the hardware does not run
 *2026-09-05*
@@ -185,3 +196,8 @@ Traced to gnea/grbl source and confirmed on the owner's hardware 2026-09-05. `DI
 *2026-09-10, Razor, traced*
 
 In gcode_gen.rs, s_min has exactly one consumer, s_max.max(s_min). ScanLineParams has no s_min field at all, and FillParams.s_min is hardcoded 0.0 at every non-test call site. With the W4 clamp in place effective_s_max equals s_max unconditionally, so powerMin affects nothing generated for line, fill, offsetFill or fillLine, under M3 or M4 — constant power already used bare s_max. It is live only for image raster, through the grayscale ramp. The UI nevertheless presents Min Pwr as a working setting with a live cap. GRBL's actual minimum-power control under dynamic scaling is $31, which appears nowhere in src/. This matters beyond tidiness: it removes the assumed remedy for M4 under-powering short segments, so a non-zero default is not a one-line change — it needs $31 or per-move S.
+
+### The `A:S` accessory flag does not report whether the beam is on; nothing may treat it as beam-on or beam-off.
+*2026-09-25, per coordinator (delegated under Lee's 2026-09-25 technical delegation)*
+
+On the owner's controller, `A:S` was present on every status report that carried override values (53 of 53 in the 2026-09-14 capture), including Idle reports after an acknowledged `M5` (capture lines 70 and 83). It was absent on every report without override values (69 of 69), including 10 Run reports mid-cut with a non-zero spindle speed in `FS:`. It therefore cannot be read as beam-on or beam-off on this controller. **Consequence:** no Kerf code may treat `A:S` (or its absence) as a beam-state signal. That includes any pause, hold, resume, stop or beam-safety logic, and the simulator's `A:` field, which models this observed pattern, not a beam state. This corrects the 2026-09-05 entry on `0x9E`. Evidence, re-countable: `scripts/probe-20260914-153729.log` (captured 2026-09-14), counted 2026-09-25 with `python3 -c "import re;t=open('scripts/probe-20260914-153729.log').read();r=re.findall(r'<[A-Za-z:0-9]+\|[^>]*>',t);ov=[x for x in r if '|Ov:' in x];nv=[x for x in r if '|Ov:' not in x];print(len(ov),sum(bool(re.search(r'\|A:[A-Z]*S',x)) for x in ov),len(nv),sum('|A:' in x for x in nv))"`, which prints `53 53 69 0` (122 status reports total).
