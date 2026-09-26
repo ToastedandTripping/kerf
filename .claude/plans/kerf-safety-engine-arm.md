@@ -4,6 +4,20 @@
 
 **Citations** were read at `49fa7c4` on session branch `marvin/kerf-gap` (2026-09-25). `git diff e78e7fe..49fa7c4 -- src src-tauri` is empty, so every source line below holds at both. The only uncommitted change in the tree is `.marvin-worktree.json`.
 
+## Fold notes (critic `kerf-safety-engine-arm-critic.md`, Fable: CONCERN, no gating FAIL)
+
+The critic changed no line of the engine edit. All 9 must-fixes are folded as the coordinator specified:
+
+1. **Killed-by column corrected.** T2 is removed from KE-M1 to M10. T2 reads the committed goldens, so a code mutant cannot turn it red. It is a regeneration guard, not a mutant killer. Every kill still stands via T1 and the byte-for-byte golden compares.
+2. **Matrix file names.** T5 writes `target/arm-matrix-out/<label>_<mode>.gcode`, where `<mode>` is `constant` or `variable`, so there are 24 files and none overwrites another. T4 pairs files by that name and requires exactly 24 on each side.
+3. **Where the before-matrix comes from.** It is built with T5 at **Commit 1**, not at the relay base, because `arm_matrix()` does not exist at the base. This applies to Ted's step 2 and to Razor's re-run.
+4. **The perimeter-start change goes to Lee in plain words.** The owner card and the close report both carry this sentence: "After a fill, the perimeter cut on the same layer now starts from a brief stop; under constant power (M3) its start corner will show more burn than before." Card step 5 now runs in M4 and in M3. The M3 half is an observation, not a pass/fail, because corner energy under M3 is the 2026-09-10 ruling's territory.
+5. **Step 5.** The filter is `golden_tests::golden_` with `--test-threads=1`, so T1 and T2 never read a corpus while it is being rewritten. Step 5's pass or fail is not consulted; steps 6 and 7 are.
+6. **Disk.** It is now 90-91% (coordinator, 2026-09-25; `df` at fold time read 93% with 34 GB free, before the coordinator's worktree removal). New precondition: at least 25 GB free before every cold build, meaning before step 1 and before the battery. Below that, stop and report.
+7. **Stepper cited** beside the parser: `stepper.c:845` and `:958-972`.
+8. **No new reader.** This batch adds no reader of `KERF_UPDATE_GOLDEN`, and none may be added.
+9. **The `$31 < $30` risk** is added to Risks as one line.
+
 - **Relay id:** `kerf-safety-engine-arm`
 - **Branch:** `relay/kerf-safety-engine-arm`
 - **Tier:** **Complex by the file-count rule** (17 files). The authored change is two files. The other 15 are golden fixtures written by one regeneration command, and a classifier test proves every changed line in them. It runs as **one batch under a written waiver** (see "Tier and files"). There is no UI, so there is no Jen spec, no Jen review and no behavioural stage.
@@ -20,7 +34,7 @@ Grill skipped. The intent is fixed by sources already written, and none of them 
 ## Existing plans reviewed
 
 **Inventory:** `.claude/plans/` holds 44 `.md` files plus `archive/`. A `grep -l` for `gcode_gen.rs`, `tests/golden`, `commands/gcode.rs` and `KERF_UPDATE_GOLDEN` hits 25 of them. The ones that matter:
-- **`kerf-evidence-e1b.md` (QUEUED, not started; no `relay/kerf-evidence-e1b` branch).** It edits the same two `.rs` files and adds golden `16_fillline_sharp_rect.gcode`. Its changes are elsewhere in both files: the `other =>` arm, `object_to_path`, `assert_golden`'s reader and new tests. It touches none of the eight mode lines or the anchors below. **Order:** only one Rust batch runs at a time, because disk is at 92% (hand-off `:51`). Whichever batch lands second rebases:
+- **`kerf-evidence-e1b.md` (QUEUED, not started; no `relay/kerf-evidence-e1b` branch).** It edits the same two `.rs` files and adds golden `16_fillline_sharp_rect.gcode`. Its changes are elsewhere in both files: the `other =>` arm, `object_to_path`, `assert_golden`'s reader and new tests. It touches none of the eight mode lines or the anchors below. **Order:** only one Rust batch runs at a time. The disk was at 92% when the hand-off was written (`:51`) and is at 90-91% now (Fold note 6); the free-space precondition is in Tests. Whichever batch lands second rebases:
   - **If E1b lands first:** golden 16 carries a positive `M3` line at site C (its line overlay), so this batch regenerates 16 files, not 15. Every count in this plan is computed by the tests, not hard-coded, and the report states the recount.
   - **If this batch lands first:** E1b's golden 16 is generated with `S0` from the start, and `committed_goldens_never_arm` (T2) covers it with no edit.
   - E1b changes `assert_golden` to regenerate only on `KERF_UPDATE_GOLDEN=1`. The regeneration command below sets exactly `1`, so it works under either reader.
@@ -74,6 +88,7 @@ The premise says stock GRBL 1.1 lights the laser at a standalone `M3 S{s}` "whil
 - **With `$32=0`, every site lights, including under M4.** START refuses `$32=0` (`canStartJob.ts:167-175`).
 - **The owner's controller is a vendor fork.** Stock source is intent evidence, not proof (DECISIONS 2026-09-05). Whether the fork applies the `G0`-dark rule is unknown. The owner's settings, captured 2026-09-14, are `$30=1000`, `$31=0`, `$32=1` (`scripts/probe-20260914-153729.log:33-35`, settings lines only).
 - **After this batch, stock is dark at all eight sites under either modal motion.** `S0` makes `pl_data->spindle_speed` zero in both branches, and `rpm == 0` with `$31=0 < $30` maps to `SPINDLE_PWM_OFF_VALUE` (`spindle_control.c:197-204`). So the fix stops depending on a subtle firmware rule the fork may not share.
+- **The burn still happens on the next `G1 S<n>`.** In laser mode the stepper forces a PWM recompute on every new planner block (`stepper.c:845`, "Force update whenever updating block"). That flag is consumed at `:958-972`, which computes PWM from that block's `pl_block->spindle_speed` and reloads it into each segment. So `M3 S0` followed by `G1 … S600` fires at 600 from the start of that move. The raster hoist (`mask_fill.rs:424-427`) has relied on the same mechanism since F4.
 
 The hazard label stands: this is X1-class on every M3 layer. The engine commands positive power on a line with no motion, and on stock firmware one arm already fires it on every scan line. The fork is unqualified at all eight sites.
 
@@ -86,6 +101,7 @@ The hazard label stands: this is X1-class on every M3 layer. The engine commands
   - `gcode_gen.rs:2516` `w4_line_clamps_power_min_to_power` asserts `contains("M4 S400")` (`:2526`);
   - `commands/gcode.rs:954` `golden_15_line_variable_power_min` asserts the same (`:969`).
   - Both move the evidence to the `G1` words (Change §3). The `!contains("S600")` half stays as it is.
+- **This batch adds no reader of `KERF_UPDATE_GOLDEN`, and none may be added.** It uses only compile-time `env!("CARGO_MANIFEST_DIR")`. E1b's T12 requires exactly one reader across the crate.
 - The simulator is not used. It treats any `M3`/`M4` as spindle-on whatever the `S` (`sim/grbl.rs:563-614`), and DECISIONS 2026-09-05 says sim-green on spindle paths is unproven.
 
 ## Tier and files
@@ -139,11 +155,11 @@ All of this goes in `mod golden_tests`.
   - R7 `M3 S500` → `M3` (the `S` is dropped);
   - R8 `M3 S500 ; a` → `M3 S0 ; b` (the comment changes).
 - **`async fn arm_matrix()`**, the fixture builder specified in 2.3. It lands in Commit 1 because the snapshot has to run on the unedited engine. T1 uses it in Commit 2.
-- **T5** `arm_matrix_snapshot` (`#[tokio::test] #[ignore]`). It builds `arm_matrix()` and writes each program to `concat!(env!("CARGO_MANIFEST_DIR"), "/target/arm-matrix-out/<label>.gcode")`. It is compile-time `env!`: no test reads the process environment, which respects E1b's rule.
+- **T5** `arm_matrix_snapshot` (`#[tokio::test] #[ignore]`). It builds `arm_matrix()` and writes each of the 24 programs to `concat!(env!("CARGO_MANIFEST_DIR"), "/target/arm-matrix-out/<label>_<mode>.gcode")`, where `<mode>` is `constant` or `variable`, the layer's `power_mode` for that run (Fold note 2). It clears the directory first, and asserts that it wrote exactly 24 distinct files. It is compile-time `env!`: no test reads the process environment, which respects E1b's rule.
 - **T4** `golden_corpus_regeneration_is_arm_only` (`#[test] #[ignore]`). Before dir: `concat!(env!("CARGO_MANIFEST_DIR"), "/target/golden-before")`.
   - It panics if that dir is missing or holds fewer `.gcode` files than `tests/golden` (so it cannot pass vacuously).
-  - It classifies each before/after pair: every `before/*.gcode` against `tests/golden/*.gcode`, and every `before/matrix/*.gcode` against `target/arm-matrix-out/*.gcode`.
-  - It asserts: the same file sets; zero `Err`; total `mode_s0` equal to the number of positive mode lines in the before set, counted by the same parser, which must be ≥ 1; `g1_gained_s == 0`; and zero positive mode lines left in any after file.
+  - It classifies each before/after pair: every `before/*.gcode` against `tests/golden/*.gcode` by file name, and every `before/matrix/<label>_<mode>.gcode` against `target/arm-matrix-out/<label>_<mode>.gcode` by that same name.
+  - It asserts: the same file sets, with exactly 24 matrix files on each side; zero `Err`; total `mode_s0` equal to the number of positive mode lines in the before set, counted by the same parser, which must be ≥ 1; `g1_gained_s == 0`; and zero positive mode lines left in any after file.
   - It prints per-file counts with `--nocapture`.
   - `target/` is gitignored (`.gitignore:23`), so nothing in the tree changes.
 
@@ -205,26 +221,28 @@ All of this goes in `mod golden_tests`.
 - **T2** `committed_goldens_never_arm` (plain `#[test]`). It reads every `*.gcode` in `golden_dir()` and asserts I1 and I2 on each.
   - Anti-vacuity: at least 16 files, and at least 1 mode line across them.
   - It stops a future regeneration from silently pinning a re-armed program as the new truth.
-- **Matrix labels are stable.** T4 pairs before/after matrix files by label, so no label or fixture parameter may change between the snapshot in 2.4 step 2 and step 6.
+- **Matrix file names are stable.** T4 pairs before and after matrix files by `<label>_<mode>`, so no label or fixture parameter may change between the snapshot in 2.4 step 2 (taken at Commit 1) and step 6.
 
 #### 2.4 Regenerated goldens (15 files; 16 if E1b landed first)
 
 This is a procedure, in this order. Ted quotes each step's output in his report.
 
-1. **Before any engine edit** (Commit 1 committed), add T1 and T2 and run them: `env -u KERF_UPDATE_GOLDEN ~/.cargo/bin/cargo test --manifest-path src-tauri/Cargo.toml --features sim arm_invariants_every_layer_type committed_goldens_never_arm`.
+0. **Free-space precondition (Fold note 6).** Run `df -BG --output=avail /home`. At least 25 GB must be free before this relay's first cold build (step 1) and again before the battery, which cold-builds its own copy. Below 25 GB, stop and report NEEDS_CONTEXT. Do not delete anything to make room: the coordinator owns worktree removal.
+1. **Before any engine edit** (Commit 1 committed), add T1 and T2 and run them: `env -u KERF_UPDATE_GOLDEN ~/.cargo/bin/cargo test --manifest-path src-tauri/Cargo.toml --features sim -- arm_invariants_every_layer_type committed_goldens_never_arm`. Cargo takes more than one name filter only after `--`.
    - **Reproduce:** T1 must fail on I1, first in `line_plain_2pass` under `constant`.
    - T2 must fail on I1 in `01_simple_rect_cut.gcode`.
    - If either passes, stop and report NEEDS_CONTEXT.
-2. **Snapshot the before state.**
+2. **Snapshot the before state, at Commit 1** (Fold note 3: `arm_matrix()` exists from Commit 1 on, never at the relay base).
    - `git diff --quiet -- src-tauri/tests/golden` must succeed.
    - `mkdir -p src-tauri/target/golden-before && cp src-tauri/tests/golden/*.gcode src-tauri/target/golden-before/`.
-   - Then `env -u KERF_UPDATE_GOLDEN ~/.cargo/bin/cargo test --manifest-path src-tauri/Cargo.toml --features sim arm_matrix_snapshot -- --ignored`, and `mv src-tauri/target/arm-matrix-out src-tauri/target/golden-before/matrix`.
+   - Then `env -u KERF_UPDATE_GOLDEN ~/.cargo/bin/cargo test --manifest-path src-tauri/Cargo.toml --features sim arm_matrix_snapshot -- --ignored`, then `mv src-tauri/target/arm-matrix-out src-tauri/target/golden-before/matrix`, and confirm that `ls src-tauri/target/golden-before/matrix/*.gcode | wc -l` prints 24.
 3. **Make the edits** in 2.1-2.3.
-4. **See only the expected reds.** Run `env -u KERF_UPDATE_GOLDEN ~/.cargo/bin/cargo test --manifest-path src-tauri/Cargo.toml --features sim commands::gcode engine::gcode_gen engine::mask_fill`.
+4. **See only the expected reds.** Run `env -u KERF_UPDATE_GOLDEN ~/.cargo/bin/cargo test --manifest-path src-tauri/Cargo.toml --features sim -- commands::gcode engine::gcode_gen engine::mask_fill`.
    - The only red tests are the `golden_NN_*` tests of the 15 files listed and T2.
    - Any other red test (T1 included) is a defect: stop.
-5. **Regenerate once:** `KERF_UPDATE_GOLDEN=1 ~/.cargo/bin/cargo test --manifest-path src-tauri/Cargo.toml --features sim golden_tests`.
-   - The filter matches only `commands::gcode::golden_tests::*`. It does not match `b2a_generate_native_status_fixture`.
+5. **Regenerate once:** `KERF_UPDATE_GOLDEN=1 ~/.cargo/bin/cargo test --manifest-path src-tauri/Cargo.toml --features sim -- golden_tests::golden_ --test-threads=1`.
+   - The filter matches only the `golden_NN_*` writers and `golden_determinism_two_runs_identical`, which is pure. T4 is also matched but is `#[ignore]` and does not run. The filter does not match T1, T2, T3, T5, or `b2a_generate_native_status_fixture`, so no test reads the corpus while it is being rewritten. `--test-threads=1` serialises the writers as well.
+   - **Step 5's pass or fail is not consulted.** It is a write step. Its only checked outcome is the `git status` below. Steps 6 and 7 are the verdict. Never re-run step 5 "to be sure": if steps 6 and 7 are not clean, stop and report.
    - Then `git status --short src-tauri src` must list exactly the two edited `.rs` files and the 15 goldens, and nothing else. In particular it must not list `05_image_engrave.gcode` or `src/lib/machine/__tests__/fixtures/nativeStatus.json`.
 6. **Classify:**
    - `env -u KERF_UPDATE_GOLDEN ~/.cargo/bin/cargo test --manifest-path src-tauri/Cargo.toml --features sim arm_matrix_snapshot -- --ignored`
@@ -257,6 +275,7 @@ This is a procedure, in this order. Ted quotes each step's output in his report.
 - `test_command`: `["env","-u","KERF_UPDATE_GOLDEN","/home/leesalo/.cargo/bin/cargo","test","--manifest-path","src-tauri/Cargo.toml","--features","sim","--","commands::gcode","engine::gcode_gen","engine::mask_fill"]`.
   - It is also launched as `env -u KERF_UPDATE_GOLDEN node ~/marvin/scripts/mutation-battery.mjs <spec>`. The battery strips only `GIT_*` from the environment. With the variable set, the goldens would rewrite instead of compare: kills would be lost and the writes would show as stray paths.
   - Ted confirms from the baseline output that all three modules ran, and states the count. The ignored T4 and T5 do not run in the battery.
+- **Free-space precondition:** at least 25 GB free (`df -BG --output=avail /home`) before launching the battery. Its copy cold-builds the crate. Below 25 GB, do not launch: report NEEDS_CONTEXT to the coordinator, who owns worktree removal.
 - `per_mutant_timeout_ms: 1500000`, `total_timeout_ms: 5400000`. These are E1b's measured values (`kerf-evidence-e1b.md:214`): a cold baseline of 218-1,463 s, then about 94-105 s per id.
   - 16 ids come to about 25-28 minutes plus the baseline.
   - Do not run cargo by hand to time the battery. Read the journal. A timeout is `errored`: re-run with the same spec, and never drop an id.
@@ -265,16 +284,16 @@ This is a procedure, in this order. Ted quotes each step's output in his report.
 
 | Id | File | find | replace | Killed by |
 |---|---|---|---|---|
-| KE-M1 | `gcode_gen.rs` | `lines.push(format!("{} S0", params.power_cmd));` | `lines.push(format!("{} S{}", params.power_cmd, params.s_max));` | T1 I1 (fill ×3), T2, goldens 03, 14 |
-| KE-M2 | `gcode_gen.rs` | `// Laser on, cut to first point⏎·32lines.push(format!("{} S0", power_cmd));` | same, with `"{} S{}", power_cmd, effective_s_max` | T1 I1 (`line_lead_in_out`), T2, golden 12 |
-| KE-M3 | `gcode_gen.rs` | `cur_y = gpts[0].1;⏎·28lines.push(format!("{} S0", power_cmd));` | same, positive | T1 I1 (most line fixtures), T2, goldens 01, 02, 04, 06-08, 10, 11, 13, 15 |
-| KE-M4 | `gcode_gen.rs` | `lines.push(format!("{} S0", power_cmd));⏎·40laser_on = true;⏎·40next_toggle_dist += perf_cut;` | first line positive, the rest the same | T1 I1 (perforation fixtures), T2, golden 10 |
-| KE-M5 | `gcode_gen.rs` | `lines.push(format!("{} S0", power_cmd));⏎·40laser_on = true;⏎·40next_toggle_dist = tab_end_dist + tab_spacing;` | first line positive | T1 I1 (`line_tabs`), T2, golden 11 |
+| KE-M1 | `gcode_gen.rs` | `lines.push(format!("{} S0", params.power_cmd));` | `lines.push(format!("{} S{}", params.power_cmd, params.s_max));` | T1 I1 (fill ×3), goldens 03, 14 |
+| KE-M2 | `gcode_gen.rs` | `// Laser on, cut to first point⏎·32lines.push(format!("{} S0", power_cmd));` | same, with `"{} S{}", power_cmd, effective_s_max` | T1 I1 (`line_lead_in_out`), golden 12 |
+| KE-M3 | `gcode_gen.rs` | `cur_y = gpts[0].1;⏎·28lines.push(format!("{} S0", power_cmd));` | same, positive | T1 I1 (most line fixtures), goldens 01, 02, 04, 06-08, 10, 11, 13, 15 |
+| KE-M4 | `gcode_gen.rs` | `lines.push(format!("{} S0", power_cmd));⏎·40laser_on = true;⏎·40next_toggle_dist += perf_cut;` | first line positive, the rest the same | T1 I1 (perforation fixtures), golden 10 |
+| KE-M5 | `gcode_gen.rs` | `lines.push(format!("{} S0", power_cmd));⏎·40laser_on = true;⏎·40next_toggle_dist = tab_end_dist + tab_spacing;` | first line positive | T1 I1 (`line_tabs`), golden 11 |
 | KE-M6 | `gcode_gen.rs` | `let oy = gpts[0].1 + dy / seg_len * ext;⏎·32if !laser_on {⏎·36lines.push(format!("{} S0", power_cmd));` | last line positive | T1 I1 (`line_perf_overcut_leadout`) **only**: no golden reaches F |
 | KE-M7 | `gcode_gen.rs` | `let loy = gpts[n - 1].1 + dy / seg_len * lead_out;⏎·32if !laser_on {⏎·36lines.push(format!("{} S0", power_cmd));` | last line positive | T1 I1 (`line_perf_overcut_leadout`) **only** |
-| KE-M8 | `gcode_gen.rs` | `// Mode at S0; power rides on the G1 words below (safety engine-arm)⏎·28lines.push(format!("{} S0", power_cmd));` | second line positive | T1 I1 (`offset_fill`), T2, golden 09 |
-| KE-M9 | `mask_fill.rs` (existing code) | `lines.push(format!("{} S0", params.power_cmd));` | `lines.push(format!("{} S{}", params.power_cmd, params.s_max));` | T1 I1 (`maskfill_then_line`, image ×2), T2, goldens 04, 05, `mask_fill` tests at `:2087-2091`, `:2159` |
-| KE-M10 | `gcode_gen.rs` | KE-M3's find | KE-M3's find, then `⏎·28lines.push(format!("S{}", effective_s_max));` (a bare `S` line, which re-arms a stationary M3 on a `G1`-modal parser) | T1 I2, T2, goldens |
+| KE-M8 | `gcode_gen.rs` | `// Mode at S0; power rides on the G1 words below (safety engine-arm)⏎·28lines.push(format!("{} S0", power_cmd));` | second line positive | T1 I1 (`offset_fill`), golden 09 |
+| KE-M9 | `mask_fill.rs` (existing code) | `lines.push(format!("{} S0", params.power_cmd));` | `lines.push(format!("{} S{}", params.power_cmd, params.s_max));` | T1 I1 (`maskfill_then_line`, image ×2), goldens 04, 05, `mask_fill` tests at `:2087-2091`, `:2159` |
+| KE-M10 | `gcode_gen.rs` | KE-M3's find | KE-M3's find, then `⏎·28lines.push(format!("S{}", effective_s_max));` (a bare `S` line, which re-arms a stationary M3 on a `G1`-modal parser) | T1 I2, goldens 01, 02, 04, 06-08, 10, 11, 13, 15 (an extra line) |
 | KE-M11 | `gcode_gen.rs` | `"G1 X{:.3} Y{:.3} F{:.0} S{}",⏎·36lox, loy, speed_mm_min, effective_s_max` | `"G1 X{:.3} Y{:.3} F{:.0}",⏎·36lox, loy, speed_mm_min` (the lead-out inherits modal `S`, which after site G is `S0`: a burning move silently loses power) | T1 I4 and P1 (`line_lead_in_out`, `line_perf_overcut_leadout`), golden 12 |
 | KE-C1 | `gcode_gen.rs` | `let power_cmd = if layer.power_mode == "variable" {⏎·12"M4"` | `…{⏎·12"M3"` | T1 I3 (variable runs), golden 15 |
 | KE-C2 | `gcode_gen.rs` | `esx, esy, params.speed_mm_min, params.s_max` | `esx, esy, params.speed_mm_min, 0.0` | T1 P1 (fill: no positive `G1` left), goldens 03, 14 |
@@ -283,6 +302,8 @@ This is a procedure, in this order. Ted quotes each step's output in his report.
 | KE-C5 | `commands/gcode.rs` | `let after_is_s0 = s_word(a) == Some(0.0);` | `let after_is_s0 = true;` | T3b R2 |
 
 **16 ids:** KE-M1 to M11 and KE-C1 to C5.
+
+**T2 kills nothing in the battery, by design (Fold note 1).** It reads the committed goldens, which a code mutant cannot change. It guards the corpus against a future regeneration pinning a re-armed program as the truth. It is not a mutant killer, and the "Killed by" column does not credit it.
 
 **Anchor uniqueness.** "Before" is the count at `49fa7c4`. "After" is the count in a scratch copy of `gcode_gen.rs` with 2.1 applied verbatim (`python3 str.count` on the whole file, so multi-line finds are counted as the battery counts them):
 
@@ -306,7 +327,7 @@ This is a procedure, in this order. Ted quotes each step's output in his report.
 - 2.4's steps 1, 4, 5 and 6 are quoted in Ted's report: the reproduce-first failures, the red list, `git status` after regeneration, and the T4 counts.
 - `git diff --stat <base>..HEAD` lists exactly the 17 paths (18 if E1b merged first).
 - The battery journal: all 16 ids **killed**, with 0 survived, 0 errored and 0 CONTROL_RED.
-- **Razor re-runs T4** himself, from a fresh `target/golden-before` built with `git show <base>:src-tauri/tests/golden/<f>` and T5 at the base commit. He checks the counts match Ted's. He also checks by reading that none of the eight sites pushes a `GcodeMove`.
+- **Razor re-runs T4** himself, from a fresh `target/golden-before`: the goldens from `git show <base>:src-tauri/tests/golden/<f>`, and the 24 matrix files from T5 run on a checkout of **Commit 1** (Fold note 3), because `arm_matrix()` does not exist at the base. He checks the counts match Ted's. He also checks by reading that none of the eight sites pushes a `GcodeMove`.
 - **Browser:** not applicable. The Vite dev server has no Tauri backend, so `invoke("generate_gcode")` cannot run there (the same holds in E1a and E1b).
 - **TS:** no TS file changes. `npm test` is not required. The Rust output shape TS consumes changes only in mode-line `S` values, and no TS code parses a mode line (grep of `src/` for `M3`/`M4` parsers: none).
 
@@ -324,7 +345,9 @@ These steps go on the owner hardware card in ROADMAP `next` at Stage 3.5. Nothin
    - both ends of every fill scan line, just inside the overscan.
    Pass: no dot at any of them, beyond the marking the line itself makes.
 4. **M4 piece:** the same design with both layers set to Variable (M4). Pass: same as step 3. This is the default path, and on stock firmware it was already dark.
-5. **Fill+Line (default M4):** a rectangle on a Fill+Line layer. The perimeter cut after the fill starts cleanly. This batch adds a planner stop at that start (Risks 2).
+5. **Fill+Line, what changed (the card and the close report both carry this sentence, Fold note 4):** "After a fill, the perimeter cut on the same layer now starts from a brief stop; under constant power (M3) its start corner will show more burn than before."
+   - **5a, M4 (the default):** a rectangle on a Fill+Line layer set to Variable (M4). The perimeter should start cleanly after the fill. A brief pause at its start corner is expected. Pass: no extra mark at the start corner.
+   - **5b, M3:** the same rectangle with the layer set to Constant (M3). Expect a heavier start corner than on a v0.8.30 burn of the same design. This is an **observation, not a pass/fail**. Extra energy at an M3 start is constant power's acceleration burn, which the 2026-09-10 ruling already covers ("constant power (M3) exists for the stationary beam, not for cutting"). It is the same effect every other M3 path start already has. Lee notes what he sees. A mark he judges unacceptable is a question for the ruling, not a defect in this batch.
 6. **Optional, Lee's call:** repeat step 3 on the current release (v0.8.30), for a before/after pair on one card. It runs the old behaviour deliberately, at 10% on card, under the same precautions.
 7. **Only if Lee through-cuts on M3:** one M3 through-cut, checking that the start and close point is still cut through. If the fork had been lighting the old mode line, it was adding an accidental pierce at the start.
 
@@ -336,11 +359,12 @@ These steps go on the owner hardware card in ROADMAP `next` at Stage 3.5. Nothin
 - Ted's report quotes 2.4's steps 1, 4, 5 and 6, with 0 rejects and `g1_gained_s == 0`.
 - The Stage 3.5 obligations below are in the merged tree.
 - The hardware card steps are **not** part of done. They are listed as owed on the owner card. Nothing in the close report says the beam was verified dark.
+- The close report quotes card step 5's plain-words sentence verbatim (Fold note 4).
 
 ## Stage 3.5 obligations (orchestrator)
 
 - **ROADMAP:**
-  - a `shipped` entry;
+  - a `shipped` entry, which carries the plain-words sentence from card step 5;
   - the Parking Lot line at `:596` is marked shipped in the section's own convention, and the "Deferred from kerf-safety-s2" section is left verbatim;
   - Hardware steps 1-7 added to the owner card bullets in `next`;
   - the Parking Lot lines for Deferrals 1-6 below.
@@ -352,6 +376,7 @@ These steps go on the owner hardware card in ROADMAP `next` at Stage 3.5. Nothin
 ## Risks
 
 1. **The fork and `M3 S0`.** On stock firmware, `S0` maps to PWM-off with `$31=0 < $30=1000` (`spindle_control.c:197-204`; owner values `probe-20260914-153729.log:33-34`). If the fork lights a minimum PWM on an enabled spindle at `S0`, a dot survives at M3 starts. That is no worse than today, and card steps 2-3 are the instrument that would show it. The remedy would be a product call (see "Decisions needed").
+1b. **`S0` is PWM-off only while `$31 < $30`** (`spindle_control.c:197`). The owner has `$31=0 < $30=1000` (`probe-20260914-153729.log:33-34`). START's readback covers `$30`, not `$31`.
 2. **Two transitions gain a planner stop (motion timing changes, G-code bytes do not).**
    - When the spindle is **already on** in the same mode with the same `S`, the old positive mode line was a no-op. `S0` changes the modal speed, so GRBL now syncs (`gcode.c:917-923`): the head stops, dark, and the next `G1` starts from standstill.
    - (a) **maskFill → the next object in the same fragment.** maskFill ends without `M5`, by design (`mask_fill.rs:384-389`). An example is golden 04, line 33: the Fill+Line perimeter.
