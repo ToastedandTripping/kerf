@@ -1150,12 +1150,17 @@ describe("S3 — jog frame", () => {
   });
 
   it("D1: a busy poll never releases the jog, whatever the store's state says", async () => {
+    await machineConnection.pollStatus(); // a real report first, so status is fresh
+    expect(useStore.getState().statusStale).toBe(false);
     await machineConnection.jog("X", 1);
     statusQueue.push(async () => makeStatusOutcome("", [], { busy: true }));
     await machineConnection.pollStatus();
     expect(useStore.getState().machineState).toBe("idle");
+    expect(useStore.getState().statusStale).toBe(false);
+    useStore.setState({ consoleLines: [] });
     await machineConnection.jog("X", 1);
     expect(sends()).toHaveLength(1);
+    expect(consoleTexts()).toEqual([JOG_REASON_PENDING]);
     await machineConnection.pollStatus(); // a real Idle report
     await machineConnection.jog("X", 1);
     expect(sends()).toHaveLength(2);
