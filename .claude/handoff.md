@@ -58,11 +58,17 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - GAP PASS STATE (2026-09-26 02:15Z): MERGED into marvin/kerf-gap, each with Razor PASS, 0 CRITICAL, ledger merged, pack stamped: E1a 0efabee, S1 df8883a, R1 cut-vs-screen 93b72af, E2 7db461a, E3 1cdd930, E5 7140cab, S2 9ec08e0, S1b e4ba1c7, R2 canvas-display 0ef5a9c (1041 JS). None of it is in a build. S1 must ship with S3.
 
-- IN FLIGHT, S3 relay kerf-safety-s3: Ted DONE_WITH_CONCERNS (14 files, 1050 JS, battery 36/36, worktree relay-kerf-safety-s3). Razor requirements are being extracted, then Razor. S3 is ui_work, so it also needs 2.8 behavioral and Jen (a CONCERN pass, no spec). The close report must flag the origin-top Position Laser as a watch-it-move test before any burn, and propose 2 DECISIONS entries (positive-Y evidence, kerf-f1).
-
-- ENGINE BATCH kerf-safety-engine-arm (queued after S3, per the coordinator): plan 3249604, Fable critic CONCERN (af77b89); the planner (acf38511a9bbb3b9e) is folding the 9 must-fixes. It needs >= 25 GB free for its cold build. E1b runs after it, since both edit gcode_gen.rs and gcode.rs.
-
 - DISK: 93%. Lee's keystrokes: rm -rf ~/.cache/kerf-s1b-ted-target (6.1G) and ~/.cache/kerf-battery-target/kerf-safety-s1b (5.0G; S1b is merged, so no longer needed). The destructive guard blocks the agent.
+
+- S3c MOTION TRUST (coordinator 2026-09-26, option a): plan, critic and relay AFTER the engine batch. Scope: a motion-in-flight flag set by Home and by console motion, cleared by the first post-ack idle report (Razor W2 on S3), and a jog that requires $H since connect when $22=1 (Razor W1). The $22=0 behaviour stays the one open decision (Lee's fact question, via the coordinator). Owner evidence, capture 2026-09-14 lines 25-28: $20=0, $21=1, $22=1, $23=1. S3 merges after its fix pass, with W1/W2 disclosed in the ROADMAP and the release notes.
+
+- S3 (kerf-safety-s3) STATE 2026-09-26 ~04:00Z: fix pass 9e0b63a; Razor re-check closed the NaN fail-open. Battery 40/40 killed on 9e0b63a (journal relay-kerf-safety-s3-2ee393a2). Behavioral CONCERNS: 2 of 4 were store-injection artifacts, orchestrator-verified (disconnect sets 'disconnected' at connection.ts:586; an unknown offset is NaN, not null). The real ones, refusals visible only in the console and 2.77:1 contrast, went to Jen. Jen is RUNNING (a787b2d2ff57312f7). Dev server: vite PID 1007893 on :5813 (kill by PID after Jen). Then 3.5 (ROADMAP shipped, owner card steps 1-6 run after $H, the W1/W2 residuals without 'not disclosed', N7's missing upper bound, Parking Lot, ARCHITECTURE), the gate, merge. Close report: the verbatim origin-top Position Laser caveat, and proposals of 2 DECISIONS entries (positive-Y evidence, kerf-f1).
+
+- ENGINE-ARM (kerf-safety-engine-arm) STATE: commits 8c5e163 and 51aa544; battery 16/16 (journal relay-kerf-safety-engine-arm-ffc07e22, run by the orchestrator on the shared target). Razor WARNING, 0 CRITICAL: the batch is correct, and both WARNINGs are pre-existing. The fix pass (comment wording, report N1) is RUNNING, by resumed Ted ad9d140fc910022d4. Then 3.5 (the DECISIONS pin proposal must say 'G1 words that carry X or Y', not 'motion'), the gate, merge. Target ~/.cache/kerf-engine-arm-target is 6.3G; remove it after merge (Lee's keystroke).
+
+- NEXT RELAY (coordinator 2026-09-26, ahead of E1b and S3c): the engine lead-in and pill-shape fix. Razor W2 on engine-arm: lead_in > 0 plus a degenerate first segment emits no G0 and no mode line, so after a mask fill a stray line burns at layer power; after M5 the object is silently not cut. Also W1: skip zero-length G1s (a stationary cut-power dwell at the corners of M3 rounded rectangles). Plan, critic, relay. The coordinator told Lee the workaround. Detail: ~/marvin/state/relay/kerf-safety-engine-arm-razor-review-b1.md W1/W2. Then E1b, then S3c.
+
+- QUOTA: the session is at 98% (coordinator, 2026-09-26). Commit at every boundary.
 
 ## Open questions awaiting Lee
 
@@ -84,6 +90,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-09-26 batteries, S3 and engine-arm reviews
+The disk hold lifted after Lee freed 11 GB. S3's battery was 40/40 and engine-arm's 16/16 (a pilot showed no target growth). S3's behavioral came back CONCERNS, and Jen is running. Engine-arm Razor: WARNING with 0 CRITICAL; Razor found a pre-existing stray-burn defect (lead-in plus pill shape after a mask fill), sent to the coordinator as BLOCKER, and it is queued as the next relay. The owner's settings from the 2026-09-14 capture, $20=0 $21=1 $22=1, were sent to the coordinator.
 
 ### 2026-09-26 S1b and R2 merged
 S1b merged as e4ba1c7: Razor PASS 0/0/8, 81/5/0; the pin is still met by the readback gate; the refusal leaks nothing; a missing Tauri key fails closed. R2 merged as 0ef5a9c: behavioral PASS, Jen PASS with 2 pre-existing CONCERNs, 1041 JS, lint = base. S3 Ted DONE with 36/36. The engine plan was written, its critic returned CONCERN, and the fold is running. The ledger lost-update was found by the coordinator in the marvin tooling (booking-gap's write at 01:18:09Z); readback after every write.
