@@ -1807,8 +1807,8 @@ function handleTextDown(worldX: number, worldY: number) {
 function handlePositionLaserDown(worldX: number, worldY: number) {
   const store = useStore.getState();
   if (!store.machineConnected || store.machineState !== "idle") return;
-  // Convert canvas Y (top-down) to GRBL Y (bottom-up)
-  const machineY = store.workspaceHeight - worldY;
+  // Canvas Y to machine Y, by the same rule the generator uses (origin-top: -y)
+  const machineY = store.originTop ? -worldY : store.workspaceHeight - worldY;
   machineConnection.jogTo(worldX, machineY);
 }
 

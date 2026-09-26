@@ -1,10 +1,17 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useSyncExternalStore } from "react";
 import { useStore } from "../../app/store";
-import { machineConnection, type ConnectionError } from "../../lib/machine/connection";
+import {
+  machineConnection,
+  getBedSource,
+  subscribeBedSource,
+  type ConnectionError,
+} from "../../lib/machine/connection";
+import { jogBlockReason } from "../../lib/machine/jogBounds";
 import { generateGcode } from "../../lib/machine/gcodeGen";
 import {
   MACHINE_STATE_COLORS,
   GRBL_ALARM_DESCRIPTIONS,
+  displayMachineState,
 } from "../../lib/machine/machineStateDisplay";
 import { CollapsibleSection } from "./CollapsibleSection";
 import type { StartCorner } from "../../app/types";
@@ -71,8 +78,9 @@ export function MachinePanel() {
   const grblLaserMode = useStore((s) => s.grblLaserMode);
   const workCoordOffset = useStore((s) => s.workCoordOffset);
   const workspaceVerified = useStore((s) => s.workspaceVerified);
-  const setWorkspaceSize = useStore((s) => s.setWorkspaceSize);
-  const setWorkspaceVerified = useStore((s) => s.setWorkspaceVerified);
+  const statusStale = useStore((s) => s.statusStale);
+  const positionKind = useStore((s) => s.positionKind);
+  const bedSource = useSyncExternalStore(subscribeBedSource, getBedSource);
   const workspaceWidth = useStore((s) => s.workspaceWidth);
   const workspaceHeight = useStore((s) => s.workspaceHeight);
   const setStatusMessage = useStore((s) => s.setStatusMessage);
@@ -96,6 +104,106 @@ export function MachinePanel() {
   const [softLimitsConfirmOpen, setSoftLimitsConfirmOpen] = useState(false);
   const [softLimitsEnabling, setSoftLimitsEnabling] = useState(false);
   const [enablingLaserMode, setEnablingLaserMode] = useState(false);
+
+  // S3 (Jen C3): a stale status never shows its last state as if it were live.
+  const shownState = displayMachineState(machineState, machineConnected, statusStale);
+  // S3: the jog buttons' disabled state and visible reason come from the same
+  // gate connection.jog() runs (display only; the handler re-gates).
+  const jogBlocked = jogBlockReason(
+    {
+      machineConnected,
+      machineState,
+      jobRunning,
+      statusStale,
+      workspaceVerified,
+      positionKind,
+      workCoordOffset,
+    },
+    "by"
+  );
+
+  function openBedInputs() {
+    setBedWInput(String(workspaceWidth));
+    setBedHInput(String(workspaceHeight));
+    setConfirmBedOpen(true);
+  }
+
+  const bedInputs = (
+    <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+      <span style={{ color: "var(--text-secondary)" }}>
+        The width and height the laser head can reach, in mm.
+      </span>
+      <div style={{ display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap" }}>
+        <span style={{ color: "var(--text-secondary)" }}>W:</span>
+        <input
+          type="number"
+          value={bedWInput}
+          onChange={(e) => setBedWInput(e.target.value)}
+          style={{
+            width: "56px",
+            fontSize: "10px",
+            padding: "2px 4px",
+            background: "var(--bg-input)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-sm)",
+            color: "var(--text-primary)",
+            textAlign: "right",
+          }}
+        />
+        <span style={{ color: "var(--text-muted)", fontSize: "9px" }}>mm</span>
+        <span style={{ color: "var(--text-secondary)" }}>H:</span>
+        <input
+          type="number"
+          value={bedHInput}
+          onChange={(e) => setBedHInput(e.target.value)}
+          style={{
+            width: "56px",
+            fontSize: "10px",
+            padding: "2px 4px",
+            background: "var(--bg-input)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-sm)",
+            color: "var(--text-primary)",
+            textAlign: "right",
+          }}
+        />
+        <span style={{ color: "var(--text-muted)", fontSize: "9px" }}>mm</span>
+        <button
+          onClick={() => {
+            const w = Math.max(1, Number(bedWInput) || 1);
+            const h = Math.max(1, Number(bedHInput) || 1);
+            machineConnection.confirmBedSize(w, h);
+            setConfirmBedOpen(false);
+          }}
+          style={{
+            fontSize: "9px",
+            padding: "2px 8px",
+            cursor: "pointer",
+            background: "var(--accent)",
+            border: "none",
+            color: "#fff",
+            borderRadius: "var(--radius-sm)",
+          }}
+        >
+          Confirm
+        </button>
+        <button
+          onClick={() => setConfirmBedOpen(false)}
+          style={{
+            fontSize: "9px",
+            padding: "2px 6px",
+            cursor: "pointer",
+            background: "none",
+            border: "1px solid var(--border)",
+            color: "var(--text-muted)",
+            borderRadius: "var(--radius-sm)",
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
 
   const refreshPorts = useCallback(async () => {
     const found = await machineConnection.listPorts();
@@ -226,19 +334,20 @@ export function MachinePanel() {
             width: "6px",
             height: "6px",
             borderRadius: "50%",
-            background: MACHINE_STATE_COLORS[machineState],
+            background: MACHINE_STATE_COLORS[shownState],
+            opacity: shownState === "stale" ? 0.4 : 1,
             marginLeft: "auto",
           }}
         />
         <span
           style={{
             fontSize: "9px",
-            color: MACHINE_STATE_COLORS[machineState],
+            color: MACHINE_STATE_COLORS[shownState],
             fontWeight: 400,
             textTransform: "capitalize",
           }}
         >
-          {machineState}
+          {shownState}
         </span>
       </div>
 
@@ -655,7 +764,7 @@ export function MachinePanel() {
             </div>
           )}
 
-          {/* Workstream E: unverified bed size prompt */}
+          {/* Workstream E: unverified bed size prompt (S3: plain words, kerf-f1 a) */}
           {machineConnected && !workspaceVerified && (
             <div
               style={{
@@ -672,15 +781,12 @@ export function MachinePanel() {
             >
               <span style={{ fontWeight: 600 }}>Bed size unconfirmed</span>
               <span style={{ color: "var(--text-secondary)" }}>
-                Machine did not report $130/$131. Confirm bed size before cutting.
+                Kerf couldn't read the bed size from the machine. Confirm it before jogging or
+                cutting.
               </span>
               {!confirmBedOpen ? (
                 <button
-                  onClick={() => {
-                    setBedWInput(String(workspaceWidth));
-                    setBedHInput(String(workspaceHeight));
-                    setConfirmBedOpen(true);
-                  }}
+                  onClick={openBedInputs}
                   style={{
                     alignSelf: "flex-start",
                     fontSize: "9px",
@@ -695,81 +801,54 @@ export function MachinePanel() {
                   Set bed size
                 </button>
               ) : (
-                <div
-                  style={{ display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap" }}
-                >
-                  <span style={{ color: "var(--text-secondary)" }}>W:</span>
-                  <input
-                    type="number"
-                    value={bedWInput}
-                    onChange={(e) => setBedWInput(e.target.value)}
-                    style={{
-                      width: "56px",
-                      fontSize: "10px",
-                      padding: "2px 4px",
-                      background: "var(--bg-input)",
-                      border: "1px solid var(--border)",
-                      borderRadius: "var(--radius-sm)",
-                      color: "var(--text-primary)",
-                      textAlign: "right",
-                    }}
-                  />
-                  <span style={{ color: "var(--text-muted)", fontSize: "9px" }}>mm</span>
-                  <span style={{ color: "var(--text-secondary)" }}>H:</span>
-                  <input
-                    type="number"
-                    value={bedHInput}
-                    onChange={(e) => setBedHInput(e.target.value)}
-                    style={{
-                      width: "56px",
-                      fontSize: "10px",
-                      padding: "2px 4px",
-                      background: "var(--bg-input)",
-                      border: "1px solid var(--border)",
-                      borderRadius: "var(--radius-sm)",
-                      color: "var(--text-primary)",
-                      textAlign: "right",
-                    }}
-                  />
-                  <span style={{ color: "var(--text-muted)", fontSize: "9px" }}>mm</span>
-                  <button
-                    onClick={() => {
-                      const w = Math.max(1, Number(bedWInput) || 1);
-                      const h = Math.max(1, Number(bedHInput) || 1);
-                      setWorkspaceSize(w, h);
-                      setWorkspaceVerified(true);
-                      setConfirmBedOpen(false);
-                    }}
-                    style={{
-                      fontSize: "9px",
-                      padding: "2px 8px",
-                      cursor: "pointer",
-                      background: "var(--accent)",
-                      border: "none",
-                      color: "#fff",
-                      borderRadius: "var(--radius-sm)",
-                    }}
-                  >
-                    Confirm
-                  </button>
-                  <button
-                    onClick={() => setConfirmBedOpen(false)}
-                    style={{
-                      fontSize: "9px",
-                      padding: "2px 6px",
-                      cursor: "pointer",
-                      background: "none",
-                      border: "1px solid var(--border)",
-                      color: "var(--text-muted)",
-                      borderRadius: "var(--radius-sm)",
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </div>
+                bedInputs
               )}
             </div>
           )}
+
+          {/* S3 kerf-f1 (b): a bed the operator set is visible and changeable */}
+          {machineConnected &&
+            workspaceVerified &&
+            bedSource !== null &&
+            bedSource !== "machine" && (
+              <div
+                style={{
+                  fontSize: "10px",
+                  color: "var(--text-muted)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "4px",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <span>
+                    Bed {workspaceWidth} × {workspaceHeight} mm —{" "}
+                    {bedSource === "remembered"
+                      ? "you confirmed this size earlier."
+                      : bedSource === "confirmed"
+                        ? "confirmed."
+                        : "confirmed for this session."}
+                  </span>
+                  {!confirmBedOpen && (
+                    <button
+                      onClick={openBedInputs}
+                      style={{
+                        fontSize: "9px",
+                        padding: "1px 6px",
+                        background: "none",
+                        border: "1px solid var(--border)",
+                        borderRadius: "var(--radius-sm)",
+                        color: "var(--text-secondary)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Change
+                    </button>
+                  )}
+                </div>
+                {confirmBedOpen && bedInputs}
+              </div>
+            )}
 
           {/* Laser power max (S-value / $30) */}
           <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
@@ -823,20 +902,33 @@ export function MachinePanel() {
                 padding: "8px",
               }}
             >
+              {jogBlocked !== null && (
+                <div
+                  data-testid="jog-blocked-note"
+                  style={{
+                    fontSize: "10px",
+                    color: "var(--text-muted)",
+                    textAlign: "center",
+                    marginBottom: "4px",
+                  }}
+                >
+                  {jogBlocked}
+                </div>
+              )}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 32px)", gap: "2px" }}>
                 <div />
                 <JogButton
                   label="&#x25B2;"
                   onClick={() => machineConnection.jog("Y", jogStep)}
-                  title="Y+"
-                  disabled={machineState === "alarm"}
+                  title={jogBlocked ?? "Y+"}
+                  disabled={jogBlocked !== null}
                 />
                 <div />
                 <JogButton
                   label="&#x25C0;"
                   onClick={() => machineConnection.jog("X", -jogStep)}
-                  title="X-"
-                  disabled={machineState === "alarm"}
+                  title={jogBlocked ?? "X-"}
+                  disabled={jogBlocked !== null}
                 />
                 <JogButton
                   label="&#x2302;"
@@ -852,15 +944,15 @@ export function MachinePanel() {
                 <JogButton
                   label="&#x25B6;"
                   onClick={() => machineConnection.jog("X", jogStep)}
-                  title="X+"
-                  disabled={machineState === "alarm"}
+                  title={jogBlocked ?? "X+"}
+                  disabled={jogBlocked !== null}
                 />
                 <div />
                 <JogButton
                   label="&#x25BC;"
                   onClick={() => machineConnection.jog("Y", -jogStep)}
-                  title="Y-"
-                  disabled={machineState === "alarm"}
+                  title={jogBlocked ?? "Y-"}
+                  disabled={jogBlocked !== null}
                 />
                 <div />
               </div>

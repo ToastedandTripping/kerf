@@ -190,6 +190,7 @@ export function MaterialTestDialog({ open, onClose }: Props) {
   }
 
   async function handleGenerate(target: "clipboard" | "send") {
+    const genOriginTop = useStore.getState().originTop;
     const gcode = await generateMaterialTestGcode(
       {
         powerMin,
@@ -206,7 +207,8 @@ export function MaterialTestDialog({ open, onClose }: Props) {
         labels,
         cutBorder,
       },
-      grblSValueMax
+      grblSValueMax,
+      genOriginTop
     );
 
     if (target === "clipboard") {
@@ -247,7 +249,7 @@ export function MaterialTestDialog({ open, onClose }: Props) {
 
   async function handleFrame() {
     const state = useStore.getState();
-    const gcode = generateFrameGcode(totalWidth, totalHeight);
+    const gcode = generateFrameGcode(totalWidth, totalHeight, state.originTop);
     // S1: the one admission all four powered doors share (material FRAME).
     const gate = canStartJob(state, gcodeExtents(gcode));
     if (!gate.ok) {
@@ -286,7 +288,7 @@ export function MaterialTestDialog({ open, onClose }: Props) {
       grblLaserMode,
       statusStale,
     },
-    gcodeExtents(generateFrameGcode(totalWidth, totalHeight))
+    gcodeExtents(generateFrameGcode(totalWidth, totalHeight, originTop))
   );
 
   return (
