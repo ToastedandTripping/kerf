@@ -100,3 +100,25 @@ CONCERN. The design is right: a pure clip that can only shrink toward zero, refu
 5. Move "no build between S3 and S5" from the plan's advice into an explicit coordinator escalation with the three options above; fix or acknowledge the "outside the bed" copy for Position Laser in the interim.
 6. State the `$21=0` qualification in the remembered-bed residual, and add the console `$130=`/`$131=` write and the per-project `originTop` to Parking Lot line 1 (or a line of their own).
 7. Specify the unknown-axis case in `jog` (refuse, nothing sent) and add a mutant for the `positionKind === null` half of the stale check.
+
+## Re-check after fold (2026-09-25)
+
+**Overall verdict: PASS** (bounded re-check of fold commit `d549006`; `src/` still unchanged since `8c60666`).
+
+**(a) Must-fixes 1-7.** All closed.
+1. Closed. The pending clear now requires `outcome.kind === "report"` with a snapshot and reads Idle from that snapshot via `machineStateToStore`, never from the store. S3-M26 restores the store read and is killed by a busy poll after the ack.
+2. Closed. `jogBlockReason` check 3 is `jobRunning`, placed before the bed and stale checks (which read idle and fresh during a job); `JogGateState` and MachinePanel carry it. S3-M27.
+3. Closed. `markStatusUnknown()` (stale true, positionKind null) is called in `disconnect` and in `connect` right after `setMachineConnected(true)`. S3-M28 covers the stale half; the positionKind half of the same helper has no mutant (nit, not blocking: the stale refusal fires first).
+4. Closed. The key is forgotten only when `send()`'s write matches `$3/$23/$100/$101/$130/$131=`, `$N…=` or `$RST=` (`touchesBedKey`, `normalizeGrblLine` extracted verbatim). `invalidateGrblSettingsSilently` is no longer edited. S3-M20 re-anchored; S3-C4 proves `$32=1` keeps the memory.
+5. Closed by the coordinator, option (c), under Lee's delegation: S3 takes the one-line mapping in `handlePositionLaserDown`, S3-M31 moved from S5-M1, freeze removed from Risks, Done condition and a resolved Escalation note. The close report is required to say the origin-top mapping is unverified on hardware, and hardware step 6 is a watch-it-move before any burn. Correct handling.
+6. Closed. Parking Lot line 1 now names all three drifts (project/Settings size, console `$130=`/`$131=`, per-project `originTop`); the residual is qualified on `$21=0`.
+7. Closed. `JOG_REASON_AXIS` with nothing sent (S3-M30); the `positionKind === null` half has S3-M29.
+
+**(b) Internal consistency.** Holds, with two stale words.
+- File count: 8 production + 6 test files listed = 14, matching the header and waiver. `toolHandler.test.ts` exists and already mocks `invoke` as rejecting, as §10 assumes; `handleViewportPointerDown` is exported and has a `positionLaser` case.
+- Ids: the table has 36 rows, 36 unique ids, matching "32 mutants + 4 controls" and the Done condition.
+- Anchors: all 7 fold anchors and S3-M31's post-image return 0 hits in `src/` at HEAD; S3-M31's pre-image `const machineY = store.workspaceHeight - worldY;` returns exactly 1 (`toolHandler.ts:1811`). The 24 original anchors were re-verified in round 1.
+- `test_command` lists six files; Verification line 389 still says "The five-file `test_command`". Stage 3.5 says "the five hardware steps above" while Verification now lists six. Both are wording only; fix at Stage 0.
+- Done condition: branch ancestor, Razor PASS 0 CRITICAL, 36 ids killed with the control-wording note, close-report sentence, Stage 3.5 done, no freeze. Consistent with the parent's `done_condition`.
+
+**(c) S3-M32 (`setOrigin` records WCO = MPos).** The hazard is real at HEAD and is created by S3 itself. Today `setOrigin` writes `{0,0}` locally (`connection.ts:656`) and GRBL refreshes `WCO:` only every 10-30 reports (2.5-7.5 s at the 250 ms poll). Once option (c) routes Position Laser into the new `jogTo`, the OFFSET refusal for absolute targets is the only thing standing between a `$J=G90` target in work coordinates and a move of target-plus-offset past the bed; in that window the store says zero, so the refusal is silent. It is **not** covered by the stale or positionKind checks: polling continues, MPos reports keep arriving, `positionKind` stays `"machine"`. The fix is minimal and correct: after an acknowledged `G92 X0 Y0`, WPos is zero so WCO equals MPos whatever G54 holds; it is one line in a function that already writes the field, versus the alternative of an "unknown offset" store state that would touch every reader. The Set Origin button is not idle- or fresh-gated (`MachinePanel.tsx:919`), so a stale position records a stale offset, but a non-zero stale value still refuses, which is the safe side. **Keep.** One-line reason: it closes the one offset window Kerf itself opens, on the path S3 just connected, and nothing else in the gate sees it. Residual to park (not in S3's scope): a console-typed `G92`, `G10 L20` or `G54-G59` is undetected until the next `WCO:`; the "Clear offset (G92.1)" button leaves the old non-zero value in the store for the same window, which only over-refuses.

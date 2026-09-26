@@ -386,7 +386,7 @@ That is 36 ids: 32 mutants (S3-M1…S3-M32) and 4 controls (S3-C1…S3-C4). The 
 
 ## Verification
 
-- The five-file `test_command` above.
+- The six-file `test_command` above.
 - `npx tsc --noEmit`.
 - `npm test`: the baseline measured at relay start plus the new tests, with none weakened. The two named changes (§5 and the S1-M7 rewrite) are listed in the Ted report with before/after text.
 - `npm run lint`: no new warnings.
@@ -428,10 +428,11 @@ That is 36 ids: 32 mutants (S3-M1…S3-M32) and 4 controls (S3-C1…S3-C4). The 
 2. **Material-test FRAME traces a box 3 mm off the card's border.** The frame spans `[10, 10 + total]`, the border `[7, 7 + total]`, on both axes when the border is on. Pre-existing; mirrored consistently by S3.
 3. **On a bottom-left-origin machine the material-test labels engrave mirror-image.** `textToGcode` adds y-down glyph geometry to a y-up program. This is read from the code, not seen on a burn. Origin-top machines are correct after S3.
 4. **A START within one poll of a jog acknowledgement is admitted.** `jogPending` is invisible to `canStartJob`, so the first job line can meet the controller mid-jog (`error:9` on stock GRBL), and the stream aborts with `0x18`. The beam is off throughout. This is critic advisory (core 6), not folded.
+5. **A work offset changed from the console goes undetected until the next `WCO:`.** A console-typed `G92`, `G10 L20` or `G54`-`G59` leaves Kerf's recorded work offset stale for up to one `WCO:` interval (2.5-7.5 s), so `jogTo` can accept work-coordinate targets against the old offset. S3-M32 covers only the Set Origin button. The G92.1 button only over-refuses. Source: S3 critic re-check (c), 2026-09-25.
 
 **Resolved:** the "Stale status still shows green Idle/Ready" index line (ROADMAP `:569`) moves to `shipped` with this relay. Its detail section (`:719`) is kept verbatim with a one-line "Shipped in kerf-safety-s3" note appended. The S1 item's "MUST SHIP WITH S3" clause (`:27`) is annotated as met.
 
-**ROADMAP `next`:** the five hardware steps above.
+**ROADMAP `next`:** the six hardware steps above.
 
 **ARCHITECTURE.md delta:**
 - Jog admission is `jogBlockReason` plus `clipJog` (pure, in `jogBounds.ts`), with one jog in flight.
