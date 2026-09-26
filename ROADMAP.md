@@ -760,6 +760,18 @@ It is out of scope for this relay (golden files untouched), and no test reads it
 - **Sim: setting writes accepted in every state (E5)** — stock refuses $N=V with error:8 outside Idle/Alarm and error:2 on a bad number; the sim acks writes in every state and rejects only non-finite numbers (error:2), acking other non-numeric values without applying them. The buffered job writes $32=1 first, possibly while a previous job drains.
 - **Sim: 0x18 always stops the beam (E5)** — DECISIONS 2026-09-05 records a 0x18 that did not (2026-09-02); no fixture models it.
 - **The Rust `$32=1` gate accepts on `ok` alone and never reads back (Razor N8 on E5)** — `serial.rs` buffered-start gate; half of the pin "START refuses until laser mode and power scale are written and read back matching" is unmet for buffered jobs. E5 makes the ack-without-apply failure representable (ignore fault), but no test drives the gate with it. Candidate owner: safety S1b ("Buffered START checks laser mode instead of writing it") or relay-plan D2.
+- **Working pause/resume on the owner's controller** (Lee, 2026-09-25: "Leave the pause button for now but ensure we have a plan to make it function in the future.") Plan: `.claude/plans/pause-resume-future.md`. BLOCKED on a DECISIONS amendment: the status-only evidence ruling makes a dark hold unqualifiable. See `### Deferred: working pause/resume (Lee, 2026-09-25)` below.
+
+### Deferred: working pause/resume (Lee, 2026-09-25)
+
+Lee, 2026-09-25, relayed by the coordinator: "Leave the pause button for now but ensure we have a plan to make it function in the future." The Pause button is unchanged; it still stops the job with no resume. The forward plan is `.claude/plans/pause-resume-future.md` (documentation only, no code). It covers:
+- what stock GRBL 1.1 and the owner's vendor fork are evidenced to support for hold and resume;
+- why Pause falls back to a stop today;
+- what Kerf would change (never send `0x9E` again; hold only on all-M4 jobs first; any non-zero power reading, restore message or timeout during a hold ends in the existing immediate `0x18` stop);
+- a staged hardware qualification (a scrap witness card with a deliberate control burn, and an optical sensor as the step up);
+- the risks.
+
+**Blocker:** the 2026-09-10 status-only evidence ruling ("Hardware evidence for this program is status-only; optical shutdown cannot be qualified …") makes a dark hold unqualifiable. It needs Lee's amendment before this plan can run. The 2026-09-10 pause ruling's "effectively permanent for now" lifts once that amendment is made. Capture evidence: under M3, `0x9E` gives `[MSG:Restoring spindle]` and the reported power returns on a parked head (capture lines 869-872). Under M4 the same sequence reports 0 throughout (lines 916-934). `~` has never been sent to this controller under capture.
 
 ## Reference
 
