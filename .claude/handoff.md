@@ -62,11 +62,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - QUOTA: the session is at 98% (coordinator, 2026-09-26). Commit at every boundary.
 
-- S3 (kerf-safety-s3): battery 40/40 on 9e0b63a. Jen CONCERNS (3): invisible refusals, #666 at 2.77:1, and the offset copy. They are being applied on safety-visibility grounds, as with S1, by a Jen fix pass (Ted a1eb30a822b70dfa1, RUNNING), with a new battery-J. Then 3.5 (ROADMAP shipped; owner card steps 1-6 run after $H; W1/W2 residuals minus 'not disclosed'; N7 no upper bound; Jen's pre-existing tab-focus note in the Parking Lot; ARCHITECTURE), the gate, merge. Close: the verbatim origin-top Position Laser caveat, and proposals of 2 DECISIONS entries. Dev server: vite PID 1007893 on :5813; kill it by PID after the fix pass.
+- GAP PASS STATE (2026-09-26 ~05:20Z): master holds 69b6c2f (10 relays, pushed via /save). Since then, on marvin/kerf-gap and NOT yet on master: S3 merged as 377a63f (jog safety, stale never green, material-test mirror, Position Laser frame; Razor 0 CRITICAL; battery 40/40 plus J1-J4, F1-F5 and M23-M25 at the final tree; 1133 JS), the engine S0 pin, and S3's two DECISIONS entries (30 in all). The next /save takes S3 to master, which restores Lee's 'S1 and S3 ship in the same build'. No release tag until then.
 
-- LEAD-IN RELAY (kerf-safety-engine-leadin, NEXT, per the coordinator): plan 35b18f9 (Standard, 3 files, 21 ids, a one-step min-move guard of 0.0125 mm, M5 after mask fill). Fable critic RUNNING (a6b92c2840c6f5ced). Reuse the target ~/.cache/kerf-engine-arm-target (6.3G). Then E1b, then S3c.
-
-- GAP PASS STATE (2026-09-26 ~05:30Z): /save merged marvin/kerf-gap into master and PUSHED (69b6c2f, Lee approved 'Merge and push now'): E1a, S1, R1 cut-vs-screen, E2, E3, E5, S2, S1b, R2 canvas-display, engine-arm, plus the DECISIONS (27 before the engine pin). Master now holds S1 WITHOUT S3; Lee's ruling is that S1 and S3 ship in the same build, so no release tag until S3 is on master too. The primary is fast-forwarded; the 10 merged relay branches are deleted (-d). None of it is in a build.
+- LEAD-IN RELAY (kerf-safety-engine-leadin) RUNNING: plan ef1d06c (critic CONCERN, folded: 3 files, 21 ids, a one-step min-move guard, M5 after mask fill). Ted aa5622ea1971d19d1 is in worktree relay-kerf-safety-engine-leadin on the shared target ~/.cache/kerf-engine-arm-target. Then Razor, 3.5 (the DECISIONS engine pin gets an amendment tightening 'carry X or Y' once zero-length G1s are gone; the Parking Lot names the hole lead-in/lead-out scar, routed to the geometry program, with the owner workaround 'lead-in and lead-out on outer cuts only'), and merge. Then E1b, then S3c.
 
 ## Open questions awaiting Lee
 
@@ -89,6 +87,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-09-26 S3 merged
+S3 merged as 377a63f after Jen's CONCERNS were applied on safety-visibility grounds (5d0cb0d; the missing --accent-danger token was replaced by --danger and parked). UI mutants re-killed at the final tree; the synced gate passed 1133 JS with lint at base. Lee approved S3's two DECISIONS entries (the evidence correction and the kerf-f1 jog ruling), now written. The lead-in plan's critic returned CONCERN; it was folded and the relay started.
 
 ### 2026-09-26 /save and /update
 /save merged the session branch into Kerf master and pushed (69b6c2f), with Lee's approval, knowing master holds S1 without S3. The G.3 checks were clean: shipped entries preserved, DECISIONS 25 to 27, no Parking Lot line lost, charter unchanged. The primary was fast-forwarded and the 10 relay branches were deleted. Lee approved the engine S0 Engineering pin, written in this update. current.md was not touched (driven session). Next: S3's Jen fix pass (Ted running), then 3.5 and merge; the lead-in relay's critic (running), then the relay; then E1b and S3c.
