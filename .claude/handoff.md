@@ -52,11 +52,11 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - QUEUED, E1b relay kerf-evidence-e1b: plan .claude/plans/kerf-evidence-e1b.md; Fable critic PASS, folded (4c52a8b); 5 files under src-tauri, 10 battery ids. Start AFTER S1b merges (both edit serial.rs; running two Rust builds at once is too much for the disk at 92%).
 
-- PLANS IN PROGRESS: S2 (.claude/plans/kerf-safety-s2.md) is lifted; its Fable critic is RUNNING (agent aec781a99224a34d4). At the fold, REMOVE the Pause relabel section and every Pause change, per Lee 2026-09-25 (leave the Pause button as is). The lifter was agent a45c703b2763a0ec2 and can be resumed for the fold. S3 (.claude/plans/kerf-safety-s3.md) is being lifted (agent a7e6cdcb7863a897e). It includes kerf-f1 refuse-jog with a bed confirmation that persists per machine, and Jen C3 (a stale status must never show a green Idle/Ready); it needs a Fable critic after the lift. The order is S2, then S3, both after S1b if they share jobStream.ts.
-
 - PROCESS NOTES: Relay packs are created by writing the file directly; relay-pack-write --set refuses 'repo'. The worktrees use a hardlinked node_modules (cp -al from kerf-gap). A symlinked one breaks Vite's pdfjs worker loading, so vitest runs with --cache=false. The chrome-devtools MCP disconnected after I killed the dev servers by port, which also killed a browser process: never kill by port again, only by PID. Evaluators now drive a private headful Chrome over puppeteer or CDP. The ROADMAP front-matter has not been valid YAML since before this session (the current: line); it is untouched. The finished relay worktrees (e1a, s1, cut-vs-screen, e2, e3, e5) can be removed after a pgrep check; the disk is at 92%.
 
-- PAUSE/RESUME PLAN LANDED (a84a9b5): .claude/plans/pause-resume-future.md (documentation only), with a ROADMAP Parking Lot index line and a detail section. BLOCKED on Lee amending the DECISIONS entry 'Hardware evidence for this program is status-only; optical shutdown cannot be qualified…' (2026-09-10). DECISION NEEDED was sent to the coordinator. Do not edit that entry.
+- PAUSE/RESUME: Lee chose the witness-card qualification on 2026-09-25, and the status-only DECISIONS entry was amended with its limits (3b2bf76). The plan at .claude/plans/pause-resume-future.md stays parked until Lee schedules it. The plan also owns the drain-window defect on today's Pause button: pauseJob never calls stopActiveSession(), so a Pause press during the drain is reported as an alarm or completion instead of cancelled (S2 critic, Verified 1).
+
+- PLANS IN PROGRESS: S2's Fable critic FAILed only on the Pause relabel, which Lee's f2 ruling removes. The lifter (a45c703b2763a0ec2) is folding it: the generator half only, with the drain-window defect parked to the pause plan. Then the S2 relay. S3 (.claude/plans/kerf-safety-s3.md) is lifted: Standard tier, 12 files with a waiver, 28 mutant ids. Its Fable critic is RUNNING (ace674cd0e2c7bdb3). The lifter says not to cut a build between S3 and S5, or Position Laser is refused on origin-top machines. At its close, S3 proposes two DECISIONS entries: the positive-Y evidence correction and kerf-f1 as a product ruling. Order: S2, then S3.
 
 ## Open questions awaiting Lee
 
@@ -78,6 +78,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-09-25 session 2, post-compaction
+Resumed from the hand-off. The S2 critic (FAIL, the relabel only) is being folded per Lee's f2 ruling. The S3 lift landed and its critic is running. Lee's 2a answer is written as a DECISIONS amendment (3b2bf76). Removed six merged relay worktrees (disk 94% to 90%). R2's test fix and S1b's Ted are still running.
 
 ### 2026-09-25 (pause/resume plan committed)
 
