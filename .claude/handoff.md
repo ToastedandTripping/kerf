@@ -79,6 +79,10 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 ## Log (newest first)
 
+### 2026-09-25 (R2 Razor verdict routed)
+
+R2 Razor (re-run) returned WARNING 0C/1W/6N; 60/60 requirements covered. F7 node-edit geometry was verified exact for the cut (2,800 random paths, 14 angles). W1: the Viewport and Rulers side has no regression test (11 mutants survive; the code is correct). Routed to Stage 2.5: Ted resumed (a009a57bbbbce8bb6), tests only, using Razor's probes from the session scratchpad rz/spec.json. Then a Razor re-check (resume a9de5f3082b48e8ba, bounded to cac2353..HEAD), 2.8, Jen, 3.5 (the F5 owner file-open step must land in ROADMAP next), then merge. The pack carries next_action.
+
 ### 2026-09-25 (gap pass session 2: six relays merged; hand-off at context floor)
 
 Merged into marvin/kerf-gap: E1a (a CRITICAL was caught, a rotated Fill+Line rect burning 6.7 mm outside its cut, fixed to maskFill), S1 (3 WARNINGs fixed, Jen's copy applied, C3 moved to S3), R1 cut-vs-screen (test gaps closed), E2 (G55-active hole closed: the probe now requires G54), E3 (option B, grey drop lines plus a per-job tally; count and buffered wording fixed), E5 (wedge arming documented, non-finite values give error:2). Decisions this session, all via the coordinator under Lee's 2026-09-25 technical delegation unless marked: E3 option B; the A:S evidence correction written (e300ab1: the Evidence-corrections entry plus an amendment to the 2026-09-05 0x9E entry, recounted 53/53 and 69/69, resolved in 1eb29de); kerf-f1 refuse jog until the bed is confirmed, with the confirmation persisting per machine (8c60666); kerf-f2 from LEE directly: 'Leave the pause button for now but ensure we have a plan to make it function in the future' (2990910). Lifted and critiqued: S1b (CONCERN, folded, 291e84f) and E1b (PASS, folded, 4c52a8b). In flight: R2 Razor, S1b Ted, S2 critic, S3 lift, the pause-resume plan. Next: route R2's Razor verdict; S1b Stage 2; fold S2 without Pause; critique S3; then E1b after S1b.
