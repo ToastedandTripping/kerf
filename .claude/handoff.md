@@ -54,9 +54,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - PLANS IN PROGRESS: S2 (.claude/plans/kerf-safety-s2.md) is lifted; its Fable critic is RUNNING (agent aec781a99224a34d4). At the fold, REMOVE the Pause relabel section and every Pause change, per Lee 2026-09-25 (leave the Pause button as is). The lifter was agent a45c703b2763a0ec2 and can be resumed for the fold. S3 (.claude/plans/kerf-safety-s3.md) is being lifted (agent a7e6cdcb7863a897e). It includes kerf-f1 refuse-jog with a bed confirmation that persists per machine, and Jen C3 (a stale status must never show a green Idle/Ready); it needs a Fable critic after the lift. The order is S2, then S3, both after S1b if they share jobStream.ts.
 
-- DOCS OWED: the future pause/resume plan .claude/plans/pause-resume-future.md is being written (agent accf2d211acfd697f; documentation only, per Lee 2026-09-25). When it lands: commit it (force-add, since .claude/plans is gitignored), add a ROADMAP Parking Lot index line plus a detail section, and send the coordinator DECISION NEEDED if a DECISIONS entry blocks it. The candidate is 'Pause is hold-only…' (2026-09-10, Lee), which says the stop fallback is 'effectively permanent for now' when combined with the status-only evidence ruling. DO NOT EDIT that entry.
-
 - PROCESS NOTES: Relay packs are created by writing the file directly; relay-pack-write --set refuses 'repo'. The worktrees use a hardlinked node_modules (cp -al from kerf-gap). A symlinked one breaks Vite's pdfjs worker loading, so vitest runs with --cache=false. The chrome-devtools MCP disconnected after I killed the dev servers by port, which also killed a browser process: never kill by port again, only by PID. Evaluators now drive a private headful Chrome over puppeteer or CDP. The ROADMAP front-matter has not been valid YAML since before this session (the current: line); it is untouched. The finished relay worktrees (e1a, s1, cut-vs-screen, e2, e3, e5) can be removed after a pgrep check; the disk is at 92%.
+
+- PAUSE/RESUME PLAN LANDED (a84a9b5): .claude/plans/pause-resume-future.md (documentation only), with a ROADMAP Parking Lot index line and a detail section. BLOCKED on Lee amending the DECISIONS entry 'Hardware evidence for this program is status-only; optical shutdown cannot be qualified…' (2026-09-10). DECISION NEEDED was sent to the coordinator. Do not edit that entry.
 
 ## Open questions awaiting Lee
 
@@ -78,6 +78,10 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-09-25 (pause/resume plan committed)
+
+a84a9b5: pause-resume-future.md (docs only) plus a ROADMAP parking entry. Its blocker is the status-only evidence ruling (2026-09-10), which makes a dark hold unqualifiable. Proposed evidence is a scrap witness card with a control burn, stepping up to an optical sensor; holds on all-M4 jobs only; never 0x9E again. DECISION NEEDED went to the coordinator.
 
 ### 2026-09-25 (R2 Razor verdict routed)
 
