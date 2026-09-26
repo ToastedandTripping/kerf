@@ -50,8 +50,6 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - LEDGER READBACK (coordinator 2026-09-26): the marvin ledger tooling can lose an update. kerf-safety-s3's ledger_add was dropped by another session's write at 01:18:09Z and has been re-added. Until marvin fixes it, read each entry back from /home/leesalo/marvin/state/relay-ledger.json after every ledger write, and re-add it if it is gone. Checker: scratchpad ledger-check.py (ids as args). As of 01:40Z all 10 of this session's entries are present.
 
-- S3c MOTION TRUST (coordinator 2026-09-26, option a): plan, critic and relay AFTER the engine batch. Scope: a motion-in-flight flag set by Home and by console motion, cleared by the first post-ack idle report (Razor W2 on S3), and a jog that requires $H since connect when $22=1 (Razor W1). The $22=0 behaviour stays the one open decision (Lee's fact question, via the coordinator). Owner evidence, capture 2026-09-14 lines 25-28: $20=0, $21=1, $22=1, $23=1. S3 merges after its fix pass, with W1/W2 disclosed in the ROADMAP and the release notes.
-
 - GAP PASS STATE (2026-09-26 ~07:45Z, context-floor hand-off). ON MASTER (pushed via /save, 69b6c2f): E1a, S1, R1 cut-vs-screen, E2, E3, E5, S2, S1b, R2 canvas-display, engine-arm. ON marvin/kerf-gap ONLY, NOT YET ON MASTER: S3 377a63f and engine-leadin 3d4f35f, plus the DECISIONS commits (30 entries: the engine S0 pin, its 2026-09-26 amendment tightening it for vector output, S3's evidence correction and the kerf-f1 jog ruling). MASTER HOLDS S1 WITHOUT S3, AGAINST LEE'S RULING THAT THEY SHIP IN THE SAME BUILD: the next step is /save (with Lee's merge approval), and no release tag until then. None of it is in a build.
 
 - ENGINE-LEADIN, PROVED AND MERGED (3d4f35f): Razor PASS after a tests-only fix pass (3a50312: T-L6 covers the four moved_to updates, T-L7 the lead-in direction and open path); the re-check was CLOSED with 0 CRITICAL. 360 Rust passed / 4 ignored; clippy and fmt clean. Battery 27/27 (21 + KL-M16..M21 6/6). A fuzz of 1500 programs (~506k burning G1s) found 0 violations. Golden 04 gained exactly one M5; the other 15 are byte-identical. The engine pin amendment was approved by Lee in this window and written (1838b84), scoped to vector output; the coordinator had filed a card for it, which can be closed. Still NOT covered (Parking Lot): raster sub-step pixels (MIN_SCAN_INTERVAL_MM 0.01), TypeScript emitters (material test, labels, FRAME), and the hard-coded step size.
@@ -59,6 +57,8 @@ in this project has already been ruled on, usually for a reason that is not obvi
 - NEXT, in order: (1) /save to take S3 and engine-leadin to master (Lee approves the merge). (2) E1b (plan .claude/plans/kerf-evidence-e1b.md, critic PASS 4c52a8b). Rebase its golden expectations: engine-arm and engine-leadin changed gcode_gen.rs and gcode.rs, and E1b's golden 16 needs the S0 mode line and the M5 seal. Re-verify its citations against HEAD before Ted. (3) S3c 'motion trust': plan, critic, relay (a motion-in-flight flag for Home and console motion; jog requires $H since connect when $22=1; the $22=0 behaviour is Lee's open decision; owner settings $20=0 $21=1 $22=1). (4) Then S4a/b/c, S5 (minus the Position Laser mapping, which moved to S3), E4, R3 editing-shortcuts (propose the Ctrl+Shift+V DECISIONS entry at its close). Build target ~/.cache/kerf-engine-arm-target (6.3G) is reusable for E1b; it's Lee's keystroke to delete when done.
 
 - PROCESS (still in force): read every ledger write back (ledger-check); Rust batteries export CARGO_TARGET_DIR to the shared target and pilot one mutant first; disk floor 28 GB during batteries, 25 GB before a cold build (34 GB free at 07:45Z); never kill by port; worktrees get a cp -al node_modules only when JS tests run there.
+
+- S3c MOTION TRUST (coordinator 2026-09-26, option a): plan, critic and relay AFTER the engine batch. Scope: a motion-in-flight flag set by Home and by console motion, cleared by the first post-ack idle report (Razor W2 on S3), and a jog that requires $H since connect when $22=1 (Razor W1). kerf-9 ANSWERED by Lee 2026-09-26 (relayed by session-d32473): "always press home." He always homes after connecting, so refusing jogs until the machine has homed matches how he works. The plan should take that as its input for the $22=0 behaviour and propose a DECISIONS entry at the relay's close; it is not written yet. Owner evidence, capture 2026-09-14 lines 25-28: $20=0, $21=1, $22=1, $23=1. S3 merges after its fix pass, with W1/W2 disclosed in the ROADMAP and the release notes.
 
 ## Open questions awaiting Lee
 
@@ -81,6 +81,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-09-26 kerf-9 and kerf-10 answered (fleet still paused)
+Lee answered both questions, relayed by session-d32473. kerf-9: "always press home". It is recorded against S3c in Owed, and its DECISIONS entry will be proposed at S3c's close. kerf-10: both entries it asked for (the per-machine bed confirmation before jogging, and the positive-Y material-test evidence correction) were already written in 2fefa32 on Lee's earlier yes, so nothing new was written and no duplicates were added. No new work was started.
 
 ### 2026-09-26 (fleet paused)
 
