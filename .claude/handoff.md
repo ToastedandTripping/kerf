@@ -58,6 +58,8 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - PLANS IN PROGRESS: S2's Fable critic FAILed only on the Pause relabel, which Lee's f2 ruling removes. The lifter (a45c703b2763a0ec2) is folding it: the generator half only, with the drain-window defect parked to the pause plan. Then the S2 relay. S3 (.claude/plans/kerf-safety-s3.md) is lifted: Standard tier, 12 files with a waiver, 28 mutant ids. Its Fable critic is RUNNING (ace674cd0e2c7bdb3). The lifter says not to cut a build between S3 and S5, or Position Laser is refused on origin-top machines. At its close, S3 proposes two DECISIONS entries: the positive-Y evidence correction and kerf-f1 as a product ruling. Order: S2, then S3.
 
+- S5 LIFT NOTE: the Position Laser originTop Y mapping (parent S5 change, and parent mutant S5-M1) MOVED to S3, per the coordinator on 2026-09-25 under Lee's delegation, option (c), with no build freeze. When S5 is lifted, its plan must drop that change and that mutant and cite this move. S3's close report flags the first origin-top Position Laser to Lee as a watch-it-move test before any burn.
+
 ## Open questions awaiting Lee
 
 | Question                                                                                            | Why it matters                                                                        | Raised     |
