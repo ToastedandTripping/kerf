@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useSyncExternalStore } from "react";
+import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import { useStore } from "../../app/store";
 import {
   machineConnection,
@@ -6,7 +6,24 @@ import {
   subscribeBedSource,
   type ConnectionError,
 } from "../../lib/machine/connection";
-import { jogBlockReason } from "../../lib/machine/jogBounds";
+import {
+  JOG_REASON_AXIS,
+  JOG_REASON_EDGE,
+  JOG_REASON_OUTSIDE,
+  JOG_REASON_NUMBER,
+  JOG_REASON_PENDING,
+  jogBlockReason,
+} from "../../lib/machine/jogBounds";
+
+/** Reasons connection.jog() can print that the render-time gate cannot see. */
+const JOG_CLICK_REASONS = new Set<string>([
+  JOG_REASON_AXIS,
+  JOG_REASON_EDGE,
+  JOG_REASON_OUTSIDE,
+  JOG_REASON_NUMBER,
+  JOG_REASON_PENDING,
+]);
+const JOG_FLASH_MS = 2000;
 import { generateGcode } from "../../lib/machine/gcodeGen";
 import {
   MACHINE_STATE_COLORS,
@@ -121,10 +138,49 @@ export function MachinePanel() {
     },
     "by"
   );
+  // Jen S3: POSITION is disabled for the same standing reasons jogTo refuses.
+  const positionBlocked = jogBlockReason(
+    {
+      machineConnected,
+      machineState,
+      jobRunning,
+      statusStale,
+      workspaceVerified,
+      positionKind,
+      workCoordOffset,
+    },
+    "to"
+  );
+  // Jen S3: a refused jog click answers in the note slot for 2 s (console line kept).
+  const [jogFlash, setJogFlash] = useState<string | null>(null);
+  const jogFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [bedRefused, setBedRefused] = useState(false);
+  useEffect(
+    () => () => {
+      if (jogFlashTimer.current) clearTimeout(jogFlashTimer.current);
+    },
+    []
+  );
+  useEffect(() => {
+    // A refused Position Laser click must never be silently eaten: drop the tool.
+    if (positionBlocked !== null && activeTool === "positionLaser") setActiveTool("select");
+  }, [positionBlocked, activeTool, setActiveTool]);
+
+  async function jogAndReport(axis: "X" | "Y", distance: number) {
+    const before = useStore.getState().consoleLines.length;
+    await machineConnection.jog(axis, distance);
+    const added = useStore.getState().consoleLines.slice(before);
+    const refused = added.find((l) => JOG_CLICK_REASONS.has(l.text));
+    if (!refused) return;
+    if (jogFlashTimer.current) clearTimeout(jogFlashTimer.current);
+    setJogFlash(refused.text);
+    jogFlashTimer.current = setTimeout(() => setJogFlash(null), JOG_FLASH_MS);
+  }
 
   function openBedInputs() {
     setBedWInput(String(workspaceWidth));
     setBedHInput(String(workspaceHeight));
+    setBedRefused(false);
     setConfirmBedOpen(true);
   }
 
@@ -174,7 +230,9 @@ export function MachinePanel() {
             // non-positive or non-numeric size in plain words; inputs stay open.
             const w = bedWInput.trim() === "" ? NaN : Number(bedWInput);
             const h = bedHInput.trim() === "" ? NaN : Number(bedHInput);
-            if (machineConnection.confirmBedSize(w, h)) setConfirmBedOpen(false);
+            const ok = machineConnection.confirmBedSize(w, h);
+            setBedRefused(!ok);
+            if (ok) setConfirmBedOpen(false);
           }}
           style={{
             fontSize: "9px",
@@ -189,7 +247,10 @@ export function MachinePanel() {
           Confirm
         </button>
         <button
-          onClick={() => setConfirmBedOpen(false)}
+          onClick={() => {
+            setBedRefused(false);
+            setConfirmBedOpen(false);
+          }}
           style={{
             fontSize: "9px",
             padding: "2px 6px",
@@ -203,6 +264,19 @@ export function MachinePanel() {
           Cancel
         </button>
       </div>
+      {bedRefused && (
+        <span
+          role="alert"
+          style={{
+            fontSize: "10px",
+            fontWeight: 600,
+            color: "var(--danger)",
+            marginTop: "4px",
+          }}
+        >
+          Enter a width and height in mm, both above 0.
+        </span>
+      )}
     </div>
   );
 
@@ -750,7 +824,7 @@ export function MachinePanel() {
                     {workCoordOffset.y.toFixed(3)} from machine zero
                   </>
                 ) : (
-                  "Work origin offset set — size unknown until the machine reports it"
+                  "Work origin offset set — the machine hasn't reported how much yet."
                 )}
               </span>
               <button
@@ -821,7 +895,7 @@ export function MachinePanel() {
               <div
                 style={{
                   fontSize: "10px",
-                  color: "var(--text-muted)",
+                  color: "var(--text-secondary)",
                   display: "flex",
                   flexDirection: "column",
                   gap: "4px",
@@ -909,31 +983,31 @@ export function MachinePanel() {
                 padding: "8px",
               }}
             >
-              {jogBlocked !== null && (
+              {(jogFlash ?? jogBlocked) !== null && (
                 <div
                   data-testid="jog-blocked-note"
                   style={{
                     fontSize: "10px",
-                    color: "var(--text-muted)",
+                    color: jogFlash !== null ? "var(--accent-warm)" : "var(--text-secondary)",
                     textAlign: "center",
                     marginBottom: "4px",
                   }}
                 >
-                  {jogBlocked}
+                  {jogFlash ?? jogBlocked}
                 </div>
               )}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 32px)", gap: "2px" }}>
                 <div />
                 <JogButton
                   label="&#x25B2;"
-                  onClick={() => machineConnection.jog("Y", jogStep)}
+                  onClick={() => jogAndReport("Y", jogStep)}
                   title={jogBlocked ?? "Y+"}
                   disabled={jogBlocked !== null}
                 />
                 <div />
                 <JogButton
                   label="&#x25C0;"
-                  onClick={() => machineConnection.jog("X", -jogStep)}
+                  onClick={() => jogAndReport("X", -jogStep)}
                   title={jogBlocked ?? "X-"}
                   disabled={jogBlocked !== null}
                 />
@@ -950,14 +1024,14 @@ export function MachinePanel() {
                 />
                 <JogButton
                   label="&#x25B6;"
-                  onClick={() => machineConnection.jog("X", jogStep)}
+                  onClick={() => jogAndReport("X", jogStep)}
                   title={jogBlocked ?? "X+"}
                   disabled={jogBlocked !== null}
                 />
                 <div />
                 <JogButton
                   label="&#x25BC;"
-                  onClick={() => machineConnection.jog("Y", -jogStep)}
+                  onClick={() => jogAndReport("Y", -jogStep)}
                   title={jogBlocked ?? "Y-"}
                   disabled={jogBlocked !== null}
                 />
@@ -1022,7 +1096,8 @@ export function MachinePanel() {
               onClick={() =>
                 setActiveTool(activeTool === "positionLaser" ? "select" : "positionLaser")
               }
-              disabled={!machineConnected || machineState !== "idle"}
+              disabled={positionBlocked !== null}
+              title={positionBlocked ?? undefined}
               style={{
                 padding: "4px 8px",
                 borderRadius: "var(--radius-sm)",
@@ -1031,15 +1106,12 @@ export function MachinePanel() {
                   activeTool === "positionLaser"
                     ? "rgba(74,144,226,0.25)"
                     : "rgba(74,144,226,0.08)",
-                color:
-                  !machineConnected || machineState !== "idle"
-                    ? "var(--text-muted)"
-                    : "var(--accent)",
+                color: positionBlocked !== null ? "var(--text-muted)" : "var(--accent)",
                 fontSize: "10px",
                 fontWeight: 600,
-                cursor: machineConnected && machineState === "idle" ? "pointer" : "not-allowed",
+                cursor: positionBlocked !== null ? "not-allowed" : "pointer",
                 textTransform: "uppercase",
-                opacity: !machineConnected || machineState !== "idle" ? 0.4 : 1,
+                opacity: positionBlocked !== null ? 0.4 : 1,
               }}
             >
               Position

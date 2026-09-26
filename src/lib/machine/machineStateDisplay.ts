@@ -9,7 +9,7 @@ export const MACHINE_STATE_COLORS: Record<string, string> = {
   home: "var(--accent)",
   sleep: "var(--text-muted)",
   disconnected: "var(--text-muted)",
-  stale: "var(--text-muted)",
+  stale: "var(--text-secondary)",
 };
 
 export const MACHINE_STATE_LABELS: Record<string, string> = {

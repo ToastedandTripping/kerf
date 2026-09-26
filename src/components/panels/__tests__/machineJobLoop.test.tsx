@@ -32,7 +32,12 @@ import { MaterialTestDialog } from "../MaterialTestDialog";
 import { streamJob, pauseJob, resumeJob } from "../../../lib/machine/jobStream";
 import { beginJobSession, _testResetJobSession } from "../../../lib/machine/jobSession";
 import { machineConnection, _testResetJogAndBedState } from "../../../lib/machine/connection";
-import { JOG_REASON_BED } from "../../../lib/machine/jogBounds";
+import {
+  JOG_REASON_BED,
+  JOG_REASON_EDGE,
+  JOG_REASON_STALE,
+  JOG_REASON_OFFSET,
+} from "../../../lib/machine/jogBounds";
 import { StatusBar } from "../../bottom/StatusBar";
 import { resetStatusConsumer } from "../../../lib/machine/machineStatus";
 import { SerialTraceRecorder } from "../../../lib/machine/__tests__/serialTraceHarness";
@@ -1153,6 +1158,51 @@ describe("S3 — MachinePanel and StatusBar", () => {
       "Bed size not set — enter a width and height in mm, both above 0."
     );
     getByText("The width and height the laser head can reach, in mm.");
+    // Jen S3: the refusal is visible on screen, not only in the console.
+    const alert = getByText("Enter a width and height in mm, both above 0.");
+    expect(alert.getAttribute("role")).toBe("alert");
+  });
+
+  it("Jen S3: a valid Confirm shows no bed alert (positive sibling)", async () => {
+    mockPanelMachine(KEYED);
+    useStore.setState({ machineConnected: false, workspaceVerified: false });
+    await machineConnection.connect("/dev/ttyUSB0", 115200);
+    const { getByText, queryByRole } = render(<MachinePanel />);
+    fireEvent.click(getByText("Set bed size"));
+    fireEvent.click(getByText("Confirm"));
+    expect(useStore.getState().workspaceVerified).toBe(true);
+    expect(queryByRole("alert")).toBeNull();
+  });
+
+  it("Jen S3: a jog refused at the edge shows its reason in the note slot", async () => {
+    mockSerial(() => ({ responses: ["ok"], drained: [] }));
+    useStore.setState({ statusStale: false, machinePosition: { x: 0, y: 0, z: 0 } });
+    const { getByText, getByTitle, getByTestId, queryByTestId } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    expect(queryByTestId("jog-blocked-note")).toBeNull();
+    fireEvent.click(getByTitle("X-"));
+    await waitFor(() => expect(getByTestId("jog-blocked-note").textContent).toBe(JOG_REASON_EDGE));
+    expect(consoleTexts()).toContain(JOG_REASON_EDGE);
+    expect(sentCommands()).toEqual([]);
+  });
+
+  it.each([
+    ["bed unconfirmed", { workspaceVerified: false }, JOG_REASON_BED],
+    ["status stale", { statusStale: true }, JOG_REASON_STALE],
+    ["offset unknown", { workCoordOffset: { x: NaN, y: NaN } }, JOG_REASON_OFFSET],
+  ] as const)("Jen S3: POSITION is disabled with its reason when %s", (_l, patch, reason) => {
+    useStore.setState({ statusStale: false, ...patch });
+    const { getByText } = render(<MachinePanel />);
+    const pos = getByText("Position") as HTMLButtonElement;
+    expect(pos.disabled).toBe(true);
+    expect(pos.title).toBe(reason);
+    expect(pos.style.opacity).toBe("0.4");
+  });
+
+  it("Jen S3: POSITION is enabled when jogTo would accept (positive sibling)", () => {
+    useStore.setState({ statusStale: false });
+    const { getByText } = render(<MachinePanel />);
+    expect((getByText("Position") as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("a remembered bed shows who set it, with a Change button that opens the inputs", async () => {
@@ -1174,7 +1224,10 @@ describe("S3 — MachinePanel and StatusBar", () => {
     useStore.setState({ workspaceVerified: false, statusStale: false });
     const { getByText, getAllByTitle, getByTestId } = render(<MachinePanel />);
     fireEvent.click(getByText("Positioning (10mm)"));
-    const buttons = getAllByTitle(JOG_REASON_BED) as HTMLButtonElement[];
+    // Four arrows plus POSITION (Jen S3) share the reason.
+    const buttons = (getAllByTitle(JOG_REASON_BED) as HTMLButtonElement[]).filter(
+      (b) => b.textContent !== "Position"
+    );
     expect(buttons).toHaveLength(4);
     for (const b of buttons) expect(b.disabled).toBe(true);
     expect(getByTestId("jog-blocked-note").textContent).toBe(JOG_REASON_BED);
