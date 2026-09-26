@@ -16,6 +16,7 @@ import { useStore } from "../../../app/store";
 import { Rulers } from "../Rulers";
 
 const painted = new Set<HTMLCanvasElement>();
+const observed = new Set<Element>();
 let restoreGetContext: (() => void) | null = null;
 let restoreResizeObserver: (() => void) | null = null;
 
@@ -41,6 +42,7 @@ function makeFakeContext(): CanvasRenderingContext2D {
 
 beforeEach(() => {
   painted.clear();
+  observed.clear();
   const proto = HTMLCanvasElement.prototype as unknown as {
     getContext: (this: HTMLCanvasElement, kind: string) => unknown;
   };
@@ -56,7 +58,9 @@ beforeEach(() => {
   const g = globalThis as unknown as { ResizeObserver: unknown };
   const originalRO = g.ResizeObserver;
   g.ResizeObserver = class {
-    observe() {}
+    observe(el: Element) {
+      observed.add(el);
+    }
     disconnect() {}
     unobserve() {}
   };
@@ -90,5 +94,15 @@ describe("Rulers remount (R2 F2)", () => {
       expect(first).not.toContain(c);
       expect(painted.has(c)).toBe(true);
     }
+  });
+
+  it("observes the remounted canvases' parents for resize", () => {
+    const { container } = render(<Rulers />);
+    act(() => useStore.setState({ gridVisible: false }));
+    observed.clear();
+    act(() => useStore.setState({ gridVisible: true }));
+    const canvases = Array.from(container.querySelectorAll("canvas"));
+    expect(canvases).toHaveLength(2);
+    for (const c of canvases) expect(observed.has(c.parentElement!)).toBe(true);
   });
 });
