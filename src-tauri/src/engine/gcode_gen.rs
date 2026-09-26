@@ -458,8 +458,10 @@ pub fn generate_gcode(
         let s_min = (clamp_power_min(layer.power, layer.power_min) / 100.0 * s_value_max).round();
 
         // Power mode command. Every mode line below is `{power_cmd} S0`; positive S
-        // rides only on G1 words with motion, so no mode line arms a stationary
-        // beam (DECISIONS 2026-09-10; safety engine-arm).
+        // rides only on G1 words that carry X or Y, so no mode line arms a
+        // stationary beam (DECISIONS 2026-09-10; safety engine-arm). Known gap,
+        // tracked separately: a G1 whose X/Y equal the current position
+        // (zero-length G1, Razor W1) still carries positive S.
         let power_cmd = if layer.power_mode == "variable" {
             "M4"
         } else {
