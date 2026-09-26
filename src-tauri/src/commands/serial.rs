@@ -36,8 +36,8 @@
 //!   while holding `realtime` or `admitted_job`, and `submit` is never held
 //!   across a read, a flush, a drain, a pump wait, or an observer emit. Every
 //!   acquisition recovers from poison. **Every job-epoch write goes through
-//!   `SerialSession::admit_and_write`** (the `serial_send` job line, the
-//!   `$32=1` bracket, buffered Phase A via `JobPermit::admit_write`), which
+//!   `SerialSession::admit_and_write`** (the `serial_send` job line,
+//!   buffered Phase A via `JobPermit::admit_write`), which
 //!   checks admission and makes the one `write()` under `submit`; the flush
 //!   follows outside it. `permit_precheck` (before the `command` wait) and
 //!   `try_permit_begin` (under `command`, before the drain) are
@@ -735,6 +735,11 @@ pub enum JobEvent {
     Finished { outcome: String },
 }
 
+/// Refusal text when the caller has not verified laser mode by readback.
+/// Never `refused:`-prefixed and never names a disconnect, so `jobStream.ts`
+/// reads it as neither an admission refusal nor a dead port.
+pub(crate) const LASER_MODE_UNVERIFIED: &str = "$32=1 not verified -- laser mode must be read back before a job starts (Enable Laser Mode, $$ in the console, or reconnect)";
+
 /// Stream body: extracted for testability with injected event sink.
 /// `on_event` returns `Result<(), String>` — on `Err`, the pump sets `job_abort`
 /// and returns `Cancelled`; the wrapper calls `serial_stop_inner` after releasing
@@ -743,16 +748,18 @@ pub enum JobEvent {
 /// RF-15: `job_epoch` is the admitted job's epoch. The body never clears
 /// `job_abort` (`serial_job_begin_inner` is its only clearer, under
 /// `admitted_job`). Entry: `permit_precheck` before the lock, then the
-/// non-authoritative `try_permit_begin` under the lock before the drain and
-/// before `$32=1` (refusal → `Err(refused: not-admitted…)`, nothing read or
-/// written). The `$32=1` write goes through `admit_and_write` (refusal →
-/// `Err(refused: not-admitted…)`, nothing written); every job line goes
-/// through `JobPermit::admit_write`, and a refused line's outcome string
-/// (`Ok`) is the refusal contract text.
+/// non-authoritative `try_permit_begin` under the lock before the drain
+/// (refusal → `Err(refused: not-admitted…)`, nothing read or written). Then
+/// the laser-mode check, still before the drain: `laser_mode_verified == false`
+/// → `Err(LASER_MODE_UNVERIFIED)`, nothing read or written, `pump_in_flight`
+/// never raised. Admission refusals win over it. No setting is ever written.
+/// Every job line goes through `JobPermit::admit_write`, and a refused line's
+/// outcome string (`Ok`) is the refusal contract text.
 pub(crate) fn serial_stream_job_inner(
     inner: &SerialInner,
     gcode: &str,
     job_epoch: u64,
+    laser_mode_verified: bool,
     on_event: &dyn Fn(JobEvent) -> Result<(), String>,
 ) -> Result<String, String> {
     inner.session.permit_precheck(job_epoch)?;
@@ -763,63 +770,30 @@ pub(crate) fn serial_stream_job_inner(
         .map_err(|e| format!("Lock failed: {}", e))?;
     let cmd_channel = guard.as_mut().ok_or("Not connected")?;
 
-    // Pre-drain entry check (non-authoritative), before the drain and before
-    // `$32=1`, so a refused stream consumes no reader bytes.
+    // Pre-drain entry check (non-authoritative), before the drain, so a
+    // refused stream consumes no reader bytes.
     inner.session.try_permit_begin(Some(job_epoch))?;
+
+    // DECISIONS 2026-09-10: START refuses until laser mode is read back
+    // matching; Kerf never writes `$32` on the job's behalf. The TS readback
+    // (`grblLaserMode`, set only by `applyLaserModeReadback`) is the authority
+    // until S4a adds a native snapshot. Refuses before any read or write.
+    if !laser_mode_verified {
+        return Err(LASER_MODE_UNVERIFIED.to_string());
+    }
 
     let _flight = PumpFlight::begin(&inner.pump_in_flight);
 
     // Capture epoch at command lock acquisition for snapshot publication.
     let lock_epoch = inner.session.epoch.load(Ordering::SeqCst);
 
-    // $32=1 hard gate (DECISIONS.md pin). Send via the existing per-line
-    // pump so it gets a proper drain + terminal wait.
+    // Drain stale controller output before the job; ALARM/MSG lines reach the console.
     let drain = serial_pump::drain_classified(&mut cmd_channel.reader, &mut cmd_channel.pending);
     for line in &drain.dropped {
         eprintln!("[serial] stream job drained: {}", line);
     }
     for line in &drain.surfaced {
         let _ = on_event(JobEvent::Console { text: line.clone() });
-    }
-
-    // Write $32=1 on the job's behalf: admission + write under `submit`,
-    // flush outside it.
-    inner
-        .session
-        .admit_and_write(job_epoch, || cmd_channel.writer.write_all(b"$32=1\n"))?
-        .map_err(|e| format!("Write error: {}", e))?;
-    cmd_channel
-        .writer
-        .flush()
-        .map_err(|e| format!("Flush error: {}", e))?;
-
-    let dollar32 = serial_pump::run_pump(
-        &mut cmd_channel.reader,
-        &mut cmd_channel.writer,
-        &mut cmd_channel.pending,
-        DEFAULT_LIVENESS_TICKS,
-        serial_pump::DEFAULT_IDLE_STALL_TICKS,
-        None,
-    );
-    // Banner publication (mirrors `serial_send_inner`): a STOP landing during
-    // the `$32=1` exchange must not lose its banner to this pump.
-    if let Ok(ref out) = dollar32 {
-        if out.terminal == serial_pump::PumpTerminal::Banner
-            && inner.session.stop_in_flight.load(Ordering::SeqCst)
-        {
-            inner.session.banner_observed.store(true, Ordering::SeqCst);
-            inner.session.emit("banner_observed");
-        }
-    }
-    match dollar32 {
-        Ok(out) => {
-            let has_ok = out.lines.iter().any(|l| l == "ok");
-            if !has_ok {
-                return Err(format!("$32=1 gate failed: {:?}", out.lines));
-            }
-        }
-        Err(PumpFailure::Disconnected(msg)) => return Err(format!("disconnected: {}", msg)),
-        Err(PumpFailure::Io(msg)) => return Err(msg),
     }
 
     // Parse G-code lines (same filtering as the TS per-line path).
@@ -935,21 +909,24 @@ pub(crate) fn serial_stream_job_inner(
 /// for the full job so disconnect's `0x18` fires if the user disconnects
 /// mid-job.
 ///
-/// `$32=1` is hard-gated: the first line sent is `$32=1`, and the pump waits
-/// for its `ok` before sending any G-code. This is a DECISIONS.md pin.
+/// Refuses unless the caller verified laser mode by readback
+/// (`laser_mode_verified`); the command never writes a setting.
 #[tauri::command]
 ///
 /// `job_epoch` (IPC key `jobEpoch`) is REQUIRED: an omitted key is rejected by
 /// Tauri's argument deserialization, so the command fails closed.
+/// `laser_mode_verified` (IPC key `laserModeVerified`) is required too, and
+/// fails closed the same way when omitted.
 pub async fn serial_stream_job(
     state: State<'_, SerialState>,
     gcode: String,
     job_epoch: u64,
+    laser_mode_verified: bool,
     channel: Channel<JobEvent>,
 ) -> Result<String, String> {
     let inner = state.0.clone();
     tokio::task::spawn_blocking(move || {
-        serial_stream_job_inner(&inner, &gcode, job_epoch, &|event| {
+        serial_stream_job_inner(&inner, &gcode, job_epoch, laser_mode_verified, &|event| {
             channel
                 .send(event)
                 .map_err(|e| format!("channel.send failed: {e}"))
@@ -1905,47 +1882,7 @@ mod tests {
         );
     }
 
-    /// PIN 3: stream body writes $32=1 as its very first line command.
-    /// If someone removes the $32=1 write, this test fails. With $32=0, GRBL
-    /// does not blank the beam during G0 rapids — beam fires across travel moves.
-    /// The MockPort times out on reads so the pump returns Disconnected after the
-    /// $32=1 write, and we can observe the write in the buffer.
-    #[test]
-    fn pin_stream_writes_dollar32_first() {
-        let written = Arc::new(Mutex::new(Vec::new()));
-        let port: Box<dyn SerialPort> = Box::new(MockPort::shared(written.clone()));
-        let reader_port: Box<dyn SerialPort> = Box::new(MockPort::new());
-        let inner = SerialInner {
-            command: Mutex::new(Some(CommandChannel {
-                writer: port,
-                reader: BufReader::new(reader_port),
-                pending: Vec::new(),
-            })),
-            realtime: Mutex::new(None),
-            connected: AtomicBool::new(true),
-            pump_in_flight: AtomicBool::new(false),
-            job_abort: AtomicBool::new(false),
-            session: SerialSession::default(),
-        };
-
-        inner.session.phase.store(PHASE_IDLE, Ordering::SeqCst);
-        let job = serial_job_begin_inner(&inner).unwrap();
-        let result =
-            serial_stream_job_inner(&inner, "G0 X10\nG1 X20 F1000 S500\n", job, &|_evt| Ok(()));
-
-        assert!(
-            result.is_err(),
-            "stream should fail (MockPort returns no ack for $32=1)"
-        );
-
-        let bytes = written.lock().unwrap();
-        let written_str = String::from_utf8_lossy(&bytes);
-        assert!(
-            written_str.starts_with("$32=1\n"),
-            "first write must be $32=1\\n; got: {:?}",
-            written_str
-        );
-    }
+    // PIN 3 (`pin_stream_writes_dollar32_first`) was replaced by rf15::s1b_stream_writes_no_dollar32_before_first_gcode_line (kerf-safety-s1b).
 
     // PIN 4: connect body writes exactly one 0x18 soft-reset. This pin cannot
     // be tested without a port factory injection (serial_connect_inner calls
@@ -2074,9 +2011,9 @@ mod tests {
         }
     }
 
-    // W2: b1_event_sink_failure_triggers_abort removed — zero assertions,
-    // the sink-failure path doesn't trigger via MockPort ($32=1 pump fails
-    // before the buffered pump callback ever fires). m6 is killed by
+    // W2: b1_event_sink_failure_triggers_abort removed — zero assertions:
+    // at the time, the sink-failure path didn't trigger via MockPort (the
+    // `$32=1` pump failed before the buffered pump callback ever fired). m6 is killed by
     // b1_stop_closes_admission_and_invalidates_permits.
 
     /// Connect with port factory: verifies the port factory parameter works.
@@ -3567,6 +3504,98 @@ mod sim_integration {
             other => panic!("expected buffered Disconnected, got {other:?}"),
         }
     }
+
+    /// A `SerialInner` whose command channel and realtime handle are all
+    /// `try_clone`s of one sim brain (as `rf15::rig` does with its port),
+    /// with the banner drained, epoch 1 and phase Idle.
+    fn s1b_sim_inner(sim: &SimPort) -> SerialInner {
+        let inner = SerialInner {
+            command: Mutex::new(Some(CommandChannel {
+                writer: sim.try_clone().unwrap(),
+                reader: BufReader::new(sim.try_clone().unwrap()),
+                pending: Vec::new(),
+            })),
+            realtime: Mutex::new(Some(sim.try_clone().unwrap())),
+            connected: AtomicBool::new(true),
+            pump_in_flight: AtomicBool::new(false),
+            job_abort: AtomicBool::new(false),
+            session: SerialSession::default(),
+        };
+        {
+            let mut g = inner.command.lock().unwrap();
+            let ch = g.as_mut().unwrap();
+            let _ = serial_pump::drain_classified(&mut ch.reader, &mut ch.pending);
+            // banner
+        }
+        inner.session.epoch.store(1, Ordering::SeqCst);
+        inner.session.phase.store(PHASE_IDLE, Ordering::SeqCst);
+        inner
+    }
+
+    /// One line through the command channel and the real `run_pump`.
+    fn s1b_sim_exchange(inner: &SerialInner, line: &str) -> Vec<String> {
+        let mut g = inner.command.lock().unwrap();
+        let ch = g.as_mut().unwrap();
+        ch.writer.write_all(line.as_bytes()).unwrap();
+        ch.writer.flush().unwrap();
+        let out = serial_pump::run_pump(
+            &mut ch.reader,
+            &mut ch.writer,
+            &mut ch.pending,
+            DEFAULT_LIVENESS_TICKS,
+            serial_pump::DEFAULT_IDLE_STALL_TICKS,
+            None,
+        )
+        .expect("sim exchange");
+        out.lines
+    }
+
+    /// S1b-T5 (Razor N8): a controller that acknowledges `$32=1` but does not
+    /// apply it cannot start a buffered job, because the start checks the
+    /// readback-set flag (false for this controller) instead of an `ok`.
+    #[test]
+    fn s1b_n8_acked_but_ignored_dollar32_cannot_start_a_buffered_job() {
+        let sim = SimPort::new(SimConfig::default());
+        let inner = s1b_sim_inner(&sim);
+        let lines = s1b_sim_exchange(&inner, "$32=0\n");
+        assert!(lines.iter().any(|l| l == "ok"), "$32=0 ack: {lines:?}");
+        sim.set_ignore_setting(32);
+        assert!(!sim.laser_mode(), "precondition: controller at $32=0");
+        let e = serial_job_begin_inner(&inner).unwrap();
+
+        let result =
+            serial_stream_job_inner(&inner, "M4 S500\nG1 X1 F500\nM5\n", e, false, &|_| Ok(()));
+
+        assert_eq!(result, Err(LASER_MODE_UNVERIFIED.to_string()));
+        assert_eq!(sim.outbound_len(), 0, "nothing sent, nothing acknowledged");
+        assert_eq!(sim.planner_len(), 0, "nothing queued");
+        assert!(!sim.spindle_energized());
+        let dump = s1b_sim_exchange(&inner, "$$\n");
+        assert!(dump.iter().any(|l| l == "$32=0"), "$$: {dump:?}");
+        assert!(!dump.iter().any(|l| l == "$32=1"), "$$: {dump:?}");
+    }
+
+    /// S1b-T6 (control for S1b-C1): a verified buffered job completes on the
+    /// default sim and writes no `$32`.
+    #[test]
+    fn s1b_verified_buffered_job_completes_on_sim_without_writing_dollar32() {
+        let sim = SimPort::new(SimConfig::default());
+        let inner = s1b_sim_inner(&sim);
+        let e = serial_job_begin_inner(&inner).unwrap();
+
+        let result = serial_stream_job_inner(
+            &inner,
+            "M4 S500\nG1 X1 F500\nG1 X2 F500\nM5\n",
+            e,
+            true,
+            &|_| Ok(()),
+        );
+
+        assert_eq!(result, Ok("complete".to_string()));
+        let dump = s1b_sim_exchange(&inner, "$$\n");
+        let d32: Vec<&String> = dump.iter().filter(|l| l.starts_with("$32=")).collect();
+        assert_eq!(d32, vec!["$32=1"], "$$: {dump:?}");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3986,7 +4015,7 @@ mod rf15 {
     // ── R5-R7 (buffered) ─────────────────────────────────────────────────
 
     /// R5: a queued buffered stream after a stop is refused at entry: nothing
-    /// written after the reset (not even `$32=1`) and `job_abort` untouched.
+    /// written after the reset (nothing) and `job_abort` untouched.
     #[test]
     fn rf15_buffered_stream_after_stop_refused_at_entry() {
         ScriptedPort::run_scenario(
@@ -3995,14 +4024,15 @@ mod rf15 {
                 let e = serial_job_begin_inner(&inner).unwrap();
                 assert!(matches!(stop(&inner), StopResult::Confirmed { .. }));
 
-                let result = serial_stream_job_inner(&inner, "G1 X1\nG1 X2\n", e, &|_| Ok(()));
+                let result =
+                    serial_stream_job_inner(&inner, "G1 X1\nG1 X2\n", e, true, &|_| Ok(()));
                 let err = result.expect_err("entry must refuse");
                 assert!(err.starts_with("refused: not-admitted:"), "{err}");
                 let trace = base.trace();
                 assert_one_reset_per_stop(&trace);
                 assert!(
                     writer_writes_after_reset(&trace).is_empty(),
-                    "no Writer write (not even $32=1) after the 0x18: {trace:?}"
+                    "no Writer write (nothing) after the 0x18: {trace:?}"
                 );
                 assert!(
                     inner.job_abort.load(Ordering::SeqCst),
@@ -4026,7 +4056,6 @@ mod rf15 {
             || {
                 let (inner, base) = rig(vec![
                     ScriptStep::Timeout,
-                    ScriptStep::Data(b"ok\r\n"), // $32=1 ack
                     ScriptStep::HoldUntilRelease { id: "phase_b" },
                     ScriptStep::Data(b"ok\r\n"),
                     ScriptStep::Data(BANNER),
@@ -4035,8 +4064,9 @@ mod rf15 {
                 let gcode: String = (0..30).map(|i| format!("G1 X{i} F500\n")).collect();
 
                 let i2 = inner.clone();
-                let pump =
-                    thread::spawn(move || serial_stream_job_inner(&i2, &gcode, e, &|_| Ok(())));
+                let pump = thread::spawn(move || {
+                    serial_stream_job_inner(&i2, &gcode, e, true, &|_| Ok(()))
+                });
                 wait_until("pump in Phase B", || has_hold_reached(&base, "phase_b"));
 
                 let i3 = inner.clone();
@@ -4071,21 +4101,16 @@ mod rf15 {
         ScriptedPort::run_scenario(
             || {
                 let (inner, base) = rig(vec![
-                    ScriptStep::HoldUntilRelease { id: "ack32" },
-                    ScriptStep::Data(b"ok\r\n"),
                     ScriptStep::HoldUntilRelease { id: "banner" },
                     ScriptStep::Data(BANNER),
                 ]);
                 let e = serial_job_begin_inner(&inner).unwrap();
+                base.hold_next_write(HandleRole::Writer, "line");
 
                 let i2 = inner.clone();
                 let pump = thread::spawn(move || {
-                    serial_stream_job_inner(&i2, "G1 X1 F500\n", e, &|_| Ok(()))
+                    serial_stream_job_inner(&i2, "G1 X1 F500\n", e, true, &|_| Ok(()))
                 });
-                // Arm the write hold for the job line once $32=1 is out.
-                wait_until("$32 ack hold", || has_hold_reached(&base, "ack32"));
-                base.hold_next_write(HandleRole::Writer, "line");
-                base.release_hold("ack32");
                 wait_until("line write parked", || has_hold_reached(&base, "line"));
 
                 let i3 = inner.clone();
@@ -4119,53 +4144,10 @@ mod rf15 {
         .unwrap();
     }
 
-    /// O3 (`$32=1` bracket): O1's shape on the `$32=1` write. The stream's
-    /// `$32=1` pump reads the stop's banner instead of `ok`, so the stream
-    /// fails the gate, and it publishes the banner so the stop confirms.
-    #[test]
-    fn rf15_o3_dollar32_write_in_progress_precedes_single_reset() {
-        ScriptedPort::run_scenario(
-            || {
-                let (inner, base) = rig(vec![
-                    ScriptStep::HoldUntilRelease { id: "banner" },
-                    ScriptStep::Data(BANNER),
-                ]);
-                let e = serial_job_begin_inner(&inner).unwrap();
-                base.hold_next_write(HandleRole::Writer, "line");
-
-                let i2 = inner.clone();
-                let pump = thread::spawn(move || {
-                    serial_stream_job_inner(&i2, "G1 X1 F500\n", e, &|_| Ok(()))
-                });
-                wait_until("$32=1 write parked", || has_hold_reached(&base, "line"));
-
-                let i3 = inner.clone();
-                let stopper = thread::spawn(move || stop(&i3));
-                wait_stop_entered(&inner);
-                assert_stop_parked_behind_write(&base, "O3");
-                base.release_hold("line");
-
-                wait_reset(&base);
-                wait_until("banner hold", || has_hold_reached(&base, "banner"));
-                base.release_hold("banner");
-                let result = pump.join().unwrap();
-                let stop_result = stopper.join().unwrap();
-
-                let trace = base.trace();
-                assert_line_before_single_reset(&trace, b"$32=1\n");
-                assert_one_reset_per_stop(&trace);
-                let err = result.expect_err("O3: the stream fails its $32=1 gate");
-                assert!(err.starts_with("$32=1 gate failed"), "{err}");
-                assert!(
-                    matches!(stop_result, StopResult::Confirmed { .. }),
-                    "O3 banner-publication assertion: the stop must confirm off the \
-                     banner the $32=1 pump consumed: {stop_result:?}"
-                );
-            },
-            SCENARIO,
-        )
-        .unwrap();
-    }
+    // O3 (`rf15_o3_dollar32_write_in_progress_precedes_single_reset`) was
+    // retired by kerf-safety-s1b: the buffered start no longer writes `$32=1`,
+    // so its subject is gone. Buffered write-vs-reset ordering is O2's
+    // (re-proved by mutant S1b-M7); O1 and O4 remain per-line evidence.
 
     /// O4 (stop first): a writer parked on the command lock after its
     /// precheck; the stop runs to completion; then the lock is released. The
@@ -4210,6 +4192,126 @@ mod rf15 {
             Duration::from_secs(6),
         )
         .unwrap();
+    }
+
+    // ── S1b ──────────────────────────────────────────────────────────────
+
+    /// S1b-T1: an unverified stream is refused before any read or write and
+    /// changes no session state.
+    #[test]
+    fn s1b_unverified_stream_touches_nothing() {
+        ScriptedPort::run_scenario(
+            || {
+                // A drain, if reached, would record ReadData.
+                let (inner, base) = rig(vec![ScriptStep::Data(b"ok\r\n")]);
+                let e = serial_job_begin_inner(&inner).unwrap();
+
+                let result = serial_stream_job_inner(&inner, "G1 X1 F500\n", e, false, &|_| Ok(()));
+
+                assert_eq!(result, Err(LASER_MODE_UNVERIFIED.to_string()));
+                let trace = base.trace();
+                assert!(
+                    !trace.iter().any(|t| matches!(t, TraceEvent::Write { .. })),
+                    "no write of any role: {trace:?}"
+                );
+                assert!(
+                    !trace
+                        .iter()
+                        .any(|t| matches!(t, TraceEvent::ReadData { .. })),
+                    "no read: {trace:?}"
+                );
+                assert!(!inner.pump_in_flight.load(Ordering::SeqCst));
+                assert!(!inner.job_abort.load(Ordering::SeqCst));
+                assert_eq!(*inner.session.admitted_job.lock().unwrap(), Some(e));
+            },
+            SCENARIO,
+        )
+        .unwrap();
+    }
+
+    /// S1b-T2 (replaces PIN 3): a verified buffered job's first Writer write
+    /// is its first G-code line, no Writer write contains `$32`, and the job
+    /// completes.
+    #[test]
+    fn s1b_stream_writes_no_dollar32_before_first_gcode_line() {
+        ScriptedPort::run_scenario(
+            || {
+                // Leading Timeout keeps both drains off the acks; trailing
+                // Timeouts keep a stray read from hitting EOF (Disconnected).
+                let (inner, base) = rig(vec![
+                    ScriptStep::Timeout,
+                    ScriptStep::Data(b"ok\r\nok\r\n"),
+                    ScriptStep::Timeout,
+                    ScriptStep::Timeout,
+                    ScriptStep::Timeout,
+                ]);
+                let e = serial_job_begin_inner(&inner).unwrap();
+
+                let result = serial_stream_job_inner(
+                    &inner,
+                    "G0 X10\nG1 X20 F1000 S500\n",
+                    e,
+                    true,
+                    &|_| Ok(()),
+                );
+
+                assert_eq!(result, Ok("complete".to_string()));
+                let trace = base.trace();
+                let writes: Vec<&Vec<u8>> = trace
+                    .iter()
+                    .filter_map(|t| match t {
+                        TraceEvent::Write {
+                            role: HandleRole::Writer,
+                            data,
+                        } => Some(data),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    writes.first().map(|d| d.as_slice()),
+                    Some(&b"G0 X10\n"[..]),
+                    "first Writer write: {trace:?}"
+                );
+                assert!(
+                    !writes.iter().any(|d| d.windows(3).any(|w| w == b"$32")),
+                    "no Writer write may contain $32: {trace:?}"
+                );
+            },
+            SCENARIO,
+        )
+        .unwrap();
+    }
+
+    /// S1b-T3: an admission refusal wins over the laser-mode refusal.
+    #[test]
+    fn s1b_admission_refusal_wins_over_laser_refusal() {
+        ScriptedPort::run_scenario(
+            || {
+                let (inner, base) = rig(vec![ScriptStep::Data(b"ok\r\n")]);
+
+                let result = serial_stream_job_inner(&inner, "G1 X1 F500\n", 1, false, &|_| Ok(()));
+
+                let err = result.expect_err("unadmitted stream must be refused");
+                assert!(err.starts_with("refused: not-admitted:"), "{err}");
+                let trace = base.trace();
+                assert!(
+                    !trace.iter().any(|t| matches!(t, TraceEvent::Write { .. })),
+                    "no writes: {trace:?}"
+                );
+            },
+            SCENARIO,
+        )
+        .unwrap();
+    }
+
+    /// S1b-T4 (coverage): the laser refusal is neither an admission refusal
+    /// nor a dead port to `jobStream.ts`.
+    #[test]
+    fn laser_mode_unverified_is_not_a_refusal_or_disconnect() {
+        assert!(LASER_MODE_UNVERIFIED.starts_with("$32=1 not verified"));
+        assert!(!LASER_MODE_UNVERIFIED.starts_with(crate::commands::serial_session::REFUSED_PREFIX));
+        assert!(!LASER_MODE_UNVERIFIED.contains("disconnected"));
+        assert!(!LASER_MODE_UNVERIFIED.contains("Not connected"));
     }
 
     // ── R8 (resend failure / CAS / recovery) ─────────────────────────────

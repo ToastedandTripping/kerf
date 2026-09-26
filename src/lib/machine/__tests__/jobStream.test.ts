@@ -182,6 +182,29 @@ describe("jobStream.ts — Phase 2A streaming mode dispatch", () => {
       expect(result.endState).toBe("error");
     });
 
+    it("S1b-T8: a laser-mode refusal from Rust is an error, not a dead port", async () => {
+      // Literal text of the Rust constant LASER_MODE_UNVERIFIED (serial.rs).
+      const refusal =
+        "$32=1 not verified -- laser mode must be read back before a job starts (Enable Laser Mode, $$ in the console, or reconnect)";
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        if (cmd === "serial_stream_job") throw refusal;
+        if (cmd === "serial_stop") {
+          return {
+            outcome: "confirmed",
+            epochBefore: 1,
+            epochAfter: 2,
+            messages: ["STOP: 0x18 sent"],
+          };
+        }
+        return undefined;
+      });
+      const result = await streamJob("G1 X10 F500", { label: "Test", session: detachedSession() });
+      expect(result.endState).toBe("error");
+      const lines = useStore.getState().consoleLines.map((l) => l.text);
+      expect(lines.some((t) => t.includes("failed: $32=1 not verified"))).toBe(true);
+      expect(useStore.getState().machineConnected).toBe(true);
+    });
+
     it("cleans up jobRunning and jobProgress on every exit", async () => {
       mockInvoke.mockResolvedValueOnce("complete");
       await streamJob("G1 X10 F500", { label: "Test", session: detachedSession() });
@@ -598,6 +621,26 @@ describe("RF-15 admission fence (jobStream)", () => {
     expect(result.endState).toBe("complete");
     const stream = recs().find((r) => r.command === "serial_stream_job")!;
     expect(stream.args.jobEpoch).toBe(session.jobId);
+  });
+
+  it("S1b-T7a: the buffered invoke carries laserModeVerified === true when the flag is set", async () => {
+    localStorage.setItem("streamingMode", "buffered");
+    fenced();
+    const session = (await beginJobSession("Job"))!;
+    useStore.setState({ grblLaserMode: true });
+    await streamJob("G1 X1", { label: "Job", session });
+    const stream = recs().find((r) => r.command === "serial_stream_job")!;
+    expect(stream.args.laserModeVerified).toBe(true);
+  });
+
+  it("S1b-T7b: the buffered invoke carries laserModeVerified === false when the flag is clear", async () => {
+    localStorage.setItem("streamingMode", "buffered");
+    fenced();
+    const session = (await beginJobSession("Job"))!;
+    useStore.setState({ grblLaserMode: false });
+    await streamJob("G1 X1", { label: "Job", session });
+    const stream = recs().find((r) => r.command === "serial_stream_job")!;
+    expect(stream.args.laserModeVerified).toBe(false);
   });
 
   it("T7 negative control: a reconnect before the first line refuses it (cancelled, never complete)", async () => {

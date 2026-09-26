@@ -126,9 +126,7 @@ const BANNER: &str = "Grbl 1.1f ['$' for help]";
 ///
 /// Not modelled (each named, parked, and unknown or different on hardware):
 /// - Setting writes outside Idle/Alarm. Stock refuses `$N=V` with `error:8`
-///   there; this sim accepts a write in every state. It matters because the
-///   buffered job writes `$32=1` as its first line, possibly while a previous
-///   job's planner is still draining.
+///   there; this sim accepts a write in every state.
 /// - Bad-number writes, partly. A value Rust parses as a number but that is
 ///   not finite (`NaN`, `inf`) is refused with `error:2` (stock's bad number
 ///   format) and not applied. A value that does not parse as a number at all
@@ -306,8 +304,9 @@ struct Faults {
     reject_setting: Option<u32>,
     /// Answer `ok` to a `$N=V` write whose `N` equals this, and do NOT apply
     /// it. DECISIONS 2026-09-10: "a controller that acknowledges a settings
-    /// write is not a controller that accepted it". Consumer: the Rust
-    /// `$32=1` gate in `serial_stream_job`, which checks for `ok` only.
+    /// write is not a controller that accepted it". Consumer:
+    /// `sim_integration::s1b_n8_acked_but_ignored_dollar32_cannot_start_a_buffered_job`;
+    /// after kerf-safety-s1b no Kerf code writes `$32` for a job.
     ignore_setting: Option<u32>,
     /// One-shot laser-switch wedge: the next M3/M4 line (not M5) arms
     /// `GrblBrain::wedged` when that line is PARSED (its newline arrives),
@@ -1013,7 +1012,8 @@ impl SimPort {
     /// Answer `ok` to a `$n=V` write and do NOT apply it: the START ruling's
     /// named failure (DECISIONS 2026-09-10, "a controller that acknowledges
     /// a settings write is not a controller that accepted it"). Consumer:
-    /// the Rust `$32=1` gate, which checks for `ok` only and never reads back.
+    /// `sim_integration::s1b_n8_acked_but_ignored_dollar32_cannot_start_a_buffered_job`;
+    /// after kerf-safety-s1b no Kerf code writes `$32` for a job.
     pub fn set_ignore_setting(&self, n: u32) {
         self.brain.lock().unwrap().faults.ignore_setting = Some(n);
     }
