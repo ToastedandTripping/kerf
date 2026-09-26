@@ -947,8 +947,8 @@ mod golden_tests {
     /// Clamped, power_min becomes 40, s_min becomes 400, and the commanded
     /// value stays S400.
     ///
-    /// So the expected S value in the fixture is **S400**, on an **M4** line:
-    /// 40% of 1000. If this fixture ever reads S600, W4 has regressed; if it
+    /// So the expected S value is **S400** on every `G1`, with the **M4** mode
+    /// line at `S0`. If a `G1` reads S600, W4 has regressed; if the mode line
     /// reads M3, the variable default has regressed.
     #[tokio::test]
     async fn golden_15_line_variable_power_min() {
@@ -966,8 +966,20 @@ mod golden_tests {
         // Asserted inline as well as against the fixture: a golden proves the
         // bytes did not move, but only a named assertion says WHY these bytes.
         assert!(
-            result.gcode.contains("M4 S400"),
-            "expected M4 S400 (power=40% of s_value_max=1000); gcode:\n{}",
+            result.gcode.contains("M4 S0"),
+            "expected the M4 mode line at S0 (W4's evidence now lives on the G1 words); \
+             gcode:\n{}",
+            result.gcode
+        );
+        let g1: Vec<&str> = result
+            .gcode
+            .lines()
+            .filter(|l| l.starts_with("G1 "))
+            .collect();
+        assert!(
+            !g1.is_empty() && g1.iter().all(|l| l.ends_with(" S400")),
+            "expected every G1 at S400 (power=40% of s_value_max=1000); W4's evidence lives \
+             on the G1 words. gcode:\n{}",
             result.gcode
         );
         assert!(
@@ -1011,5 +1023,690 @@ mod golden_tests {
             run1.gcode, run2.gcode,
             "generator output must be deterministic across runs"
         );
+    }
+
+    // ── safety engine-arm: G-code word parser and arm-diff classifier ──────
+    //
+    // "Mode line" means a line carrying an M3 or M4 word. The engine-arm rule
+    // is that every mode line carries S0 and positive S rides only on G1 words
+    // with motion. These helpers read that from emitted text, with no regex
+    // crate: a hand-written scanner over `([A-Z])\s*(-?\d*\.?\d+)`.
+
+    /// Every `(letter, number)` word on the code part of `line` (everything
+    /// from the first `;` is a comment and is ignored).
+    fn words(line: &str) -> Vec<(char, f64)> {
+        let code = line.split(';').next().unwrap_or("");
+        let bytes = code.as_bytes();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            let c = bytes[i] as char;
+            if c.is_ascii_uppercase() {
+                let mut j = i + 1;
+                while j < bytes.len() && (bytes[j] as char).is_ascii_whitespace() {
+                    j += 1;
+                }
+                let start = j;
+                if j < bytes.len() && bytes[j] == b'-' {
+                    j += 1;
+                }
+                let digits_start = j;
+                let mut seen_dot = false;
+                while j < bytes.len() {
+                    let d = bytes[j] as char;
+                    if d.is_ascii_digit() {
+                        j += 1;
+                    } else if d == '.' && !seen_dot {
+                        seen_dot = true;
+                        j += 1;
+                    } else {
+                        break;
+                    }
+                }
+                let num = &code[start..j];
+                let has_digit = code[digits_start..j].bytes().any(|b| b.is_ascii_digit());
+                if has_digit && !num.ends_with('.') {
+                    if let Ok(v) = num.parse::<f64>() {
+                        out.push((c, v));
+                        i = j;
+                        continue;
+                    }
+                }
+            }
+            i += 1;
+        }
+        out
+    }
+
+    fn s_word(line: &str) -> Option<f64> {
+        words(line)
+            .into_iter()
+            .find(|&(c, _)| c == 'S')
+            .map(|(_, v)| v)
+    }
+
+    fn is_mode_line(line: &str) -> bool {
+        words(line)
+            .iter()
+            .any(|&(c, v)| c == 'M' && (v == 3.0 || v == 4.0))
+    }
+
+    fn has_word(line: &str, letter: char, value: f64) -> bool {
+        words(line).iter().any(|&(c, v)| c == letter && v == value)
+    }
+
+    fn has_xy(line: &str) -> bool {
+        words(line).iter().any(|&(c, _)| c == 'X' || c == 'Y')
+    }
+
+    /// `line` with its ` S<number>` token removed from the code part. Any `;`
+    /// comment is kept byte-for-byte.
+    fn strip_s_word(line: &str) -> String {
+        let (code, comment) = match line.find(';') {
+            Some(k) => (&line[..k], &line[k..]),
+            None => (line, ""),
+        };
+        let bytes = code.as_bytes();
+        let mut k = 0;
+        while k < bytes.len() {
+            let at_token_start = bytes[k] == b'S' && (k == 0 || bytes[k - 1] == b' ');
+            if at_token_start {
+                let mut j = k + 1;
+                if j < bytes.len() && bytes[j] == b'-' {
+                    j += 1;
+                }
+                let num_start = j;
+                while j < bytes.len() && (bytes[j].is_ascii_digit() || bytes[j] == b'.') {
+                    j += 1;
+                }
+                if j > num_start {
+                    let from = if k > 0 { k - 1 } else { k };
+                    return format!("{}{}{}", &code[..from], &code[j..], comment);
+                }
+            }
+            k += 1;
+        }
+        line.to_string()
+    }
+
+    #[derive(Debug, Default, PartialEq)]
+    struct ArmDiff {
+        mode_s0: usize,
+        g1_gained_s: usize,
+    }
+
+    /// Classify every changed line between two programs. The only accepted
+    /// changes are class A (a positive mode line goes to S0, nothing else on
+    /// the line moves) and class B (a G1 with X/Y and no S gains a positive S).
+    fn classify_arm_diff(before: &str, after: &str) -> Result<ArmDiff, String> {
+        let bl: Vec<&str> = before.lines().collect();
+        let al: Vec<&str> = after.lines().collect();
+        if bl.len() != al.len() {
+            return Err(format!(
+                "line count changed: {} before, {} after",
+                bl.len(),
+                al.len()
+            ));
+        }
+        let mut diff = ArmDiff::default();
+        for (i, (b, a)) in bl.iter().zip(al.iter()).enumerate() {
+            let (b, a) = (*b, *a);
+            if b == a {
+                continue;
+            }
+            let same_apart_from_s = strip_s_word(b) == strip_s_word(a);
+            let after_is_s0 = s_word(a) == Some(0.0);
+            let before_s = s_word(b);
+            if is_mode_line(b)
+                && before_s.is_some_and(|s| s > 0.0)
+                && after_is_s0
+                && same_apart_from_s
+            {
+                diff.mode_s0 += 1;
+                continue;
+            }
+            if has_word(b, 'G', 1.0)
+                && has_xy(b)
+                && before_s.is_none()
+                && s_word(a).is_some_and(|s| s > 0.0)
+                && same_apart_from_s
+            {
+                diff.g1_gained_s += 1;
+                continue;
+            }
+            return Err(format!(
+                "line {}: {:?} -> {:?} is neither a mode-line S0 nor a G1 gaining S",
+                i + 1,
+                b,
+                a
+            ));
+        }
+        Ok(diff)
+    }
+
+    /// Number of mode lines carrying a positive S in `program`.
+    fn positive_mode_lines(program: &str) -> usize {
+        program
+            .lines()
+            .filter(|l| is_mode_line(l) && s_word(l).is_some_and(|s| s > 0.0))
+            .count()
+    }
+
+    #[test]
+    fn arm_diff_accepts_only_mode_s0_and_g1_gaining_s() {
+        assert_eq!(
+            classify_arm_diff("M3 S1000", "M3 S0"),
+            Ok(ArmDiff {
+                mode_s0: 1,
+                g1_gained_s: 0
+            })
+        );
+        assert_eq!(
+            classify_arm_diff("M4 S400", "M4 S0"),
+            Ok(ArmDiff {
+                mode_s0: 1,
+                g1_gained_s: 0
+            })
+        );
+        assert_eq!(
+            classify_arm_diff("G1 X1.000 Y2.000 F1200", "G1 X1.000 Y2.000 F1200 S600"),
+            Ok(ArmDiff {
+                mode_s0: 0,
+                g1_gained_s: 1
+            })
+        );
+        let before = "G21\nM3 S600\nG1 X1.000 Y2.000 F1200\nG0 X0 Y0\nM4 S250 ; ring\nM5";
+        let after = "G21\nM3 S0\nG1 X1.000 Y2.000 F1200 S600\nG0 X0 Y0\nM4 S0 ; ring\nM5";
+        assert_eq!(
+            classify_arm_diff(before, after),
+            Ok(ArmDiff {
+                mode_s0: 2,
+                g1_gained_s: 1
+            })
+        );
+    }
+
+    #[test]
+    fn arm_diff_rejects_everything_else() {
+        let cases: [(&str, &str, &str, &str); 8] = [
+            ("R1", "G21\nM3 S500", "G21\nM4 S0", "line 2:"),
+            ("R2", "G21\nM3 S500", "G21\nM3 S700", "line 2:"),
+            (
+                "R3",
+                "G1 X1.000 Y2.000 F1200 S600",
+                "G1 X1.000 Y2.500 F1200 S600",
+                "line 1:",
+            ),
+            (
+                "R4",
+                "G1 X1.000 Y2.000 F1200 S600",
+                "G1 X1.000 Y2.000 F1200 S0",
+                "line 1:",
+            ),
+            ("R5", "G21\nM3 S500", "G21\nM3 S0\nM5", "line count changed"),
+            ("R6", "G0 X1.000 Y2.000", "G0 X1.000 Y2.000 S600", "line 1:"),
+            ("R7", "G21\nG90\nM3 S500", "G21\nG90\nM3", "line 3:"),
+            ("R8", "M3 S500 ; a", "M3 S0 ; b", "line 1:"),
+        ];
+        for (id, before, after, needle) in cases {
+            match classify_arm_diff(before, after) {
+                Ok(d) => panic!("{id}: {before:?} -> {after:?} must be rejected, got {d:?}"),
+                Err(e) => assert!(
+                    e.contains(needle),
+                    "{id}: error must name {needle:?}, got {e:?}"
+                ),
+            }
+        }
+    }
+
+    // ── safety engine-arm: the fixture matrix (every layer type, M3 and M4) ─
+
+    /// One generated program from the matrix, with what it is expected to say.
+    struct Program {
+        gcode: String,
+        /// `3.0` or `4.0`: the only M3/M4 number the program may carry.
+        expected_mode: f64,
+        /// The positive S every burning vector G1 must carry; `None` for raster.
+        expected_s: Option<f64>,
+    }
+
+    fn arm_line_obj(id: &str, layer: CutLayer) -> CutObject {
+        let mut obj = rect_obj(id, 0.0, 0.0, 30.0, 20.0, layer);
+        obj.obj_type = "path".to_string();
+        obj.paths = vec![rect_path(0.0, 0.0, 30.0, 20.0)];
+        obj
+    }
+
+    fn arm_layer(mode: &str, power_mode: &str) -> CutLayer {
+        CutLayer {
+            power: 60.0,
+            power_min: 0.0,
+            power_mode: power_mode.to_string(),
+            ..base_layer(mode)
+        }
+    }
+
+    fn arm_image_request(
+        power_mode: &str,
+        pixels: &[(u8, u8, u8, u8)],
+        dither: &str,
+    ) -> ImageEngraveRequest {
+        ImageEngraveRequest {
+            image_data: make_rgba_png_base64(4, 1, pixels),
+            x: 0.0,
+            y: 0.0,
+            width: 4.0,
+            height: 1.0,
+            rotation: 0.0,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            power: 100.0,
+            power_min: 0.0,
+            speed: 3000.0,
+            passes: 1,
+            power_mode: power_mode.to_string(),
+            interval: 1.0,
+            dither: dither.to_string(),
+            overscan: 0.0,
+            bidirectional: true,
+            scanning_offset: 0.0,
+            brightness: 0.0,
+            contrast: 0.0,
+            gamma: 1.0,
+            invert: false,
+            workspace_height: 50.0,
+            origin_top: false,
+            s_value_max: 1000.0,
+            power_curve: None,
+            newsprint_cell_size: None,
+            newsprint_angle: None,
+            remove_background: false,
+            bg_tolerance: 20.0,
+            scan_motion: None,
+        }
+    }
+
+    async fn arm_vector(objs: Vec<CutObject>) -> String {
+        generate_gcode(objs, 100.0, Some(1000.0), None, None, None)
+            .await
+            .expect("generate_gcode should succeed")
+            .gcode
+    }
+
+    /// 12 fixtures x {constant, variable} = 24 programs, labelled
+    /// `<label>_<power_mode>`. Shared by T1 and T5; labels and parameters must
+    /// not change between a before-snapshot and its after-snapshot.
+    async fn arm_matrix() -> Vec<(String, Program)> {
+        let mut out = Vec::new();
+        for pm in ["constant", "variable"] {
+            let mode_letter = if pm == "variable" { 4.0 } else { 3.0 };
+            let vector = |gcode: String| Program {
+                gcode,
+                expected_mode: mode_letter,
+                expected_s: Some(600.0),
+            };
+            let name = |label: &str| format!("{label}_{pm}");
+
+            let mut l = arm_layer("line", pm);
+            l.passes = 2;
+            out.push((
+                name("line_plain_2pass"),
+                vector(arm_vector(vec![arm_line_obj("plain", l)]).await),
+            ));
+
+            let mut l = arm_layer("line", pm);
+            l.lead_in = 3.0;
+            l.lead_out = 2.0;
+            out.push((
+                name("line_lead_in_out"),
+                vector(arm_vector(vec![arm_line_obj("lead", l)]).await),
+            ));
+
+            let mut l = arm_layer("line", pm);
+            l.perforation_cut = 3.0;
+            l.perforation_skip = 2.0;
+            out.push((
+                name("line_perforation"),
+                vector(arm_vector(vec![arm_line_obj("perf", l)]).await),
+            ));
+
+            let mut l = arm_layer("line", pm);
+            l.tab_spacing = 8.0;
+            l.tab_width = 2.0;
+            out.push((
+                name("line_tabs"),
+                vector(arm_vector(vec![arm_line_obj("tabs", l)]).await),
+            ));
+
+            let mut l = arm_layer("line", pm);
+            l.perforation_cut = 3.0;
+            l.perforation_skip = 2.0;
+            l.overcut = 2.5;
+            l.lead_out = 2.0;
+            out.push((
+                name("line_perf_overcut_leadout"),
+                vector(arm_vector(vec![arm_line_obj("perf_oc_lo", l)]).await),
+            ));
+
+            let mut l = arm_layer("fill", pm);
+            l.interval = 5.0;
+            l.overscan = 0.0;
+            let obj = rect_obj("fill0", 0.0, 0.0, 20.0, 20.0, l);
+            out.push((name("fill_overscan0"), vector(arm_vector(vec![obj]).await)));
+
+            let mut l = arm_layer("fill", pm);
+            l.interval = 5.0;
+            l.overscan = 2.0;
+            l.bidirectional = true;
+            let obj = rect_obj("fill2", 0.0, 0.0, 20.0, 20.0, l);
+            out.push((name("fill_overscan2"), vector(arm_vector(vec![obj]).await)));
+
+            let mut l = arm_layer("fill", pm);
+            l.interval = 5.0;
+            l.overscan = 1.0;
+            l.cross_hatch = true;
+            l.fill_order = Some("flood".to_string());
+            l.scan_angle = 30.0;
+            let obj = rect_obj("hatch", 0.0, 0.0, 20.0, 20.0, l);
+            out.push((
+                name("fill_hatch_flood_30"),
+                vector(arm_vector(vec![obj]).await),
+            ));
+
+            let mut l = arm_layer("offsetFill", pm);
+            l.interval = 2.0;
+            let mut obj = rect_obj("offset", 0.0, 0.0, 20.0, 20.0, l);
+            obj.obj_type = "path".to_string();
+            obj.paths = vec![rect_path(0.0, 0.0, 20.0, 20.0)];
+            out.push((name("offset_fill"), vector(arm_vector(vec![obj]).await)));
+
+            let outer = rect_path(0.0, 0.0, 40.0, 40.0);
+            let hole = rect_path(15.0, 15.0, 10.0, 10.0);
+            let mut ml = arm_layer("maskFill", pm);
+            ml.interval = 5.0;
+            let mut mask_obj = rect_obj("mf_fill", 0.0, 0.0, 40.0, 40.0, ml);
+            mask_obj.obj_type = "path".to_string();
+            mask_obj.paths = vec![outer.clone(), hole];
+            mask_obj.layer_index = Some(0);
+            let mut ll = arm_layer("line", pm);
+            ll.cut_inner_first = false;
+            let mut line_obj = rect_obj("mf_perimeter", 0.0, 0.0, 40.0, 40.0, ll);
+            line_obj.obj_type = "path".to_string();
+            line_obj.paths = vec![outer];
+            line_obj.layer_index = Some(0);
+            out.push((
+                name("maskfill_then_line"),
+                vector(arm_vector(vec![line_obj, mask_obj]).await),
+            ));
+
+            let bw = [
+                (0, 0, 0, 255),
+                (255, 255, 255, 255),
+                (0, 0, 0, 255),
+                (255, 255, 255, 255),
+            ];
+            let img = generate_image_gcode(arm_image_request(pm, &bw, "threshold"))
+                .await
+                .expect("generate_image_gcode should succeed");
+            out.push((
+                name("image_threshold"),
+                Program {
+                    gcode: img.gcode,
+                    expected_mode: mode_letter,
+                    expected_s: None,
+                },
+            ));
+
+            let grey = [
+                (0, 0, 0, 255),
+                (128, 128, 128, 255),
+                (200, 200, 200, 255),
+                (255, 255, 255, 255),
+            ];
+            let img = generate_image_gcode(arm_image_request(pm, &grey, "grayscale"))
+                .await
+                .expect("generate_image_gcode should succeed");
+            out.push((
+                name("image_grayscale"),
+                Program {
+                    gcode: img.gcode,
+                    // Grayscale forces M4 whatever the layer says.
+                    expected_mode: 4.0,
+                    expected_s: None,
+                },
+            ));
+        }
+        out
+    }
+
+    const ARM_MATRIX_OUT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/target/arm-matrix-out");
+    const GOLDEN_BEFORE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/target/golden-before");
+
+    fn gcode_files(dir: &std::path::Path) -> std::collections::BTreeMap<String, String> {
+        let mut out = std::collections::BTreeMap::new();
+        let entries =
+            std::fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));
+        for entry in entries {
+            let path = entry.expect("dir entry").path();
+            if path.extension().and_then(|x| x.to_str()) == Some("gcode") {
+                let name = path.file_name().unwrap().to_string_lossy().to_string();
+                let text = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+                out.insert(name, text);
+            }
+        }
+        out
+    }
+
+    /// T5: write every matrix program to `target/arm-matrix-out/<label>_<mode>.gcode`.
+    /// Run explicitly (`-- --ignored`) to snapshot before/after an engine change.
+    #[tokio::test]
+    #[ignore]
+    async fn arm_matrix_snapshot() {
+        let dir = std::path::Path::new(ARM_MATRIX_OUT);
+        if dir.exists() {
+            std::fs::remove_dir_all(dir).expect("clear arm-matrix-out");
+        }
+        std::fs::create_dir_all(dir).expect("create arm-matrix-out");
+        let matrix = arm_matrix().await;
+        for (label, prog) in &matrix {
+            std::fs::write(dir.join(format!("{label}.gcode")), &prog.gcode)
+                .unwrap_or_else(|e| panic!("write {label}: {e}"));
+        }
+        let written = gcode_files(dir);
+        assert_eq!(matrix.len(), 24, "matrix must hold 24 programs");
+        assert_eq!(written.len(), 24, "must write exactly 24 distinct files");
+    }
+
+    /// T4: one-shot proof that a regeneration changed nothing but mode lines
+    /// going to S0. Needs `target/golden-before` (the committed goldens plus
+    /// `matrix/`, the T5 snapshot taken before the engine edit).
+    #[test]
+    #[ignore]
+    fn golden_corpus_regeneration_is_arm_only() {
+        let before_dir = std::path::Path::new(GOLDEN_BEFORE);
+        assert!(
+            before_dir.is_dir(),
+            "{} is missing: snapshot the before state first",
+            before_dir.display()
+        );
+        let before = gcode_files(before_dir);
+        let after = gcode_files(&golden_dir());
+        assert!(
+            !after.is_empty() && before.len() >= after.len(),
+            "before dir holds {} .gcode files, tests/golden holds {}",
+            before.len(),
+            after.len()
+        );
+        let before_m = gcode_files(&before_dir.join("matrix"));
+        let after_m = gcode_files(std::path::Path::new(ARM_MATRIX_OUT));
+
+        let check = |corpus: &str,
+                     before: &std::collections::BTreeMap<String, String>,
+                     after: &std::collections::BTreeMap<String, String>|
+         -> (usize, usize) {
+            assert_eq!(
+                before.keys().collect::<Vec<_>>(),
+                after.keys().collect::<Vec<_>>(),
+                "{corpus}: before and after file sets differ"
+            );
+            let mut total = ArmDiff::default();
+            let mut positive_before = 0;
+            let mut errors = Vec::new();
+            for (name, b) in before {
+                let a = &after[name];
+                let pos = positive_mode_lines(b);
+                positive_before += pos;
+                match classify_arm_diff(b, a) {
+                    Ok(d) => {
+                        println!(
+                            "{corpus} {name}: mode_s0={} g1_gained_s={} (positive mode lines before: {pos})",
+                            d.mode_s0, d.g1_gained_s
+                        );
+                        total.mode_s0 += d.mode_s0;
+                        total.g1_gained_s += d.g1_gained_s;
+                    }
+                    Err(e) => errors.push(format!("{corpus} {name}: {e}")),
+                }
+                assert_eq!(
+                    positive_mode_lines(a),
+                    0,
+                    "{corpus} {name}: positive mode line left after regeneration"
+                );
+            }
+            let changed = before.iter().filter(|(n, b)| after[*n] != **b).count();
+            println!(
+                "{corpus} TOTAL: files={} changed={changed} mode_s0={} g1_gained_s={} rejects={} positive_before={positive_before}",
+                before.len(),
+                total.mode_s0,
+                total.g1_gained_s,
+                errors.len()
+            );
+            assert!(
+                errors.is_empty(),
+                "{corpus}: rejects:\n{}",
+                errors.join("\n")
+            );
+            assert_eq!(
+                total.g1_gained_s, 0,
+                "{corpus}: no G1 may gain S in this batch"
+            );
+            assert_eq!(
+                total.mode_s0, positive_before,
+                "{corpus}: mode_s0 must equal the positive mode lines before"
+            );
+            (total.mode_s0, positive_before)
+        };
+
+        let (g, _) = check("golden", &before, &after);
+        assert_eq!(before_m.len(), 24, "before matrix must hold 24 files");
+        assert_eq!(after_m.len(), 24, "after matrix must hold 24 files");
+        let (m, _) = check("matrix", &before_m, &after_m);
+        assert!(
+            g + m >= 1,
+            "vacuous: no positive mode line in the before set"
+        );
+    }
+
+    /// I1 and I2 over one program. Returns the number of mode lines seen.
+    fn assert_never_arms(ctx: &str, gcode: &str) -> usize {
+        let mut mode_lines = 0;
+        for (i, line) in gcode.lines().enumerate() {
+            let s = s_word(line);
+            if is_mode_line(line) {
+                mode_lines += 1;
+                assert_eq!(
+                    s,
+                    Some(0.0),
+                    "I1 ({ctx}) line {}: every M3/M4 line must carry S0: {line:?}",
+                    i + 1
+                );
+            }
+            if s.is_some_and(|v| v > 0.0) {
+                assert!(
+                    has_word(line, 'G', 1.0) && has_xy(line),
+                    "I2 ({ctx}) line {}: positive S only on a G1 with X or Y: {line:?}",
+                    i + 1
+                );
+            }
+        }
+        mode_lines
+    }
+
+    /// T1: no layer type, in either power mode, arms a stationary beam.
+    #[tokio::test]
+    async fn arm_invariants_every_layer_type() {
+        let matrix = arm_matrix().await;
+        assert_eq!(matrix.len(), 24, "matrix must hold 24 programs");
+        for (label, prog) in &matrix {
+            let modes = assert_never_arms(label, &prog.gcode);
+            assert!(modes >= 1, "I3 ({label}): program has no mode line");
+            let mut section = "";
+            let mut positive_g1 = 0;
+            for (i, line) in prog.gcode.lines().enumerate() {
+                let n = i + 1;
+                for marker in ["; Cut:", "; Offset Fill:", "; Engrave:", "; Mask Fill:"] {
+                    if line.starts_with(marker) {
+                        section = marker;
+                    }
+                }
+                for &(c, v) in &words(line) {
+                    if c == 'M' && (v == 3.0 || v == 4.0) {
+                        assert_eq!(
+                            v, prog.expected_mode,
+                            "I3 ({label}) line {n}: wrong mode letter: {line:?}"
+                        );
+                    }
+                }
+                if !has_word(line, 'G', 1.0) {
+                    continue;
+                }
+                let s = s_word(line);
+                assert!(
+                    s.is_some(),
+                    "I4 ({label}) line {n}: every G1 must carry its own S: {line:?}"
+                );
+                let s = s.unwrap();
+                if s > 0.0 {
+                    positive_g1 += 1;
+                }
+                match (prog.expected_s, section) {
+                    (Some(want), "; Cut:") | (Some(want), "; Offset Fill:") => assert_eq!(
+                        s, want,
+                        "P1 ({label}) line {n}: a {section} G1 must keep its power: {line:?}"
+                    ),
+                    (Some(want), "; Engrave:") => assert!(
+                        s == 0.0 || s == want,
+                        "P1 ({label}) line {n}: an engrave G1 is S0 or S{want}: {line:?}"
+                    ),
+                    _ => assert!(
+                        s <= 1000.0,
+                        "P1 ({label}) line {n}: raster S above s_value_max: {line:?}"
+                    ),
+                }
+            }
+            assert!(
+                positive_g1 >= 1,
+                "P1 ({label}): no G1 carries positive power; the program burns nothing"
+            );
+        }
+    }
+
+    /// T2: the committed corpus never arms. Guards a future regeneration from
+    /// pinning a re-armed program as the new truth. (Kills no code mutant: it
+    /// reads committed files.)
+    #[test]
+    fn committed_goldens_never_arm() {
+        let files = gcode_files(&golden_dir());
+        assert!(
+            files.len() >= 16,
+            "expected at least 16 goldens, found {}",
+            files.len()
+        );
+        let modes: usize = files
+            .iter()
+            .map(|(name, text)| assert_never_arms(name, text))
+            .sum();
+        assert!(modes >= 1, "vacuous: no mode line across the corpus");
     }
 }

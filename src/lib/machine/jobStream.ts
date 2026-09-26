@@ -150,8 +150,8 @@ interface JobEvent {
 /**
  * Stream a G-code job using the buffered (character-counting) pump.
  *
- * The Rust side handles the $32=1 gate, RX budget accounting, and the full
- * send/read loop. This function creates a Tauri Channel to receive progress
+ * Rust refuses unless `laserModeVerified` (the readback-set `grblLaserMode`)
+ * is true, and handles RX budget accounting and the full send/read loop. This function creates a Tauri Channel to receive progress
  * events and updates the store accordingly.
  */
 async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise<StreamJobResult> {
@@ -213,6 +213,7 @@ async function streamJobBuffered(gcode: string, opts: StreamJobOptions): Promise
     const outcome = await invoke<string>("serial_stream_job", {
       gcode,
       jobEpoch: session.jobId,
+      laserModeVerified: useStore.getState().grblLaserMode,
       channel,
     });
 

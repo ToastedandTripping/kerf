@@ -68,6 +68,13 @@ src/
       CommandPalette.tsx     — Ctrl+K fuzzy command search
     viewport/
       Viewport.tsx           — Pixi.js 8 WebGL canvas, persistent display cache, selection handles
+      renderHelpers.ts       — placeSprite / applyTextImageTransform / rotationPlacement /
+                               applyObjectRotation / renderImageObject: one placement rule for
+                               rotated and flipped text, images and Graphics (pivot at centre)
+      textureCache.ts        — module-private image texture cache: getReadyTexture (decode,
+                               then a pending/failed state; never an empty outline),
+                               isTextureFailed (crossed-box placeholder), evictTextures,
+                               clearTextures (generation bump), setTextureReadyListener
       Rulers.tsx             — mm rulers along canvas edges
 
   lib/
@@ -202,6 +209,8 @@ src-tauri/src/
                                it to maskFill plus a `line` overlay (a sharp rectangle gets
                                a synthesized 4-corner contour), and `assertNoFillLine`
                                throws otherwise.
+                               Every mode line is `{M3|M4} S0`; power rides only on `G1`
+                               words that carry X or Y (safety engine-arm, 2026-09-26).
     mask_fill.rs             — The one shared raster scanner (~1170 lines + tests):
                                scan_mask_to_gcode (MaskScanParams; binary or grayscale S)
                                used by image engrave and maskFill; fill_compound_mask
@@ -268,7 +277,8 @@ src-tauri/tests/
    → getStreamingMode() reads localStorage "streamingMode" (default "perLine"):
        perLine  — TS loop: machineConnection.send(line) per line
                   → invoke("serial_send") → run_pump waits for ok/error/ALARM/banner
-       buffered — invoke("serial_stream_job", Channel) → writes $32=1 and requires ok,
+       buffered — invoke("serial_stream_job", Channel) → refuses unless laserModeVerified
+                  (the readback-set flag), writes no setting,
                   then run_buffered_pump; Progress/Console/Status/Finished JobEvents
    → session.drain() → session.end() → invoke("serial_job_end")
 ```
@@ -288,7 +298,10 @@ after that readback began (module-level `settingsGeneration`). Every settings wr
 after it settles. `enableLaserMode` invalidates explicitly, because its write bypasses
 `send()`. A console `$$` re-verifies `$32` only. The full settings parse runs only from
 `queryGrblSettings` (on connect, and the soft-limit requery). A failed readback and
-`disconnect()` both leave the flag false.
+`disconnect()` both leave the flag false. The buffered command `serial_stream_job` receives the flag as `laserModeVerified` (a
+plain `bool`, so a missing key is rejected by Tauri before the body runs) and refuses
+before any serial I/O when it is false; it no longer writes `$32=1` (kerf-safety-s1b). A
+`0x18` does not clear the flag (S4a), and per-line mode has no Rust-side gate (S4a).
 
 **Job-session lifetime (`jobSession.ts`).** One module-level active session. `beginJobSession`
 refuses while another session is active or a stop is settling, and when `serial_job_begin`
@@ -311,8 +324,8 @@ sessions until the old one settles. Callbacks from a cancelled session are disca
    contour. Every `M3`/`M4` mode line both emit carries `S0`; positive S appears only on `G1`
    words with motion, so the material test never arms a stationary beam (safety S2,
    2026-09-25). The border follows the chosen power mode. This output does not pass through
-   the Rust engine, `limits.rs`, `assembleGcode` or the golden fixtures, and the engine's own
-   standalone mode lines still carry positive S (ROADMAP Parking Lot, S2 Deferral 1).
+   the Rust engine, `limits.rs`, `assembleGcode` or the golden fixtures, and the Rust
+   engine's mode lines carry `S0` as well (safety engine-arm, 2026-09-26).
 
 ### Serial Lock Order
 
@@ -459,7 +472,7 @@ Every job line carries the admitted epoch: `serial_send` takes `jobEpoch` (absen
 `$H`, jog and settings writes, which are not phase-gated) and `serial_stream_job` requires it.
 **Every job-epoch write goes through `SerialSession::admit_and_write`**: it takes `submit`,
 checks admission, makes the line's single `write()` and drops `submit`; the flush (`tcdrain`)
-follows outside the lock. The sites are the `serial_send` job line, the `$32=1` bracket, and
+follows outside the lock. The sites are the `serial_send` job line and
 the buffered pump's Phase A (`SubmissionGate::admit_write` in `serial_pump.rs`, implemented by
 `JobPermit`, independently of the shared `job_abort` flag). `permit_precheck` before the
 command-lock wait and `try_permit_begin` under `command` before the drain are
@@ -470,8 +483,8 @@ or refused with nothing written; no interleaving puts job bytes after the reset.
 `write(2)` that returns on enqueue, so the stop waits at most one enqueue, bounded by the port
 timeout, and never on the controller, an acknowledgement or transmission) is in the
 `serial_session.rs` module doc. The stream body never clears `job_abort` (`serial_job_begin`
-is its only clearer). The `$32=1` pump publishes a banner it reads while a stop is in flight,
-as `serial_send` does, so a STOP during the `$32=1` exchange still confirms.
+is its only clearer). The buffered pump publishes the reset banner it reads while a stop is in flight, as
+`serial_send` does, so a STOP during a buffered job still confirms.
 
 The only refusal is `refused: not-admitted: …` (nothing written), carried in the existing
 `Err(String)` / outcome contracts. `connection.send()` returns a refusal as `[<string>]`,

@@ -58,6 +58,11 @@ Kerf compensation expands holes without accounting for which side is waste, and 
 
 The text tool (four bundled fonts, converted to paths at G-code time) shipped in v0.8.29 at Lee's direct request while the charter still listed built-in font rendering as a non-goal and the ROADMAP parked text behind gate D3. Lee resolved the contradiction in favour of the tree rather than removing the feature. The amendment put to him read: built-in text from bundled fonts is in; font management and text-on-path stay out. A drift review must not flag the text tool as a reintroduced exclusion. The CHARTER.md wording itself is changed only in an edit Lee approves, per the charter's own rule.
 
+### The Pause button stays as it is (it stops the job) until a dark hold is qualified; a plan to make it work exists.
+*2026-09-25, per Lee*
+
+Lee, 2026-09-25, in the coordinator window, verbatim: "Leave the pause botton [sic] for now but ensure we have a plan to make it function in the future." This records a ruling he already gave. It decided kerf-f2, which asked whether the button should be relabelled 'STOP (no resume)' or removed: neither ships, and the button keeps stopping the job with no resume, the fallback the 2026-09-10 hold-only entry requires. Lee gave no further reason; none is recorded here. The plan to make Pause work is .claude/plans/pause-resume-future.md (a84a9b5), parked until Lee schedules it; the evidence it needs became possible with the 2026-09-25 amendment to the status-only evidence entry (3b2bf76), which allows a witness-card qualification. A future session must not relabel, remove or re-wire Pause outside that plan.
+
 ---
 
 ## Engineering pins
@@ -112,6 +117,11 @@ The host-side abort sequence is: send 0x18 (soft reset) as a realtime byte, then
 *2026-09-24, Lee*
 
 Job-line admission and the job-line write are one critical section: a writer takes the `submit` lock, checks admission, writes the line with one `write_all`, and releases it; the stop takes the same lock to close admission (`close_admission` requires the held guard), releases it, and only then sends its single `0x18`. The flush (`tcdrain`), the drain and the response wait stay outside the lock. The earlier design detected a line that slipped in after the reset and sent a second `0x18` to repair it; Lee rejected that as designing around the race, and this makes the race impossible instead. The bound: the stop waits for at most one `write(2)` after `POLLOUT`, which is at most the 1000 ms port timeout and in practice microseconds. The premise: both serial handles are dup'd file descriptors of one tty (serialport `try_clone` is `F_DUPFD_CLOEXEC`), so they share one output queue, and job lines are small. It never waits on the controller, an acknowledgement, or transmission. This does not breach the 2026-09-20 ruling that abort sends 0x18 immediately: the reset could not reach the wire any sooner than line bytes already in the queue ahead of it, so the lock only fixes which side of the reset a line falls on. Removing the lock, narrowing it to a barrier, or reintroducing a second reset reopens the laser-after-STOP race. Relay kerf-fence-single-reset, plan .claude/plans/fence-single-reset.md.
+
+### Every mode line Kerf emits carries S0; positive S rides only on G1 words that carry X or Y.
+*2026-09-26, per Lee*
+
+A standalone M3 at positive S lights a stationary beam on stock GRBL 1.1 whenever the parser is G1-modal (gcode.c spindle sync; traced by the engine-arm planner and critic), and the owner's vendor fork is unqualified, so no mode line may carry power: S2 (2026-09-25) enforced this in the TypeScript material-test and label generators, and engine-arm (2026-09-26, merged 021f45b) in the Rust engine. Enforced by the materialTestGcode invariants and by arm_invariants_every_layer_type and committed_goldens_never_arm. The wording is 'carry X or Y', not 'with motion', because zero-length G1s still exist until the lead-in relay (kerf-safety-engine-leadin) lands; tighten it then by amendment. The deliberate stationary use, the Fire button, is outside this pin (it is a console-style M3 by design under the 2026-09-10 M4/M3 ruling).
 
 ---
 

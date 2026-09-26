@@ -4,14 +4,16 @@ import { machineConnection } from "../machine/connection";
 import {
   movePartial,
   scalePartial,
-  pointsPartial,
   pointsBBox,
   POINTS_EPSILON,
   orientedHandlePoints,
+  pathPointsToWorld,
+  worldDeltaToLocal,
+  pointsPartialKeepingPlacement,
 } from "../geometry";
 import { computeAABB } from "../geometry";
 import { findNearestSnapPoint, snapThresholdMm, ellipseDiameter } from "../measure";
-import { PX_PER_MM } from "../constants";
+import { PX_PER_MM, ROTATE_HANDLE_OFFSET_PX, screenPxToMm } from "../constants";
 
 // Handle types for resize/rotate
 export type HandleType = "nw" | "n" | "ne" | "w" | "e" | "sw" | "s" | "se" | "rotate" | null;
@@ -71,6 +73,10 @@ const nodeDrag = {
   startX: 0,
   startY: 0,
   originalPoints: [] as PathPoint[],
+  // R2 F7: transform centre and rotation at drag start. Every frame is
+  // computed from these and originalPoints, so nothing accumulates.
+  centreBefore: { x: 0, y: 0 },
+  rotation: 0,
 };
 
 // --- MEASURE TOOL STATE ---
@@ -348,9 +354,9 @@ export function hitTestHandle(worldX: number, worldY: number, zoom: number): Han
   const store = useStore.getState();
   if (store.selectedIds.length === 0) return null;
 
-  const handleSize = Math.max(12, 8) / zoom; // minimum 12 screen-pixel hit target
+  const handleSize = screenPxToMm(12, zoom); // 12 screen-pixel hit target, in mm
   const hs = handleSize / 2;
-  const rotateOffset = 20 / zoom; // mm above top-center in local-y
+  const rotateOffset = screenPxToMm(ROTATE_HANDLE_OFFSET_PX, zoom); // mm above top-center in local-y
 
   // --- Single-select: use oriented (rotated) handle anchors ---
   if (store.selectedIds.length === 1) {
@@ -400,7 +406,7 @@ export function hitTestHandle(worldX: number, worldY: number, zoom: number): Han
   if (!bbox) return null;
 
   // Rotation handle (above top center)
-  const rotHandleY = bbox.y - 20 / zoom;
+  const rotHandleY = bbox.y - rotateOffset;
   if (Math.abs(worldX - (bbox.x + bbox.w / 2)) < hs * 2 && Math.abs(worldY - rotHandleY) < hs * 2) {
     return "rotate";
   }
@@ -1340,7 +1346,7 @@ function handlePenDown(worldX: number, worldY: number, _e: React.PointerEvent) {
   const firstPt = penState.points[0];
   const zoom = store.camera.zoom;
   const dist = Math.hypot(x - firstPt.x, y - firstPt.y);
-  if (penState.points.length >= 3 && dist < PEN_CLOSE_RADIUS / zoom) {
+  if (penState.points.length >= 3 && dist < screenPxToMm(PEN_CLOSE_RADIUS, zoom)) {
     commitPen(true);
     return;
   }
@@ -1503,11 +1509,13 @@ export function hitTestNodeHandles(
   const obj = store.objects.find((o) => o.id === pathId);
   if (!obj || !obj.points) return null;
 
-  const hitRadius = NODE_HIT_RADIUS / zoom;
+  const hitRadius = screenPxToMm(NODE_HIT_RADIUS, zoom);
+  // R2 F7: test where the nodes are drawn (rotated); order and length match obj.points.
+  const pts = pathPointsToWorld(obj);
 
   // Hit test handles first (they're on top visually)
-  for (let i = 0; i < obj.points.length; i++) {
-    const pt = obj.points[i];
+  for (let i = 0; i < pts.length; i++) {
+    const pt = pts[i];
     if (pt.handleOut) {
       const dist = Math.hypot(worldX - pt.handleOut.x, worldY - pt.handleOut.y);
       if (dist < hitRadius) return { index: i, target: "handleOut" };
@@ -1519,8 +1527,8 @@ export function hitTestNodeHandles(
   }
 
   // Hit test anchor points
-  for (let i = 0; i < obj.points.length; i++) {
-    const pt = obj.points[i];
+  for (let i = 0; i < pts.length; i++) {
+    const pt = pts[i];
     const dist = Math.hypot(worldX - pt.x, worldY - pt.y);
     if (dist < hitRadius) return { index: i, target: "node" };
   }
@@ -1547,6 +1555,8 @@ function handleNodeDown(worldX: number, worldY: number, _e: React.PointerEvent) 
           handleIn: p.handleIn ? { ...p.handleIn } : undefined,
           handleOut: p.handleOut ? { ...p.handleOut } : undefined,
         }));
+        nodeDrag.centreBefore = transformCentre(obj);
+        nodeDrag.rotation = obj.transform.rotation || 0;
         store.setNodeEditState({
           pathId: store.nodeEditState.pathId,
           selectedNodeIndex: hit.index,
@@ -1590,8 +1600,14 @@ function handleNodeMove(worldX: number, worldY: number) {
   const obj = store.objects.find((o) => o.id === pathId);
   if (!obj || !obj.points) return;
 
-  const dx = worldX - nodeDrag.startX;
-  const dy = worldY - nodeDrag.startY;
+  // R2 F7: the world delta, expressed in the path's own (unrotated) frame.
+  const d = worldDeltaToLocal(
+    worldX - nodeDrag.startX,
+    worldY - nodeDrag.startY,
+    nodeDrag.rotation
+  );
+  const dx = d.x;
+  const dy = d.y;
   const newPoints = nodeDrag.originalPoints.map((p) => ({
     ...p,
     handleIn: p.handleIn ? { ...p.handleIn } : undefined,
@@ -1642,8 +1658,9 @@ function handleNodeMove(worldX: number, worldY: number) {
     };
   }
 
-  // W1b: pointsPartial keeps transform ≡ pointsBBox while nodes move
-  store.updateObject(pathId, pointsPartial(obj, newPoints));
+  // W1b: transform ≡ pointsBBox while nodes move; R2 F7: untouched nodes keep
+  // their world position on a rotated path (rotation itself is never written).
+  store.updateObject(pathId, pointsPartialKeepingPlacement(obj, newPoints, nodeDrag.centreBefore));
 }
 
 function handleNodeUp() {
@@ -1654,6 +1671,14 @@ function handleNodeUp() {
     nodeDrag.target = null;
     nodeDrag.originalPoints = [];
   }
+}
+
+/** R2 F7: the rotation centre of an object (its transform bbox centre). */
+function transformCentre(obj: DesignObject): { x: number; y: number } {
+  return {
+    x: obj.transform.x + obj.transform.width / 2,
+    y: obj.transform.y + obj.transform.height / 2,
+  };
 }
 
 export function deleteSelectedNode() {
@@ -1678,8 +1703,9 @@ export function deleteSelectedNode() {
     selectedNodeIndex >= newPoints.length ? newPoints.length - 1 : selectedNodeIndex;
 
   store.withUndo("delete-node", () => {
-    // W1b: deleting a node can shrink the bbox — keep the transform synced
-    store.updateObject(pathId, pointsPartial(obj, newPoints));
+    // W1b: deleting a node can shrink the bbox — keep the transform synced.
+    // R2 F7: survivors keep their world position on a rotated path.
+    store.updateObject(pathId, pointsPartialKeepingPlacement(obj, newPoints, transformCentre(obj)));
   });
   store.setNodeEditState({ pathId, selectedNodeIndex: newSelectedIdx });
 }
@@ -1758,7 +1784,10 @@ export function handleViewportDoubleClick(worldX: number, worldY: number) {
         // W1b: handle changes don't move anchors, but pointsPartial keeps the
         // invariant maintained at every points writer uniformly (anchors-only
         // bbox — handle overshoot never changes the transform).
-        store.updateObject(store.nodeEditState.pathId!, pointsPartial(obj, newPoints));
+        store.updateObject(
+          store.nodeEditState.pathId!,
+          pointsPartialKeepingPlacement(obj, newPoints, transformCentre(obj))
+        );
       });
       return;
     }

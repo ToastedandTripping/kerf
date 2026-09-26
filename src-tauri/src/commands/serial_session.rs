@@ -34,8 +34,8 @@
 //!
 //! Every job line carries the epoch of the admitted job. **Invariant: every
 //! job-epoch write goes through `admit_and_write`.** Both production send
-//! paths (`serial_send` with `job_epoch`, `serial_stream_job` for its `$32=1`
-//! bracket and per line in the buffered pump) run `permit_precheck` before
+//! paths (`serial_send` with `job_epoch`, `serial_stream_job` per line in the
+//! buffered pump) run `permit_precheck` before
 //! waiting on the command lock (fast-fail only) and `try_permit_begin` while
 //! holding the command lock, before any drain (non-authoritative: it only
 //! spares a refused send the drain). The authoritative check is inside
