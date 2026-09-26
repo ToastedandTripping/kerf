@@ -109,8 +109,9 @@ export async function generateMaterialTestGcode(
 
       if (opts.mode === "cut") {
         // Rectangle outline — power on once, off once
+        // Mode line at S0 (DECISIONS 2026-09-10): power only on G1 motion, never a stationary beam.
         lines.push(`G0 X${cx.toFixed(3)} Y${cy.toFixed(3)}`);
-        lines.push(`${opts.powerMode} S${sValue}`);
+        lines.push(`${opts.powerMode} S0`);
         lines.push(
           `G1 X${(cx + opts.cellWidth).toFixed(3)} Y${cy.toFixed(3)} F${feedRate} S${sValue}`
         );
@@ -131,8 +132,9 @@ export async function generateMaterialTestGcode(
         let y = cy;
 
         // Lead-in: position before power-on
+        // Mode line at S0 (DECISIONS 2026-09-10): power only on G1 motion, never a stationary beam.
         lines.push(`G0 X${cx.toFixed(3)} Y${y.toFixed(3)}`);
-        lines.push(`${opts.powerMode} S${sValue}`);
+        lines.push(`${opts.powerMode} S0`);
 
         while (y <= cy + opts.cellHeight + 1e-9) {
           const ex = forward ? cx + opts.cellWidth : cx;
@@ -166,8 +168,9 @@ export async function generateMaterialTestGcode(
     const borderS = sValueMax;
     const borderFeed = 200;
     lines.push("; --- Cut border (reusable test card) ---");
+    // Border follows the chosen power mode; mode line at S0 (DECISIONS 2026-09-10).
     lines.push(`G0 X${bx.toFixed(3)} Y${by.toFixed(3)}`);
-    lines.push(`M3 S${borderS}`);
+    lines.push(`${opts.powerMode} S0`);
     lines.push(`G1 X${(bx + bw).toFixed(3)} Y${by.toFixed(3)} F${borderFeed} S${borderS}`);
     lines.push(`G1 X${(bx + bw).toFixed(3)} Y${(by + bh).toFixed(3)} F${borderFeed} S${borderS}`);
     lines.push(`G1 X${bx.toFixed(3)} Y${(by + bh).toFixed(3)} F${borderFeed} S${borderS}`);

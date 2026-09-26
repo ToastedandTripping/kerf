@@ -42,7 +42,7 @@ function collectPathLeaves(objs: DesignObject[], wx = 0, wy = 0): PathLeaf[] {
  * feedRate: mm/min.
  * powerMode: "M3" or "M4"
  *
- * Each glyph contour is emitted as: G0 (rapid to start) → laser on → G1 stream
+ * Each glyph contour is emitted as: G0 (rapid to start) → mode set at S0; power on the G1 words → G1 stream
  * → M5 (laser off). Multi-contour glyphs (0, 6, 8, 9, O, %) emit one pass per
  * contour. The returned array is suitable for joining with "\n" or splicing into
  * a larger G-code buffer.
@@ -101,7 +101,7 @@ export async function textToGcode(
 
     const first = sampled[0];
     lines.push(`G0 X${toX(first.x)} Y${toY(first.y)}`);
-    lines.push(`${powerMode} S${sValue}`);
+    lines.push(`${powerMode} S0`);
 
     for (let i = 1; i < sampled.length; i++) {
       const pt = sampled[i];
