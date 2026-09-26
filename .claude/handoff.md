@@ -68,6 +68,8 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - DISK HOLD (coordinator 2026-09-26): 25 GB free, 95%. No new Rust build, worktree or mutation battery until the coordinator reports free space above 35 GB. The engine-arm battery was stopped by PID and its stray copy swept. Engine Ted (ad9d140fc910022d4) is held, with a 6.2 GB target dir. S3's fix pass (a1eb30a822b70dfa1) runs without its battery. S3 does NOT merge until its S3-F battery has run on the fixed tree (owed, not skipped). Freeing space is Lee's keystroke only.
 
+- S3 after its fix pass (9e0b63a, 1064 JS): Razor's re-check is WARNING only for test evidence. The S3-M21 anchor was removed by the fix, so S3-F5 was added. Its battery is OWED BEFORE MERGE: ~/marvin/state/relay/kerf-safety-s3-battery-final.json (40 mutants, every anchor unique at 9e0b63a). It runs when the disk is above 35 GB. Then 2.8 behavioral, Jen (CONCERN pass), 3.5, and merge. Close-report notes are in the pack (batch_reports[0].close_report_notes).
+
 ## Open questions awaiting Lee
 
 | Question                                                                                            | Why it matters                                                                        | Raised     |
