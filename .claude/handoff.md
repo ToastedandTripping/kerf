@@ -44,8 +44,6 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - S3 owns the green-when-stale status indicator (Jen C3 on kerf-safety-s1, 2026-09-25). No plan owned it, so it is added to S3's scope, to be folded into the plan when S3 is lifted. When status is stale, MachinePanel and StatusBar still show a green Idle and Ready while START's title says stale: the screen says safe when Kerf does not know. S1 and S3 ship in the same build, so no build reaches Lee showing green while stale unless he has been told. The coordinator ruled this on 2026-09-25. Full detail is under C3 in ~/marvin/state/relay/kerf-safety-s1-jen-review.md.
 
-- GAP PASS STATE (2026-09-25, end of session 2 context). MERGED into marvin/kerf-gap, each with Razor PASS, 0 CRITICAL, ledger merged, pack stamped: E1a 0efabee, S1 df8883a, R1 cut-vs-screen 93b72af, E2 7db461a, E3 1cdd930, E5 7140cab. The merged tree ran 953/953 JS at E3's sync, and E5 ran 345 sim tests. None of it is in a build. S1 must ship with S3.
-
 - IN FLIGHT, R2 relay kerf-refresh-canvas-display: Ted DONE_WITH_CONCERNS on relay/kerf-refresh-canvas-display (9 commits f436a0e..cac2353, base 994953f, 982/982 JS). Stage 2 Razor is RUNNING (agent a9de5f3082b48e8ba). Its first run died on the weekly limit and was re-run fresh. Next: route the Razor verdict (a fix pass resumes Ted a009a57bbbbce8bb6), then 2.8 behavioral, then Jen Stage 3 against state/relay/kerf-refresh-canvas-display-jen-spec.md, then 3.5 (4 plan Deferrals lines, the F5 owner file-open step to ROADMAP next, an ARCHITECTURE delta for renderHelpers.ts and textureCache.ts), then merge. Pack: ~/marvin/state/relay/kerf-refresh-canvas-display-pack.json.
 
 - IN FLIGHT, S1b relay kerf-safety-s1b: plan .claude/plans/kerf-safety-s1b.md; Fable critic CONCERN, folded (291e84f). Ted is RUNNING (agent aaf747122b2d68819) in worktree relay-kerf-safety-s1b, cut from 291e84f. Next: Stage 2 Razor (extract requirements with an agent, assemble the brief the way the E2/E3/E5 razor briefs in state/relay were assembled), then 2.5, 3.5, merge. S1b deletes the Rust $32=1 write and gates buffered START on the readback-set flag. Its critic's residuals: 0x18 never clears the flag (S4a closes it), and the X5 race via the settings dialog and the soft-limit buttons (parked to S4a).
@@ -56,9 +54,13 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - PAUSE/RESUME: Lee chose the witness-card qualification on 2026-09-25, and the status-only DECISIONS entry was amended with its limits (3b2bf76). The plan at .claude/plans/pause-resume-future.md stays parked until Lee schedules it. The plan also owns the drain-window defect on today's Pause button: pauseJob never calls stopActiveSession(), so a Pause press during the drain is reported as an alarm or completion instead of cancelled (S2 critic, Verified 1).
 
-- PLANS IN PROGRESS: S2's Fable critic FAILed only on the Pause relabel, which Lee's f2 ruling removes. The lifter (a45c703b2763a0ec2) is folding it: the generator half only, with the drain-window defect parked to the pause plan. Then the S2 relay. S3 (.claude/plans/kerf-safety-s3.md) is lifted: Standard tier, 12 files with a waiver, 28 mutant ids. Its Fable critic is RUNNING (ace674cd0e2c7bdb3). The lifter says not to cut a build between S3 and S5, or Position Laser is refused on origin-top machines. At its close, S3 proposes two DECISIONS entries: the positive-Y evidence correction and kerf-f1 as a product ruling. Order: S2, then S3.
-
 - S5 LIFT NOTE: the Position Laser originTop Y mapping (parent S5 change, and parent mutant S5-M1) MOVED to S3, per the coordinator on 2026-09-25 under Lee's delegation, option (c), with no build freeze. When S5 is lifted, its plan must drop that change and that mutant and cite this move. S3's close report flags the first origin-top Position Laser to Lee as a watch-it-move test before any burn.
+
+- GAP PASS STATE (2026-09-25): these are MERGED into marvin/kerf-gap, each with Razor PASS, 0 CRITICAL, the ledger merged and the pack stamped: E1a 0efabee, S1 df8883a, R1 cut-vs-screen 93b72af, E2 7db461a, E3 1cdd930, E5 7140cab, S2 9ec08e0 (978/978 JS). None of it is in a build. S1 must ship with S3.
+
+- DECISIONS PROPOSALS owed to Lee (propose only, never auto-write): (1) kerf-f2 as a Product ruling: 'The Pause button stays as it is (it stops the job) until a dark hold is qualified; a plan to make it work exists.' Lee 2026-09-25, verbatim: 'Leave the pause button for now but ensure we have a plan to make it function in the future.' Sent as DECISION NEEDED with S2's close. (2) At S3's close: the positive-Y evidence correction and kerf-f1 as a Product ruling. (3) At R3's close: Ctrl+Shift+V.
+
+- S3 relay next (plan PASS, 13ec69d): 14 files, 36 ids, with the Position Laser mapping moved from S5 (coordinator option c) and S3-M32 kept (coordinator). The close report must flag the first Position Laser on an origin-top machine as a watch-it-move test before any burn.
 
 ## Open questions awaiting Lee
 
@@ -80,6 +82,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-09-25 S2 merged
+S2 (kerf-safety-s2) merged as 9ec08e0: Razor PASS, 0/0/3, 76/76 covered, battery 7/7, 978 JS, gate all PASS. The Pause button is untouched. ROADMAP gained the owner card-burn bullet (with an M3 Quick Cut card per Razor N1) and 7 Parking Lot lines; ARCHITECTURE producer 3 was rewritten. R2's re-check closed RW1 (the camera test, 10959a3), and its behavioral check is running. S3's plan passed its re-check. S1b's Ted is still running.
 
 ### 2026-09-25 session 2, post-compaction
 Resumed from the hand-off. The S2 critic (FAIL, the relabel only) is being folded per Lee's f2 ruling. The S3 lift landed and its critic is running. Lee's 2a answer is written as a DECISIONS amendment (3b2bf76). Removed six merged relay worktrees (disk 94% to 90%). R2's test fix and S1b's Ted are still running.
