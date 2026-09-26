@@ -252,3 +252,19 @@ power (M4) throughout?**
   wrong is a Pause that surprises you by stopping an M3 job, which is safe.
 - *Reversibility and urgency:* This is a software gate, so it is reversible. It matters only
   after decision 1 is answered with anything other than (a).
+
+## Carried from S2 (2026-09-25)
+
+These came to this plan from the S2 fold (`kerf-safety-s2.md` Deferrals 2 to 4, verbatim, original numbering). They must be folded into the sections above before this plan's critic runs. Note that §4's procedure currently leans on the hold-wait that item 3 calls dead.
+
+2. **Pause during the drain window is reported as an alarm or a completion, not as cancelled.**
+   - Owner: `.claude/plans/pause-resume-future.md`.
+   - This is today's behaviour of the unchanged Pause button: `pauseJob` (`jobStream.ts:47-57`) never calls `stopActiveSession()`.
+   - The one-line fix: `pauseJob` calls `stopActiveSession()` fire-and-forget before `store.setJobRunning(false)`, in `handleStop`'s B3 order and with its comment (`JobActionBar.tsx:106-111`).
+   - Its mutant, in the style of the critic's S2-M8: delete that call. It must go red on a test that seeds a real session via `beginJobSession` (with `serial_job_begin` mocked to return `1`), clicks Pause, and asserts `getActiveSession()?.cancelled === true`.
+   - The existing `pauseJob` tests (`machineJobLoop.test.tsx:716-775`) stay green: with no active session, `stopActiveSession` returns at once.
+3. **Dead hold-wait with a stale comment.**
+   - Owner: `pause-resume-future.md`.
+   - `jobStream.ts:348-354` can never see `"hold"` while `jobRunning` is true, and its comment cites an `emergencyStop` re-poll that B4 removed. It should be fixed or deleted with the pause work.
+4. **Owner test card step 6 ("Pause / resume", `docs/test-card.md:57-63`) instructs a Resume that does not exist.**
+   - Owner: `pause-resume-future.md`, which rewrites it when the button's behaviour is settled.

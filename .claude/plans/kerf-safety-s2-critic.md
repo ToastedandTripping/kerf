@@ -125,3 +125,42 @@ Type-specific worst case: a stationary beam at a cell start on the owner's mater
 6. **Console wording (X6).** Reword "Paused jobs cannot resume …" for a button that no longer says Pause and update the two pinned assertions deliberately, or state why the string stays.
 7. **Docs.** Do not write "the same as STOP" into ARCHITECTURE `:439-442`, the tooltip or the handler comment until 1 is folded; add the `jobStream.ts:348-354` comment to the doc-only pass; one Parking Lot line for silent label loss on font-load failure.
 8. **Nits.** 39 plan files, not 36; the hold screenshot and hold test are synthetic state, say so.
+
+---
+
+## Re-check after fold (2026-09-25)
+
+**Scope:** bounded re-check of the folded `kerf-safety-s2.md` at `4c08470` (plans-only commits since `8c60666`; `git diff 8c60666..HEAD -- src src-tauri` is empty, so every source citation above still holds). Read: Fold notes, Intent, Existing plans, What exists today, Change, Tests and mutants, Verification, Deferrals, Stage 3.5, Risks; `pause-resume-future.md` header and its hold/drain mentions; `.claude/handoff.md` (`kerf-f2` row and log). Ruling applied: Lee, 2026-09-25, "Leave the pause button for now but ensure we have a plan to make it function in the future."
+
+### (a) Gating items
+
+| Round-1 item | Status | Basis |
+|---|---|---|
+| Core 3 FAIL / X5 (Pause ≠ STOP in the drain window) | **Removed with the scope**, defect parked | S2 no longer touches `JobActionBar.tsx` or `jobStream.ts`; the defect is today's behaviour of the unchanged button and is recorded as Deferral 2 with the one-line fix and the S2-M8-style mutant. S2 ships no new false claim about the button. |
+| Must-fix 2 (RESUME narrative) | **Closed** | "The Pause button today" states the verified facts only: state is written from status reports only via `machineStatus.ts:184`, reached from `pollStatus` which returns while `jobPollingSuspended` (`connection.ts:535`, mirrors `jobRunning` at `:318`); RESUME unreachable; controller hold invisible mid-job; console `~` claim dropped. Re-checked at HEAD: all true. |
+| Must-fix 3 (engine Parking Lot line) | **Closed** | Deferral 1 names it X1-class on every M3 layer of every real job, its own batch, `env -u KERF_UPDATE_GOLDEN` discipline, and the close-report escalation. |
+| Must-fix 4 (commit-1 residue) | **Closed** | Change §1 lists exactly four `export` prefixes, the moved `textToGcode` import, one new dialog import; Verification and Razor's check name that residue and nothing else. |
+| Must-fix 5, 6 (string rule, console wording) | **Fall away** | No button change; the string stays by the ruling. |
+| Must-fix 7 (docs) | **Closed** | No "same as STOP" anywhere; no pause ARCHITECTURE delta; hold-wait comment parked (Deferral 3); font-load label loss parked (Deferral 6). |
+| X1 CONCERN | **Closed** | Generator half unchanged from round 1 (PASS-quality); the vendor-fork `M3 S0` worst case is now stated in Risks with the card burn as the instrument; the engine hazard is parked as required. |
+
+Nothing gating remains open against S2.
+
+### (b) Internal consistency
+
+- **File count:** `materialTestGcode.ts` (new), `MaterialTestDialog.tsx`, `textGcode.ts`, `textGcode.test.ts`, `materialTestGcode.test.ts` (new) = 5, one root. Matches the Tier line. Two commits (Change) matches "The move is reviewed apart from the arming change".
+- **Mutants:** the table's live ids are S2-M1, M2, M3, M5, M6, C1, C2 = seven; the spec sentence, the battery-journal line in Verification and the done condition all say the same seven. S2-M4 and S2-M7 are marked dropped with the ruling; S2-M8 is not in the spec and lives in Deferral 2. The spec strings section carries exactly the seven. Every `find` is unchanged from round 1 and still unique at HEAD.
+- **`test_command`:** two files (`materialTestGcode.test.ts`, `textGcode.test.ts`); Verification calls it "the two-file `test_command`"; `machineJobLoop.test.tsx` is run separately as "unchanged and green", which is right since it imports the dialog and so exercises the moved generator.
+- **Dropped-scope references:** every remaining mention of `JobActionBar.tsx`, `jobStream.ts`, `pauseJob`, `resumeJob`, `handlePauseResume`, `machineJobLoop.test.tsx:716-775` and `kerf-f2` is in a facts-only, deferral or hand-off context; none instructs a change to the button. Deferrals 1-6 match "Parking Lot lines 1-6" in Stage 3.5. The Intent's fourth bullet and "What S2 does not satisfy" both name the button as out of scope by the ruling. Consistent.
+
+### (c) Anything new that is wrong?
+
+Spot-checked at HEAD: `geometry/index.ts:669` `sampleBezierPath` (the canvas-display hunk starts at `:391`) — exact; `JobActionBar.tsx:106-111` and `:110` — exact; `jobSession.ts:243-248` — exact; `jobStream.ts:413` drain call and `:348-354` hold-wait — exact; `connection.ts:535`, `:318` — exact; `machineStatus.ts:184` — exact; `docs/test-card.md:57-63` — exact; `creatorInvariants.test.ts:24-26`, `:59-85` — exact. The "no visual change" claim for the `.tsx` touch is true (imports and a deletion only). Nothing new is wrong in the plan.
+
+**One residual, not in S2's gate:** the plan and the hand-off say Deferrals 2, 3 and 4 are "owned by `pause-resume-future.md`", but that file does not mention `stopActiveSession`, the drain window, or the dead hold-wait; its only hold-wait sentence (`:112`, "the per-line hold-wait already exits on `jobRunning = false`") leans on the dead code Deferral 3 names. Ownership is currently a pointer to nothing. Owed before that plan's own critic runs: carry Deferrals 2-4 into `pause-resume-future.md` verbatim, and re-read its `:112` against the fact that the hold-wait can never enter. S2's Stage 3.5 Parking Lot lines still index all six, so S2 itself is not blocked.
+
+**Nits:** `.claude/plans/` holds 43 `.md` files now (the fold counted 42; the S3 critic landed since). The hand-off's `kerf-f2` row reads "resolved 2026-09-26" while its log entry and the ruling are dated 2026-09-25; one of the two is off by a day (UTC, probably) and should say which.
+
+### Overall verdict (after fold)
+
+**PASS** — S2 is dispatchable as the generator half only. The FAIL was carried entirely by the relabel, which Lee's ruling removes; what remains is the half that was already sound in round 1, with the engine hazard, the drain-window defect and the dead hold-wait parked in the plan's own Deferrals and indexed at Stage 3.5. The only open item is that the forward plan named as owner of Deferrals 2-4 does not yet contain them; that is owed to `pause-resume-future.md`, not to this gate.
