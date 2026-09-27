@@ -26,10 +26,12 @@ only as a pointer; the detail stays in the private register.
 ## Product rulings
 
 ### streamingMode default: flip `perLine`→`buffered` only if buffered measurably wins
-*2026-07-05*
+*2026-07-05, amended 2026-09-27*
 
 Gate D1c — recommended default is "flip if buffered wins, keep perLine if no measurable
 difference"; you may override.
+
+**Amended, per Lee, 2026-09-27:** Settled by one comparison run: the same dense job sent both ways on the owner's controller, on the published build. If buffered shows no visible difference, buffered mode is removed rather than kept hidden, because it is a second sending path every safety change must cover, and this controller's 127-block planner may already keep per-line sending fed (Lee, 2026-09-27 grill).
 
 ### Variable power (M4) is the default for every new layer; constant power (M3) exists for the stationary beam, not for cutting.
 *2026-09-10, Lee*
@@ -67,6 +69,16 @@ Lee, 2026-09-25, in the coordinator window, verbatim: "Leave the pause botton [s
 *2026-09-26, per Lee (decided by the coordinator under Lee's 2026-09-25 technical delegation as kerf-f1; recorded on Lee's yes)*
 
 The owner's controller runs $20=0 (soft limits off, capture 2026-09-14), so the bed confirmation is the only thing that knows where the edge is: before kerf-safety-s3 an unconfirmed bed sent the raw jog request with no limit, and a verified one could reverse a jog at the edge. The refusal and the confirm step use plain words. The confirmation is remembered per machine, keyed by the port plus the controller's $3, $23, $100, $101, $130 and $131, re-applied only on a full settings read and forgotten when any of those change, a settings read fails, or the operator presses Change. It cannot detect a physical bed change on the same port with the same settings, and that residual is disclosed. A future session must not restore the raw, unclipped jog on an unconfirmed bed.
+
+### The Min Pwr box is shown only on image layers, the only place it reaches the laser.
+*2026-09-27, per Lee*
+
+Min Pwr reaches no G-code on line, fill, offset-fill or fill-line layers in either power mode (Evidence corrections, 2026-09-10). It only shapes the grayscale ramp of an image raster. Shown on every layer, it looks like a floor that protects short perforation dashes under variable power, and it is not one. Lee chose to hide it where it does nothing, over relabelling it or making it real through the controller's $31. A future session must not re-show it on vector layers without first making it reach the G-code.
+
+### Camera alignment and rotary support stay parked; the owner has no such hardware and no plan to get it.
+*2026-09-27, per Lee*
+
+Gate D4 (2026-07-05) waited on whether the hardware exists. Lee answered in the 2026-09-27 grill: no, keep it parked. It stays on the ROADMAP with no planning, and it is not removed, so re-adding it later does not mean re-planning from nothing. Reopen only if Lee says he has, or will buy, a camera or rotary.
 
 ---
 
@@ -165,32 +177,43 @@ machine behaviour.
 Read from the machine 2026-09-05: `[VER:1.1f.20220810:]`, vendor string "CV master-release 3.0.4", `[OPT:VHL,127,65536]` — a 127-block planner and 65536-byte RX buffer against stock GRBL's 15 and 128. Two consequences. (a) Behaviours observed on this machine that stock source says are impossible are real and must be handled, not argued away: the intermittent laser-switch wedge (controller stops acking line commands after `M3`/`M4` while still answering `?` with `Idle`, until `0x18`) is one such, and a `0x18` that failed to stop the beam on 2026-09-02 is another. (b) Phase 2A's premise is questionable here — a 127-block planner means per-line streaming may already keep this controller fed, so the stutter buffered mode was built to cure may not exist on this hardware. Record the planner depth alongside any gate D1c A/B result.
 
 ### Hardware evidence for this program is status-only; optical shutdown cannot be qualified, and powered release stays blocked on that basis.
-*2026-09-10, Lee, amended 2026-09-25*
+*2026-09-10, Lee, amended 2026-09-25, amended 2026-09-27*
 
 A time-correlated optical sensor was recommended and an enclosed camera with a synchronised marker offered as a weaker fallback with an explicitly limited acceptance criterion. Lee chose status-only. The consequence is stated rather than hidden: a status report says what the software commanded and never what the beam emitted, and that gap is precisely what let two reviews pass a defect that re-arms the laser. Most of the program is unaffected — the wedge trigger comes off a serial trace, and Phases 0 through 2 close on tests — but any claim that the beam went dark is unqualifiable, so hold-only pause cannot be qualified and powered release stays blocked. If measurement never becomes available, the honest cost is a release that stays blocked, not confidence that was invented.
 
 **Amended, per Lee, 2026-09-25:** A dark hold may be qualified by the witness-card procedure: low power on scrap card, with a deliberate control burn beside the test so the test could have failed, and a time-correlated optical sensor as the step-up if any mark is doubtful. Status reports alone still cannot show the beam is dark. The limits are part of the ruling. The procedure qualifies only what the test shows: emission above the card's marking threshold, over the dwell, mode and controller tested, and nothing about timing or emission too weak to mark. Every test is run by Lee at the machine with fire precautions in place. Nothing is built or scheduled on the strength of this amendment; the pause work stays parked in the future pause/resume plan until Lee schedules it, and until a witness test has actually been run and accepted, everything this entry blocks stays blocked.
 
+**Amended, per Lee, 2026-09-27:** Powered release is no longer blocked on this basis (Lee, 2026-09-27 grill, with the wedge entry's release gate). The evidence limits are unchanged. No release note, test or claim may say the beam goes dark on stop or pause unless a witness-card test shows it. Pause still means stop.
+
 ### The laser-switch wedge requires a captured trigger and a prevention before release; a quiet run is not closure.
-*2026-09-10, Lee*
+*2026-09-10, Lee, amended 2026-09-27*
 
 Accepting containment on a restricted workflow was available and was rejected; shipping after a short non-reproduction was rejected outright. The defect has already demonstrated it can hit the same spot twice and then vanish for a whole run, so a session that sees nothing cannot distinguish a fixed intermittent failure from one that did not occur that day. Containment remains a possible fallback but must never be reported as the wedge being fixed, and taking it would require expressly redefining the blocker and stating the limitation to the operator.
+
+**Amended, per Lee, 2026-09-27:** Release is no longer gated on the wedge. Lee chose "Lift the release block" in the 2026-09-27 grill, over a one-release exception for v0.8.31 alone, and v0.8.31 is published on that basis. The rest of this entry stands. The wedge stays open. It must still be captured and prevented, a quiet run is still not closure, it must never be reported as fixed, and every release's notes name it as a known open defect.
 
 ### The owner's laser controller switches the air-assist pump, so Air Assist stays and must actually drive it.
 *2026-09-25, Lee*
 
 Asked whether the Air Assist switch should be removed because nothing might be listening to it, Lee stated as fact that his controller does switch the air pump. So the control is not decorative on this machine: removing it is refused, and any gap between the switch and the command the controller receives is a defect to fix, not a reason to drop the feature. Recorded because a future audit that finds the switch weakly wired could otherwise propose deleting it.
 
+### Controller model and firmware strings may be published in this repository; raw diagnostic logs are not committed from now on.
+*2026-09-27, per Lee*
+
+The header says hardware identity is kept private, yet the committed 2026-09-14 probe log and several entries here quote the controller's firmware version, vendor string and buffer sizes. Lee chose to accept that and correct the rule, over moving the log private or rewriting history. A firmware string identifies a commercial controller model, not the owner. For that class of detail this entry supersedes the header's hardware-identity clause (the writer cannot edit the header). Account, contact and incident detail stay private as before. The committed log stays, because entries cite it as re-countable evidence. New diagnostic captures are kept out of the repository and cited by summary.
+
 ---
 
 ## Evidence corrections
 
 ### The SVG path-coordinate drift is not an import/transform defect — that code was audited clean
-*2026-06-21*
+*2026-06-21, amended 2026-09-27*
 
 Import/transform code audited clean; needs a sample Inkscape SVG from Lee to reproduce.
 Carried across all three prior hand-offs with no progress. Do not re-derive an
 import/transform theory without a reproducing file.
+
+**Amended, per Lee, 2026-09-27:** The June 2026 drift report is closed until it recurs. If it happens again, the file that shows it is saved and the report reopens with that file. Nobody guesses at a fix without it (Lee, 2026-09-27 grill).
 
 ### `0x9E` is a TOGGLE and GRBL already stops the laser itself at hold-complete — Kerf's pause volley re-arms the beam
 *2026-09-05, amended 2026-09-25*
