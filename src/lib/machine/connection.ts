@@ -9,6 +9,14 @@ import {
   isStatusEligible,
   type GrblSnapshot,
 } from "./machineStatus";
+import {
+  JOG_REASON_AXIS,
+  JOG_REASON_PENDING,
+  JOG_REASON_TARGET,
+  clipJog,
+  jogBlockReason,
+  targetInEnvelope,
+} from "./jogBounds";
 
 interface PortInfo {
   name: string;
@@ -85,18 +93,24 @@ let connectingPromise: Promise<string> | null = null;
  */
 let settingsGeneration = 0;
 
+/** Normalize as GRBL 1.1's line reader does before it executes the line:
+ *  drop ( ... ) comments, cut at ';', delete every char <= 0x20 and every '/',
+ *  upper-case. (S3: extracted verbatim from isGrblSettingsWrite.) */
+function normalizeGrblLine(cmd: string): string {
+  return (
+    cmd
+      .replace(/\([^)]*\)?/g, "")
+      .split(";")[0]
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x20/]/g, "")
+      .toUpperCase()
+  );
+}
+
 /** S1: true for commands that change a controller setting ($N=, $Nx=, $RST=).
  *  A startup block ($N0=...) runs after every reset, so it counts as a write. */
 export function isGrblSettingsWrite(cmd: string): boolean {
-  // Normalize as GRBL 1.1's line reader does before it executes the line:
-  // drop ( ... ) comments, cut at ';', delete every char <= 0x20 and every '/',
-  // upper-case.
-  const c = cmd
-    .replace(/\([^)]*\)?/g, "")
-    .split(";")[0]
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\x00-\x20/]/g, "")
-    .toUpperCase();
+  const c = normalizeGrblLine(cmd);
   return /^\$\d+=/.test(c) || /^\$N\d*=/.test(c) || /^\$RST=/.test(c);
 }
 
@@ -143,6 +157,137 @@ function applyLaserModeReadback(responses: string[], genAtStart: number): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// S3: bed memory (kerf-f1 b). A bed size the operator confirmed is remembered
+// per machine, keyed by the port plus the six settings that define the frame.
+// ---------------------------------------------------------------------------
+
+export type BedSource = "machine" | "remembered" | "confirmed" | "session" | null;
+
+const BED_CONFIRMATIONS_KEY = "kerf-bed-confirmations";
+const BED_CONFIRMATIONS_CAP = 8;
+const BED_KEY_SETTINGS = [3, 23, 100, 101, 130, 131] as const;
+const BED_WRITE_RE = /^\$(3|23|100|101|130|131)=|^\$N\d*=|^\$RST=/;
+
+let connectedPort: string | null = null;
+let bedKey: string | null = null;
+let bedSource: BedSource = null;
+const bedSourceListeners = new Set<() => void>();
+
+function markBed(s: BedSource): void {
+  bedSource = s;
+  for (const cb of bedSourceListeners) cb();
+}
+
+/** useSyncExternalStore subscribe for the bed's source. */
+export function subscribeBedSource(cb: () => void): () => void {
+  bedSourceListeners.add(cb);
+  return () => {
+    bedSourceListeners.delete(cb);
+  };
+}
+
+/** useSyncExternalStore snapshot: who set the current bed size. */
+export function getBedSource(): BedSource {
+  return bedSource;
+}
+
+function bedKeyFrom(port: string | null, geo: Map<number, number>): string | null {
+  if (port === null || !geo.has(100) || !geo.has(101)) return null;
+  const portPart = `port=${port}`;
+  return [portPart, ...BED_KEY_SETTINGS.map((k) => `$${k}=${geo.get(k) ?? "-"}`)].join("|");
+}
+
+function touchesBedKey(cmd: string): boolean {
+  return BED_WRITE_RE.test(normalizeGrblLine(cmd));
+}
+
+/** A key-setting write since the last full parse: a confirm is session-only until re-read. */
+function forgetBedKeyAfterWrite(): void {
+  bedKey = null;
+}
+
+/** Disconnect: nothing about this connection's bed survives it. */
+function forgetConnectionBed(): void {
+  bedKey = null;
+}
+
+interface BedEntry {
+  key: string;
+  w: number;
+  h: number;
+}
+
+function validBedSize(w: unknown, h: unknown): boolean {
+  return (
+    typeof w === "number" &&
+    typeof h === "number" &&
+    Number.isFinite(w) &&
+    Number.isFinite(h) &&
+    w > 0 &&
+    h > 0
+  );
+}
+
+/** Read every call (never cached): malformed data reads as no entries. */
+function readBedEntries(): BedEntry[] {
+  try {
+    const raw = localStorage.getItem(BED_CONFIRMATIONS_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (e): e is BedEntry =>
+        e !== null && typeof e === "object" && typeof e.key === "string" && validBedSize(e.w, e.h)
+    );
+  } catch {
+    // Storage unavailable or corrupt JSON: treat as nothing remembered (fail-closed:
+    // the operator is asked to confirm).
+    return [];
+  }
+}
+
+function readRememberedBed(key: string): { w: number; h: number } | null {
+  const hit = readBedEntries().find((e) => e.key === key);
+  return hit ? { w: hit.w, h: hit.h } : null;
+}
+
+/** Returns false when storage refused the write; the caller says so (N6). */
+function writeRememberedBed(key: string, w: number, h: number): boolean {
+  try {
+    const rest = readBedEntries().filter((e) => e.key !== key);
+    const next = [{ key, w, h }, ...rest].slice(0, BED_CONFIRMATIONS_CAP);
+    localStorage.setItem(BED_CONFIRMATIONS_KEY, JSON.stringify(next));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** S3 fold 3: a status Kerf has not yet seen is unknown, never fresh. */
+function markStatusUnknown(): void {
+  const st = useStore.getState();
+  st.setStatusStale(true);
+  st.setPositionKind(null);
+}
+
+// S3 D1: one jog in flight. jogTick moves at submit and at acknowledgement so a
+// poll in flight across either edge cannot count as "after the jog".
+let jogPending = false;
+let jogTick = 0;
+
+async function sendJogLine(line: string): Promise<void> {
+  if (jogPending) {
+    useStore.getState().addConsoleLine(JOG_REASON_PENDING, "info");
+    return;
+  }
+  jogPending = true;
+  jogTick++;
+  const responses = await machineConnection.send(line);
+  jogTick++;
+  if (!responses.includes("ok")) jogPending = false;
+}
+
 /**
  * S1: parse a `$$` response set (parse-only; sends nothing). Applies
  * $20-22, $30, $110/111, $120/121, $130/131 as the connect parse always has;
@@ -158,12 +303,14 @@ function parseSettingsResponses(responses: string[], gen: number): boolean {
     maxFeedRateY = 0;
   let maxTravelX = 0,
     maxTravelY = 0;
+  const geo = new Map<number, number>();
   for (const line of responses) {
     const match = line.match(/^\$(\d+)=([\d.]+)/);
     if (match) {
       parsedAny = true;
       const key = parseInt(match[1], 10);
       const value = parseFloat(match[2]);
+      geo.set(key, value);
       if (key === 20) {
         store.setGrblSoftLimits(value === 1);
         store.addConsoleLine(
@@ -215,13 +362,26 @@ function parseSettingsResponses(responses: string[], gen: number): boolean {
     store.setGrblMaxFeedRate(maxFeedRateX, maxFeedRateY);
     store.addConsoleLine(`Max feed rate: X=${maxFeedRateX} Y=${maxFeedRateY} mm/min`, "info");
   }
+  bedKey = parsedAny ? bedKeyFrom(connectedPort, geo) : null;
   if (maxTravelX > 0 && maxTravelY > 0) {
     store.setWorkspaceSize(maxTravelX, maxTravelY);
     store.setWorkspaceVerified(true);
+    markBed("machine");
     store.addConsoleLine(
       `Workspace set to ${maxTravelX}×${maxTravelY}mm from machine settings`,
       "info"
     );
+  } else if (bedKey) {
+    const remembered = readRememberedBed(bedKey);
+    if (remembered) {
+      store.setWorkspaceSize(remembered.w, remembered.h);
+      store.setWorkspaceVerified(true);
+      markBed("remembered");
+      store.addConsoleLine(
+        `Using the bed size you confirmed for this machine before: ${remembered.w} × ${remembered.h} mm. Change it in the Machine panel if that's wrong.`,
+        "info"
+      );
+    }
   }
   return parsedAny;
 }
@@ -275,6 +435,8 @@ export const machineConnection = {
           baudRate,
         });
         store.setMachineConnected(true);
+        connectedPort = portName;
+        markStatusUnknown();
         // Reset spindle-drop diagnostic state so a stale value from a previous
         // connection doesn't produce a spurious warning on the first poll.
         resetSpindleDrop();
@@ -409,6 +571,13 @@ export const machineConnection = {
       jobPollingSuspended = false;
       // S1 N3: a previous controller's laser-mode TRUE never survives.
       store.setGrblLaserMode(false);
+      // S3: nor does its bed, its status freshness, or a jog in flight.
+      store.setWorkspaceVerified(false);
+      markStatusUnknown();
+      connectedPort = null;
+      forgetConnectionBed();
+      markBed(null);
+      jogPending = false;
       await invoke("serial_disconnect", { jobActive: needsEstop });
       store.setMachineConnected(false);
       // Tail clear: a job-running flag must never outlive the connection,
@@ -436,6 +605,7 @@ export const machineConnection = {
       // S1: the one settings-write chokepoint — invalidate before the write.
       const isWrite = isGrblSettingsWrite(command);
       if (isWrite) invalidateGrblSettings();
+      if (isWrite && touchesBedKey(command)) forgetBedKeyAfterWrite();
       // S1: a `$$` re-verifies; capture the generation BEFORE the invoke.
       const isReadback = command.trim() === "$$";
       const readbackGen = settingsGeneration;
@@ -534,6 +704,7 @@ export const machineConnection = {
     }
     if (jobPollingSuspended) return;
 
+    const tickAtInvoke = jogTick;
     try {
       const outcome = await invoke<StatusOutcome>("serial_get_status");
       // Busy/none sentinel included: the strike counter RESETS on it — the
@@ -551,6 +722,14 @@ export const machineConnection = {
       // B2b: update the statusStale store field from isStatusEligible().
       // This drives the canStartJob gate (3s eligibility rule).
       store.setStatusStale(!isStatusEligible());
+
+      // S3 D1: only a real Idle report from a poll begun after the jog's
+      // acknowledgement releases it. Busy/no-response writes no state, so the
+      // store's machineState is never consulted here.
+      const noJogOverlap = tickAtInvoke === jogTick;
+      const realReport = outcome.kind === "report" && outcome.snapshot !== null;
+      const reportedIdle = realReport && machineStateToStore(outcome.snapshot!.state) === "idle";
+      if (accepted && jogPending && noJogOverlap && reportedIdle) jogPending = false;
 
       // Spindle-drop evidence (status only); fed here when no job is running.
       if (accepted && outcome.snapshot) {
@@ -579,48 +758,42 @@ export const machineConnection = {
 
   async jog(axis: string, distance: number, feedRate: number = 1000): Promise<void> {
     const store = useStore.getState();
-    // Jog is disabled in alarm state — machine must be unlocked first
-    if (store.machineState === "alarm") {
-      store.addConsoleLine("Jog blocked: machine in alarm state — unlock ($X) first", "warning");
+    const blocked = jogBlockReason(store, "by");
+    if (blocked) {
+      store.addConsoleLine(blocked, "warning");
       return;
     }
-    const { machinePosition, workspaceWidth, workspaceHeight, workspaceVerified } = store;
-    // WARNING-1: The client-side clamp assumes machinePosition is in machine-frame
-    // [0..bed] coordinates. On $10=0 machines WPos can be WCO-offset (negative or
-    // shifted), so clamping to [0..bed] would mis-clamp a valid jog.
-    // Only apply the clamp when the workspace is verified (bed size is known) —
-    // this is a best-effort convenience guard; $20 soft limits are the hard backstop.
-    let clamped = distance;
-    if (workspaceVerified) {
-      if (axis === "X" || axis === "x") {
-        const dest = machinePosition.x + distance;
-        const destClamped = Math.max(0, Math.min(workspaceWidth, dest));
-        clamped = destClamped - machinePosition.x;
-      } else if (axis === "Y" || axis === "y") {
-        const dest = machinePosition.y + distance;
-        const destClamped = Math.max(0, Math.min(workspaceHeight, dest));
-        clamped = destClamped - machinePosition.y;
-      }
-      if (clamped === 0) {
-        store.addConsoleLine("Jog clamped: already at bed edge", "info");
-        return;
-      }
+    const ax = axis.toUpperCase();
+    if (ax !== "X" && ax !== "Y") {
+      store.addConsoleLine(JOG_REASON_AXIS, "warning");
+      return;
     }
-    // When workspace is unverified, skip the clamp and let GRBL/$20 be the backstop.
-    await this.send(`$J=G91 ${axis}${clamped} F${feedRate}`);
+    const clip = clipJog({
+      axis: ax,
+      distance,
+      position: ax === "X" ? store.machinePosition.x : store.machinePosition.y,
+      bed: ax === "X" ? store.workspaceWidth : store.workspaceHeight,
+      originTop: store.originTop,
+    });
+    if (clip.kind === "refuse") {
+      store.addConsoleLine(clip.reason, "warning");
+      return;
+    }
+    await sendJogLine(`$J=G21 G91 ${ax}${clip.distance.toFixed(3)} F${feedRate}`);
   },
 
   async jogTo(x: number, y: number, feedRate: number = 3000): Promise<void> {
     const store = useStore.getState();
-    if (store.machineState === "alarm") {
-      store.addConsoleLine("Jog blocked: machine in alarm state — unlock ($X) first", "warning");
+    const blocked = jogBlockReason(store, "to");
+    if (blocked) {
+      store.addConsoleLine(blocked, "warning");
       return;
     }
-    const { workspaceWidth, workspaceHeight } = store;
-    // Clamp absolute destination to bed bounds
-    const cx = Math.max(0, Math.min(workspaceWidth, x));
-    const cy = Math.max(0, Math.min(workspaceHeight, y));
-    await this.send(`$J=G90 X${cx.toFixed(3)} Y${cy.toFixed(3)} F${feedRate}`);
+    if (!targetInEnvelope(x, y, store.workspaceWidth, store.workspaceHeight, store.originTop)) {
+      store.addConsoleLine(JOG_REASON_TARGET, "warning");
+      return;
+    }
+    await sendJogLine(`$J=G21 G90 X${x.toFixed(3)} Y${y.toFixed(3)} F${feedRate}`);
   },
 
   /** Cooperative cancel for a buffered streaming job. Sets the Rust-side abort
@@ -643,17 +816,28 @@ export const machineConnection = {
   },
 
   async setOrigin(): Promise<void> {
-    await this.send("G92 X0 Y0");
+    const responses = await this.send("G92 X0 Y0");
     const store = useStore.getState();
     const { workCoordOffset } = store;
-    if (workCoordOffset.x !== 0 || workCoordOffset.y !== 0) {
+    const offsetKnown = Number.isFinite(workCoordOffset.x) && Number.isFinite(workCoordOffset.y);
+    if (offsetKnown && (workCoordOffset.x !== 0 || workCoordOffset.y !== 0)) {
       store.addConsoleLine(
         `Work origin set. Previous offset was X${workCoordOffset.x.toFixed(3)} Y${workCoordOffset.y.toFixed(3)}. Run G92.1 to clear offset.`,
         "info"
       );
     }
-    // Reset the known offset to 0 since we just set origin — next poll will update if needed
-    store.setWorkCoordOffset({ x: 0, y: 0 });
+    // No ok: the controller did not take the G92, so the known offset stands.
+    if (!responses.includes("ok")) return;
+    // N5: only a fresh machine-frame report gives the exact MPos. Otherwise the
+    // offset is unknown (NaN, never 0) until the next WCO: field, so jogTo's
+    // offset refusal applies instead of a zero it cannot vouch for.
+    const trusted = !store.statusStale && store.positionKind === "machine";
+    if (!trusted) {
+      store.setWorkCoordOffset({ x: NaN, y: NaN });
+      return;
+    }
+    const mpos = store.machinePosition;
+    store.setWorkCoordOffset({ x: mpos.x, y: mpos.y }); // S3: G92 X0 Y0 makes WCO equal to MPos
   },
 
   async softReset(): Promise<void> {
@@ -790,6 +974,41 @@ export const machineConnection = {
     }
   },
 
+  /** S3 kerf-f1 (b): the operator's bed confirmation, the only writer of the
+   *  memory. Returns false (and says why) when the size is refused. */
+  confirmBedSize(w: number, h: number): boolean {
+    const store = useStore.getState();
+    if (!validBedSize(w, h)) {
+      store.addConsoleLine(
+        "Bed size not set — enter a width and height in mm, both above 0.",
+        "error"
+      );
+      return false;
+    }
+    store.setWorkspaceSize(w, h);
+    store.setWorkspaceVerified(true);
+    if (bedKey && writeRememberedBed(bedKey, w, h)) {
+      markBed("confirmed");
+      store.addConsoleLine(
+        `Bed size ${w} × ${h} mm confirmed. Kerf will remember it for this machine.`,
+        "info"
+      );
+    } else if (bedKey) {
+      markBed("session");
+      store.addConsoleLine(
+        `Bed size ${w} × ${h} mm confirmed for this session. Kerf couldn't save it for next time, so it will ask again next time you connect.`,
+        "warning"
+      );
+    } else {
+      markBed("session");
+      store.addConsoleLine(
+        `Bed size ${w} × ${h} mm confirmed for this session. Kerf couldn't read this machine's settings, so it will ask again next time you connect.`,
+        "info"
+      );
+    }
+    return true;
+  },
+
   /** Query $$ and apply $30/$32/$120-131. Returns true when the response
    * parsed as settings (at least one `$N=V` line) — the $32 warning and the
    * "unverified" fallback in connect() key off this. */
@@ -873,4 +1092,15 @@ function categorizeConnectionError(raw: string): ConnectionError {
 // Not imported anywhere in production code.
 export function _testResetPollFailures(): void {
   consecutivePollFailures = 0;
+}
+
+// S3 test-only reset: module-level jog-in-flight and bed-memory state would
+// otherwise leak between tests that share this module instance.
+// Not imported anywhere in production code.
+export function _testResetJogAndBedState(): void {
+  jogPending = false;
+  jogTick = 0;
+  connectedPort = null;
+  bedKey = null;
+  bedSource = null;
 }

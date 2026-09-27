@@ -1,7 +1,11 @@
 import { useSyncExternalStore } from "react";
 import { useStore } from "../../app/store";
 import { subscribeCursorPosition, getCursorPosition } from "../../app/store";
-import { MACHINE_STATE_COLORS, MACHINE_STATE_LABELS } from "../../lib/machine/machineStateDisplay";
+import {
+  MACHINE_STATE_COLORS,
+  MACHINE_STATE_LABELS,
+  displayMachineState,
+} from "../../lib/machine/machineStateDisplay";
 
 export function StatusBar() {
   // P4: Cursor position via useSyncExternalStore (removed from Zustand)
@@ -12,9 +16,13 @@ export function StatusBar() {
   const gridVisible = useStore((s) => s.gridVisible);
   const snapToGrid = useStore((s) => s.snapToGrid);
   const machineState = useStore((s) => s.machineState);
+  const machineConnected = useStore((s) => s.machineConnected);
+  const statusStale = useStore((s) => s.statusStale);
   const statusMessage = useStore((s) => s.statusMessage);
   const showConsole = useStore((s) => s.showConsole);
   const setShowConsole = useStore((s) => s.setShowConsole);
+  // S3 (Jen C3): a stale status never shows a green "Ready".
+  const shownState = displayMachineState(machineState, machineConnected, statusStale);
 
   return (
     <div
@@ -43,12 +51,13 @@ export function StatusBar() {
               width: "6px",
               height: "6px",
               borderRadius: "50%",
-              background: MACHINE_STATE_COLORS[machineState] ?? "var(--text-muted)",
+              background: MACHINE_STATE_COLORS[shownState] ?? "var(--text-muted)",
+              opacity: shownState === "stale" ? 0.4 : 1,
             }}
             aria-hidden="true"
           />
-          <span style={{ color: MACHINE_STATE_COLORS[machineState] ?? "var(--text-muted)" }}>
-            {MACHINE_STATE_LABELS[machineState] ?? machineState}
+          <span style={{ color: MACHINE_STATE_COLORS[shownState] ?? "var(--text-muted)" }}>
+            {MACHINE_STATE_LABELS[shownState] ?? shownState}
           </span>
         </span>
 

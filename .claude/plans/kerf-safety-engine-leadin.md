@@ -1,6 +1,26 @@
 # Kerf safety engine-leadin: every cut starts with a G0 and a mode line, and no burning G1 stands still
 
-> STATUS: written 2026-09-25. All sections are complete. Critic review is still owed (astra by default, Fable as the fallback).
+> STATUS: written 2026-09-25; critic folded 2026-09-26. The Fable critic (`kerf-safety-engine-leadin-critic.md`) returned CONCERN, with no gating FAIL and X1 PASS.
+
+## Fold notes (critic `kerf-safety-engine-leadin-critic.md`, Fable: CONCERN, no gating FAIL, X1 PASS)
+
+All 7 must-fixes are folded as the coordinator specified. None changes a line of the engine edit (2a-2e), the anchors or the 21-id battery.
+
+1. **P2's tolerance now excludes the lead-in.** Where `lead_in` is `Some(l)`, P2 subtracts the lead-in `G1`'s own written length before comparing, so the 0.1 mm slack is real on all six lead-in fixtures. KL-C5 was already killed by `rounded_plain_2pass`; it is now also killed by the pills. (2f, Invariants.)
+2. **T-L4's seal formula counts the footer.** The expected `seal` is the number of section markers **or `; KERF:FOOTER_BEGIN` markers** that the before program reaches while `b_st.sealable()`, matching `is_boundary`. A maskFill-only job (a mask fill as the last object) is then counted correctly. (T-L4 expectations.)
+3. **P3 is defined before the fix.** A `; Cut:` section with a `lead_in` expectation but no mode line, or no positive `G1` after its first mode line, is itself a P3 violation. So the reproduce-first table's P3 entries are well-defined. (2f.)
+4. **The time-estimate mechanism is corrected.** `estimate_time` (`gcode_gen.rs:1456`) is computed from `moves`, not from the distance accumulators, and it already skips moves under 0.001 mm. A refused zero-length `G1` therefore changes nothing, and a refused sub-step one changes the estimate by milliseconds. (2c, Risk 3.)
+5. **Deferral 2 is re-scoped.**
+   - Lead-in (by the outward normal) and lead-out (by straight extension) do not know which side is waste. On a hole, both mark the part, with or without an overcut; the overcut only turns the lead-out scar into a diagonal chord.
+   - It is routed to the geometry program under DECISIONS 2026-09-10 ("which side is waste"), with the material outcome named in its Parking Lot line.
+   - An owner workaround line is added to the owner card and the Stage 3.5 obligations: lead-in and lead-out on outer cuts only.
+6. **The A4b dependency is stated.** `pill_after_maskfill` depends on the A4b partition (`commands/gcode.rs:82-110`) emitting the mask fill first. A future ordering change reads as a fixture break, not an engine defect. (Fixture table.)
+7. **The empty-`Ok` mask-fill seal is declared, not guarded.** The seal's `M5` is unconditional in the `Ok` branch, on purpose. An `Ok` scan with no rows writes an `M5` with the laser already off, which is a no-op on the controller. No corpus program has an empty mask fill. If one is ever added, the classifier returns `Err` (`may_seal` requires `sealable()`), which surfaces it for a decision. The engine edit is unchanged. (2d, Risks.)
+
+**Also folded (not must-fixes):**
+- **Risk 2** gets the critic's clause: on another machine the reversal is "read `$100/$101`", not "change the number".
+- **Engine-arm has merged.** `83e02e5` is an ancestor of `marvin/kerf-gap` (merged `021f45b`), and `git diff 83e02e5 HEAD -- src-tauri` is empty (critic), so every citation holds on the session branch. The engine-arm worktree has been removed.
+- **The DECISIONS item** at Stage 3.5 is now an **amendment** of Lee's 2026-09-26 entry, "Every mode line Kerf emits carries S0; positive S rides only on G1 words that carry X or Y." That entry says: "tighten it then by amendment".
 
 **Lifted from:** Razor's review of `kerf-safety-engine-arm` batch 1, findings **W2** (physical safety) and **W1**: `~/marvin/state/relay/kerf-safety-engine-arm-razor-review-b1.md`, under "Findings". Both defects are pre-existing. Razor routed them to "its own fix relay promptly", and the hand-off at `519931f` queues the work as "lead-in burn fix queued next".
 
@@ -113,7 +133,7 @@ Grill skipped. The intent is fixed by sources that are already written, and none
 | Perforation (`:661-715`) | No: each dash restarts with `G0` (`:704`) then a mode line (`:712`) | **Yes**, at the `t = 0` cut end. Guarded |
 | Tabs (`:716-785`) | No: `G0` (`:741`) then a mode line (`:751`) | **Yes**, at the `t = 0` cut end. Guarded |
 | Overcut (`:819-849`) | No: it follows the path, re-arms with a mode line if `!laser_on` (`:831`), and is positioned by the path's own `G0`s | A tiny overcut: guarded. A degenerate first segment means the overcut is silently skipped, which is dark (Deferral 1) |
-| Lead-out (`:851-880`) | No, same reason | A tiny lead-out: guarded. A degenerate last segment means it is silently skipped, which is dark (Deferral 1). **After an overcut, the lead-out burns a diagonal from the overcut end** (Deferral 2) |
+| Lead-out (`:851-880`) | No, same reason | A tiny lead-out: guarded. A degenerate last segment means it is silently skipped, which is dark (Deferral 1). **On a hole, the lead-out (like the lead-in) marks the part; after an overcut the scar becomes a diagonal chord** (Deferral 2) |
 | Kerf-offset path (TS, `gcodeGen.ts:448-517`) | Arrives as `paths` and enters the same line-arm start block, so the restructure covers it | **Yes**: sub-step collapsed-edge junctions. Guarded |
 | offsetFill ring (`:1085-1150`) | No: `M5`, `G0`, then the mode line per ring | **Yes**: duplicates in ring 0 and the inner rings. Guarded |
 | fill scan (`emit_scan_segments`, from `:236`) | No: `G0`, then the mode line per scan line | **Yes**: zero-width scan. Guarded |
@@ -187,7 +207,7 @@ All three are plain `#[test]`.
 | Label | Object | Layer settings | Reaches |
 |---|---|---|---|
 | `pill_leadin` | `rect_obj` at (10,10), 10×20, `corner_radius Some(5.0)` (so `r = w/2`) | line, `lead_in 3` | W2 after the preamble `M5` (the not-cut variant) |
-| `pill_after_maskfill` | engine-arm's `maskfill_then_line` mask object (40×40 outer plus hole, interval 5, `layer_index 0`), plus the pill from row 1 moved to (50,10), `layer_index 0` | mask: maskFill; pill: line, `lead_in 3` | W2 after a mask fill (the burn variant), and the seam |
+| `pill_after_maskfill` | engine-arm's `maskfill_then_line` mask object (40×40 outer plus hole, interval 5, `layer_index 0`), plus the pill from row 1 moved to (50,10), `layer_index 0` | mask: maskFill; pill: line, `lead_in 3` | W2 after a mask fill (the burn variant), and the seam. **Depends on the A4b partition** (`commands/gcode.rs:82-110`) emitting every fill-ish object before any line object in a shared `layer_index`. If that ordering ever changes, this fixture stops reproducing, and that is a fixture break, not an engine defect. |
 | `pill_radius_clamp` | like row 1, `corner_radius Some(8.0)` (clamped to 5) | line, `lead_in 3` | the clamp at `:1358` |
 | `pill_wide` | (10,10), 20×10, `corner_radius Some(5.0)` (so `r = h/2`) | line, `lead_in 3`, `lead_out 2` | collapsed side edges (W1), with a healthy first segment |
 | `rounded_plain_2pass` | (10,10), 30×20, `corner_radius Some(3.0)` | line, `passes 2` | W1, Razor's probe shape |
@@ -364,7 +384,7 @@ if entry.is_some() {
 - The W2 path now gets `G0` (to the lead-in point, found from the first real segment), the mode line and its lead-in.
 - A path with no point more than 0.001 mm from its start gets `G0`, the mode line, no burning `G1` (the loop's are all refused), and `M5`.
 
-**2c. The nine burning `G1` sites.** Each `lines.push(format!("G1 … S{}", …)); moves.push(GcodeMove { … "cut"/"engrave" … });` pair becomes one call, verbatim. The distance accumulators before each site are **left exactly as they are**, so `cut_distance`, `total_distance` and the time estimate count geometry, not emitted lines. Only the `moves` preview drops a refused point.
+**2c. The nine burning `G1` sites.** Each `lines.push(format!("G1 … S{}", …)); moves.push(GcodeMove { … "cut"/"engrave" … });` pair becomes one call, verbatim. The distance accumulators before each site are **left exactly as they are**, so `cut_distance` and `total_distance` count geometry, not emitted lines. The `moves` list (the preview) drops a refused point. **The time estimate is computed from `moves`** (`estimate_time`, `gcode_gen.rs:1456`), which already skips moves under 0.001 mm, so a refused zero-length `G1` changes nothing and a refused sub-step one changes it by milliseconds (fold 4).
 
 | Site | Today | Becomes |
 |---|---|---|
@@ -396,6 +416,10 @@ if entry.is_some() {
 lines.push("M5".to_string()); // seal the mask fill
 ```
 
+- **The seal is unconditional in the `Ok` branch, on purpose (fold 7).** An `Ok` result with no rows (an all-empty mask that the `has_content` check at `:1211` did not catch) writes an `M5` with the laser already off. That is a no-op on the controller.
+- No corpus program has an empty mask fill. If one is ever added, T-L4's classifier returns `Err` for it, because `may_seal` requires `sealable()`. That surfaces the case for a decision instead of hiding it.
+- A guard on a non-empty `scan_result.gcode` was considered and rejected: it adds a branch and a mutant to protect against a harmless extra `M5`.
+
 **2e. The comment at `:460-464`.** Replace its last two sentences ("Known gap, tracked separately: a G1 whose X/Y equal the current position (zero-length G1, Razor W1) still carries positive S.") so that the block reads, verbatim:
 
 ```
@@ -411,8 +435,8 @@ lines.push("M5".to_string()); // seal the mask fill
   - Checks `leadin_violations`: I-SEAM, I-ARM, I-DISP and I-STEP.
   - Checks `assert_never_arms` (engine-arm's I1/I2), called only after `leadin_violations`, so its panic cannot hide the list.
   - **P1:** at least one positive `G1` when `expect_burn`. **Exactly zero** positive `G1`s for `path_all_coincide` and `zero_width_fill`, whose sections must still contain a `G0`, a mode line and an `M5`.
-  - **P2:** where `perimeter` is `Some(p)`, the summed text-coordinate length of the positive `G1`s in the `; Cut:` sections is `>= p - 0.1`.
-  - **P3:** where `lead_in` is `Some(l)`, the first positive `G1` after the first mode line of the `; Cut:` section has text length `l ± 0.002`.
+  - **P2:** where `perimeter` is `Some(p)`, take the summed text-coordinate length of the positive `G1`s in the `; Cut:` sections, **minus the written length of each section's lead-in `G1`** where `lead_in` is `Some` (that is, the first positive `G1` after the section's first mode line). The result must be `>= p - 0.1`. So the 0.1 mm slack is real on the lead-in fixtures too, rather than hidden under a 3 mm lead-in (fold 1).
+  - **P3:** where `lead_in` is `Some(l)`, the first positive `G1` after the first mode line of the `; Cut:` section has text length `l ± 0.002`. **These are P3 violations too:** a `; Cut:` section with no mode line at all, and a mode line followed by no positive `G1`. That is what the pre-fix W2 output looks like, so the reproduce-first table's P3 entries are defined (fold 3).
 - **T-L2** `committed_goldens_hold_leadin_invariants` (`#[test]`). It runs `leadin_violations` on every committed golden and asserts none.
   - Anti-vacuity: at least 16 files, and at least 1 positive `G1` checked.
   - It guards a future regeneration. It kills no code mutant.
@@ -479,8 +503,8 @@ A **section** runs from a section marker (`; Cut:`, `; Engrave:`, `; Offset Fill
 | **I-STEP** | In the vector sections (`Cut`, `Engrave`, `Offset Fill`), no positive-`S` `G1` moves less than 0.0125 mm on both axes as written. The test uses its own literal, not the engine's constant. | T-L1, T-L2 |
 | I1-I4 | engine-arm's: every mode line is `S0`; positive `S` only on `G1` with X/Y; mode letter follows the layer; every `G1` carries `S` | engine-arm T1 and T2 (unchanged), plus `assert_never_arms` inside T-L1 |
 | **P1** | Each fixture that should burn does. `path_all_coincide` and `zero_width_fill` burn nothing, and each of their sections still opens with `G0` and a mode line and closes with `M5`. | T-L1 |
-| **P2** | No cut is lost to the guard: the burned length is at least the path perimeter minus 0.1 mm. | T-L1 |
-| **P3** | A requested lead-in is honoured, including on the W2 shapes. | T-L1 |
+| **P2** | No cut is lost to the guard: the burned length, excluding the lead-in `G1`, is at least the path perimeter minus 0.1 mm. | T-L1 |
+| **P3** | A requested lead-in is honoured, including on the W2 shapes. A section with no mode line, or no burn after it, fails P3. | T-L1 |
 | **I5** | Apart from the classified changes, the program is byte-identical. | T-L4 (one-shot, over 16 goldens and 58 matrix programs), then the byte-for-byte goldens |
 
 **The matrix test requested** is T-L1 over `leadin_matrix()`:
@@ -546,7 +570,7 @@ D is judged against **`a_st.pos`**, meaning where the fixed program's head actua
 - **K7:** a 0.010 mm positive `G1` in a `; Mask Fill:` section gives **no** I-STEP. The scope is deliberate.
 
 **T-L4 expectations** (one-shot, over the before and after sets from 2g steps 2 and 6):
-- **Every golden and every `arm__*` program:** `start == retarget == delete == 0`, and `seal ==` the number of section markers the before program reaches while `b_st.sealable()`. That count is computed by the test from the before text, so it holds whichever of E1b or this batch lands first.
+- **Every golden and every `arm__*` program:** `start == retarget == delete == 0`, and `seal ==` the number of section markers **or `; KERF:FOOTER_BEGIN` markers** that the before program reaches while `b_st.sealable()`. That matches `is_boundary`, so a program whose last object is a mask fill (the ordinary maskFill-only job) is counted, not rejected (fold 2). That count is computed by the test from the before text, so it holds whichever of E1b or this batch lands first.
   - Expected result at `83e02e5`: golden 04 is `seal 1`, `arm__maskfill_then_line_{constant,variable}` are `seal 1` each, and everything else is unchanged.
 - **Every `leadin__*` program, identical under both modes:**
 
@@ -681,6 +705,8 @@ These steps go on the owner hardware card in ROADMAP `next` at Stage 3.5. The re
 6. **Repeat steps 3-5 on Variable (M4),** the default. Pass criteria are the same.
 7. **Optional, Lee's call:** repeat steps 3-4 on v0.8.30, for a before/after pair on one card. That runs the old behaviour deliberately, at 10% on card, under the same precautions.
 
+**Workaround line for the card (not a test, fold 5):** "Use lead-in and lead-out on outer cuts only. On a hole (an inner cut), both currently burn into the finished part: a straight stub, or a diagonal chord when overcut is also set. This holds until the geometry program fixes which side is waste."
+
 ## done_condition
 
 - `relay/kerf-safety-engine-arm` is an ancestor of `relay/kerf-safety-engine-leadin`, which is an ancestor of `marvin/kerf-gap`.
@@ -695,15 +721,15 @@ These steps go on the owner hardware card in ROADMAP `next` at Stage 3.5. The re
 - **ROADMAP:**
   - a `shipped` entry;
   - the Parking Lot line or hand-off item for this fix marked shipped in the section's own convention;
-  - owner-card steps 1-7 added to `next`;
-  - Parking Lot lines for Deferrals 1-7.
+  - owner-card steps 1-7 added to `next`, **plus the workaround line** (lead-in and lead-out on outer cuts only; on a hole both burn into the part);
+  - Parking Lot lines for Deferrals 1-7. Deferral 2's line is worded as the material outcome given in Deferral 2 and is indexed under the geometry program (DECISIONS 2026-09-10).
   - Engine-arm's Deferral 6 (the maskFill seam) is marked **closed for vector fragments**; it remains open for image output, which relies on the footer `M5`.
 - **ARCHITECTURE.md delta** (`:194-203`, `gcode_gen.rs`): "every line path starts `G0` then `{M3|M4} S0`; every burning vector `G1` goes through `CutPen`, which refuses a move under one motor step (0.0125 mm per axis, as written); a mask fill ends `M5`."
-- **DECISIONS proposal** (never auto-written; the orchestrator records it under the coordinator's delegation with provenance, or puts it to Lee). Engineering pin:
+- **DECISIONS amendment** (via `update-decisions.mjs decisions_amend`, never hand-edited; the orchestrator records it under the coordinator's delegation with provenance, or puts it to Lee). It amends Lee's 2026-09-26 entry, "Every mode line Kerf emits carries S0; positive S rides only on G1 words that carry X or Y.", which says "tighten it then by amendment". The added sentence:
   > "Every path the engine cuts starts with a G0 to its entry point and a mode line, and no burning G1 moves the head less than 0.0125 mm on some axis as written."
   - **The reason:** a stationary positive-S block under M3 burns (GRBL `motion_control.c:68-76`), and a burn that depends on a predecessor's state has already both skipped a cut and drawn a stray line.
   - **Enforced by** `leadin_invariants_every_fixture` and `committed_goldens_hold_leadin_invariants`.
-  - This also settles the wording question engine-arm's W1 raised for its own pin: displacement is now asserted, so "with motion" becomes true.
+  - Displacement is now asserted, so the entry's "carry X or Y" can be tightened to "with motion". The heading is never reworded (`project-docs.md`), so the tightening goes in the amendment text.
 
 ## Risks
 
@@ -712,8 +738,10 @@ These steps go on the owner hardware card in ROADMAP `next` at Stage 3.5. The re
    - `MIN_G1_AXIS_MM = 0.0125` is one step at `$100/$101 = 80` (`probe-20260914-153729.log:36-37`).
    - On a machine with fewer steps per mm (coarser steps), a sub-step `G1` can still plan empty.
    - On a finer machine, the guard merges moves under 0.0125 mm. That is a chord error of at most 0.0125 mm, far below the kerf. It is invisible, and it loses no cut (P2 is the check).
-   - START reads back `$30`/`$32`, not `$100`/`$101` (Deferral 6).
-3. **The preview drops refused points.** `moves` loses a point only where no `G1` is written. Distances and the time estimate are unchanged, because the accumulators stay where they are.
+   - START reads back `$30`/`$32`, not `$100`/`$101` (Deferral 6). On another machine the reversal is "read `$100/$101` and derive the step", not "change the number".
+3. **The preview and the time estimate drop refused points.**
+   - `moves` loses a point only where no `G1` is written. The distance totals are unchanged, because the accumulators stay where they are.
+   - `estimate_time` reads `moves` and already skips moves under 0.001 mm (`gcode_gen.rs:1456`). So a refused zero-length `G1` changes the estimate by nothing, and a refused sub-step one by milliseconds (fold 4).
 4. **One more planner stop per mask-fill seam.** The sealing `M5` syncs at the end of the last mask scan line. Under M3 that end sees a full stop at power, the same as every `fill` scan end and every path end already do (constant-power acceleration burn, the 2026-09-10 ruling's territory). Under M4 it is dark. The perimeter start after it already stops (engine-arm Risk 2a).
 5. **A lead-in on a W2 path now points along the first real segment,** where before there was no lead-in and no cut. That is the lead-in the operator asked for (P3). A 3 mm stub appears where nothing was cut before: owner card step 3.
 6. **E1b merge order:** see "Existing plans reviewed". Only one Rust batch builds at a time.
@@ -731,7 +759,13 @@ These steps go on the owner hardware card in ROADMAP `next` at Stage 3.5. The re
    - The closing duplicate makes the last segment zero (`:527`, `:1371`), and the lead-out guard skips it (`:858`). So no `object_to_path` rounded rectangle ever gets its lead-out.
    - A pill's zero first segment skips the overcut the same way (`:826`).
    - Both are dark, so this is feature loss, not a hazard. The fix is to take the direction from the first and last real segments. It changes output for every rounded rectangle with a lead-out, so it needs its own batch and a regeneration.
-2. **Overcut plus lead-out burns a diagonal.** After an overcut the head is at the overcut end (`:846-847`), but the lead-out target is computed from the path's end (`:859-860`). The lead-out `G1` therefore runs from the overcut end to a point past the start corner. On a hole that cuts into the part. It is found by reading, and no golden or fixture checks its geometry. It needs its own fix and an owner check.
+2. **Lead-in and lead-out do not know which side is waste. On a hole, both mark the part** (re-scoped per fold 5).
+   - **Lead-in:** the entry point uses the **outward** normal (`:546-579`, moved verbatim into `lead_in_point`). On a hole, outward is into the part, so the lead-in `G1` burns `lead_in` mm into the part.
+   - **Lead-out:** the target is a straight extension of the last edge past the end (`:859-860`), which is outside the polygon on any convex closed path. On a hole, that is `lead_out` mm into the part.
+   - **Overcut:** after an overcut the head is at the overcut end (`:846-847`), so the lead-out `G1` becomes a diagonal chord from there to the extension point. The overcut changes the scar's shape, not whether it exists.
+   - **Route:** the geometry program, under DECISIONS 2026-09-10 ("Kerf compensation expands holes without accounting for which side is waste"). This is the same blindness. It is not this batch's class, and fixing it changes output for every program with a lead-in or lead-out (golden 12, `line_perf_overcut_leadout`).
+   - **Parking Lot line, with the material outcome named:** "Lead-in and lead-out on a hole (an inner cut) burn into the finished part, a straight stub of the lead length, or a diagonal chord when overcut is also set. Workaround until the geometry program lands: use lead-in and lead-out on outer cuts only."
+   - Found by reading, and confirmed by the critic's trace. No golden or fixture checks this geometry, and it needs an owner check when it is fixed.
 3. **`object_to_path` emits duplicate points** (each arc's first point, `:1434-1452`, and the last arc's end). This batch neutralises them at the emitter. Making the source duplicate-free would change offsetFill rings and the optimizer's containment geometry (`optimizer.rs:304`, `:328`), so it belongs with the deferred geometry program (DECISIONS 2026-09-10) and E1b's `object_to_path` work.
 4. **Inward offsetting keeps duplicated vertices un-offset** (`offset.rs:40-43`). Every inner ring of a shape with duplicates (a pill's TS contour on an offsetFill layer, `gcodeGen.ts:395`) keeps points on the outer outline, which burns spikes from the inner rings back to the edge. This batch removes only the zero-length `G1`s. Geometry program.
 5. **Raster sub-step pixels.** `MIN_SCAN_INTERVAL_MM = 0.01` (`limits.rs:18`) is below one step at 80 steps/mm. A one-pixel run at that interval is an empty block, which under M3 is a stationary sync. The fix is in `mask_fill.rs` (merge the run, or clamp the interval to a step), and it touches image output.

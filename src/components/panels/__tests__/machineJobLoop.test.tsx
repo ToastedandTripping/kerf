@@ -31,7 +31,14 @@ import { MachinePanel } from "../MachinePanel";
 import { MaterialTestDialog } from "../MaterialTestDialog";
 import { streamJob, pauseJob, resumeJob } from "../../../lib/machine/jobStream";
 import { beginJobSession, _testResetJobSession } from "../../../lib/machine/jobSession";
-import { machineConnection } from "../../../lib/machine/connection";
+import { machineConnection, _testResetJogAndBedState } from "../../../lib/machine/connection";
+import {
+  JOG_REASON_BED,
+  JOG_REASON_EDGE,
+  JOG_REASON_STALE,
+  JOG_REASON_OFFSET,
+} from "../../../lib/machine/jogBounds";
+import { StatusBar } from "../../bottom/StatusBar";
 import { resetStatusConsumer } from "../../../lib/machine/machineStatus";
 import { SerialTraceRecorder } from "../../../lib/machine/__tests__/serialTraceHarness";
 
@@ -963,20 +970,25 @@ describe("S1 — one admission for four doors", () => {
       expect(onClose).not.toHaveBeenCalled();
     });
 
-    it("S1-M7: a grid that fits only in the wrong frame refuses on an origin-top machine", async () => {
+    // S3 rewrite of S1-M7: the grid is now generated in the machine's frame, so
+    // on an origin-top machine it is ADMITTED and every Y it sends is <= 0. The
+    // S1 bounds gate still sees originTop (re-pinned by S3-M15).
+    it("S1-M7 (S3): an origin-top grid is admitted and lands in negative Y", async () => {
       mockSerial(() => ({ responses: ["ok"], drained: [] }));
       const onClose = vi.fn();
       const { getByText, getByLabelText } = render(<MaterialTestDialog open onClose={onClose} />);
       // Labels engrave real text, whose font does not load under jsdom.
       fireEvent.click(getByLabelText("Labels"));
-      useStore.setState({ originTop: true }); // after render: exercise the click-time gate
+      useStore.setState({ originTop: true }); // after render: exercise the click-time read
       fireEvent.click(getByText("Send to Machine"));
-      await waitFor(() =>
-        expect(consoleTexts()).toContain("Grid extends outside the bed. Reduce steps or cell size.")
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+      await waitFor(() => expect(useStore.getState().jobRunning).toBe(false), { timeout: 5000 });
+      expect(recorder.findRecords("serial_job_begin").length).toBe(1);
+      const ys = sentCommands().flatMap((c) =>
+        [...c.split(";")[0].matchAll(/Y(-?\d*\.?\d+)/g)].map((m) => Number(m[1]))
       );
-      await new Promise((r) => setTimeout(r, 50));
-      expect(powerWrites()).toEqual([]);
-      expect(onClose).not.toHaveBeenCalled();
+      expect(ys.some((y) => y < 0)).toBe(true);
+      for (const y of ys) expect(y).toBeLessThanOrEqual(0);
     });
 
     it("S1-D1: a refusal renders in the dialog as an alert with the console closed", async () => {
@@ -1041,5 +1053,221 @@ describe("S1 — one admission for four doors", () => {
       expect(recorder.findRecords("serial_job_begin").length).toBe(1);
       expect(powerWrites().length).toBeGreaterThan(0);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S3 — MachinePanel and StatusBar: the bed confirmation is remembered per
+// machine (kerf-f1 b), the jog gate is visible (kerf-f1 a), and a stale status
+// never shows a green "Ready" (Jen C3).
+// ---------------------------------------------------------------------------
+describe("S3 — MachinePanel and StatusBar", () => {
+  const KEYED = ["$3=0", "$23=0", "$32=1", "$100=80", "$101=80", "ok"];
+
+  function mockPanelMachine(settings: string[]) {
+    let seq = 0;
+    mockInvoke.mockImplementation(async (cmd: string, args?: { command?: string }) => {
+      if (cmd === "serial_connect") return "Grbl 1.1h ['$' for help]";
+      if (cmd === "list_serial_ports") return [];
+      if (cmd === "serial_send" && args?.command === "$$")
+        return { responses: settings, drained: [] };
+      if (cmd === "serial_send") return { responses: ["ok"], drained: [] };
+      if (cmd === "serial_get_status") {
+        seq++;
+        return {
+          status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>",
+          events: [],
+          kind: "report",
+          snapshot: {
+            epoch: 1,
+            seq,
+            state: "idle",
+            positionKind: "MPos",
+            position: [0, 0, 0],
+            wco: null,
+            feed: 0,
+            spindle: 0,
+            accessory: "Unknown",
+            units: "Unknown",
+            raw: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>",
+            unknownFields: [],
+          },
+        };
+      }
+      return undefined;
+    });
+  }
+
+  beforeEach(() => {
+    cleanup();
+    mockInvoke.mockReset();
+    resetStatusConsumer();
+    _testResetJogAndBedState();
+    localStorage.clear();
+    seedReadyToStart();
+    useStore.setState({ positionKind: "machine", workCoordOffset: { x: 0, y: 0 } });
+  });
+
+  afterEach(async () => {
+    cleanup();
+    if (useStore.getState().machineConnected) await machineConnection.disconnect();
+  });
+
+  async function reconnect(port = "/dev/ttyUSB0") {
+    await machineConnection.disconnect();
+    useStore.setState({ workspaceWidth: 500, workspaceHeight: 300 });
+    await machineConnection.connect(port, 115200);
+  }
+
+  it("kerf-f1 (b): Confirm in the panel is remembered for this machine across a reconnect", async () => {
+    mockPanelMachine(KEYED);
+    useStore.setState({ machineConnected: false, workspaceVerified: false });
+    await machineConnection.connect("/dev/ttyUSB0", 115200);
+    expect(useStore.getState().workspaceVerified).toBe(false);
+    const { getByText, getByDisplayValue } = render(<MachinePanel />);
+    expect(
+      getByText(
+        "Kerf couldn't read the bed size from the machine. Confirm it before jogging or cutting."
+      )
+    ).toBeTruthy();
+    fireEvent.click(getByText("Set bed size"));
+    getByText("The width and height the laser head can reach, in mm.");
+    const wInput = getByDisplayValue("500");
+    const hInput = getByDisplayValue("300");
+    fireEvent.change(wInput, { target: { value: "300" } });
+    fireEvent.change(hInput, { target: { value: "200" } });
+    fireEvent.click(getByText("Confirm"));
+    expect(useStore.getState().workspaceVerified).toBe(true);
+    await reconnect();
+    const st = useStore.getState();
+    expect(st.workspaceVerified).toBe(true);
+    expect([st.workspaceWidth, st.workspaceHeight]).toEqual([300, 200]);
+  });
+
+  it("N7: an empty width is refused in plain words, the inputs stay open, nothing remembered", async () => {
+    mockPanelMachine(KEYED);
+    useStore.setState({ machineConnected: false, workspaceVerified: false });
+    await machineConnection.connect("/dev/ttyUSB0", 115200);
+    const { getByText, getByDisplayValue } = render(<MachinePanel />);
+    fireEvent.click(getByText("Set bed size"));
+    fireEvent.change(getByDisplayValue("500"), { target: { value: "" } });
+    fireEvent.click(getByText("Confirm"));
+    expect(useStore.getState().workspaceVerified).toBe(false);
+    expect(localStorage.getItem("kerf-bed-confirmations")).toBeNull();
+    expect(consoleTexts()).toContain(
+      "Bed size not set — enter a width and height in mm, both above 0."
+    );
+    getByText("The width and height the laser head can reach, in mm.");
+    // Jen S3: the refusal is visible on screen, not only in the console.
+    const alert = getByText("Enter a width and height in mm, both above 0.");
+    expect(alert.getAttribute("role")).toBe("alert");
+  });
+
+  it("Jen S3: a valid Confirm shows no bed alert (positive sibling)", async () => {
+    mockPanelMachine(KEYED);
+    useStore.setState({ machineConnected: false, workspaceVerified: false });
+    await machineConnection.connect("/dev/ttyUSB0", 115200);
+    const { getByText, queryByRole } = render(<MachinePanel />);
+    fireEvent.click(getByText("Set bed size"));
+    fireEvent.click(getByText("Confirm"));
+    expect(useStore.getState().workspaceVerified).toBe(true);
+    expect(queryByRole("alert")).toBeNull();
+  });
+
+  it("Jen S3: a jog refused at the edge shows its reason in the note slot", async () => {
+    mockSerial(() => ({ responses: ["ok"], drained: [] }));
+    useStore.setState({ statusStale: false, machinePosition: { x: 0, y: 0, z: 0 } });
+    const { getByText, getByTitle, getByTestId, queryByTestId } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    expect(queryByTestId("jog-blocked-note")).toBeNull();
+    fireEvent.click(getByTitle("X-"));
+    await waitFor(() => expect(getByTestId("jog-blocked-note").textContent).toBe(JOG_REASON_EDGE));
+    expect(consoleTexts()).toContain(JOG_REASON_EDGE);
+    expect(sentCommands()).toEqual([]);
+  });
+
+  it.each([
+    ["bed unconfirmed", { workspaceVerified: false }, JOG_REASON_BED],
+    ["status stale", { statusStale: true }, JOG_REASON_STALE],
+    ["offset unknown", { workCoordOffset: { x: NaN, y: NaN } }, JOG_REASON_OFFSET],
+  ] as const)("Jen S3: POSITION is disabled with its reason when %s", (_l, patch, reason) => {
+    useStore.setState({ statusStale: false, ...patch });
+    const { getByText } = render(<MachinePanel />);
+    const pos = getByText("Position") as HTMLButtonElement;
+    expect(pos.disabled).toBe(true);
+    expect(pos.title).toBe(reason);
+    expect(pos.style.opacity).toBe("0.4");
+  });
+
+  it("Jen S3: POSITION is enabled when jogTo would accept (positive sibling)", () => {
+    useStore.setState({ statusStale: false });
+    const { getByText } = render(<MachinePanel />);
+    expect((getByText("Position") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("a remembered bed shows who set it, with a Change button that opens the inputs", async () => {
+    mockPanelMachine(KEYED);
+    useStore.setState({ machineConnected: false, workspaceVerified: false });
+    await machineConnection.connect("/dev/ttyUSB0", 115200);
+    machineConnection.confirmBedSize(300, 200);
+    await reconnect();
+    const { getByText, queryByText } = render(<MachinePanel />);
+    await waitFor(() =>
+      expect(getByText("Bed 300 × 200 mm — you confirmed this size earlier.")).toBeTruthy()
+    );
+    expect(queryByText("The width and height the laser head can reach, in mm.")).toBeNull();
+    fireEvent.click(getByText("Change"));
+    getByText("The width and height the laser head can reach, in mm.");
+  });
+
+  it("an unconfirmed bed disables all four jog buttons and says why, visibly", () => {
+    useStore.setState({ workspaceVerified: false, statusStale: false });
+    const { getByText, getAllByTitle, getByTestId } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    // Four arrows plus POSITION (Jen S3) share the reason.
+    const buttons = (getAllByTitle(JOG_REASON_BED) as HTMLButtonElement[]).filter(
+      (b) => b.textContent !== "Position"
+    );
+    expect(buttons).toHaveLength(4);
+    for (const b of buttons) expect(b.disabled).toBe(true);
+    expect(getByTestId("jog-blocked-note").textContent).toBe(JOG_REASON_BED);
+  });
+
+  it("jog buttons are enabled and titled by axis when the gate is clear (positive sibling)", () => {
+    const { getByText, getByTitle, queryByTestId } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    for (const t of ["Y+", "X-", "X+", "Y-"]) {
+      expect((getByTitle(t) as HTMLButtonElement).disabled).toBe(false);
+    }
+    expect(queryByTestId("jog-blocked-note")).toBeNull();
+  });
+
+  it("C3: a stale status reads Stale in the StatusBar, never Ready", () => {
+    useStore.setState({ machineConnected: true, machineState: "idle", statusStale: true });
+    const { getByText, queryByText } = render(<StatusBar />);
+    expect(getByText("Stale")).toBeTruthy();
+    expect(queryByText("Ready")).toBeNull();
+    cleanup();
+    useStore.setState({ statusStale: false });
+    const fresh = render(<StatusBar />);
+    expect(fresh.getByText("Ready")).toBeTruthy();
+  });
+
+  it("C3: the Machine header reads stale, not idle, while status is stale", () => {
+    useStore.setState({ machineConnected: true, machineState: "idle", statusStale: true });
+    const { getByText, queryByText } = render(<MachinePanel />);
+    expect(getByText("stale")).toBeTruthy();
+    expect(queryByText("idle")).toBeNull();
+  });
+
+  it("C3 control: disconnected reads Disconnected, not Stale", () => {
+    useStore.setState({
+      machineConnected: false,
+      machineState: "disconnected",
+      statusStale: true,
+    });
+    const { getByText, queryByText } = render(<StatusBar />);
+    expect(getByText("Disconnected")).toBeTruthy();
+    expect(queryByText("Stale")).toBeNull();
   });
 });

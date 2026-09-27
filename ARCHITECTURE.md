@@ -211,6 +211,10 @@ src-tauri/src/
                                throws otherwise.
                                Every mode line is `{M3|M4} S0`; power rides only on `G1`
                                words that carry X or Y (safety engine-arm, 2026-09-26).
+                               Every line path starts `G0` then `{M3|M4} S0`; every burning
+                               vector `G1` goes through `CutPen`, which refuses a move under one
+                               motor step (0.0125 mm per axis, as written); a mask fill ends `M5`
+                               (safety engine-leadin). Raster and TS emitters are not covered.
     mask_fill.rs             — The one shared raster scanner (~1170 lines + tests):
                                scan_mask_to_gcode (MaskScanParams; binary or grayscale S)
                                used by image engrave and maskFill; fill_compound_mask
@@ -302,6 +306,23 @@ after it settles. `enableLaserMode` invalidates explicitly, because its write by
 plain `bool`, so a missing key is rejected by Tauri before the body runs) and refuses
 before any serial I/O when it is false; it no longer writes `$32=1` (kerf-safety-s1b). A
 `0x18` does not clear the flag (S4a), and per-line mode has no Rust-side gate (S4a).
+
+**Jog admission and bed trust (kerf-safety-s3).** Every jog passes `jogBlockReason` and
+`clipJog` (pure, `src/lib/machine/jogBounds.ts`): refused while not connected, in alarm, in a
+job, stale, not idle, in a work frame or with a work offset set or unknown, or while the
+previous jog is still moving (one jog in flight, `jogPending`, cleared only by a fresh post-ack
+report); otherwise the distance is clipped toward zero at the bed edge, never reversed or
+enlarged, and non-finite input refuses. `jogTo` (Position Laser) refuses an out-of-envelope
+target; canvas Y maps to machine Y by the generator's rule (`originTop ? -y : H - y`). Every
+`$J=` carries `G21`. Bed verification has three sources: the controller's `$130/$131`, an
+operator confirmation remembered per machine (keyed by port plus `$3/$23/$100/$101/$130/$131`,
+re-applied only on a full settings read, forgotten on a key-setting write, a changed key, a
+failed read or Change), and a this-session confirmation; all are cleared on disconnect. A new
+connection starts stale, and a stale status displays as "Stale" in grey, never a green
+Idle/Ready. `setOrigin` records WCO = MPos after `G92 X0 Y0` only from a fresh machine-frame
+position; otherwise the offset is NaN (unknown) and `jogTo` refuses. The material-test program
+is mirrored in Y on origin-top machines. Known residuals (MPos 0 trusted as the bed corner;
+a jog racing Home) are queued as S3c.
 
 **Job-session lifetime (`jobSession.ts`).** One module-level active session. `beginJobSession`
 refuses while another session is active or a stop is settling, and when `serial_job_begin`
@@ -418,7 +439,7 @@ realtime handles, increments the session epoch and sets phase Idle. `connection.
 | `$32` | `grblLaserMode` | canStartJob, JobActionBar FRAME gate, gcodeGen.ts ($32=0 warning), MaterialTestDialog (M4 warning), MachinePanel |
 | `$110` / `$111` | `grblMaxFeedRateX/Y` | SpeedInput cap, gcodeGen.ts scan motion, MaterialTestDialog, GrblSettingsDialog |
 | `$120` / `$121` | `grblAccelX/Y` | gcodeGen.ts (`computeOverscan`, scan motion), GrblSettingsDialog |
-| `$130` / `$131` | `workspaceWidth/Height` + `workspaceVerified = true` | canStartJob, FRAME, jog clamp |
+| `$130` / `$131` | `workspaceWidth/Height` + `workspaceVerified = true` | canStartJob, FRAME, jogBlockReason/clipJog |
 
 **Status polling.** `pollStatus()` runs every 250ms and is skipped while `jobRunning` is true.
 `serial_get_status` `try_lock`s the command mutex: when a pump holds it, it writes `?` on the

@@ -231,6 +231,108 @@ fn collect_scan_segments(
     segments
 }
 
+/// Safety leadin (Razor W1): the smallest per-axis move, in the coordinates as
+/// written (`{:.3}`), that a burning G1 may make. A shorter G1 can round to zero
+/// motor steps. Stock GRBL then plans an empty block, and under M3 in laser mode
+/// it syncs the spindle at that G1's S with the head stopped (grbl
+/// motion_control.c mc_line, planner.c plan_buffer_line). 0.0125 mm is one step
+/// at the owner's $100/$101 = 80 steps/mm.
+pub(crate) const MIN_G1_AXIS_MM: f64 = 0.0125;
+
+/// True when a G1 from `from` to `to` moves at least MIN_G1_AXIS_MM on some axis,
+/// measured on the coordinates exactly as they are written to the program.
+pub(crate) fn g1_moves(from: (f64, f64), to: (f64, f64)) -> bool {
+    let q = |v: f64| format!("{:.3}", v).parse::<f64>().unwrap_or(v);
+    (q(to.0) - q(from.0)).abs() >= MIN_G1_AXIS_MM || (q(to.1) - q(from.1)).abs() >= MIN_G1_AXIS_MM
+}
+
+/// Writes the burning G1s of one path, ring or scan line (safety leadin). It
+/// remembers the last position written to the program and writes nothing for a
+/// G1 that would not move the head (see MIN_G1_AXIS_MM).
+struct CutPen {
+    last: (f64, f64),
+    speed: f64,
+    s: f64,
+    move_type: &'static str,
+}
+
+impl CutPen {
+    /// A non-burning move (G0, or a G1 at S0) put the head at (x, y).
+    fn moved_to(&mut self, x: f64, y: f64) {
+        self.last = (x, y);
+    }
+
+    /// `G1 X Y F S` to (x, y), or nothing when it would not move the head.
+    fn cut(&mut self, lines: &mut Vec<String>, moves: &mut Vec<GcodeMove>, x: f64, y: f64) {
+        if !g1_moves(self.last, (x, y)) {
+            return;
+        }
+        lines.push(format!(
+            "G1 X{:.3} Y{:.3} F{:.0} S{}",
+            x, y, self.speed, self.s
+        ));
+        moves.push(GcodeMove {
+            x,
+            y,
+            move_type: self.move_type.to_string(),
+            speed: self.speed,
+            power: self.s,
+        });
+        self.last = (x, y);
+    }
+}
+
+/// The lead-in entry point of a path (safety leadin, Razor W2): `lead_in` away
+/// from gpts[0], set by the first point more than 0.001 mm from gpts[0]
+/// (perpendicular and outward for a closed path, straight back for an open
+/// one). None when every point is within 0.001 mm of gpts[0].
+fn lead_in_point(gpts: &[(f64, f64)], closed: bool, lead_in: f64) -> Option<(f64, f64)> {
+    let (dx, dy, seg_len) = gpts[1..].iter().find_map(|p| {
+        let (dx, dy) = (p.0 - gpts[0].0, p.1 - gpts[0].1);
+        let len = (dx * dx + dy * dy).sqrt();
+        (len > 0.001).then_some((dx, dy, len))
+    })?;
+    if closed {
+        // P2-A Fix #4: select lead-in side based on polygon winding.
+        //
+        // Left normal (-dy, dx) points to the LEFT of travel direction.
+        // For CCW polygons (positive signed area in G-code space):
+        //   left = interior → need RIGHT normal for outside approach.
+        // For CW polygons (negative signed area):
+        //   left = exterior → left normal is correct.
+        //
+        // Multiply by -sign(signed_area) to always get the outward normal.
+        let nx = -dy / seg_len;
+        let ny = dx / seg_len;
+
+        // Compute signed area of the polygon in G-code space
+        // (exclude closing duplicate point).
+        let gcode_pts = &gpts[..gpts.len() - 1];
+        let signed_area = {
+            let n = gcode_pts.len();
+            let mut sum = 0.0_f64;
+            for i in 0..n {
+                let j = (i + 1) % n;
+                sum += gcode_pts[i].0 * gcode_pts[j].1;
+                sum -= gcode_pts[j].0 * gcode_pts[i].1;
+            }
+            sum / 2.0
+        };
+
+        // Flip for CCW (positive area) — left normal is inward.
+        let sign = if signed_area > 0.0 { -1.0 } else { 1.0 };
+        Some((
+            gpts[0].0 + sign * nx * lead_in,
+            gpts[0].1 + sign * ny * lead_in,
+        ))
+    } else {
+        Some((
+            gpts[0].0 - dx / seg_len * lead_in,
+            gpts[0].1 - dy / seg_len * lead_in,
+        ))
+    }
+}
+
 /// Emit G-code from a list of scan segments (possibly reordered).
 #[allow(clippy::too_many_arguments)]
 fn emit_scan_segments(
@@ -275,6 +377,12 @@ fn emit_scan_segments(
             speed: RAPID_SPEED_MM_MIN,
             power: 0.0,
         });
+        let mut scan_pen = CutPen {
+            last: (rsx, rsy),
+            speed: params.speed_mm_min,
+            s: params.s_max,
+            move_type: "engrave",
+        };
 
         // Accelerate to boundary at engrave speed with laser off
         if params.overscan > 0.0 {
@@ -297,6 +405,7 @@ fn emit_scan_segments(
                 speed: params.speed_mm_min,
                 power: 0.0,
             });
+            scan_pen.moved_to(bsx, bsy);
         }
 
         // Engrave scan line
@@ -309,17 +418,7 @@ fn emit_scan_segments(
         let scan_dist = (seg.x_end - seg.x_start).abs();
         *cut_distance += scan_dist;
         *total_distance += scan_dist;
-        lines.push(format!(
-            "G1 X{:.3} Y{:.3} F{:.0} S{}",
-            esx, esy, params.speed_mm_min, params.s_max
-        ));
-        moves.push(GcodeMove {
-            x: esx,
-            y: esy,
-            move_type: "engrave".to_string(),
-            speed: params.speed_mm_min,
-            power: params.s_max,
-        });
+        scan_pen.cut(lines, moves, esx, esy);
         lines.push("M5".to_string());
 
         // Deceleration overscan zone
@@ -459,9 +558,9 @@ pub fn generate_gcode(
 
         // Power mode command. Every mode line below is `{power_cmd} S0`; positive S
         // rides only on G1 words that carry X or Y, so no mode line arms a
-        // stationary beam (DECISIONS 2026-09-10; safety engine-arm). Known gap,
-        // tracked separately: a G1 whose X/Y equal the current position
-        // (zero-length G1, Razor W1) still carries positive S.
+        // stationary beam (DECISIONS 2026-09-10; safety engine-arm). Every burning
+        // G1 of the vector arms goes through CutPen, which refuses one that would
+        // not move the head (safety leadin, Razor W1).
         let power_cmd = if layer.power_mode == "variable" {
             "M4"
         } else {
@@ -536,104 +635,45 @@ pub fn generate_gcode(
                             cum_dist.push(cum_dist[i - 1] + d);
                         }
 
-                        // Lead-in: approach from perpendicular/linear offset
+                        // Path start (safety leadin, Razor W2). Every path starts the same way,
+                        // whatever lead_in or the first segment's length: a G0 to its entry point,
+                        // then the mode line. With a lead-in, the entry point is off the path and
+                        // a burning G1 runs from it to gpts[0].
                         let lead_in = layer.lead_in;
-                        if lead_in > 0.0 && gpts.len() >= 2 {
-                            let dx = gpts[1].0 - gpts[0].0;
-                            let dy = gpts[1].1 - gpts[0].1;
-                            let seg_len = (dx * dx + dy * dy).sqrt();
-                            if seg_len > 0.001 {
-                                // Perpendicular approach for closed paths, linear for open.
-                                // P2-A Fix #4: select lead-in side based on polygon winding.
-                                //
-                                // Left normal (-dy, dx) points to the LEFT of travel direction.
-                                // For CCW polygons (positive signed area in G-code space):
-                                //   left = interior → need RIGHT normal for outside approach.
-                                // For CW polygons (negative signed area):
-                                //   left = exterior → left normal is correct.
-                                //
-                                // Multiply by -sign(signed_area) to always get the outward normal.
-                                let (lix, liy) = if path.closed {
-                                    let nx = -dy / seg_len;
-                                    let ny = dx / seg_len;
-
-                                    // Compute signed area of the polygon in G-code space
-                                    // (exclude closing duplicate point).
-                                    let gcode_pts = &gpts[..gpts.len() - 1];
-                                    let signed_area = {
-                                        let n = gcode_pts.len();
-                                        let mut sum = 0.0_f64;
-                                        for i in 0..n {
-                                            let j = (i + 1) % n;
-                                            sum += gcode_pts[i].0 * gcode_pts[j].1;
-                                            sum -= gcode_pts[j].0 * gcode_pts[i].1;
-                                        }
-                                        sum / 2.0
-                                    };
-
-                                    // Flip for CCW (positive area) — left normal is inward.
-                                    let sign = if signed_area > 0.0 { -1.0 } else { 1.0 };
-                                    (
-                                        gpts[0].0 + sign * nx * lead_in,
-                                        gpts[0].1 + sign * ny * lead_in,
-                                    )
-                                } else {
-                                    (
-                                        gpts[0].0 - dx / seg_len * lead_in,
-                                        gpts[0].1 - dy / seg_len * lead_in,
-                                    )
-                                };
-                                // Rapid to lead-in start
-                                let dist = ((lix - cur_x).powi(2) + (liy - cur_y).powi(2)).sqrt();
-                                travel_distance += dist;
-                                total_distance += dist;
-                                lines.push(format!("G0 X{:.3} Y{:.3}", lix, liy));
-                                moves.push(GcodeMove {
-                                    x: lix,
-                                    y: liy,
-                                    move_type: "rapid".to_string(),
-                                    speed: RAPID_SPEED_MM_MIN,
-                                    power: 0.0,
-                                });
-                                // Laser on, cut to first point
-                                lines.push(format!("{} S0", power_cmd));
-                                let d =
-                                    ((gpts[0].0 - lix).powi(2) + (gpts[0].1 - liy).powi(2)).sqrt();
-                                cut_distance += d;
-                                total_distance += d;
-                                lines.push(format!(
-                                    "G1 X{:.3} Y{:.3} F{:.0} S{}",
-                                    gpts[0].0, gpts[0].1, speed_mm_min, effective_s_max
-                                ));
-                                moves.push(GcodeMove {
-                                    x: gpts[0].0,
-                                    y: gpts[0].1,
-                                    move_type: "cut".to_string(),
-                                    speed: speed_mm_min,
-                                    power: effective_s_max,
-                                });
-                                cur_x = gpts[0].0;
-                                cur_y = gpts[0].1;
-                            }
-                        }
-
-                        if lead_in <= 0.0 {
-                            // Rapid to start
-                            let dist =
-                                ((gpts[0].0 - cur_x).powi(2) + (gpts[0].1 - cur_y).powi(2)).sqrt();
-                            travel_distance += dist;
-                            total_distance += dist;
-                            lines.push(format!("G0 X{:.3} Y{:.3}", gpts[0].0, gpts[0].1));
-                            moves.push(GcodeMove {
-                                x: gpts[0].0,
-                                y: gpts[0].1,
-                                move_type: "rapid".to_string(),
-                                speed: RAPID_SPEED_MM_MIN,
-                                power: 0.0,
-                            });
+                        let entry = if lead_in > 0.0 {
+                            lead_in_point(&gpts, path.closed, lead_in)
+                        } else {
+                            None
+                        };
+                        let (sx, sy) = entry.unwrap_or(gpts[0]);
+                        let dist = ((sx - cur_x).powi(2) + (sy - cur_y).powi(2)).sqrt();
+                        travel_distance += dist;
+                        total_distance += dist;
+                        lines.push(format!("G0 X{:.3} Y{:.3}", sx, sy));
+                        moves.push(GcodeMove {
+                            x: sx,
+                            y: sy,
+                            move_type: "rapid".to_string(),
+                            speed: RAPID_SPEED_MM_MIN,
+                            power: 0.0,
+                        });
+                        cur_x = sx;
+                        cur_y = sy;
+                        lines.push(format!("{} S0", power_cmd)); // safety leadin: path start
+                        let mut pen = CutPen {
+                            last: (sx, sy),
+                            speed: speed_mm_min,
+                            s: effective_s_max,
+                            move_type: "cut",
+                        };
+                        if entry.is_some() {
+                            // Lead-in: burn from the entry point to the path's first point
+                            let d = ((gpts[0].0 - sx).powi(2) + (gpts[0].1 - sy).powi(2)).sqrt();
+                            cut_distance += d;
+                            total_distance += d;
+                            pen.cut(&mut lines, &mut moves, gpts[0].0, gpts[0].1);
                             cur_x = gpts[0].0;
                             cur_y = gpts[0].1;
-                            lines.push(format!("{} S0", power_cmd));
                         }
 
                         // Cut along path with perforation or tab support
@@ -683,17 +723,7 @@ pub fn generate_gcode(
                                         // End of cut segment
                                         cut_distance += d;
                                         total_distance += d;
-                                        lines.push(format!(
-                                            "G1 X{:.3} Y{:.3} F{:.0} S{}",
-                                            tx, ty, speed_mm_min, effective_s_max
-                                        ));
-                                        moves.push(GcodeMove {
-                                            x: tx,
-                                            y: ty,
-                                            move_type: "cut".to_string(),
-                                            speed: speed_mm_min,
-                                            power: effective_s_max,
-                                        });
+                                        pen.cut(&mut lines, &mut moves, tx, ty);
                                         lines.push("M5".to_string());
                                         laser_on = false;
                                         next_toggle_dist += perf_skip;
@@ -709,6 +739,7 @@ pub fn generate_gcode(
                                             speed: RAPID_SPEED_MM_MIN,
                                             power: 0.0,
                                         });
+                                        pen.moved_to(tx, ty);
                                         lines.push(format!("{} S0", power_cmd));
                                         laser_on = true;
                                         next_toggle_dist += perf_cut;
@@ -746,6 +777,7 @@ pub fn generate_gcode(
                                             speed: RAPID_SPEED_MM_MIN,
                                             power: 0.0,
                                         });
+                                        pen.moved_to(tx, ty);
                                         cur_x = tx;
                                         cur_y = ty;
                                         lines.push(format!("{} S0", power_cmd));
@@ -763,17 +795,7 @@ pub fn generate_gcode(
                                             ((tx - cur_x).powi(2) + (ty - cur_y).powi(2)).sqrt();
                                         cut_distance += d;
                                         total_distance += d;
-                                        lines.push(format!(
-                                            "G1 X{:.3} Y{:.3} F{:.0} S{}",
-                                            tx, ty, speed_mm_min, effective_s_max
-                                        ));
-                                        moves.push(GcodeMove {
-                                            x: tx,
-                                            y: ty,
-                                            move_type: "cut".to_string(),
-                                            speed: speed_mm_min,
-                                            power: effective_s_max,
-                                        });
+                                        pen.cut(&mut lines, &mut moves, tx, ty);
                                         cur_x = tx;
                                         cur_y = ty;
                                         lines.push("M5".to_string());
@@ -788,17 +810,7 @@ pub fn generate_gcode(
                                 let d = ((px - cur_x).powi(2) + (py - cur_y).powi(2)).sqrt();
                                 cut_distance += d;
                                 total_distance += d;
-                                lines.push(format!(
-                                    "G1 X{:.3} Y{:.3} F{:.0} S{}",
-                                    px, py, speed_mm_min, effective_s_max
-                                ));
-                                moves.push(GcodeMove {
-                                    x: px,
-                                    y: py,
-                                    move_type: "cut".to_string(),
-                                    speed: speed_mm_min,
-                                    power: effective_s_max,
-                                });
+                                pen.cut(&mut lines, &mut moves, px, py);
                             } else {
                                 let d = ((px - cur_x).powi(2) + (py - cur_y).powi(2)).sqrt();
                                 travel_distance += d;
@@ -811,6 +823,7 @@ pub fn generate_gcode(
                                     speed: RAPID_SPEED_MM_MIN,
                                     power: 0.0,
                                 });
+                                pen.moved_to(px, py);
                             }
                             cur_x = px;
                             cur_y = py;
@@ -832,17 +845,7 @@ pub fn generate_gcode(
                                 }
                                 cut_distance += ext;
                                 total_distance += ext;
-                                lines.push(format!(
-                                    "G1 X{:.3} Y{:.3} F{:.0} S{}",
-                                    ox, oy, speed_mm_min, effective_s_max
-                                ));
-                                moves.push(GcodeMove {
-                                    x: ox,
-                                    y: oy,
-                                    move_type: "cut".to_string(),
-                                    speed: speed_mm_min,
-                                    power: effective_s_max,
-                                });
+                                pen.cut(&mut lines, &mut moves, ox, oy);
                                 cur_x = ox;
                                 cur_y = oy;
                             }
@@ -863,17 +866,7 @@ pub fn generate_gcode(
                                 }
                                 cut_distance += lead_out;
                                 total_distance += lead_out;
-                                lines.push(format!(
-                                    "G1 X{:.3} Y{:.3} F{:.0} S{}",
-                                    lox, loy, speed_mm_min, effective_s_max
-                                ));
-                                moves.push(GcodeMove {
-                                    x: lox,
-                                    y: loy,
-                                    move_type: "cut".to_string(),
-                                    speed: speed_mm_min,
-                                    power: effective_s_max,
-                                });
+                                pen.cut(&mut lines, &mut moves, lox, loy);
                                 cur_x = lox;
                                 cur_y = loy;
                             }
@@ -1102,6 +1095,12 @@ pub fn generate_gcode(
                             });
                             cur_x = rsx;
                             cur_y = rsy;
+                            let mut oring = CutPen {
+                                last: (rsx, rsy),
+                                speed: speed_mm_min,
+                                s: effective_s_max,
+                                move_type: "cut",
+                            };
 
                             // Laser on before cutting this ring (F8)
                             // Mode at S0; power rides on the G1 words below (safety engine-arm)
@@ -1113,17 +1112,7 @@ pub fn generate_gcode(
                                 let d = ((px - cur_x).powi(2) + (py - cur_y).powi(2)).sqrt();
                                 cut_distance += d;
                                 total_distance += d;
-                                lines.push(format!(
-                                    "G1 X{:.3} Y{:.3} F{:.0} S{}",
-                                    px, py, speed_mm_min, effective_s_max
-                                ));
-                                moves.push(GcodeMove {
-                                    x: px,
-                                    y: py,
-                                    move_type: "cut".to_string(),
-                                    speed: speed_mm_min,
-                                    power: effective_s_max,
-                                });
+                                oring.cut(&mut lines, &mut moves, px, py);
                                 cur_x = px;
                                 cur_y = py;
                             }
@@ -1134,17 +1123,7 @@ pub fn generate_gcode(
                             if d > 0.001 {
                                 cut_distance += d;
                                 total_distance += d;
-                                lines.push(format!(
-                                    "G1 X{:.3} Y{:.3} F{:.0} S{}",
-                                    cfx, cfy, speed_mm_min, effective_s_max
-                                ));
-                                moves.push(GcodeMove {
-                                    x: cfx,
-                                    y: cfy,
-                                    move_type: "cut".to_string(),
-                                    speed: speed_mm_min,
-                                    power: effective_s_max,
-                                });
+                                oring.cut(&mut lines, &mut moves, cfx, cfy);
                                 cur_x = cfx;
                                 cur_y = cfy;
                             }
@@ -1259,6 +1238,9 @@ pub fn generate_gcode(
                                             cur_y = last.y;
                                         }
                                         moves.extend(scan_result.moves);
+                                        // The raster scanner leaves the laser enabled (no M5, by
+                                        // design); the next object must not inherit it.
+                                        lines.push("M5".to_string()); // seal the mask fill
                                     }
                                     Err(e) => {
                                         eprintln!(

@@ -9,6 +9,7 @@ export const MACHINE_STATE_COLORS: Record<string, string> = {
   home: "var(--accent)",
   sleep: "var(--text-muted)",
   disconnected: "var(--text-muted)",
+  stale: "var(--text-secondary)",
 };
 
 export const MACHINE_STATE_LABELS: Record<string, string> = {
@@ -21,7 +22,18 @@ export const MACHINE_STATE_LABELS: Record<string, string> = {
   home: "Homing",
   sleep: "Sleep",
   disconnected: "Disconnected",
+  stale: "Stale",
 };
+
+/** S3 (Jen C3): a connected machine whose status is stale shows "stale", never
+ *  its last state. Disconnected still shows as disconnected. */
+export function displayMachineState(
+  machineState: string,
+  machineConnected: boolean,
+  statusStale: boolean
+): string {
+  return machineConnected && statusStale ? "stale" : machineState;
+}
 
 /** GRBL alarm code -> human description. Static protocol data, not UI state. */
 export const GRBL_ALARM_DESCRIPTIONS: Record<string, string> = {
