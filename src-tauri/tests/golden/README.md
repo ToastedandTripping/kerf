@@ -36,6 +36,7 @@ This directory holds committed, byte-for-byte snapshots of the **exact
 | `13_overcut.gcode`                                 | 2.5mm overcut past the closed contour's start point                                                                                                   |
 | `14_cross_hatch.gcode`                             | Fill layer with `cross_hatch` — horizontal pass plus a vertical second pass                                                                           |
 | `15_line_variable_power_min.gcode`                 | Line layer with `power_mode: "variable"` (M4) and a non-zero `power_min` — the default path since the M4 flip, plus the W4 power_min-vs-power clamp    |
+| `16_fillline_sharp_rect.gcode` | Sharp rectangle on a Fill+Line layer as the TS generator lowers it (E1a): a maskFill object carrying a closed 4-corner contour plus its `_line_overlay` line object on one `layer_index` |
 
 Fixture-construction code (and the exact input parameters for each) lives in
 `src/commands/gcode.rs`, `#[cfg(test)] mod golden_tests`.
@@ -43,7 +44,7 @@ Fixture-construction code (and the exact input parameters for each) lives in
 ## Regenerating
 
 Never hand-edit these files. To regenerate deliberately (e.g. after a Phase 4
-geometry change):
+geometry change). Only the exact value `1` regenerates; `KERF_UPDATE_GOLDEN=0`, an empty value or `true` compare as normal.
 
 ```sh
 cd src-tauri
