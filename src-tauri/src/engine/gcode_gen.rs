@@ -507,10 +507,11 @@ fn generate_scan_lines(
 
 /// Generate G-code from a list of objects with their layer settings.
 ///
-/// Returns `Err` if a resource limit is exceeded (e.g., interval so small it
-/// would produce billions of scan segments). Geometry errors (degenerate
-/// shapes) are handled per-object — the object is skipped with a warning
-/// comment, but the job continues.
+/// Returns `Err` if a resource limit is exceeded, if an object with no paths
+/// has a type this engine cannot draw, or if an object's layer mode has no arm
+/// here (the error names the mode and the object; a silently partial program is
+/// never returned). Degenerate geometry is still skipped per object with a `;`
+/// comment; which of those should refuse the job is parked with astra 2.6.
 pub fn generate_gcode(
     objects: &[CutObject],
     workspace_height: f64,
@@ -549,6 +550,18 @@ pub fn generate_gcode(
     // Within each object, sub-contours are also ordered inner-first (holes before perimeter) in the "line" arm below.
 
     for obj in objects {
+        if obj.paths.is_empty()
+            && !matches!(
+                obj.obj_type.as_str(),
+                "rectangle" | "ellipse" | "line" | "path"
+            )
+        {
+            let unknown_type_err = format!(
+                "unknown object type '{}' on object '{}' (no paths to cut)",
+                obj.obj_type, obj.id
+            );
+            return Err(unknown_type_err);
+        }
         let layer = &obj.layer;
         let speed_mm_min = layer.speed; // canonical unit is mm/min
         let s_max = (layer.power / 100.0 * s_value_max).round();
@@ -1255,14 +1268,9 @@ pub fn generate_gcode(
                     }
                 }
                 other => {
-                    // Unrecognized layer mode: do not silently emit nothing.
-                    // Mirrors the maskFill skip path — warn on stderr AND leave an
-                    // in-band marker so the omission is visible in the G-code itself.
-                    eprintln!(
-                        "[gcode_gen] unknown layer mode '{}': object '{}' skipped",
-                        other, obj.id
-                    );
-                    lines.push(format!("; unknown layer mode '{}' — object skipped", other));
+                    let unknown_mode_err =
+                        format!("unknown layer mode '{}' on object '{}'", other, obj.id);
+                    return Err(unknown_mode_err);
                 }
             }
 
@@ -2609,7 +2617,7 @@ mod tests {
     }
 
     /// P5 Finding 6: unknown obj_type in object_to_path produces empty path
-    /// with a warning (the object is silently skipped in the line arm).
+    /// with a warning (generate_gcode refuses such an object before any arm (E1b T11)).
     #[test]
     fn p5_unknown_obj_type_produces_empty_path() {
         let path = object_to_path(&CutObject {
@@ -2656,6 +2664,47 @@ mod tests {
             result.is_ok(),
             "Legit multi-mode job must pass under caps: {:?}",
             result.err()
+        );
+    }
+
+    /// E1b T10: an unknown layer mode fails the whole job, naming the mode and
+    /// the object. No partial `Ok` program is returned.
+    #[test]
+    fn unknown_mode_is_err_naming_mode_and_object() {
+        let ok = make_rect_obj("ok", 0.0, 0.0, 10.0, 10.0, make_layer_line());
+        let mut bogus_layer = make_layer_line();
+        bogus_layer.mode = "bogus".to_string();
+        let bogus = make_rect_obj("r_bogus", 20.0, 0.0, 10.0, 10.0, bogus_layer);
+        let result = generate_gcode(&[ok, bogus], 100.0, 1000.0, false);
+        match result {
+            Ok(r) => panic!("expected Err, got Ok with program:\n{}", r.gcode),
+            Err(e) => assert_eq!(e, "unknown layer mode 'bogus' on object 'r_bogus'"),
+        }
+    }
+
+    /// E1b T11: a path-less object of an unknown type is refused on both arms
+    /// that call `object_to_path` (line, offsetFill). A point-less `path` is a
+    /// known type with degenerate geometry and keeps today's skip.
+    #[test]
+    fn unknown_obj_type_is_err_naming_type_and_object() {
+        for mode in ["line", "offsetFill"] {
+            let mut layer = make_layer_line();
+            layer.mode = mode.to_string();
+            let mut tri = make_rect_obj("tri", 0.0, 0.0, 10.0, 10.0, layer);
+            tri.obj_type = "triangle".to_string();
+            match generate_gcode(&[tri], 100.0, 1000.0, false) {
+                Ok(r) => panic!("{mode}: expected Err, got Ok with program:\n{}", r.gcode),
+                Err(e) => assert_eq!(
+                    e, "unknown object type 'triangle' on object 'tri' (no paths to cut)",
+                    "{mode}"
+                ),
+            }
+        }
+        let mut p = make_rect_obj("p", 0.0, 0.0, 10.0, 10.0, make_layer_line());
+        p.obj_type = "path".to_string();
+        assert!(
+            generate_gcode(&[p], 100.0, 1000.0, false).is_ok(),
+            "a point-less path keeps the degenerate-geometry skip"
         );
     }
 }

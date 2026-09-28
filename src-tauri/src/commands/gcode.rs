@@ -27,6 +27,166 @@ fn start_point_from_corner(corner: &str, width: f64, height: f64, origin_top: bo
     }
 }
 
+/// Order the objects for generation. Guarantees:
+/// - Layer groups follow the arrival order of their `layer_index`.
+/// - Within a mixed layer, every fill-ish object precedes every line object.
+/// - Every input object appears exactly once in the output, and a mixed layer
+///   holding an object in neither pass is an `Err`, never a drop.
+fn order_objects(
+    objects: &[CutObject],
+    start_x: f64,
+    start_y: f64,
+) -> Result<Vec<CutObject>, String> {
+    // F7: Group by layer_index to preserve user-set layer order.
+    // Within each layer group:
+    //   - line mode: apply inner-first, then NN travel optimization
+    //   - fill/offsetFill: NN travel optimization only (inner-first irrelevant for fills)
+    // Emit groups in the order their layer_index values first appear.
+
+    // Collect unique layer indices in arrival order
+    let mut layer_order: Vec<i32> = Vec::new();
+    for obj in objects {
+        let li = obj.layer_index.unwrap_or(0);
+        if !layer_order.contains(&li) {
+            layer_order.push(li);
+        }
+    }
+
+    let mut final_objects: Vec<CutObject> = Vec::new();
+    let mut cur_x = start_x;
+    let mut cur_y = start_y;
+
+    for &li in &layer_order {
+        let layer_objs: Vec<CutObject> = objects
+            .iter()
+            .filter(|o| o.layer_index.unwrap_or(0) == li)
+            .cloned()
+            .collect();
+
+        // A4b (must-fix #2): partition fill-ish and line objects within a layer
+        // so that ALL fill passes precede ALL line (perimeter) passes.
+        // For a fillLine layer both maskFill/fill objects AND line overlay objects
+        // share the same layer_index — without partition, NN reordering could
+        // interleave them, cutting the perimeter before the fill finishes and
+        // shifting the workpiece. For pre-fillLine layers every object has one
+        // mode, so the partition is a no-op.
+        let is_fill_ish = |mode: &str| matches!(mode, "fill" | "maskFill" | "offsetFill");
+
+        let has_mixed = layer_objs.iter().any(|o| is_fill_ish(&o.layer.mode))
+            && layer_objs.iter().any(|o| o.layer.mode == "line");
+
+        if has_mixed {
+            if let Some(stray) = layer_objs
+                .iter()
+                .find(|o| !is_fill_ish(&o.layer.mode) && o.layer.mode != "line")
+            {
+                return Err(format!(
+                    "layer {}: object '{}' has mode '{}', which is neither a fill pass nor a line pass; it would be dropped from the job",
+                    li, stray.id, stray.layer.mode
+                ));
+            }
+            // Partition into fill-ish and line groups
+            let fill_group: Vec<CutObject> = layer_objs
+                .iter()
+                .filter(|o| is_fill_ish(&o.layer.mode))
+                .cloned()
+                .collect();
+            let line_group: Vec<CutObject> = layer_objs
+                .iter()
+                .filter(|o| o.layer.mode == "line")
+                .cloned()
+                .collect();
+
+            // Fill-ish: NN optimize (inner-first not meaningful for fills)
+            let fill_order = optimizer::optimize_cut_order_from(&fill_group, cur_x, cur_y);
+            for &idx in &fill_order {
+                let obj = &fill_group[idx];
+                // P2-A Fix #9: use optimizer's object_end_point (last path point)
+                // instead of bbox corner, matching the optimizer's own tracking.
+                let (ex, ey) = optimizer::object_end_point(obj);
+                cur_x = ex;
+                cur_y = ey;
+                final_objects.push(obj.clone());
+            }
+
+            // Line: inner-first (toggle on, default) or pure NN (toggle off),
+            // starting from where fills ended.
+            // Operational note: cut_inner_first defaults true, so existing line layers
+            // switch from plain NN to inner-first order on first generate — intended.
+            // Toggle off is the instant escape hatch if a real-world cut regresses.
+            // All objects in this layer group share one layer definition; reading the
+            // first object's flag is correct. (If per-object overrides are ever added,
+            // this becomes a per-object branch rather than a group-level read.)
+            let inner_first = line_group
+                .first()
+                .map(|o| o.layer.cut_inner_first)
+                .unwrap_or(true);
+            let line_order = if inner_first {
+                optimizer::order_inner_first_nn(&line_group, cur_x, cur_y)
+            } else {
+                optimizer::optimize_cut_order_from(&line_group, cur_x, cur_y)
+            };
+            for &idx in &line_order {
+                let obj = &line_group[idx];
+                // P2-A Fix #9: use optimizer's object_end_point (last path point)
+                // instead of bbox corner, matching the optimizer's own tracking.
+                let (ex, ey) = optimizer::object_end_point(obj);
+                cur_x = ex;
+                cur_y = ey;
+                final_objects.push(obj.clone());
+            }
+        } else {
+            // Homogeneous layer (pre-fillLine case — no-op partition)
+            let is_line_mode = layer_objs
+                .first()
+                .map(|o| o.layer.mode.as_str() == "line")
+                .unwrap_or(false);
+
+            // Pure-fill layers stay pure NN even with the toggle on (is_line_mode guard).
+            let order = if is_line_mode {
+                // All objects in this layer group share one layer definition; reading the
+                // first object's flag is correct. (If per-object overrides are ever added,
+                // this becomes a per-object branch rather than a group-level read.)
+                let inner_first = layer_objs
+                    .first()
+                    .map(|o| o.layer.cut_inner_first)
+                    .unwrap_or(true);
+                if inner_first {
+                    optimizer::order_inner_first_nn(&layer_objs, cur_x, cur_y)
+                } else {
+                    optimizer::optimize_cut_order_from(&layer_objs, cur_x, cur_y)
+                }
+            } else {
+                optimizer::optimize_cut_order_from(&layer_objs, cur_x, cur_y)
+            };
+            for &idx in &order {
+                let obj = &layer_objs[idx];
+                // P2-A Fix #9: use optimizer's object_end_point (last path point)
+                // instead of bbox corner, matching the optimizer's own tracking.
+                let (ex, ey) = optimizer::object_end_point(obj);
+                cur_x = ex;
+                cur_y = ey;
+                final_objects.push(obj.clone());
+            }
+        }
+    }
+
+    Ok(final_objects)
+}
+
+/// True only for the exact value "1". `=0`, empty, or `true` compare instead of rewriting.
+/// Pure so it can be tested without touching the process environment.
+#[cfg(test)]
+pub(crate) fn golden_update_requested(v: Option<&str>) -> bool {
+    v == Some("1")
+}
+
+/// The one place in the crate that reads KERF_UPDATE_GOLDEN (pinned by T12).
+#[cfg(test)]
+pub(crate) fn golden_update_env() -> bool {
+    golden_update_requested(std::env::var("KERF_UPDATE_GOLDEN").ok().as_deref())
+}
+
 /// Generate G-code from design objects
 /// Runs in spawn_blocking since G-code generation with optimization is CPU-heavy
 #[tauri::command]
@@ -46,130 +206,7 @@ pub async fn generate_gcode(
         let (start_x, start_y) =
             start_point_from_corner(corner, ws_width, workspace_height, origin_top);
 
-        // F7: Group by layer_index to preserve user-set layer order.
-        // Within each layer group:
-        //   - line mode: apply inner-first, then NN travel optimization
-        //   - fill/offsetFill: NN travel optimization only (inner-first irrelevant for fills)
-        // Emit groups in the order their layer_index values first appear.
-
-        // Collect unique layer indices in arrival order
-        let mut layer_order: Vec<i32> = Vec::new();
-        for obj in &objects {
-            let li = obj.layer_index.unwrap_or(0);
-            if !layer_order.contains(&li) {
-                layer_order.push(li);
-            }
-        }
-
-        let mut final_objects: Vec<CutObject> = Vec::new();
-        let mut cur_x = start_x;
-        let mut cur_y = start_y;
-
-        for &li in &layer_order {
-            let layer_objs: Vec<CutObject> = objects
-                .iter()
-                .filter(|o| o.layer_index.unwrap_or(0) == li)
-                .cloned()
-                .collect();
-
-            // A4b (must-fix #2): partition fill-ish and line objects within a layer
-            // so that ALL fill passes precede ALL line (perimeter) passes.
-            // For a fillLine layer both maskFill/fill objects AND line overlay objects
-            // share the same layer_index — without partition, NN reordering could
-            // interleave them, cutting the perimeter before the fill finishes and
-            // shifting the workpiece. For pre-fillLine layers every object has one
-            // mode, so the partition is a no-op.
-            let is_fill_ish = |mode: &str| matches!(mode, "fill" | "maskFill" | "offsetFill");
-
-            let has_mixed = layer_objs.iter().any(|o| is_fill_ish(&o.layer.mode))
-                && layer_objs.iter().any(|o| o.layer.mode == "line");
-
-            if has_mixed {
-                // Partition into fill-ish and line groups
-                let fill_group: Vec<CutObject> = layer_objs
-                    .iter()
-                    .filter(|o| is_fill_ish(&o.layer.mode))
-                    .cloned()
-                    .collect();
-                let line_group: Vec<CutObject> = layer_objs
-                    .iter()
-                    .filter(|o| o.layer.mode == "line")
-                    .cloned()
-                    .collect();
-
-                // Fill-ish: NN optimize (inner-first not meaningful for fills)
-                let fill_order = optimizer::optimize_cut_order_from(&fill_group, cur_x, cur_y);
-                for &idx in &fill_order {
-                    let obj = &fill_group[idx];
-                    // P2-A Fix #9: use optimizer's object_end_point (last path point)
-                    // instead of bbox corner, matching the optimizer's own tracking.
-                    let (ex, ey) = optimizer::object_end_point(obj);
-                    cur_x = ex;
-                    cur_y = ey;
-                    final_objects.push(obj.clone());
-                }
-
-                // Line: inner-first (toggle on, default) or pure NN (toggle off),
-                // starting from where fills ended.
-                // Operational note: cut_inner_first defaults true, so existing line layers
-                // switch from plain NN to inner-first order on first generate — intended.
-                // Toggle off is the instant escape hatch if a real-world cut regresses.
-                // All objects in this layer group share one layer definition; reading the
-                // first object's flag is correct. (If per-object overrides are ever added,
-                // this becomes a per-object branch rather than a group-level read.)
-                let inner_first = line_group
-                    .first()
-                    .map(|o| o.layer.cut_inner_first)
-                    .unwrap_or(true);
-                let line_order = if inner_first {
-                    optimizer::order_inner_first_nn(&line_group, cur_x, cur_y)
-                } else {
-                    optimizer::optimize_cut_order_from(&line_group, cur_x, cur_y)
-                };
-                for &idx in &line_order {
-                    let obj = &line_group[idx];
-                    // P2-A Fix #9: use optimizer's object_end_point (last path point)
-                    // instead of bbox corner, matching the optimizer's own tracking.
-                    let (ex, ey) = optimizer::object_end_point(obj);
-                    cur_x = ex;
-                    cur_y = ey;
-                    final_objects.push(obj.clone());
-                }
-            } else {
-                // Homogeneous layer (pre-fillLine case — no-op partition)
-                let is_line_mode = layer_objs
-                    .first()
-                    .map(|o| o.layer.mode.as_str() == "line")
-                    .unwrap_or(false);
-
-                // Pure-fill layers stay pure NN even with the toggle on (is_line_mode guard).
-                let order = if is_line_mode {
-                    // All objects in this layer group share one layer definition; reading the
-                    // first object's flag is correct. (If per-object overrides are ever added,
-                    // this becomes a per-object branch rather than a group-level read.)
-                    let inner_first = layer_objs
-                        .first()
-                        .map(|o| o.layer.cut_inner_first)
-                        .unwrap_or(true);
-                    if inner_first {
-                        optimizer::order_inner_first_nn(&layer_objs, cur_x, cur_y)
-                    } else {
-                        optimizer::optimize_cut_order_from(&layer_objs, cur_x, cur_y)
-                    }
-                } else {
-                    optimizer::optimize_cut_order_from(&layer_objs, cur_x, cur_y)
-                };
-                for &idx in &order {
-                    let obj = &layer_objs[idx];
-                    // P2-A Fix #9: use optimizer's object_end_point (last path point)
-                    // instead of bbox corner, matching the optimizer's own tracking.
-                    let (ex, ey) = optimizer::object_end_point(obj);
-                    cur_x = ex;
-                    cur_y = ey;
-                    final_objects.push(obj.clone());
-                }
-            }
-        }
+        let final_objects = order_objects(&objects, start_x, start_y)?;
 
         gcode_gen::generate_gcode(&final_objects, workspace_height, s_value_max, origin_top)
     })
@@ -229,50 +266,6 @@ pub struct PreviewDitherResult {
 #[cfg(test)]
 mod tests {
     use crate::engine::gcode_gen::{CutLayer, CutObject};
-    use crate::engine::optimizer;
-
-    /// Test-local helper: apply A4b partition (fill-ish before line) and return
-    /// the result as a flat Vec.  Mirrors the inlined logic in generate_gcode.
-    fn sort_fill_before_line(objs: Vec<CutObject>, start_x: f64, start_y: f64) -> Vec<CutObject> {
-        let is_fill_ish = |mode: &str| matches!(mode, "fill" | "maskFill" | "offsetFill");
-        let has_mixed = objs.iter().any(|o| is_fill_ish(&o.layer.mode))
-            && objs.iter().any(|o| o.layer.mode == "line");
-
-        if !has_mixed {
-            return objs;
-        }
-
-        let fill_group: Vec<CutObject> = objs
-            .iter()
-            .filter(|o| is_fill_ish(&o.layer.mode))
-            .cloned()
-            .collect();
-        let line_group: Vec<CutObject> = objs
-            .iter()
-            .filter(|o| o.layer.mode == "line")
-            .cloned()
-            .collect();
-
-        let mut result: Vec<CutObject> = Vec::new();
-        let mut cur_x = start_x;
-        let mut cur_y = start_y;
-
-        let fill_order = optimizer::optimize_cut_order_from(&fill_group, cur_x, cur_y);
-        for &idx in &fill_order {
-            let obj = &fill_group[idx];
-            cur_x = obj.x + obj.width;
-            cur_y = obj.y + obj.height;
-            result.push(obj.clone());
-        }
-
-        let line_order = optimizer::order_inner_first_nn(&line_group, cur_x, cur_y);
-        for &idx in &line_order {
-            let obj = &line_group[idx];
-            result.push(obj.clone());
-        }
-        result
-    }
-
     fn make_cut_layer(mode: &str) -> CutLayer {
         CutLayer {
             mode: mode.to_string(),
@@ -335,7 +328,7 @@ mod tests {
             make_obj_with_mode("fill_b", "maskFill", 0),
             make_obj_with_mode("fill_c", "fill", 0),
         ];
-        let result = sort_fill_before_line(objs, 0.0, 0.0);
+        let result = super::order_objects(&objs, 0.0, 0.0).expect("ordering");
         // All fill-ish objects must precede the line object
         let line_pos = result.iter().position(|o| o.layer.mode == "line").unwrap();
         for (i, obj) in result.iter().enumerate() {
@@ -360,7 +353,7 @@ mod tests {
             make_obj_with_mode("a", "line", 0),
             make_obj_with_mode("b", "line", 0),
         ];
-        let result = sort_fill_before_line(objs, 0.0, 0.0);
+        let result = super::order_objects(&objs, 0.0, 0.0).expect("ordering");
         // 2 objects, both line — no change
         assert_eq!(result.len(), 2);
         assert!(result.iter().all(|o| o.layer.mode == "line"));
@@ -373,9 +366,62 @@ mod tests {
             make_obj_with_mode("a", "maskFill", 0),
             make_obj_with_mode("b", "maskFill", 0),
         ];
-        let result = sort_fill_before_line(objs, 0.0, 0.0);
+        let result = super::order_objects(&objs, 0.0, 0.0).expect("ordering");
         assert_eq!(result.len(), 2);
         assert!(result.iter().all(|o| o.layer.mode == "maskFill"));
+    }
+
+    /// E1b T2: the partition keeps every object exactly once, and on a mixed
+    /// layer every fill-ish object precedes the line object.
+    #[test]
+    fn partition_keeps_every_object_exactly_once() {
+        let objs = vec![
+            make_obj_with_mode("a", "maskFill", 0),
+            make_obj_with_mode("l", "line", 0),
+            make_obj_with_mode("b", "maskFill", 0),
+            make_obj_with_mode("c", "fill", 0),
+            make_obj_with_mode("d", "offsetFill", 0),
+            make_obj_with_mode("e", "line", 1),
+        ];
+        let result = super::order_objects(&objs, 0.0, 0.0).expect("ordering");
+        let mut want: Vec<&str> = objs.iter().map(|o| o.id.as_str()).collect();
+        let mut got: Vec<&str> = result.iter().map(|o| o.id.as_str()).collect();
+        want.sort_unstable();
+        got.sort_unstable();
+        assert_eq!(got, want, "output ids must be the input ids, each once");
+        let l_pos = result.iter().position(|o| o.id == "l").unwrap();
+        for id in ["a", "b", "c", "d"] {
+            let p = result.iter().position(|o| o.id == id).unwrap();
+            assert!(
+                p < l_pos,
+                "fill-ish '{id}' at {p} must precede 'l' at {l_pos}"
+            );
+        }
+    }
+
+    /// E1b T3: a mixed layer holding an object in neither pass is an `Err`.
+    #[test]
+    fn mixed_layer_stray_mode_is_err() {
+        let mut f = make_obj_with_mode("f", "maskFill", 0);
+        f.paths = vec![crate::engine::gcode_gen::PathSegment {
+            points: vec![
+                crate::engine::gcode_gen::Point { x: 0.0, y: 0.0 },
+                crate::engine::gcode_gen::Point { x: 20.0, y: 0.0 },
+                crate::engine::gcode_gen::Point { x: 20.0, y: 20.0 },
+                crate::engine::gcode_gen::Point { x: 0.0, y: 20.0 },
+            ],
+            closed: true,
+        }];
+        let objs = vec![
+            f,
+            make_obj_with_mode("l", "line", 0),
+            make_obj_with_mode("b", "bogus", 0),
+        ];
+        let e = super::order_objects(&objs, 0.0, 0.0).expect_err("stray must be refused");
+        assert!(
+            e.contains("'b'") && e.contains("'bogus'") && e.contains("neither"),
+            "{e}"
+        );
     }
 
     // ── P6-A: start_point_from_corner table test ──────────────────────────
@@ -475,7 +521,7 @@ mod golden_tests {
     /// `tests/golden/README.md`.
     fn assert_golden(name: &str, actual: &str) {
         let path = golden_dir().join(format!("{name}.gcode"));
-        if std::env::var("KERF_UPDATE_GOLDEN").is_ok() {
+        if golden_update_env() {
             std::fs::create_dir_all(path.parent().expect("golden path has a parent dir"))
                 .expect("failed to create tests/golden directory");
             std::fs::write(&path, format!("{actual}\n"))
@@ -2893,5 +2939,304 @@ mod golden_tests {
                 "{pm}: open lead-in goes straight back"
             );
         }
+    }
+
+    // ── E1b: Fill+Line sharp rectangle, unknown modes, the golden gate ─────
+
+    /// What `toCutObjects` emits for a 30 x 10 sharp rectangle at (10, 20) on a
+    /// `fillLine` layer after E1a lowering: a maskFill object carrying a closed
+    /// 4-corner contour, then its `_line_overlay` line object, on one layer.
+    fn fillline_sharp_rect_pair(rotation: f64) -> Vec<CutObject> {
+        let mk = |id: &str, mode: &str| CutObject {
+            id: id.to_string(),
+            obj_type: "rectangle".to_string(),
+            x: 10.0,
+            y: 20.0,
+            width: 30.0,
+            height: 10.0,
+            paths: vec![rect_path(10.0, 20.0, 30.0, 10.0)],
+            layer: base_layer(mode),
+            corner_radius: None,
+            rotation,
+            priority: None,
+            group_id: None,
+            layer_index: Some(0),
+        };
+        vec![mk("r1", "maskFill"), mk("r1_line_overlay", "line")]
+    }
+
+    async fn run_fillline_pair(rotation: f64) -> GcodeResult {
+        generate_gcode(
+            fillline_sharp_rect_pair(rotation),
+            60.0,
+            Some(1000.0),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("generate_gcode should succeed")
+    }
+
+    /// The code lines strictly between the preamble and footer markers.
+    fn body_lines(gcode: &str) -> Vec<&str> {
+        let start = gcode
+            .lines()
+            .position(|l| l == "; KERF:PREAMBLE_END")
+            .expect("preamble end marker");
+        let end = gcode
+            .lines()
+            .position(|l| l == "; KERF:FOOTER_BEGIN")
+            .expect("footer begin marker");
+        gcode
+            .lines()
+            .skip(start + 1)
+            .take(end - start - 1)
+            .collect()
+    }
+
+    fn is_motion(line: &str, g: f64) -> bool {
+        words(line)
+            .first()
+            .map(|&(c, v)| c == 'G' && v == g)
+            .unwrap_or(false)
+    }
+
+    /// E1b T4: the Fill+Line sharp rectangle through the real command.
+    #[tokio::test]
+    async fn golden_16_fillline_sharp_rect() {
+        let result = run_fillline_pair(0.0).await;
+        let g = &result.gcode;
+        let fill = g.find("; Mask Fill: r1").expect("mask fill section");
+        let cut = g
+            .find("; Cut: r1_line_overlay")
+            .expect("line overlay section");
+        assert!(fill < cut, "the fill pass must precede the perimeter");
+        assert_golden("16_fillline_sharp_rect", g);
+    }
+
+    /// E1b T5: the preview moves and the emitted program agree, move for move.
+    #[tokio::test]
+    async fn fillline_sharp_rect_moves_match_program() {
+        let result = run_fillline_pair(0.0).await;
+        let (mut x, mut y) = (0.0_f64, 0.0_f64);
+        let mut parsed: Vec<(f64, f64)> = Vec::new();
+        for line in body_lines(&result.gcode) {
+            if !(is_motion(line, 0.0) || is_motion(line, 1.0)) {
+                continue;
+            }
+            for (c, v) in words(line) {
+                match c {
+                    'X' => x = v,
+                    'Y' => y = v,
+                    _ => {}
+                }
+            }
+            parsed.push((x, y));
+        }
+        assert!(!parsed.is_empty(), "vacuous: no motion lines parsed");
+        assert_eq!(
+            result.moves.len(),
+            parsed.len(),
+            "moves vs G0/G1 line count"
+        );
+        for (i, (m, p)) in result.moves.iter().zip(&parsed).enumerate() {
+            assert!(
+                (m.x - p.0).abs() < 1e-3 && (m.y - p.1).abs() < 1e-3,
+                "index {i}: move ({}, {}) vs program ({}, {})",
+                m.x,
+                m.y,
+                p.0,
+                p.1
+            );
+        }
+    }
+
+    /// E1b T6: every laser-on segment lies inside the rectangle (after undoing
+    /// the Y-flip and the object rotation), and both passes reach its edges.
+    #[tokio::test]
+    async fn fillline_sharp_rect_burns_inside_rect() {
+        const TOL: f64 = 0.005;
+        for rot in [0.0_f64, 30.0] {
+            let result = run_fillline_pair(rot).await;
+            let back = |gx: f64, gy: f64| -> (f64, f64) {
+                let (dx, dy) = (gx - 25.0, (60.0 - gy) - 25.0);
+                let r = -rot.to_radians();
+                (
+                    25.0 + dx * r.cos() - dy * r.sin(),
+                    25.0 + dx * r.sin() + dy * r.cos(),
+                )
+            };
+            let (mut x, mut y, mut s) = (0.0_f64, 0.0_f64, 0.0_f64);
+            let mut section = "";
+            let (mut fill_on, mut line_on) = (0usize, 0usize);
+            let (mut lo_x, mut hi_x, mut lo_y, mut hi_y) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+            for line in body_lines(&result.gcode) {
+                if line.starts_with("; Mask Fill: r1") {
+                    section = "fill";
+                } else if line.starts_with("; Cut: r1_line_overlay") {
+                    section = "line";
+                }
+                let w = words(line);
+                // Every mode line (M3/M4 S0, M5) resets the modal S.
+                if w.iter()
+                    .any(|&(c, v)| c == 'M' && (v == 3.0 || v == 4.0 || v == 5.0))
+                {
+                    s = w
+                        .iter()
+                        .find(|&&(c, _)| c == 'S')
+                        .map(|&(_, v)| v)
+                        .unwrap_or(0.0);
+                    continue;
+                }
+                if !(is_motion(line, 0.0) || is_motion(line, 1.0)) {
+                    continue;
+                }
+                let (px, py) = (x, y);
+                for &(c, v) in &w {
+                    match c {
+                        'X' => x = v,
+                        'Y' => y = v,
+                        'S' => s = v,
+                        _ => {}
+                    }
+                }
+                if is_motion(line, 1.0) && s > 0.0 {
+                    match section {
+                        "fill" => fill_on += 1,
+                        "line" => line_on += 1,
+                        _ => {}
+                    }
+                    for (ex, ey) in [back(px, py), back(x, y)] {
+                        assert!(
+                            (10.0 - TOL..=40.0 + TOL).contains(&ex)
+                                && (20.0 - TOL..=30.0 + TOL).contains(&ey),
+                            "rot {rot}: burn endpoint ({ex:.4}, {ey:.4}) outside the rectangle, line `{line}`"
+                        );
+                        lo_x = lo_x.min(ex);
+                        hi_x = hi_x.max(ex);
+                        lo_y = lo_y.min(ey);
+                        hi_y = hi_y.max(ey);
+                    }
+                }
+            }
+            assert!(
+                fill_on >= 1,
+                "rot {rot}: no laser-on segment in the mask fill"
+            );
+            assert!(
+                line_on >= 1,
+                "rot {rot}: no laser-on segment in the line overlay"
+            );
+            assert!(
+                lo_x <= 11.0 && hi_x >= 39.0 && lo_y <= 21.0 && hi_y >= 29.0,
+                "rot {rot}: burned extents x [{lo_x}, {hi_x}] y [{lo_y}, {hi_y}] miss an edge"
+            );
+        }
+    }
+
+    /// E1b T8: an unknown mode on a homogeneous layer reaches the engine and
+    /// fails the command, naming the mode and the object.
+    #[tokio::test]
+    async fn unknown_mode_is_err_at_command_boundary() {
+        let mut ok = rect_obj("rl", 0.0, 0.0, 10.0, 10.0, base_layer("line"));
+        ok.layer_index = Some(0);
+        let mut bogus = rect_obj("rb", 20.0, 0.0, 10.0, 10.0, base_layer("bogus"));
+        bogus.layer_index = Some(1);
+        match generate_gcode(vec![ok, bogus], 100.0, Some(1000.0), None, None, None).await {
+            Ok(r) => panic!("expected Err, got Ok with program:\n{}", r.gcode),
+            Err(e) => assert!(
+                e.contains("'bogus'") && e.contains("'rb'"),
+                "error must name mode and object: {e}"
+            ),
+        }
+    }
+
+    /// The T3/T9 mixed layer: maskFill `f`, line `l`, and a stray `bogus` `b`.
+    fn mixed_layer_with_stray() -> Vec<CutObject> {
+        let mut f = rect_obj("f", 0.0, 0.0, 20.0, 20.0, base_layer("maskFill"));
+        f.obj_type = "path".to_string();
+        f.paths = vec![rect_path(0.0, 0.0, 20.0, 20.0)];
+        let l = rect_obj("l", 30.0, 0.0, 10.0, 10.0, base_layer("line"));
+        let b = rect_obj("b", 50.0, 0.0, 10.0, 10.0, base_layer("bogus"));
+        let mut out = vec![f, l, b];
+        for o in &mut out {
+            o.layer_index = Some(0);
+        }
+        out
+    }
+
+    /// E1b T9: a stray mode on a mixed layer fails the command instead of
+    /// vanishing from the job without trace.
+    #[tokio::test]
+    async fn mixed_layer_stray_mode_is_err_at_command_boundary() {
+        match generate_gcode(
+            mixed_layer_with_stray(),
+            100.0,
+            Some(1000.0),
+            None,
+            None,
+            None,
+        )
+        .await
+        {
+            Ok(r) => panic!("expected Err, got Ok with program:\n{}", r.gcode),
+            Err(e) => assert!(
+                e.contains("'b'") && e.contains("neither"),
+                "error must name the stray: {e}"
+            ),
+        }
+    }
+
+    /// E1b T7: only the exact value "1" regenerates. No environment access.
+    #[test]
+    fn golden_update_requested_only_for_exact_1() {
+        for v in [None, Some("0"), Some(""), Some("true")] {
+            assert!(!golden_update_requested(v), "{v:?} must compare");
+        }
+        assert!(golden_update_requested(Some("1")));
+    }
+
+    /// E1b T12: exactly one line in the crate passes the golden variable as a
+    /// call argument, and it is the predicate call in `commands/gcode.rs`.
+    /// Limit: a reader through `option_env!` or `env::vars()` evades this scan.
+    #[test]
+    fn golden_env_has_exactly_one_reader() {
+        let needle = concat!("\"KERF_UPDATE", "_GOLDEN\")");
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("read src dir") {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().and_then(|x| x.to_str()) == Some("rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(
+            std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
+            &mut files,
+        );
+        let mut hits: Vec<(std::path::PathBuf, String)> = Vec::new();
+        for f in &files {
+            let text = std::fs::read_to_string(f).expect("read .rs file");
+            for line in text.lines() {
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                if line.contains(needle) {
+                    hits.push((f.clone(), line.to_string()));
+                }
+            }
+        }
+        assert_eq!(hits.len(), 1, "golden env readers: {hits:?}");
+        let (file, line) = &hits[0];
+        assert!(line.contains("golden_update_requested("), "{line}");
+        assert!(
+            file.ends_with("commands/gcode.rs"),
+            "reader lives in {}",
+            file.display()
+        );
     }
 }

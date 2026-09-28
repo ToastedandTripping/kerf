@@ -3091,7 +3091,7 @@ mod sim_integration {
     /// event (with camelCase fields) and a StatusOutcome with snapshot, epoch,
     /// and sequence. The TS side (B2b) consumes this to validate schema parity.
     ///
-    /// Runs only when KERF_UPDATE_GOLDEN is set — in CI the fixture is compared
+    /// Runs only when KERF_UPDATE_GOLDEN is `1` — in CI the fixture is compared
     /// against the checked-in copy.
     #[test]
     fn b2a_generate_native_status_fixture() {
@@ -3149,8 +3149,8 @@ mod sim_integration {
             "statusOutcome": outcome_json,
         });
 
-        // Write to the fixture path only when KERF_UPDATE_GOLDEN is set.
-        if std::env::var("KERF_UPDATE_GOLDEN").is_ok() {
+        // Write to the fixture path only when KERF_UPDATE_GOLDEN is `1`.
+        if crate::commands::gcode::golden_update_env() {
             let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .parent()
                 .unwrap()
