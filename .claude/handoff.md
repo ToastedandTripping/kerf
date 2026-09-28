@@ -38,8 +38,6 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - **Phase 2A buffered streaming is merged (0a83e69), opt-in behind streamingMode (default perLine).** Only the owner A/B test (gate D1c) remains; see the Phase 2A A/B bullet.
 
-- **Fence single-reset is on master (caa0dcc, 2026-09-24) and in no build.** The owner 4-step hardware test in ROADMAP next is still owed; whether and when a build is cut is Lee's call.
-
 - **Charter text-tool amendment approved by Lee 2026-09-25 (DECISIONS, Product rulings); CHARTER.md wording not yet edited.** The Non-goals sentence and the fonts drift tripwire still name built-in font rendering as excluded. The edit is Lee-approved content only.
 
 - QUEUED, E1b relay kerf-evidence-e1b: plan .claude/plans/kerf-evidence-e1b.md; Fable critic PASS, folded (4c52a8b); 5 files under src-tauri, 10 battery ids. Start AFTER S1b merges (both edit serial.rs; running two Rust builds at once is too much for the disk at 92%).
@@ -60,7 +58,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - NEXT, in order: (1) a /grill with Lee to clear the remaining open decisions (Lee, 2026-09-27). (2) E1b (plan .claude/plans/kerf-evidence-e1b.md, critic PASS 4c52a8b). Rebase its golden expectations first: engine-arm and engine-leadin changed gcode_gen.rs and gcode.rs, and golden 16 needs the S0 mode line and the M5 seal. Re-verify its citations against HEAD before Ted. (3) S3c 'motion trust': plan, critic, relay, with kerf-9's answer as input. (4) Then S4a/b/c, S5 (minus the Position Laser mapping, which moved to S3), E4, R3 editing-shortcuts (propose the Ctrl+Shift+V DECISIONS entry at its close). Build target ~/.cache/kerf-engine-arm-target is reusable for E1b.
 
-- GRILL 2026-09-27 (capture .claude/grills/2026-09-27-kerf-remaining-open-decisions.md, confirmed by Lee). (1) PUBLISH v0.8.31. Lee overrode the private-build recommendation, and the wedge release gate was lifted (DECISIONS amended). The release notes must name the wedge as open and say that Pause stops the job. Hardware risk flagged once: the new STOP has never run on the machine, so the owner test card goes on scrap first. (2) MIN PWR ON IMAGE LAYERS ONLY needs a plan, a critic and a relay (UI; Jen applies). Queue it after E1b. (3) BUFFERED COMPARISON RUN is owed by Lee on v0.8.31: one dense job both ways, and no visible difference means buffered is removed (a relay after his result). (4) The 1-2 day geometry design study (kerf-d9, delegated) is still unscheduled; it is not in the carry-over list. Clipper2's gate D2 row is resolved by it.
+- v0.8.31 PUBLISHED 2026-09-27 (https://github.com/ToastedandTripping/kerf/releases/tag/v0.8.31). Tag 7756b62, Build and CI green. The notes name the wedge as open, say Pause stops the job, and say the beam cannot be confirmed dark. OWED BY LEE on this build, before trusting it on a real job: the owner cards in the ROADMAP next section (fence 4-step, jog and Position Laser, engine S0, lead-in, material-test card, canvas image check), and the buffered comparison run (one dense job both ways; no visible difference means a removal relay).
+
+- From the 2026-09-27 grill, still owed by this session: the MIN PWR image-layers-only relay (plan, critic, relay; queue after E1b), and the kerf-d9 geometry design study (1-2 days, no code, unscheduled). Capture: .claude/grills/2026-09-27-kerf-remaining-open-decisions.md.
 
 ## Open questions awaiting Lee
 
@@ -83,6 +83,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-09-27 v0.8.31 published
+The release gate passed: 1133 JS, 360 Rust, tsc, prettier, clippy and fmt clean, and lint at 0 errors. All five version files were bumped, and 7756b62 was pushed to master and tagged. The Build run finished and published macOS and Linux installers. The auto-generated notes were a bare changelog, so they were replaced with the disclosures the new ruling requires. That edit used the ToastedandTripping token, because the active gh account is the SSC one. The ROADMAP current line and a shipped entry were recorded.
 
 ### 2026-09-27 grill: remaining decisions cleared
 The grill ran two rounds plus the confirmation gate, and Lee confirmed the result. Lee overrode two recommendations: publish v0.8.31 rather than a private build, and lift the wedge release gate rather than make a one-release exception. He took the recommended option on the other five: Min Pwr on image layers only, controller strings acceptable in the public repo, buffered sending settled by one comparison run, camera and rotary parked, and the Inkscape drift report closed. DECISIONS went from 30 to 33 entries, with 4 amendments. Five question rows were resolved.
