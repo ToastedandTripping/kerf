@@ -56,11 +56,11 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - GAP PASS STATE (2026-09-27, after /save). ON MASTER 1c41a89 (pushed, primary fast-forwarded): E1a, S1, R1 cut-vs-screen, E2, E3, E5, S2, S1b, R2 canvas-display, engine-arm, S3, engine-leadin, and all 30 DECISIONS entries. S1 and S3 are now together on master, as Lee ruled. None of it is in a build; cutting one is Lee's call.
 
-- NEXT, in order: (1) a /grill with Lee to clear the remaining open decisions (Lee, 2026-09-27). (2) E1b (plan .claude/plans/kerf-evidence-e1b.md, critic PASS 4c52a8b). Rebase its golden expectations first: engine-arm and engine-leadin changed gcode_gen.rs and gcode.rs, and golden 16 needs the S0 mode line and the M5 seal. Re-verify its citations against HEAD before Ted. (3) S3c 'motion trust': plan, critic, relay, with kerf-9's answer as input. (4) Then S4a/b/c, S5 (minus the Position Laser mapping, which moved to S3), E4, R3 editing-shortcuts (propose the Ctrl+Shift+V DECISIONS entry at its close). Build target ~/.cache/kerf-engine-arm-target is reusable for E1b.
-
 - v0.8.31 PUBLISHED 2026-09-27 (https://github.com/ToastedandTripping/kerf/releases/tag/v0.8.31). Tag 7756b62, Build and CI green. The notes name the wedge as open, say Pause stops the job, and say the beam cannot be confirmed dark. OWED BY LEE on this build, before trusting it on a real job: the owner cards in the ROADMAP next section (fence 4-step, jog and Position Laser, engine S0, lead-in, material-test card, canvas image check), and the buffered comparison run (one dense job both ways; no visible difference means a removal relay).
 
 - From the 2026-09-27 grill, still owed by this session: the MIN PWR image-layers-only relay (plan, critic, relay; queue after E1b), and the kerf-d9 geometry design study (1-2 days, no code, unscheduled). Capture: .claude/grills/2026-09-27-kerf-remaining-open-decisions.md.
+
+- NEXT, in order (2026-09-27): (1) S3c motion trust. Plan revision 5; astra critic rounds 1-4 all FAIL, every finding verified real and folded. Round 5 is the cap: if it does not pass, the residual findings go to Lee as a decision. Split out of it: S3d, connection lifetime (a native connection token at the non-job write boundary: a queued send can write to a new controller after a reconnect), and S3e, frame qualification (a per-machine enforced refusal until the owner card's frame check passes). (2) R3 editing-shortcuts: the plan passed critic round 4, and its citations are being re-verified against HEAD because 8 of its files moved since 6e3378b. (3) Then S4a/b/c and S5 (lift from PLAN-safety-gate-class.md), E4, the Min Pwr image-only relay, S3d, S3e. E1b shipped on marvin/kerf-gap as d2dfd24 and is not yet on master.
 
 ## Open questions awaiting Lee
 
@@ -83,6 +83,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-09-27 E1b merged; S3c in critic
+E1b merged into marvin/kerf-gap as d2dfd24: an unknown mode or type is now an Err, the partition refuses strays, and goldens regenerate only on =1. Razor PASS: 0 CRITICAL, 0 WARNING, 6 NOTE, 29/29 covered. Battery 10/10 killed; 371 Rust. Razor N1 (a passes:0 layer omits objects silently) is parked. The S3c plan went through five revisions. The astra critic found real defects each round: raw console $J= escaped the hold, three alarm paths only logged, there was no reset-banner revoke, stale replies were unfenced, an accepted Idle could carry no position, a second position writer took WPos, units were unknown, and the card was unbounded. The connection-lifetime and frame classes were split out as S3d and S3e. Disk: cleared 16.6 GiB of build cache from two merged Phase 1 relay worktrees (cargo clean); 42 GB free.
 
 ### 2026-09-27 v0.8.31 published
 The release gate passed: 1133 JS, 360 Rust, tsc, prettier, clippy and fmt clean, and lint at 0 errors. All five version files were bumped, and 7756b62 was pushed to master and tagged. The Build run finished and published macOS and Linux installers. The auto-generated notes were a bare changelog, so they were replaced with the disclosures the new ruling requires. That edit used the ToastedandTripping token, because the active gh account is the SSC one. The ROADMAP current line and a shipped entry were recorded.
