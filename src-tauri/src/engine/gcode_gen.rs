@@ -2658,4 +2658,45 @@ mod tests {
             result.err()
         );
     }
+
+    /// E1b T10: an unknown layer mode fails the whole job, naming the mode and
+    /// the object. No partial `Ok` program is returned.
+    #[test]
+    fn unknown_mode_is_err_naming_mode_and_object() {
+        let ok = make_rect_obj("ok", 0.0, 0.0, 10.0, 10.0, make_layer_line());
+        let mut bogus_layer = make_layer_line();
+        bogus_layer.mode = "bogus".to_string();
+        let bogus = make_rect_obj("r_bogus", 20.0, 0.0, 10.0, 10.0, bogus_layer);
+        let result = generate_gcode(&[ok, bogus], 100.0, 1000.0, false);
+        match result {
+            Ok(r) => panic!("expected Err, got Ok with program:\n{}", r.gcode),
+            Err(e) => assert_eq!(e, "unknown layer mode 'bogus' on object 'r_bogus'"),
+        }
+    }
+
+    /// E1b T11: a path-less object of an unknown type is refused on both arms
+    /// that call `object_to_path` (line, offsetFill). A point-less `path` is a
+    /// known type with degenerate geometry and keeps today's skip.
+    #[test]
+    fn unknown_obj_type_is_err_naming_type_and_object() {
+        for mode in ["line", "offsetFill"] {
+            let mut layer = make_layer_line();
+            layer.mode = mode.to_string();
+            let mut tri = make_rect_obj("tri", 0.0, 0.0, 10.0, 10.0, layer);
+            tri.obj_type = "triangle".to_string();
+            match generate_gcode(&[tri], 100.0, 1000.0, false) {
+                Ok(r) => panic!("{mode}: expected Err, got Ok with program:\n{}", r.gcode),
+                Err(e) => assert_eq!(
+                    e, "unknown object type 'triangle' on object 'tri' (no paths to cut)",
+                    "{mode}"
+                ),
+            }
+        }
+        let mut p = make_rect_obj("p", 0.0, 0.0, 10.0, 10.0, make_layer_line());
+        p.obj_type = "path".to_string();
+        assert!(
+            generate_gcode(&[p], 100.0, 1000.0, false).is_ok(),
+            "a point-less path keeps the degenerate-geometry skip"
+        );
+    }
 }

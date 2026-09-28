@@ -2894,4 +2894,229 @@ mod golden_tests {
             );
         }
     }
+
+    // ── E1b: Fill+Line sharp rectangle, unknown modes, the golden gate ─────
+
+    /// What `toCutObjects` emits for a 30 x 10 sharp rectangle at (10, 20) on a
+    /// `fillLine` layer after E1a lowering: a maskFill object carrying a closed
+    /// 4-corner contour, then its `_line_overlay` line object, on one layer.
+    fn fillline_sharp_rect_pair(rotation: f64) -> Vec<CutObject> {
+        let mk = |id: &str, mode: &str| CutObject {
+            id: id.to_string(),
+            obj_type: "rectangle".to_string(),
+            x: 10.0,
+            y: 20.0,
+            width: 30.0,
+            height: 10.0,
+            paths: vec![rect_path(10.0, 20.0, 30.0, 10.0)],
+            layer: base_layer(mode),
+            corner_radius: None,
+            rotation,
+            priority: None,
+            group_id: None,
+            layer_index: Some(0),
+        };
+        vec![mk("r1", "maskFill"), mk("r1_line_overlay", "line")]
+    }
+
+    async fn run_fillline_pair(rotation: f64) -> GcodeResult {
+        generate_gcode(
+            fillline_sharp_rect_pair(rotation),
+            60.0,
+            Some(1000.0),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("generate_gcode should succeed")
+    }
+
+    /// The code lines strictly between the preamble and footer markers.
+    fn body_lines(gcode: &str) -> Vec<&str> {
+        let start = gcode
+            .lines()
+            .position(|l| l == "; KERF:PREAMBLE_END")
+            .expect("preamble end marker");
+        let end = gcode
+            .lines()
+            .position(|l| l == "; KERF:FOOTER_BEGIN")
+            .expect("footer begin marker");
+        gcode.lines().skip(start + 1).take(end - start - 1).collect()
+    }
+
+    fn is_motion(line: &str, g: f64) -> bool {
+        words(line)
+            .first()
+            .map(|&(c, v)| c == 'G' && v == g)
+            .unwrap_or(false)
+    }
+
+    /// E1b T4: the Fill+Line sharp rectangle through the real command.
+    #[tokio::test]
+    async fn golden_16_fillline_sharp_rect() {
+        let result = run_fillline_pair(0.0).await;
+        let g = &result.gcode;
+        let fill = g.find("; Mask Fill: r1").expect("mask fill section");
+        let cut = g.find("; Cut: r1_line_overlay").expect("line overlay section");
+        assert!(fill < cut, "the fill pass must precede the perimeter");
+        assert_golden("16_fillline_sharp_rect", g);
+    }
+
+    /// E1b T5: the preview moves and the emitted program agree, move for move.
+    #[tokio::test]
+    async fn fillline_sharp_rect_moves_match_program() {
+        let result = run_fillline_pair(0.0).await;
+        let (mut x, mut y) = (0.0_f64, 0.0_f64);
+        let mut parsed: Vec<(f64, f64)> = Vec::new();
+        for line in body_lines(&result.gcode) {
+            if !(is_motion(line, 0.0) || is_motion(line, 1.0)) {
+                continue;
+            }
+            for (c, v) in words(line) {
+                match c {
+                    'X' => x = v,
+                    'Y' => y = v,
+                    _ => {}
+                }
+            }
+            parsed.push((x, y));
+        }
+        assert!(!parsed.is_empty(), "vacuous: no motion lines parsed");
+        assert_eq!(
+            result.moves.len(),
+            parsed.len(),
+            "moves vs G0/G1 line count"
+        );
+        for (i, (m, p)) in result.moves.iter().zip(&parsed).enumerate() {
+            assert!(
+                (m.x - p.0).abs() < 1e-3 && (m.y - p.1).abs() < 1e-3,
+                "index {i}: move ({}, {}) vs program ({}, {})",
+                m.x,
+                m.y,
+                p.0,
+                p.1
+            );
+        }
+    }
+
+    /// E1b T6: every laser-on segment lies inside the rectangle (after undoing
+    /// the Y-flip and the object rotation), and both passes reach its edges.
+    #[tokio::test]
+    async fn fillline_sharp_rect_burns_inside_rect() {
+        const TOL: f64 = 0.005;
+        for rot in [0.0_f64, 30.0] {
+            let result = run_fillline_pair(rot).await;
+            let back = |gx: f64, gy: f64| -> (f64, f64) {
+                let (dx, dy) = (gx - 25.0, (60.0 - gy) - 25.0);
+                let r = -rot.to_radians();
+                (
+                    25.0 + dx * r.cos() - dy * r.sin(),
+                    25.0 + dx * r.sin() + dy * r.cos(),
+                )
+            };
+            let (mut x, mut y, mut s) = (0.0_f64, 0.0_f64, 0.0_f64);
+            let mut section = "";
+            let (mut fill_on, mut line_on) = (0usize, 0usize);
+            let (mut lo_x, mut hi_x, mut lo_y, mut hi_y) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+            for line in body_lines(&result.gcode) {
+                if line.starts_with("; Mask Fill: r1") {
+                    section = "fill";
+                } else if line.starts_with("; Cut: r1_line_overlay") {
+                    section = "line";
+                }
+                let w = words(line);
+                // Every mode line (M3/M4 S0, M5) resets the modal S.
+                if w.iter().any(|&(c, v)| c == 'M' && (v == 3.0 || v == 4.0 || v == 5.0)) {
+                    s = w
+                        .iter()
+                        .find(|&&(c, _)| c == 'S')
+                        .map(|&(_, v)| v)
+                        .unwrap_or(0.0);
+                    continue;
+                }
+                if !(is_motion(line, 0.0) || is_motion(line, 1.0)) {
+                    continue;
+                }
+                let (px, py) = (x, y);
+                for &(c, v) in &w {
+                    match c {
+                        'X' => x = v,
+                        'Y' => y = v,
+                        'S' => s = v,
+                        _ => {}
+                    }
+                }
+                if is_motion(line, 1.0) && s > 0.0 {
+                    match section {
+                        "fill" => fill_on += 1,
+                        "line" => line_on += 1,
+                        _ => {}
+                    }
+                    for (ex, ey) in [back(px, py), back(x, y)] {
+                        assert!(
+                            (10.0 - TOL..=40.0 + TOL).contains(&ex)
+                                && (20.0 - TOL..=30.0 + TOL).contains(&ey),
+                            "rot {rot}: burn endpoint ({ex:.4}, {ey:.4}) outside the rectangle, line `{line}`"
+                        );
+                        lo_x = lo_x.min(ex);
+                        hi_x = hi_x.max(ex);
+                        lo_y = lo_y.min(ey);
+                        hi_y = hi_y.max(ey);
+                    }
+                }
+            }
+            assert!(fill_on >= 1, "rot {rot}: no laser-on segment in the mask fill");
+            assert!(line_on >= 1, "rot {rot}: no laser-on segment in the line overlay");
+            assert!(
+                lo_x <= 11.0 && hi_x >= 39.0 && lo_y <= 21.0 && hi_y >= 29.0,
+                "rot {rot}: burned extents x [{lo_x}, {hi_x}] y [{lo_y}, {hi_y}] miss an edge"
+            );
+        }
+    }
+
+    /// E1b T8: an unknown mode on a homogeneous layer reaches the engine and
+    /// fails the command, naming the mode and the object.
+    #[tokio::test]
+    async fn unknown_mode_is_err_at_command_boundary() {
+        let mut ok = rect_obj("rl", 0.0, 0.0, 10.0, 10.0, base_layer("line"));
+        ok.layer_index = Some(0);
+        let mut bogus = rect_obj("rb", 20.0, 0.0, 10.0, 10.0, base_layer("bogus"));
+        bogus.layer_index = Some(1);
+        match generate_gcode(vec![ok, bogus], 100.0, Some(1000.0), None, None, None).await {
+            Ok(r) => panic!("expected Err, got Ok with program:\n{}", r.gcode),
+            Err(e) => assert!(
+                e.contains("'bogus'") && e.contains("'rb'"),
+                "error must name mode and object: {e}"
+            ),
+        }
+    }
+
+    /// The T3/T9 mixed layer: maskFill `f`, line `l`, and a stray `bogus` `b`.
+    fn mixed_layer_with_stray() -> Vec<CutObject> {
+        let mut f = rect_obj("f", 0.0, 0.0, 20.0, 20.0, base_layer("maskFill"));
+        f.obj_type = "path".to_string();
+        f.paths = vec![rect_path(0.0, 0.0, 20.0, 20.0)];
+        let l = rect_obj("l", 30.0, 0.0, 10.0, 10.0, base_layer("line"));
+        let b = rect_obj("b", 50.0, 0.0, 10.0, 10.0, base_layer("bogus"));
+        let mut out = vec![f, l, b];
+        for o in &mut out {
+            o.layer_index = Some(0);
+        }
+        out
+    }
+
+    /// E1b T9: a stray mode on a mixed layer fails the command instead of
+    /// vanishing from the job without trace.
+    #[tokio::test]
+    async fn mixed_layer_stray_mode_is_err_at_command_boundary() {
+        match generate_gcode(mixed_layer_with_stray(), 100.0, Some(1000.0), None, None, None).await
+        {
+            Ok(r) => panic!("expected Err, got Ok with program:\n{}", r.gcode),
+            Err(e) => assert!(
+                e.contains("'b'") && e.contains("neither"),
+                "error must name the stray: {e}"
+            ),
+        }
+    }
 }
