@@ -168,7 +168,10 @@ src-tauri/src/
     grbl_status.rs           — parse_status_frame: `<…>` report → GrblSnapshot (state,
                                MPos/WPos, WCO, FS, accessory, unknown fields)
     gcode.rs                 — Tauri commands: generate_gcode, generate_image_gcode,
-                               preview_image_dither; golden_tests module
+                               preview_image_dither; golden_tests module.
+                               `order_objects`: layer arrival order and the fill-before-line
+                               partition; a mixed layer with an object in neither pass is an
+                               `Err`, never a drop (evidence E1b).
     image_trace.rs           — Tauri command: trace_image_command (calls engine)
     power.rs                 — keep-awake acquire/release (OS sleep inhibitor during jobs)
   sim/                       — Test infrastructure, #[cfg(any(test, feature = "sim"))] only
@@ -215,6 +218,9 @@ src-tauri/src/
                                vector `G1` goes through `CutPen`, which refuses a move under one
                                motor step (0.0125 mm per axis, as written); a mask fill ends `M5`
                                (safety engine-leadin). Raster and TS emitters are not covered.
+                               An unknown mode, or an unknown object type with no paths, is an
+                               `Err` naming it and the object (evidence E1b); degenerate
+                               geometry is still skipped per object with a `;` comment.
     mask_fill.rs             — The one shared raster scanner (~1170 lines + tests):
                                scan_mask_to_gcode (MaskScanParams; binary or grayscale S)
                                used by image engrave and maskFill; fill_compound_mask
@@ -230,7 +236,7 @@ src-tauri/src/
     dither.rs                — 8 dithering algorithms (threshold, ordered, Floyd-Steinberg,
                                Jarvis, Stucki, Atkinson, grayscale, newsprint halftone)
     offset.rs                — Polygon inward offset (convex/concave, self-intersection cleanup)
-    optimizer.rs             — Cut ordering: layer-index arrival, fill-before-line partition,
+    optimizer.rs             — Cut ordering: layer-index arrival,
                                inner-first rank (containment DAG), NN within rank bands;
                                flood fill segment reordering, start corner selection
     tracer.rs                — vtracer-based image→SVG vectorization with preprocessing
@@ -239,7 +245,9 @@ src-tauri/src/
 src-tauri/tests/
   golden/*.gcode             — Frozen G-code snapshots (compared in gcode.rs golden_tests).
                                Phase 3 proves output byte-identical; Phase 4 reviews geometry
-                               diffs. Regenerate with KERF_UPDATE_GOLDEN=1 (CI guards it unset).
+                               diffs. Regenerate with KERF_UPDATE_GOLDEN=1 (only the exact value `1`;
+                               one reader, `golden_update_env`, pinned by a source-scan test;
+                               CI guards it unset).
   golden/stop_result_fixture.json — StopResult serde shapes. No test reads this file (Razor N3):
                                serial.rs b1_stop_result_fixture_round_trip round-trips
                                in-memory variants only, and no TS test loads it.
