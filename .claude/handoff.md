@@ -82,6 +82,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 ## Log (newest first)
 
+### 2026-09-29 motion-trust B1 fix pass
+64be256: three STOP-during-barrier tests (closing W1), plus N2, N3 and N6 pins, a comment-aware read-site scan, and lock table trust=1.5. cargo 436 passed. Razor re-check running (resumed). Unpinned: N5 and N4 (N4 goes to the owner card). Pack next_action holds the rest.
+
 ### 2026-09-29 motion-trust B1 Razor verdict
 B1: WARNING, 0 CRITICAL, 1 WARNING, 11 NOTE, 15/15 covered. Stop and fence (X1) confirmed unchanged: no deadlock; raw 0x18 waits at most one job-line write; STOP never goes through send_byte. m05 is accepted as equivalent. The wire change is acceptable (a job start is delayed up to about 1.65 s, before any write). W1 is tests only: the barrier's three stop-banner reads are untested. A fix pass was sent to the B1 Ted (resumed, pre-fix 3eabaa6). CARRY TO B2+B3 (in pack carry_to_b23): N1 real race, where a concurrent status poll can undo job admission's observed=None; N2 and N3 tests; N11, homed is sound only with motors energised ($1=255). Next: re-check by resuming the B1 Razor on 3eabaa6..HEAD, then the B2+B3 brief.
 
