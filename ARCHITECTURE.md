@@ -146,6 +146,7 @@ src/
     nesting.ts               — Skyline Bottom-Left-Fill bin-packing algorithm
     recentFiles.ts           — localStorage-backed recent file list
     shortcuts.ts             — Keyboard shortcut registration (includes 1-6 layer assignment)
+    editCommands.ts          — The one copy/cut/paste/delete/duplicate/flip implementation; MenuBar, CommandPalette and shortcuts.ts all call it
     speedScale.ts            — Speed-to-display scaling utilities
     variableText.ts          — Template placeholder parser, serial number generator, CSV import
     __tests__/               — Cross-module tests (creator invariants, image pipeline, ...)
