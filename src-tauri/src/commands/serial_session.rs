@@ -215,7 +215,15 @@ pub struct SerialSession {
     /// `realtime`, above the leaves. Never held across I/O. Take it only
     /// through `trust()`, which recovers poison.
     pub(crate) trust: Mutex<MotionTrust>,
+    /// Test-only interleaving hook: called with a point name at the named
+    /// schedule points (`test_point`). Production has no such field.
+    #[cfg(test)]
+    pub(crate) test_hook: Mutex<Option<TestHook>>,
 }
+
+/// A test interleaving hook (see `SerialSession::test_point`).
+#[cfg(test)]
+pub(crate) type TestHook = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
 
 impl Default for SerialSession {
     fn default() -> Self {
@@ -232,11 +240,28 @@ impl Default for SerialSession {
             snapshot_seq: AtomicU64::new(0),
             snapshot: Mutex::new(None),
             trust: Mutex::new(MotionTrust::default()),
+            #[cfg(test)]
+            test_hook: Mutex::new(None),
         }
     }
 }
 
 impl SerialSession {
+    /// Test-only schedule point. The hook is cloned out and called with the
+    /// hook mutex released, so a hook may drive other threads that reach
+    /// their own points.
+    #[cfg(test)]
+    pub(crate) fn test_point(&self, name: &str) {
+        let hook = self
+            .test_hook
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(h) = hook {
+            h(name);
+        }
+    }
+
     /// Emit a session event to the observer (if set).
     pub(crate) fn emit(&self, event: &str) {
         if let Ok(guard) = self.observer.lock() {
@@ -465,6 +490,10 @@ pub(crate) struct MotionTrust {
     pub(crate) last_conn_id: u64,
     /// When the last motion send returned (the barrier's quiesce anchor).
     pub(crate) last_motion_end: Option<Instant>,
+    /// Job admissions made (bumped under `submit` by job begin). Part of the
+    /// barrier's basis: a barrier that straddles a job admission records
+    /// nothing (Razor B1 N1).
+    pub(crate) job_admissions: u64,
 }
 
 impl MotionTrust {
@@ -533,6 +562,7 @@ pub(crate) struct BarrierBasis {
     pub(crate) trust_epoch: u64,
     pub(crate) motion_writes: u64,
     pub(crate) last_motion_end: Option<Instant>,
+    pub(crate) job_admissions: u64,
 }
 
 /// `trust` guard: poison-recovering, rank-tracked in tests.
@@ -731,9 +761,14 @@ impl SerialSession {
         self.trust().bump();
     }
 
-    /// A job was admitted (caller holds `submit`): any observation predates it.
+    /// A job was admitted (caller holds `submit`): any observation predates
+    /// it, and a barrier already under way (it holds `command`, which job
+    /// begin does not take) must not re-populate it: the admission count is
+    /// in the barrier's basis.
     pub(crate) fn trust_note_job_admitted(&self) {
-        self.trust().observed = None;
+        let mut t = self.trust();
+        t.job_admissions += 1;
+        t.observed = None;
     }
 
     /// True when the observation is not current (barrier needed).
@@ -749,6 +784,7 @@ impl SerialSession {
             trust_epoch: t.trust_epoch,
             motion_writes: t.motion_writes,
             last_motion_end: t.last_motion_end,
+            job_admissions: t.job_admissions,
         }
     }
 
@@ -768,7 +804,13 @@ impl SerialSession {
             idle_mpos,
             mpos: if idle_mpos { frame.position } else { None },
         };
-        self.trust().observed = Some(o);
+        let mut t = self.trust();
+        // A job admitted during the barrier cleared `observed` without moving
+        // the epoch or the write count; recording now would undo that clear.
+        if t.job_admissions != basis.job_admissions {
+            return;
+        }
+        t.observed = Some(o);
     }
 
     /// The trust fields as a snapshot carries them.
@@ -784,6 +826,100 @@ impl SerialSession {
             observed_seq: cur.map(|o| o.seq),
             observed_pos: cur.and_then(|o| o.mpos),
         }
+    }
+}
+
+/// Jog and connection refusal codes (B2+B3). Each is written
+/// `refused: <code>: <plain reason>`; TS shows the reason verbatim.
+pub(crate) fn refusal(code: &str) -> String {
+    let why = match code {
+        "stale-connection" => {
+            "this command was made for an earlier connection, so nothing was sent. Kerf has reconnected since."
+        }
+        "job-active" => "a job is running. Jogging waits until it ends.",
+        "stopping" => "a stop is in progress.",
+        "not-homed" => {
+            "Home the machine ($H) before jogging. Kerf jogs only from a completed Home, and a reset, an alarm, a stop, a reconnect or a machine-settings change since then needs a new Home."
+        }
+        "units" => {
+            "Kerf has not read positions in mm ($13=0) from the machine on this connection since the last settings change. Send $$, or reconnect."
+        }
+        "motion-pending" => "another motion command is still in progress.",
+        "not-observed" => {
+            "Kerf is still waiting for the machine to report that it has stopped."
+        }
+        "stale-basis" => {
+            "the position this jog was measured from is out of date. Press the arrow again."
+        }
+        _ => "refused.",
+    };
+    format!("{REFUSED_PREFIX} {code}: {why}")
+}
+
+impl SerialSession {
+    /// The stale-connection check: `conn` must be the current connection.
+    /// A disconnected session (`conn_id == 0`) has no handle either, so any
+    /// caller reaching this without a handle already failed "Not connected".
+    pub(crate) fn check_conn(&self, conn: u64) -> Result<(), String> {
+        if self.trust().conn_id != conn {
+            return Err(refusal("stale-connection"));
+        }
+        Ok(())
+    }
+
+    /// Jog admission (the enforcing gate). Takes `submit`, then `trust`, and
+    /// checks every condition; on success counts the write (`motion_writes`,
+    /// `observed = None`), releases `trust`, and calls `write` (the jog
+    /// line's one `write_all`) while still holding `submit`. A STOP's
+    /// `close_admission` needs `submit`, so it either ran entirely before the
+    /// check (and the check refuses) or waits for this one write and then
+    /// sends its `0x18` after the jog's bytes. A refusal writes nothing.
+    pub(crate) fn admit_jog_and_write(
+        &self,
+        jog_basis: Option<u64>,
+        write: impl FnOnce() -> io::Result<()>,
+    ) -> Result<io::Result<()>, String> {
+        #[cfg(test)]
+        let _rk = lock_rank::hold(lock_rank::SUBMIT, "submit");
+        let _submit = self.submit.lock().unwrap_or_else(|e| e.into_inner());
+        {
+            let mut t = self.trust();
+            let job = {
+                #[cfg(test)]
+                let _rk = lock_rank::hold(lock_rank::ADMITTED_JOB, "admitted_job");
+                self.admitted_job
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .is_some()
+            };
+            let phase = self.phase.load(Ordering::SeqCst);
+            if job || phase == PHASE_ACTIVE {
+                return Err(refusal("job-active"));
+            }
+            if phase == PHASE_STOPPING {
+                return Err(refusal("stopping"));
+            }
+            if !t.homed() {
+                return Err(refusal("not-homed"));
+            }
+            if t.units_mm != Some(t.conn_id) {
+                return Err(refusal("units"));
+            }
+            if t.motion_pending != 1 {
+                return Err(refusal("motion-pending"));
+            }
+            let Some(o) = t.current_observation() else {
+                return Err(refusal("not-observed"));
+            };
+            if jog_basis != Some(o.seq) {
+                return Err(refusal("stale-basis"));
+            }
+            t.motion_writes += 1;
+            t.observed = None;
+        }
+        #[cfg(test)]
+        self.test_point("jog_before_write");
+        Ok(write())
     }
 }
 
@@ -902,9 +1038,10 @@ fn is_motion_gcode(n: &str) -> bool {
 /// The one outbound command grammar. `Err` is a malformed payload: a line
 /// delimiter, a control byte, a non-ASCII byte, or a realtime character
 /// (`?`, `!`, `~`), any of which makes the line mean something different to
-/// GRBL than to a prefix check. In B1 an `Err` is NOT refused (the caller
-/// still writes it and records it as the worst case); the `malformed`
-/// refusal is B2+B3.
+/// GRBL than to a prefix check. From B2+B3, `serial_send` refuses an `Err`
+/// with nothing written. (The buffered job pump still classifies its lines
+/// with `.ok()` and records a malformed line as the worst case; its lines
+/// are Kerf-generated and pinned by the fixture-grammar golden.)
 pub(crate) fn classify_outbound(cmd: &str) -> Result<Outbound, String> {
     for b in cmd.bytes() {
         let why = match b {
@@ -915,7 +1052,9 @@ pub(crate) fn classify_outbound(cmd: &str) -> Result<Outbound, String> {
             _ => None,
         };
         if let Some(why) = why {
-            return Err(format!("{REFUSED_PREFIX} malformed: {why} (0x{b:02x})"));
+            return Err(format!(
+                "{REFUSED_PREFIX} malformed: {why} (0x{b:02x}). Nothing was sent. Kerf sends one command per line, with no tabs or other control characters and none of the realtime characters ? ! ~ inside it. Retype the command without them."
+            ));
         }
     }
     let n = normalize_grbl_line(cmd);

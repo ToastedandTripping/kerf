@@ -14,6 +14,11 @@ use crate::sim::scripted_port::{HandleRole, ScriptStep, ScriptedPort, TraceEvent
 
 const BANNER: &[u8] = b"Grbl 1.1h ['$' for help]\r\n";
 
+/// A console relative motion (class `Motion`). B1's tests used a `$J=` jog
+/// as their motion carrier; from B2+B3 a jog is admitted only from a clean
+/// home, mm units and a matching basis, so these tests move by console.
+const MOVE: &str = "G91 G0 X1";
+
 /// Pre-released separator hold ids.
 const SEPS: [&str; 12] = [
     "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11",
@@ -71,11 +76,11 @@ pub(super) fn rig(script: Vec<ScriptStep>) -> Rig {
 }
 
 pub(super) fn send(r: &Rig, cmd: &str) -> Result<SendOutcome, String> {
-    serial_send_inner(&r.inner, cmd, None)
+    serial_send_inner(&r.inner, cmd, None, cur(&r.inner), None)
 }
 
 pub(super) fn poll(r: &Rig) -> StatusOutcome {
-    serial_get_status_inner(&r.inner).expect("status poll")
+    serial_get_status_inner(&r.inner, cur(&r.inner)).expect("status poll")
 }
 
 /// The published snapshot as TS sees it (JSON), so the reproduce-first
@@ -167,7 +172,7 @@ fn n5_barrier_drains_a_stale_idle_and_observes_the_probe_reply() {
         sep(0),
         data(b"<Idle|MPos:11.000,0.000,0.000|FS:0,0>\r\n"),
     ]);
-    send(&r, "$J=G91 X1 F100").unwrap();
+    send(&r, MOVE).unwrap();
     let out = poll(&r);
     let snap = out.snapshot.expect("a snapshot");
     assert_eq!(
@@ -186,19 +191,25 @@ fn n5_barrier_drains_a_stale_idle_and_observes_the_probe_reply() {
 /// connection must not reach the new port. B1 adds only the identity; the
 /// refusal (and so this test going green) is B2+B3.
 #[test]
-#[ignore = "B2+B3: the conn refusal makes this green; B1 adds only conn_id bookkeeping"]
 fn n8_uncontended_stale_send_writes_nothing_to_the_new_port() {
     let old = ScriptedPort::new(vec![data(BANNER)]);
     let new = ScriptedPort::new(vec![data(BANNER), data(b"ok\r\n")]);
     let inner = Arc::new(SerialInner::default());
     let o = old.clone_with_role(HandleRole::Writer);
-    serial_connect_inner(&inner, "old", 115200, &|_| {}, &move |_, _| o.try_clone()).unwrap();
+    let old_conn = serial_connect_inner(&inner, "old", 115200, &|_| {}, &move |_, _| o.try_clone())
+        .unwrap()
+        .conn_id;
     disconnect_inner(&inner).unwrap();
     let n = new.clone_with_role(HandleRole::Writer);
     serial_connect_inner(&inner, "new", 115200, &|_| {}, &move |_, _| n.try_clone()).unwrap();
     let before = writer_bytes(&new.trace()).len();
-    // The "old connection's" send: today nothing names the connection.
-    let _ = serial_send_inner(&inner, "$J=G91 X50 F3000", None);
+    // The old connection's send names the old connection (B2+B3).
+    let res = serial_send_inner(&inner, "G91 G0 X50", None, old_conn, None);
+    assert!(
+        res.as_ref()
+            .is_err_and(|e| e.starts_with("refused: stale-connection:")),
+        "{res:?}"
+    );
     let after = writer_bytes(&new.trace());
     assert_eq!(
         after.len(),
@@ -402,7 +413,7 @@ fn n2_status_read_alarm_then_error_advances_epoch() {
         ScriptStep::Error("boom".to_string()),
     ]);
     let e = epoch(&r);
-    assert!(serial_get_status_inner(&r.inner).is_err());
+    assert!(serial_get_status_inner(&r.inner, cur(&r.inner)).is_err());
     assert_eq!(epoch(&r), e + 1, "ALARM:2 was noted before the Err");
     assert!(!tv(&r).homed);
 }
@@ -468,7 +479,7 @@ fn n5_split_stale_frame_is_completed_noted_and_discarded() {
         sep(2),
         data(b"<Idle|MPos:11.000,0.000,0.000|FS:0,0>\r\n"),
     ]);
-    send(&r, "$J=G91 X1 F100").unwrap();
+    send(&r, MOVE).unwrap();
     let out = poll(&r);
     let snap = out.snapshot.unwrap();
     assert_eq!(snap.position, Some([11.0, 0.0, 0.0]));
@@ -503,7 +514,7 @@ fn n5_still_partial_line_writes_no_probe_and_observes_nothing() {
         data(b"ok\r\n<Idle|MPos:10.000,0"),
         ScriptStep::Timeout,
     ]);
-    send(&r, "$J=G91 X1 F100").unwrap();
+    send(&r, MOVE).unwrap();
     let out = poll(&r);
     assert_eq!(out.kind, StatusKind::NoResponse);
     assert!(tv(&r).observed_seq.is_none());
@@ -516,7 +527,7 @@ fn n5_still_partial_line_writes_no_probe_and_observes_nothing() {
 #[test]
 fn n5_barrier_waits_the_quiesce_after_motion() {
     let r = rig(vec![sep(0), data(b"ok\r\n"), sep(1), data(IDLE0)]);
-    send(&r, "$J=G91 X1 F100").unwrap();
+    send(&r, MOVE).unwrap();
     let t = std::time::Instant::now();
     poll(&r);
     assert!(
@@ -537,7 +548,7 @@ fn n5_barrier_reruns_until_idle() {
         sep(2),
         data(b"<Idle|MPos:1.000,0.000,0.000|FS:0,0>\r\n"),
     ]);
-    send(&r, "$J=G91 X1 F100").unwrap();
+    send(&r, MOVE).unwrap();
     poll(&r);
     assert!(
         tv(&r).observed_seq.is_none(),
@@ -598,7 +609,7 @@ fn n6_concurrent_motion_sends_are_all_counted() {
     let pending = |r: &Rig| r.inner.session.trust().motion_pending;
     let a = {
         let inner = r.inner.clone();
-        thread::spawn(move || serial_send_inner(&inner, "$J=G91 X1 F100", None))
+        thread::spawn(move || serial_send_inner(&inner, MOVE, None, cur(&inner), None))
     };
     wait_for("A in its pump", || {
         r.base
@@ -609,7 +620,7 @@ fn n6_concurrent_motion_sends_are_all_counted() {
     assert_eq!(pending(&r), 1);
     let b = {
         let inner = r.inner.clone();
-        thread::spawn(move || serial_send_inner(&inner, "G0 X1", None))
+        thread::spawn(move || serial_send_inner(&inner, "G0 X1", None, cur(&inner), None))
     };
     wait_for("B counted while queued on command", || pending(&r) == 2);
     assert!(tv(&r).motion_pending);
@@ -626,7 +637,7 @@ fn n6_concurrent_motion_sends_are_all_counted() {
 #[test]
 fn n6_motion_guard_decrements_on_error_returns() {
     let r = rig(vec![sep(0), ScriptStep::Error("boom".to_string())]);
-    assert!(send(&r, "$J=G91 X1 F100").is_err());
+    assert!(send(&r, MOVE).is_err());
     assert_eq!(r.inner.session.trust().motion_pending, 0);
     // Non-motion sends are not counted.
     let r = rig(vec![
@@ -635,7 +646,7 @@ fn n6_motion_guard_decrements_on_error_returns() {
         data(b"ok\r\n"),
     ]);
     let inner = r.inner.clone();
-    let h = thread::spawn(move || serial_send_inner(&inner, "$G", None));
+    let h = thread::spawn(move || serial_send_inner(&inner, "$G", None, cur(&inner), None));
     wait_for("in pump", || {
         r.base
             .trace()
@@ -667,8 +678,8 @@ fn n6_job_admission_clears_the_observation() {
         tv(&r).observed_seq.is_none(),
         "admitting a job clears the observation, before any line"
     );
-    serial_send_inner(&r.inner, "G1 X1 F100", Some(job)).unwrap();
-    serial_send_inner(&r.inner, "M5", Some(job)).unwrap();
+    serial_send_inner(&r.inner, "G1 X1 F100", Some(job), cur(&r.inner), None).unwrap();
+    serial_send_inner(&r.inner, "M5", Some(job), cur(&r.inner), None).unwrap();
     serial_job_end_inner(&r.inner, job).unwrap();
     assert!(tv(&r).observed_seq.is_none());
     assert_eq!(
@@ -687,7 +698,7 @@ fn n6_job_line_write_clears_the_observation() {
     let job = serial_job_begin_inner(&r.inner).unwrap();
     poll(&r);
     assert!(tv(&r).observed_seq.is_some());
-    serial_send_inner(&r.inner, "M5", Some(job)).unwrap();
+    serial_send_inner(&r.inner, "M5", Some(job), cur(&r.inner), None).unwrap();
     assert!(
         tv(&r).observed_seq.is_none(),
         "a job line is a motion write"
@@ -906,7 +917,7 @@ fn n10_units_serialise_as_mm_on_the_snapshot() {
 fn n11_motion_send_error_after_write_revokes_homed() {
     let r = homed_rig(vec![sep(1), ScriptStep::Error("io".to_string())]);
     let e = epoch(&r);
-    assert!(send(&r, "$J=G91 X1 F100").is_err());
+    assert!(send(&r, MOVE).is_err());
     assert_eq!(epoch(&r), e + 1, "position unknown after a failed motion");
     assert!(!tv(&r).homed);
 }
@@ -930,7 +941,7 @@ fn raw_reset_and_jog_cancel_revoke_homed_other_realtime_bytes_do_not() {
         (b'?', false),
     ] {
         let r = homed_rig(vec![]);
-        send_byte_inner(&r.inner, b).unwrap();
+        send_byte_inner(&r.inner, cur(&r.inner), b).unwrap();
         assert_eq!(!tv(&r).homed, revokes, "byte 0x{b:02x}");
         assert!(r.base.trace().iter().any(
             |e| matches!(e, TraceEvent::Write { role: HandleRole::Realtime, data } if data == &[b])
@@ -947,7 +958,7 @@ fn realtime_reset_completes_while_command_lock_held_and_waits_only_on_submit() {
     let (tx, rx) = std::sync::mpsc::channel();
     let inner = r.inner.clone();
     thread::spawn(move || {
-        let _ = tx.send(send_byte_inner(&inner, 0x18));
+        let _ = tx.send(send_byte_inner(&inner, cur(&inner), 0x18));
     });
     assert!(
         rx.recv_timeout(Duration::from_millis(50)).is_err(),
@@ -1069,14 +1080,15 @@ fn grammar_flags_malformed_payloads() {
 }
 
 #[test]
-fn b1_never_refuses_a_malformed_payload_and_records_the_worst_case() {
+fn n9_a_malformed_payload_is_refused_with_nothing_written_or_counted() {
     let r = homed_rig(vec![sep(1), data(b"ok\r\n")]);
-    let out = send(&r, "G0 X1?").expect("B1 is classify-only: nothing is refused");
-    assert_eq!(out.responses, vec!["ok"]);
-    assert!(writer_bytes(&r.base.trace()).ends_with(b"G0 X1?\n"));
-    let v = tv(&r);
-    assert!(!v.homed, "a malformed write is treated as invalidating");
-    assert!(v.observed_seq.is_none(), "and as motion");
+    let before = writer_bytes(&r.base.trace()).len();
+    let v0 = tv(&r);
+    let e = send(&r, "G0 X1?").unwrap_err();
+    assert!(e.starts_with("refused: malformed:"), "{e}");
+    assert_eq!(writer_bytes(&r.base.trace()).len(), before, "zero bytes");
+    assert_eq!(tv(&r), v0, "trust untouched: nothing was written");
+    assert_eq!(r.inner.session.trust().motion_pending, 0);
 }
 
 // ── N12: source scan ───────────────────────────────────────────────────────
@@ -1182,10 +1194,10 @@ fn n13_tracked_paths_hold_nothing_afterwards() {
     // stop, a job and a reconnect, this thread holds no rank.
     let r = homed_rig(vec![sep(1), data(b"ok\r\n"), data(BANNER)]);
     let job = serial_job_begin_inner(&r.inner).unwrap();
-    serial_send_inner(&r.inner, "M5", Some(job)).unwrap();
+    serial_send_inner(&r.inner, "M5", Some(job), cur(&r.inner), None).unwrap();
     serial_job_end_inner(&r.inner, job).unwrap();
     serial_stop_inner(&r.inner, &nap);
-    send_byte_inner(&r.inner, 0x18).unwrap();
+    send_byte_inner(&r.inner, cur(&r.inner), 0x18).unwrap();
     disconnect_inner(&r.inner).unwrap();
     assert!(lock_rank::held().is_empty(), "{:?}", lock_rank::held());
 }
@@ -1197,10 +1209,10 @@ fn n13_tracked_paths_hold_nothing_afterwards() {
 /// the confirming banner it consumes at `script`'s window.
 fn stop_during_barrier(script: Vec<ScriptStep>) {
     let r = rig(script);
-    send(&r, "$J=G91 X1 F100").unwrap();
+    send(&r, MOVE).unwrap();
     let poller = {
         let inner = r.inner.clone();
-        thread::spawn(move || serial_get_status_inner(&inner))
+        thread::spawn(move || serial_get_status_inner(&inner, cur(&inner)))
     };
     wait_for("barrier holds command", || {
         r.inner.command.try_lock().is_err()
@@ -1255,7 +1267,7 @@ fn fix_n2_send_byte_bumps_before_the_reset_is_written() {
     let rt = r.inner.realtime.lock().unwrap(); // the write cannot happen yet
     let h = {
         let inner = r.inner.clone();
-        thread::spawn(move || send_byte_inner(&inner, 0x18))
+        thread::spawn(move || send_byte_inner(&inner, cur(&inner), 0x18))
     };
     wait_for("epoch bumped while the write is blocked", || {
         r.inner.session.trust().trust_epoch == e + 1
@@ -1293,7 +1305,7 @@ fn fix_partial_invalidating_line_completed_by_the_barrier_is_noted() {
         sep(3),
         data(IDLE0),
     ]);
-    send(&r, "$J=G91 X1 F100").unwrap();
+    send(&r, MOVE).unwrap();
     assert!(tv(&r).homed, "a jog alone keeps the home");
     poll(&r);
     assert!(!tv(&r).homed, "the completed ALARM:1 was noted");
