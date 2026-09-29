@@ -16,6 +16,7 @@ import type { DesignObject } from "../../app/types";
 import { useKeyboardShortcuts } from "../shortcuts";
 import { NestingDialog } from "../../components/panels/NestingDialog";
 import { ShortcutOverlay } from "../../components/panels/ShortcutOverlay";
+import { CommandPalette } from "../../components/topbar/CommandPalette";
 
 function ShortcutHarness() {
   useKeyboardShortcuts();
@@ -40,6 +41,15 @@ function CheckpointEmulator() {
     return () => window.removeEventListener("keydown", flush);
   }, []);
   return null;
+}
+function PaletteBrowserOrderHarness() {
+  useKeyboardShortcuts();
+  return (
+    <>
+      <CommandPalette />
+      <CheckpointEmulator />
+    </>
+  );
 }
 function BrowserOrderHarness() {
   useKeyboardShortcuts();
@@ -182,5 +192,20 @@ describe("F7 modal guard", () => {
     expect(useStore.getState().activeTool).toBe("rectangle");
     await act(async () => {});
     expect(document.querySelector('[aria-modal="true"]')).toBeNull();
+  });
+
+  it("Escape that closes the palette (input not focused) never reaches the global handler (browser listener timing)", async () => {
+    render(<PaletteBrowserOrderHarness />);
+    useStore.getState().addObject(makeRect("r1"));
+    useStore.getState().setSelectedIds(["r1"]);
+    useStore.setState({ activeTool: "rectangle" });
+    act(() => useStore.getState().openDialog("commandPalette"));
+    expect(document.querySelector('[aria-modal="true"]')).not.toBeNull();
+
+    keyAt(window, { key: "Escape" });
+    expect(useStore.getState().openDialogs.has("commandPalette")).toBe(false);
+    expect(useStore.getState().selectedIds).toEqual(["r1"]);
+    expect(useStore.getState().activeTool).toBe("rectangle");
+    await act(async () => {});
   });
 });
