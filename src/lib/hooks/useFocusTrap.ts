@@ -1,6 +1,7 @@
 import { useEffect, useRef, type RefObject } from "react";
 
-const FOCUSABLE_SELECTORS = [
+/** Shared with the central Tab fallback in shortcuts.ts. */
+export const FOCUSABLE_SELECTORS = [
   "a[href]",
   "button:not([disabled])",
   "input:not([disabled])",

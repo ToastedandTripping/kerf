@@ -24,8 +24,7 @@ const SRC = path.resolve(__dirname, "../..");
 
 /** Files that render aria-modal but may not call useFocusTrap, each with its reason. */
 const ALLOWLIST: Record<string, string> = {
-  "components/panels/GrblSettingsDialog.tsx":
-    "remediation-frozen file (refresh-editing-shortcuts plan, Files: out of scope); containment owed, see fix2 report",
+  "components/panels/GrblSettingsDialog.tsx": "frozen; covered by the central fallback",
 };
 
 function walk(dir: string): string[] {

@@ -142,16 +142,18 @@ describe("F7 modal guard", () => {
     expect(useStore.getState().objects[0].transform.x).toBe(11);
   });
 
-  it("Tab is not prevented inside a bare aria-modal root; after removing only that root it is", () => {
+  it("in a bare aria-modal root, a mid-list Tab is not prevented and an edge Tab is (central fallback); after removing only that root Tab is the global handler's again", () => {
     render(<ShortcutHarness />);
     const bare = render(
       <div role="dialog" aria-modal="true">
-        <button>ok</button>
+        <button>one</button>
+        <button>two</button>
       </div>
     );
-    const button = bare.container.querySelector("button")!;
-    button.focus();
-    expect(keyAt(button, { key: "Tab" }).defaultPrevented).toBe(false);
+    const [one] = Array.from(bare.container.querySelectorAll("button"));
+    one.focus();
+    // moving normally between two inside elements: left to the browser
+    expect(keyAt(one, { key: "Tab" }).defaultPrevented).toBe(false);
 
     bare.unmount(); // the harness stays mounted
     expect(keyAt(document.body, { key: "Tab" }).defaultPrevented).toBe(true);
@@ -236,5 +238,55 @@ describe("F7 modal guard", () => {
     dialog.rerender(<NestingDialog open={false} onClose={noop} />);
     keyAt(document.body, { key: "Delete" });
     expect(useStore.getState().objects[0].points).toHaveLength(2);
+  });
+
+  it("central Tab fallback contains focus in an aria-modal root that has no useFocusTrap", () => {
+    render(<ShortcutHarness />);
+    const outside = render(<button>outside</button>).container.querySelector("button")!;
+    const bare = render(
+      <div role="dialog" aria-modal="true">
+        <button>first</button>
+        <button>last</button>
+      </div>
+    );
+    const [first, last] = Array.from(bare.container.querySelectorAll("button"));
+
+    last.focus();
+    expect(keyAt(last, { key: "Tab" }).defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(first);
+
+    first.focus();
+    expect(keyAt(first, { key: "Tab", shiftKey: true }).defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(last);
+
+    outside.focus();
+    expect(keyAt(outside, { key: "Tab" }).defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(first);
+    outside.focus();
+    keyAt(outside, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it("central fallback does not double-step inside a dialog whose own trap handled the edge", () => {
+    render(<ShortcutHarness />);
+    const bare = render(
+      <div role="dialog" aria-modal="true">
+        <button>a</button>
+        <button>b</button>
+        <button>c</button>
+      </div>
+    );
+    const [a, , c] = Array.from(bare.container.querySelectorAll("button"));
+    const dialog = bare.container.firstElementChild as HTMLElement;
+    // emulate a per-dialog trap: it wraps last -> first and prevents the default
+    dialog.addEventListener("keydown", (e) => {
+      if (e.key === "Tab" && document.activeElement === c) {
+        e.preventDefault();
+        a.focus();
+      }
+    });
+    c.focus();
+    keyAt(c, { key: "Tab" });
+    expect(document.activeElement).toBe(a);
   });
 });

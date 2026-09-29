@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useStore } from "../app/store";
 import { fileOperations } from "./fileOps";
 import { handleViewportKeyDown, switchTool } from "./tools/toolHandler";
+import { FOCUSABLE_SELECTORS } from "./hooks/useFocusTrap";
 import { movePartial } from "./geometry";
 import { MIN_ZOOM, MAX_ZOOM } from "./constants";
 import {
@@ -29,6 +30,37 @@ const toolShortcuts: Record<string, ToolType> = {
 /** Hidden-but-mounted modal roots already reported (dev-only warning fires once each). */
 const warnedModals = new WeakSet<Element>();
 
+/**
+ * Central focus-containment fallback for modal roots without their own trap
+ * (GrblSettingsDialog and MaterialTestDialog are frozen). A per-dialog
+ * useFocusTrap runs first on the dialog element; if it already handled the edge
+ * (defaultPrevented) this does nothing, so there is no double step. A Tab moving
+ * normally between two inside elements is left to the browser.
+ */
+function containTab(e: KeyboardEvent, modal: Element) {
+  if (e.defaultPrevented) return;
+  const nodes = Array.from(modal.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTORS)).filter(
+    (n) => !n.closest("[disabled]") && n.checkVisibility?.() !== false
+  );
+  const active = document.activeElement;
+  if (nodes.length === 0) {
+    e.preventDefault();
+    return;
+  }
+  const first = nodes[0];
+  const last = nodes[nodes.length - 1];
+  if (!active || !modal.contains(active)) {
+    e.preventDefault();
+    (e.shiftKey ? last : first).focus();
+  } else if (e.shiftKey && active === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && active === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
 export function useKeyboardShortcuts() {
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -49,6 +81,7 @@ export function useKeyboardShortcuts() {
           warnedModals.add(modal);
           console.warn("[shortcuts] all shortcuts suppressed by a hidden aria-modal root:", modal);
         }
+        if (e.key === "Tab") containTab(e, modal);
         return;
       }
 
