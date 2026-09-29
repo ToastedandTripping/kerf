@@ -252,8 +252,16 @@ export function MenuBar() {
             action: () => useStore.getState().ungroupSelected(),
           },
           { type: "separator" },
-          { label: "Rotate 90 CW", action: () => useStore.getState().rotate90("cw") },
-          { label: "Rotate 90 CCW", action: () => useStore.getState().rotate90("ccw") },
+          {
+            label: "Rotate 90 CW",
+            shortcut: "]",
+            action: () => useStore.getState().rotate90("cw"),
+          },
+          {
+            label: "Rotate 90 CCW",
+            shortcut: "[",
+            action: () => useStore.getState().rotate90("ccw"),
+          },
           { type: "separator" },
           {
             label: "Align Left",

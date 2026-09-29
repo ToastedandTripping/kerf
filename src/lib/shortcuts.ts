@@ -279,6 +279,23 @@ export function useKeyboardShortcuts() {
         }
       }
 
+      // Snap toggle (S). Same modifier guard as the tool keys, so Shift+S does nothing.
+      if (!ctrl && !shift && !alt && key === "s") {
+        const s = useStore.getState();
+        s.setSnapToGrid(!s.snapToGrid);
+        return;
+      }
+
+      // Rotate 90 CW / CCW (] / [)
+      if (!ctrl && !alt && e.key === "]") {
+        useStore.getState().rotate90("cw");
+        return;
+      }
+      if (!ctrl && !alt && e.key === "[") {
+        useStore.getState().rotate90("ccw");
+        return;
+      }
+
       // Tool shortcuts (single key, no modifier)
       if (!ctrl && !shift && !alt && toolShortcuts[key]) {
         switchTool(toolShortcuts[key]);

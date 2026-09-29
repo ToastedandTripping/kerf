@@ -149,7 +149,7 @@ export function buildTracedPathObjects(
 
   // Fix 1: Wrap all output paths from a single image in one top-level group so
   // the whole trace moves as a unit. Without this, grid snap scatters individual
-  // letters/parts on the first drag. Users can Ungroup (Ctrl+Shift+G) if needed.
+  // letters/parts on the first drag. Users can Ungroup (Ctrl+U) if needed.
   if (allPathObjects.length <= 1) return allPathObjects;
   const groupName = imageName ? `Trace: ${imageName}` : "Traced image";
   return [buildGroupObject(allPathObjects, generateId(), groupName, layerIndex)];

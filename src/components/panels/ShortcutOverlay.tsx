@@ -21,6 +21,8 @@ const SHORTCUT_GROUPS = [
       { keys: "P", action: "Pen" },
       { keys: "T", action: "Text" },
       { keys: "N", action: "Node edit" },
+      { keys: "M", action: "Measure" },
+      { keys: "H", action: "Pan" },
     ],
   },
   {
@@ -29,6 +31,7 @@ const SHORTCUT_GROUPS = [
       { keys: "Ctrl+Z", action: "Undo" },
       { keys: "Ctrl+Shift+Z", action: "Redo" },
       { keys: "Ctrl+C / X / V", action: "Copy / Cut / Paste" },
+      { keys: "Alt+V", action: "Paste in place" },
       { keys: "Ctrl+D", action: "Duplicate" },
       { keys: "Del", action: "Delete" },
       { keys: "Ctrl+G", action: "Group" },
@@ -73,6 +76,7 @@ const SHORTCUT_GROUPS = [
       { keys: "Ctrl+Shift+A", action: "Zoom to selection" },
       { keys: "Space+drag", action: "Pan" },
       { keys: "G", action: "Toggle grid" },
+      { keys: "S", action: "Toggle snap" },
     ],
   },
 ];

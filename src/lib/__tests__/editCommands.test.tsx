@@ -241,3 +241,41 @@ describe("F3 Ctrl+Shift+V is Flip Vertical (Lee 2026-09-22)", () => {
     expect(useStore.getState().objects).toHaveLength(2);
   });
 });
+
+describe("F6 labelled keys are bound: S, ], [", () => {
+  it("S toggles snap false -> true -> false; Shift+S right after a live S does nothing; S is not an undo step", () => {
+    render(<ShortcutHarness />);
+    const snap = () => useStore.getState().snapToGrid;
+    const depth = useStore.getState().undoStack.length;
+    expect(snap()).toBe(false);
+    key({ key: "s" });
+    expect(snap()).toBe(true);
+    key({ key: "S", shiftKey: true });
+    expect(snap()).toBe(true);
+    key({ key: "s" });
+    expect(snap()).toBe(false);
+    // setSnapToGrid is a view setting (plain set), not a document edit
+    expect(useStore.getState().undoStack.length).toBe(depth);
+  });
+
+  it("] rotates +90 and [ rotates -90, each as one undo step", () => {
+    render(<ShortcutHarness />);
+    useStore.getState().addObject(makeRect("r1"));
+    useStore.getState().setSelectedIds(["r1"]);
+    const rot = () => useStore.getState().objects[0].transform.rotation;
+    const depth = () => useStore.getState().undoStack.length;
+
+    let before = depth();
+    key({ key: "]" });
+    expect(rot()).toBe(90);
+    expect(depth()).toBe(before + 1);
+
+    before = depth();
+    key({ key: "[" });
+    expect(rot()).toBe(0);
+    expect(depth()).toBe(before + 1);
+
+    key({ key: "[" });
+    expect(rot()).toBe(270);
+  });
+});

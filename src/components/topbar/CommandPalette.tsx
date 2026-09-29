@@ -225,6 +225,7 @@ function getCommands(): Command[] {
     {
       id: "view-snap",
       label: "Toggle Snap to Grid",
+      shortcut: "S",
       category: "View",
       action: () => s().setSnapToGrid(!s().snapToGrid),
     },
@@ -323,12 +324,14 @@ function getCommands(): Command[] {
     {
       id: "arr-rot90cw",
       label: "Rotate 90 CW",
+      shortcut: "]",
       category: "Arrange",
       action: () => s().rotate90("cw"),
     },
     {
       id: "arr-rot90ccw",
       label: "Rotate 90 CCW",
+      shortcut: "[",
       category: "Arrange",
       action: () => s().rotate90("ccw"),
     },
