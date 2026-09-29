@@ -97,6 +97,10 @@ export function ShortcutOverlay() {
         else s.openDialog("shortcuts");
       }
       if (e.key === "Escape" && isOpen) {
+        // This Escape is consumed. Stop the other window listeners: in a browser React
+        // commits the close before the next listener runs, so the global shortcut
+        // handler would find no modal and also deselect / switch tools.
+        e.stopImmediatePropagation();
         s.closeDialog("shortcuts");
       }
     }

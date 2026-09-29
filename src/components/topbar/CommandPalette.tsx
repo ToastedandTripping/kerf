@@ -444,6 +444,8 @@ export function CommandPalette() {
         setSelectedIndex(0);
       }
       if (e.key === "Escape" && useStore.getState().openDialogs.has("commandPalette")) {
+        // Consumed: keep it from the global shortcut handler (see ShortcutOverlay).
+        e.stopImmediatePropagation();
         useStore.getState().closeDialog("commandPalette");
       }
     }

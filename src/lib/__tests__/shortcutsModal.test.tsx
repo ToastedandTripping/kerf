@@ -8,7 +8,9 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockRejectedValue(new Error("Rust backend not available")),
 }));
 
-import { render, cleanup, fireEvent } from "@testing-library/react";
+import { useEffect } from "react";
+import { flushSync } from "react-dom";
+import { render, cleanup, fireEvent, act } from "@testing-library/react";
 import { useStore } from "../../app/store";
 import type { DesignObject } from "../../app/types";
 import { useKeyboardShortcuts } from "../shortcuts";
@@ -18,6 +20,35 @@ import { ShortcutOverlay } from "../../components/panels/ShortcutOverlay";
 function ShortcutHarness() {
   useKeyboardShortcuts();
   return null;
+}
+
+/** App.tsx shape: the hook in the parent, the sheet as a child. Child effects run
+ *  first, so the sheet's window listener is registered BEFORE the global one. */
+function AppShapedHarness() {
+  useKeyboardShortcuts();
+  return <ShortcutOverlay />;
+}
+
+/** A real browser runs a microtask checkpoint between window listeners for a
+ *  user-agent keydown, so React commits the sheet's close BEFORE the global
+ *  handler runs. jsdom (script dispatch) does not; this listener, registered
+ *  between the two, reproduces that commit with flushSync. */
+function CheckpointEmulator() {
+  useEffect(() => {
+    const flush = () => flushSync(() => {});
+    window.addEventListener("keydown", flush);
+    return () => window.removeEventListener("keydown", flush);
+  }, []);
+  return null;
+}
+function BrowserOrderHarness() {
+  useKeyboardShortcuts();
+  return (
+    <>
+      <ShortcutOverlay />
+      <CheckpointEmulator />
+    </>
+  );
 }
 
 function makeRect(id: string): DesignObject {
@@ -117,12 +148,7 @@ describe("F7 modal guard", () => {
   });
 
   it("Escape with the ? sheet open only closes the sheet; a second Escape deselects", () => {
-    render(
-      <>
-        <ShortcutHarness />
-        <ShortcutOverlay />
-      </>
-    );
+    render(<AppShapedHarness />);
     useStore.getState().addObject(makeRect("r1"));
     useStore.getState().setSelectedIds(["r1"]);
     useStore.setState({ activeTool: "rectangle" });
@@ -139,5 +165,22 @@ describe("F7 modal guard", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     expect(useStore.getState().selectedIds).toEqual([]);
     expect(useStore.getState().activeTool).toBe("select");
+  });
+
+  it("Escape that closes the ? sheet never reaches the global handler, even when the close commits first (browser listener timing)", async () => {
+    render(<BrowserOrderHarness />);
+    useStore.getState().addObject(makeRect("r1"));
+    useStore.getState().setSelectedIds(["r1"]);
+    useStore.setState({ activeTool: "rectangle" });
+    act(() => useStore.getState().openDialog("shortcuts"));
+    expect(document.querySelector('[aria-modal="true"]')).not.toBeNull();
+
+    // raw dispatch: no act batching, so the emulated checkpoint really commits the close
+    keyAt(window, { key: "Escape" });
+    expect(useStore.getState().openDialogs.has("shortcuts")).toBe(false);
+    expect(useStore.getState().selectedIds).toEqual(["r1"]);
+    expect(useStore.getState().activeTool).toBe("rectangle");
+    await act(async () => {});
+    expect(document.querySelector('[aria-modal="true"]')).toBeNull();
   });
 });
