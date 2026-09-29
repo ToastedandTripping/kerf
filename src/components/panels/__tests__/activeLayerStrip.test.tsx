@@ -27,7 +27,9 @@ function seedLayers() {
   // Use real DEFAULT_LAYERS so the store is in a consistent state
   useStore.setState({
     layers: DEFAULT_LAYERS,
-    activeLayerIndex: 0, // first layer (Cut — index 0)
+    activeLayerIndex: 0, // first layer (Engrave, fill — index 0)
+    grblMaxFeedRateX: 0,
+    grblMaxFeedRateY: 0,
   });
 }
 
@@ -90,6 +92,49 @@ describe("ActiveLayerStrip", () => {
       0, // activeLayerIndex 0
       expect.objectContaining({ speed: 1500, activePreset: undefined })
     );
+  });
+
+  describe("F9 speed field goes through clampSpeed", () => {
+    function speedChange(value: string) {
+      const updateLayerSpy = vi.fn();
+      useStore.setState({ updateLayer: updateLayerSpy } as unknown as Parameters<
+        typeof useStore.setState
+      >[0]);
+      const { getAllByRole } = render(<ActiveLayerStrip />);
+      fireEvent.change(getAllByRole("spinbutton")[1], { target: { value } });
+      return updateLayerSpy;
+    }
+
+    it("an emptied field writes speed 1, not 0", () => {
+      expect(speedChange("")).toHaveBeenCalledWith(0, expect.objectContaining({ speed: 1 }));
+    });
+
+    it('"0" writes speed 1', () => {
+      expect(speedChange("0")).toHaveBeenCalledWith(0, expect.objectContaining({ speed: 1 }));
+    });
+
+    it("line layer (Score, index 1) caps at the slower axis", () => {
+      useStore.setState({ activeLayerIndex: 1, grblMaxFeedRateX: 6000, grblMaxFeedRateY: 5000 });
+      expect(speedChange("999999")).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({ speed: 5000 })
+      );
+    });
+
+    it("fill layer (Engrave, index 0) caps at the X axis (raster sweeps X)", () => {
+      useStore.setState({ activeLayerIndex: 0, grblMaxFeedRateX: 6000, grblMaxFeedRateY: 5000 });
+      expect(speedChange("999999")).toHaveBeenCalledWith(
+        0,
+        expect.objectContaining({ speed: 6000 })
+      );
+    });
+
+    it("the input carries max = the active layer's cap", () => {
+      useStore.setState({ activeLayerIndex: 1, grblMaxFeedRateX: 6000, grblMaxFeedRateY: 5000 });
+      const { getAllByRole } = render(<ActiveLayerStrip />);
+      expect(getAllByRole("spinbutton")[1].getAttribute("max")).toBe("5000");
+      expect(getAllByRole("spinbutton")[1].getAttribute("min")).toBe("1");
+    });
   });
 
   it("returns null when no layers match activeLayerIndex", () => {

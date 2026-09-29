@@ -14,16 +14,24 @@
  */
 
 import { useStore } from "../../app/store";
+import { clampSpeed, effectiveMaxSpeed, rasterMaxSpeed } from "../../lib/speedScale";
 
 export function ActiveLayerStrip() {
   // SEPARATE scalar/stable-ref selectors — no object literal returned (Error-185 safe)
   const layers = useStore((s) => s.layers);
   const activeLayerIndex = useStore((s) => s.activeLayerIndex);
   const updateLayer = useStore((s) => s.updateLayer);
+  const grblMaxX = useStore((s) => s.grblMaxFeedRateX);
+  const grblMaxY = useStore((s) => s.grblMaxFeedRateY);
 
   // Derive active layer OUTSIDE the selector
   const active = layers.find((l) => l.index === activeLayerIndex);
   if (!active) return null;
+  // Same cap LayerPanel's SpeedInput uses (LayerPanel.tsx:546): raster layers sweep X.
+  const max =
+    active.mode === "fill" || active.mode === "fillLine"
+      ? rasterMaxSpeed(grblMaxX, grblMaxY)
+      : effectiveMaxSpeed(grblMaxX, grblMaxY);
 
   function handlePowerChange(e: React.ChangeEvent<HTMLInputElement>) {
     const val = Math.max(0, Math.min(100, Number(e.target.value)));
@@ -120,8 +128,9 @@ export function ActiveLayerStrip() {
         <input
           type="number"
           min="1"
+          max={max}
           value={active.speed}
-          onChange={(e) => handleSpeedChange(Number(e.target.value))}
+          onChange={(e) => handleSpeedChange(clampSpeed(Number(e.target.value), max))}
           style={{
             flex: 1,
             background: "var(--bg-input)",
