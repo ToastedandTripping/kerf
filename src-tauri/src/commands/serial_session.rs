@@ -196,7 +196,7 @@ pub struct SerialSession {
     /// Submission critical section: held only across a job line's admission
     /// check plus its single `write()` call (`admit_and_write`), and by the
     /// stop's admission close. Never held across a read, flush, drain, pump
-    /// wait or emit. Lock order: `command` → `submit` → `admitted_job`.
+    /// wait or emit. Lock order: `command` → `submit` → `trust` → `admitted_job`.
     pub(crate) submit: Mutex<()>,
     /// Result slot for joiners — written by the stop, read+cleared by the joiner.
     pub(crate) last_stop: Mutex<Option<StopResult>>,

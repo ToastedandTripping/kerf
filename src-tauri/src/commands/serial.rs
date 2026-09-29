@@ -11,7 +11,7 @@
 //! |-------|--------------|---------|----------|
 //! | leaf  | `session.admitted_job` | `serial_job_begin` (under `submit`), `serial_job_end`, `serial_stop_inner` (under `submit`), `admit_and_write` (under `submit`) | Microseconds (check+set) |
 //! | leaf  | `session.snapshot` | snapshot publish/read/invalidate (below `trust` and `admitted_job`) | Microseconds |
-//! | 2.7   | `session.trust` | every motion-trust transition (`SerialSession::trust()`), under `submit` in `close_admission`, `serial_job_begin` and a job line's write; under `command` + `realtime` at connect install | Microseconds; never held across I/O |
+//! | 1.5   | `session.trust` | every motion-trust transition (`SerialSession::trust()`), under `submit` in `close_admission`, `serial_job_begin` and a job line's write; under `command` + `realtime` at connect install | Microseconds; never held across I/O |
 //! | 2.5   | `session.submit` | `admit_and_write` (admission check + one `write()` of a job line), `serial_stop_inner` Step 2 (admission close), `send_byte_inner` for `0x18`/`0x85` (trust bump only, released before the write), `serial_job_begin` | Microseconds; at most one `write(2)` enqueue, bounded by the port timeout (1000 ms) |
 //! | leaf  | `session.last_stop` | `serial_stop_inner` (result write), joiner (result read) | Microseconds |
 //! | leaf  | `session.observer` | test setup, session event emission | Microseconds |
@@ -41,7 +41,7 @@
 //! - `SerialSession` tracks connection epoch, job phase, submission permits, and
 //!   the stop operation. See `serial_session.rs` for the full design.
 //! - **Job-line admission (RF-15, submission critical section).** Lock order
-//!   `command` → `submit` → `admitted_job` (leaf). Nothing takes `submit`
+//!   `command` → `submit` → `trust` → `admitted_job` (leaf). Nothing takes `submit`
 //!   while holding `realtime` or `admitted_job`, and `submit` is never held
 //!   across a read, a flush, a drain, a pump wait, or an observer emit. Every
 //!   acquisition recovers from poison. **Every job-epoch write goes through

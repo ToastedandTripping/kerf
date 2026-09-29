@@ -1098,6 +1098,12 @@ fn n12_every_read_site_is_pinned_and_hooked() {
         let src = std::fs::read_to_string(&path).unwrap();
         // Production code only: cut at the first test module.
         let prod = src.split("#[cfg(test)]\nmod ").next().unwrap();
+        // Comments do not count as a hook (or as a site).
+        let prod: String = prod
+            .lines()
+            .map(|l| l.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
         // Split into functions; a site belongs to the function it sits in,
         // and that WHOLE function must hand its lines to the hook.
         let mut chunks: Vec<(String, String)> = vec![("<none>".to_string(), String::new())];
@@ -1182,4 +1188,113 @@ fn n13_tracked_paths_hold_nothing_afterwards() {
     send_byte_inner(&r.inner, 0x18).unwrap();
     disconnect_inner(&r.inner).unwrap();
     assert!(lock_rank::held().is_empty(), "{:?}", lock_rank::held());
+}
+
+// ── Fix pass (Razor W1 + NOTEs) ────────────────────────────────────────────
+
+/// A STOP lands while the observation barrier holds `command` (quiescing
+/// after a jog). The stop's own read cannot run, so the barrier must flag
+/// the confirming banner it consumes at `script`'s window.
+fn stop_during_barrier(script: Vec<ScriptStep>) {
+    let r = rig(script);
+    send(&r, "$J=G91 X1 F100").unwrap();
+    let poller = {
+        let inner = r.inner.clone();
+        thread::spawn(move || serial_get_status_inner(&inner))
+    };
+    wait_for("barrier holds command", || {
+        r.inner.command.try_lock().is_err()
+    });
+    let res = serial_stop_inner(&r.inner, &nap);
+    poller.join().unwrap().unwrap();
+    assert!(
+        matches!(res, StopResult::Confirmed { .. }),
+        "the barrier consumed the banner; the stop must still confirm: {res:?}"
+    );
+}
+
+#[test]
+fn w1_stop_confirms_when_the_barrier_drain_takes_the_banner() {
+    stop_during_barrier(vec![
+        sep(0),
+        data(b"ok\r\n"),
+        data(BANNER),
+        sep(1),
+        data(IDLE0),
+    ]);
+}
+
+#[test]
+fn w1_stop_confirms_when_the_barrier_partial_completion_takes_the_banner() {
+    stop_during_barrier(vec![
+        sep(0),
+        data(b"ok\r\n"),
+        data(b"Grbl 1.1h ['$' fo"),
+        sep(1),
+        data(b"r help]\r\n"),
+        sep(2),
+        data(IDLE0),
+    ]);
+}
+
+#[test]
+fn w1_stop_confirms_when_the_barrier_probe_takes_the_banner() {
+    stop_during_barrier(vec![
+        sep(0),
+        data(b"ok\r\n"),
+        sep(1),
+        data(BANNER),
+        data(IDLE0),
+    ]);
+}
+
+#[test]
+fn fix_n2_send_byte_bumps_before_the_reset_is_written() {
+    let r = homed_rig(vec![]);
+    let e = epoch(&r);
+    let rt = r.inner.realtime.lock().unwrap(); // the write cannot happen yet
+    let h = {
+        let inner = r.inner.clone();
+        thread::spawn(move || send_byte_inner(&inner, 0x18))
+    };
+    wait_for("epoch bumped while the write is blocked", || {
+        r.inner.session.trust().trust_epoch == e + 1
+    });
+    drop(rt);
+    h.join().unwrap().unwrap();
+}
+
+#[test]
+fn fix_n3_job_begin_takes_submit() {
+    let r = homed_rig(vec![]);
+    let submit = r.inner.session.submit.lock().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let inner = r.inner.clone();
+    thread::spawn(move || {
+        let _ = tx.send(serial_job_begin_inner(&inner));
+    });
+    assert!(
+        rx.recv_timeout(Duration::from_millis(50)).is_err(),
+        "job admission must wait on submit"
+    );
+    drop(submit);
+    rx.recv_timeout(Duration::from_millis(500))
+        .unwrap()
+        .unwrap();
+}
+
+#[test]
+fn fix_partial_invalidating_line_completed_by_the_barrier_is_noted() {
+    let r = homed_rig(vec![
+        sep(1),
+        data(b"ok\r\nALAR"),
+        sep(2),
+        data(b"M:1\r\n"),
+        sep(3),
+        data(IDLE0),
+    ]);
+    send(&r, "$J=G91 X1 F100").unwrap();
+    assert!(tv(&r).homed, "a jog alone keeps the home");
+    poll(&r);
+    assert!(!tv(&r).homed, "the completed ALARM:1 was noted");
 }
