@@ -82,6 +82,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 ## Log (newest first)
 
+### 2026-09-29 R3 review stages complete
+The R3 batch 2 re-check is CLOSED (0 CRITICAL, 0 WARNING). Both R3 batches are reviewed and closed; the relay branch HEAD is 235ce63, clean and not merged. Next for R3: Stage 2.7 onward, per the pack next_action. The motion-trust B1 Razor re-check is still running.
+
 ### 2026-09-29 R3 batch 2 fix pass
 235ce63 (tests only): the onImportVector binding is pinned by appPdfWiring.test.tsx, and N1-N3 are pinned; vitest 1177. The Razor re-check is running (resumed). Pack next_action holds the rest of R3's close.
 
