@@ -664,6 +664,8 @@ verbatim and are not to be edited into summaries — this index points at them.
 - **`Layer.mode` is not validated when a project loads** (`fileOps/index.ts:40`, `:634`). Since E1b an unknown mode fails at Generate with a named error; validating at load would say so earlier. TS lead, not scheduled. See `### Deferred from kerf-evidence-e1b (2026-09-27)` below.
 - **A layer with `passes: 0` still omits its objects silently (Razor N1 on E1b).** The unknown-mode Err sits inside the per-pass loop, so zero passes returns Ok with nothing cut, in every mode. The UI clamps passes to at least 1; a project file can still carry 0. See `### Deferred from kerf-evidence-e1b (2026-09-27)` below.
 - **E1b test notes (Razor N2-N6).** T6's edge-reach check pools the fill and the overlay; T6 reads a bare M3/M4 as S0 (true only via the S0 pin); the README Regenerating lead-in reads as a fragment; T12 can be dodged by a rustfmt-wrapped reader; the IPC deserialisation path is untested. See `### Deferred from kerf-evidence-e1b (2026-09-27)` below.
+- **Frame qualification (S3e): an enforced per-machine "frame qualified" refusal.** The motion-trust plan claims no frame correctness. Whether jogs refuse on unqualified machines until S3e ships is for Lee (it touches the 2026-09-10 full-feature ruling). See `### Deferred from kerf-safety-motion-trust (2026-09-29)` below.
+- **Motion-trust residuals (planned 2026-09-29):** `$22=0` attestation; jobs/FRAME/material test do not require homing; no alarm-code discrimination; console motion unclipped by policy; WPos-only controllers lose jogging; a protocol barrier (`G4 P0`) if the timing barrier fails qualification. See `### Deferred from kerf-safety-motion-trust (2026-09-29)` below.
 ### Deferred from the 2026-09-05 pause/stop investigation
 
 Verbatim record of what the 2026-09-05 session established. Two defects, both owner-confirmed on
@@ -1036,6 +1038,18 @@ These steps go on the owner hardware card in ROADMAP `next` at Stage 3.5. The re
    - The README "Regenerating" lead-in reads as a fragment.
    - T12 can be dodged by a rustfmt-wrapped reader line.
    - The IPC deserialisation path is not exercised; the owner release-build check in `next` is the end-to-end proof.
+
+### Deferred from kerf-safety-motion-trust (2026-09-29)
+
+**Why these are here:** plan `.claude/plans/kerf-safety-motion-trust.md` (revision 2) indexes its deferrals at plan time (critic round 1, F7). The plan supersedes S3c revision 5, which Lee held on 2026-09-29 for a combined fix.
+
+1. **S3e, frame qualification.** A per-machine "frame qualified" state, keyed by the S3 bed key (port plus `$3/$23/$100/$101/$130/$131`). Jogs refuse until its card passes. It carries S3c revision 5's frame steps and the round-5 containment requirements: an independently verified physical stop, and scale and travel qualified before the test. The motion-trust plan makes no claim that a jog cannot reach the frame on a mis-framed machine. Whether jogs should refuse on every unqualified machine until S3e ships conflicts with Lee's 2026-09-10 full-feature ruling, so that goes to Lee.
+2. **Attestation for `$22=0` machines.** It needs a motion-free current-session window, an unambiguous physical corner and direction, the hazard shown before confirming, and hardware qualification. Until then, `$22=0` refuses jogs.
+3. **Jobs, FRAME and the material test do not require homing** (`canStartJob`, S4c). Jobs are in the motion ledger only for observation.
+4. **No alarm-code discrimination.** Every alarm revokes trust, including soft-limit alarm 2.
+5. **Console motion stays unclipped by policy.** It is counted, and refused on a stale connection or a malformed payload, but not bounded.
+6. **`$10` WPos-only controllers lose jogging** (fail closed).
+7. **A protocol-level barrier** (for example `G4 P0` synchronisation), if card step 4 disqualifies the timing-based observation barrier on the owner's controller.
 
 ## Reference
 
