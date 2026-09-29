@@ -50,7 +50,9 @@ export function NestingDialog({ open, onClose }: Props) {
 
   // Every aria-modal root contains focus (F7 made Tab inert behind modals).
   const trapRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(trapRef, open);
+  // Initial focus on the Spacing number field: the range slider paints no focus ring.
+  const spacingFieldRef = useRef<HTMLInputElement>(null);
+  useFocusTrap(trapRef, open, spacingFieldRef);
 
   if (!open) return null;
 
@@ -143,6 +145,7 @@ export function NestingDialog({ open, onClose }: Props) {
               style={{ flex: 1 }}
             />
             <input
+              ref={spacingFieldRef}
               type="number"
               min={0}
               max={20}
