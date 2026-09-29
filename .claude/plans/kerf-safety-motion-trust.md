@@ -14,7 +14,7 @@
   - B2+B3 (one releasable unit), native identity and jog admission plus the TS consumer;
   - B4, panel.
 - **Base:** `marvin/kerf-gap` at `97a72f9` or later.
-- **Revision 3.** Folds astra round 1 (`-critic-r1.md`, FAIL) and Fable round 2 (`-critic-r2.md`, FAIL on dimension 8 only; X1 and X5 sound). See the fold tables at the end.
+- **Revision 4.** Folds astra round 1 (`-critic-r1.md`, FAIL), Fable round 2 (`-critic-r2.md`, FAIL on dimension 8 only) and Fable round 3 (`-critic-r3.md`, **CONCERN, no gating FAIL**). See the fold tables at the end.
 - **Supersedes** `.claude/plans/kerf-safety-s3c.md` (revision 5, held). Per Lee, 2026-09-29, it merges S3c with S3d and the native transport fixes, "reviewed until it passes".
 - **Facts:** `.claude/plans/kerf-safety-motion-connection-facts.md` (native transport map at `a6b5d65`). Ted re-verifies every cited line before editing.
 - **Owner capture:** `scripts/probe-20260914-153729.log`.
@@ -81,11 +81,11 @@ pub(crate) struct MotionTrust {
     observed: Option<Observation>, // the latest barrier observation
     units_mm: Option<u64>,     // conn_id at which `$13=0` was read; cleared by writes/resets/errors
 }
-pub(crate) struct Observation { conn_id: u64, trust_epoch: u64, after_writes: u64, seq: u64, idle_mpos: bool }
+pub(crate) struct Observation { conn_id: u64, trust_epoch: u64, after_writes: u64, seq: u64, idle_mpos: bool, mpos: Option<[f64; 3]> } // mpos: the barrier frame's MPos when idle_mpos
 ```
 
 - **Where it lives.** `SerialSession` gains `trust: Mutex<MotionTrust>`.
-- **Lock order.** The order is `command` → `submit` → `trust` → `snapshot` → `admitted_job`. The existing table lists `submit` as 2.5 under `command` and `admitted_job` as a leaf. This plan inserts `trust` between `submit` and `snapshot`, and makes `snapshot` a leaf below `trust`. Ted amends the table at `serial.rs:5-13` and each lock's doc comment. Every holder of `trust` releases it before any I/O.
+- **Lock order.** The order is `command` → `submit` → `trust` → {`snapshot`, `admitted_job`} (both leaves), plus `realtime` → `trust` for `send_byte`'s connection check. The existing table lists `submit` as 2.5 under `command` and `admitted_job` as a leaf. This plan inserts `trust` between `submit` and `snapshot`, and makes `snapshot` a leaf below `trust`. Ted amends the table at `serial.rs:5-13` and each lock's doc comment. Every holder of `trust` releases it before any I/O.
 - **Poison.** Poison is recovered with `unwrap_or_else(|e| e.into_inner())`, as `submit` already is, so a panic in a holder can never block STOP.
 
 **One outbound command grammar** (`fn classify_outbound(cmd: &str) -> Result<Outbound, String>`) runs first in `serial_send_inner`. It refuses, with no write:
@@ -94,7 +94,7 @@ pub(crate) struct Observation { conn_id: u64, trust_epoch: u64, after_writes: u6
 - a byte `>= 0x7f`;
 - any of `?`, `!`, `~`, which are realtime characters to GRBL.
 
-Before classification, every byte `<= 0x20` (spaces and tabs; control bytes are already refused) and every `/` is deleted, and the text is upper-cased. That is what GRBL 1.1's line reader does, and what `normalizeGrblLine` does in `connection.ts:99-108`. So `$ J=G91 X1` is a Jog. Classification then works on that normalised text:
+Before classification, `(…)` comments and everything from `;` to the end of the line are removed, every byte `<= 0x20` (spaces and tabs; control bytes are already refused) and every `/` is deleted, and the text is upper-cased. GRBL 1.1's `protocol_main_loop` drops comments for `$` lines as well as G-code, so `(a)$J=G91 X50` is a jog to GRBL and is classified as `Jog` here too, gated by jog admission. That is what GRBL 1.1's line reader does, and what `normalizeGrblLine` does in `connection.ts:99-108`. So `$ J=G91 X1` is a Jog. Classification then works on that normalised text:
 - `Jog` for `$J=…`;
 - `Home` for exactly `$H`;
 - `HomeAxis` for `$H…`;
@@ -144,9 +144,9 @@ This is new and native. It runs **inside `serial_get_status_inner`** on every po
 
 1. **Hold `command`** for the whole barrier. The status poller already runs under `try_lock`, so a pump in flight means busy and no barrier.
 2. **Quiesce.** Wait `Q` ms since the last motion terminal was read. `Q` is the constant `OBSERVE_QUIESCE_MS`, default 150. Its value is a hardware-qualified parameter (see Verification, card step 4).
-3. **Drain** everything buffered: `pending`, the reader and the OS queue, through `drain_classified` with `on_line`. Every drained line is noted, and statuses are published as ordinary snapshots with `settled: false`.
+3. **Drain** everything buffered: `pending`, the reader and the OS queue, through `drain_classified` with `on_line`. Every drained line is noted, and statuses are published as ordinary snapshots, which carry no observation. **Then, if `pending` still holds a partial line, complete it with one bounded `read_until` (one read tick), note it, and publish it the same way. Only after that write the probe.** Every frame the probe can return has therefore started arriving after the drain ended.
 4. **Probe.** Write `?`, then read the first status frame after it, bounded at 500 ms.
-5. **Build the observation** from that frame: `idle_mpos` is `state == Idle` (literal) with a finite MPos. Record `after_writes = motion_writes`, the current `conn_id`, the current `trust_epoch`, and the frame's `seq`.
+5. **Build the observation** from that frame: `idle_mpos` is `state == Idle` (literal) with a finite MPos, and `mpos` is that MPos. Record `after_writes = motion_writes`, the current `conn_id`, the current `trust_epoch`, and the frame's `seq`.
 
 **Why this is a real post-motion observation**, with the assumption stated:
 - Every byte in the reader when the probe is written was drained, so the frame read after the probe was generated after the drain began, which is at least `Q` ms after the last motion `ok`.
@@ -154,7 +154,7 @@ This is new and native. It runs **inside `serial_get_status_inner`** on every po
 - **The assumption: the owner's vendor fork starts cycles within `Q` of `ok`, and transmits a report within 500 ms of `?`.** This is not assumed silently. Card step 4 qualifies it: 20 back-to-back 1 mm jogs, each checked against the observed position. Until the card passes, the ROADMAP records "software-closed, hardware-unqualified".
 - A buffered frame from an earlier busy-path `?` is either drained (it arrived within `Q`) or generated after the drain began, and so also post-`Q`.
 - **The busy-path `?`** (`serial.rs:629-644`) **can** run during the barrier. The poller's next tick finds `command` held and takes the busy branch, which writes `?` via `realtime`. That is harmless: its `?` is sent after the quiesce began, so its reply is post-quiesce like every frame the barrier can read. The barrier takes the first complete status frame read after its own probe, whichever `?` it answers.
-- **A partial line.** A status frame whose first bytes were already in `pending` when the drain ran is completed and read afterwards. It is covered by the same assumption: it was generated after the drain began, since the drain consumed every complete line, and the owner's fork emits its post-`ok` report well within `Q`, as qualified by card step 4. If the step-4 qualification fails, item 7 of the Parking Lot (a protocol barrier) replaces this.
+- **A partial line** at the drain boundary is handled by step 3: it is completed, noted and published before the probe is written, never used as the observation (critic r3 F4).
 
 The barrier's cost is at most `Q` + 500 ms per motion, on the next poll after the motion. During a pump the poller is busy as today.
 
@@ -178,6 +178,10 @@ The barrier's cost is at most `Q` + 500 ms per motion, on the next poll after th
 4. For non-jog commands: the stale-connection check; the transitions above; and the write under `command` as today.
 5. **`send_byte(conn, b)`** reads `conn_id` while holding `realtime`: the order is `realtime` → `trust`, which is added to the lock-order table. It cannot cycle, because nothing holds `trust` and waits on `realtime` or `submit`. So the check is atomic with the handle it writes. It is refused on a stale `conn`, except `0x18`. **`serial_get_status(conn)`** checks under `command` or `realtime`, whichever path it takes, and is refused on a stale `conn`.
 6. **Refusal reasons:** `stale-connection`, `malformed`, `job-active`, `stopping`, `not-homed`, `units`, `motion-pending`, `not-observed` or `stale-basis`.
+
+**`send_byte_inner`'s doc invariant changes.** The comment at `serial.rs:593-595` ("touches ONLY the realtime lock") stays true for `!`, `~` and `?`. For `0x18` and `0x85`, the call now takes `submit` for the trust bump, bounded by one in-progress `write()`, which is the fence's own bound. The pin test `realtime_write_completes_while_command_lock_held` is split: the `?`, `!` and `~` case keeps its assertion, and a new case asserts that `0x18` completes while `command` is held and blocks at most behind one `submit` holder.
+
+**The busy path.** `serial_get_status(conn)` on the busy path calls `send_byte(conn, b'?')`. A refusal for a stale `conn` is swallowed as today (`let _ =` at `:634`) and returns Busy with the last snapshot, so a stale poll during a pump never surfaces as an error.
 
 ### Snapshot and result fields (serialised to TS)
 
@@ -227,8 +231,8 @@ The barrier's cost is at most `Q` + 500 ms per motion, on the next poll after th
 
 | Batch | Files | Depends on | Releasable alone |
 |---|---|---|---|
-| B1 native line/trust state and observation barrier | `serial_session.rs`, `serial_pump.rs`, `serial.rs`, `grbl_status.rs` | none | Yes. It adds state, hooks, the barrier and snapshot fields. No refusal and no ABI break. TS ignores the new fields |
-| B2+B3 native identity and jog admission, plus the TS consumer | `serial.rs`, `serial_session.rs`, `connection.ts`, `machineStatus.ts`, `jogBounds.ts`, `store/index.ts`, `store/storeTypes.ts`, and tests | B1 | **Only together.** The ABI break (`serial_connect` shape, required `conn`/`jog_basis`) and its callers ship in one batch. **Waiver:** 7 production files over two roots, because splitting them yields an undeployable intermediate (critic F7) |
+| B1 native line/trust state and observation barrier | `serial_session.rs`, `serial_pump.rs`, `serial.rs`, `grbl_status.rs` | none | Yes. It adds state, hooks, the barrier, snapshot fields and `classify_outbound` in **classify-only** mode, which never refuses. No refusal and no ABI break. TS ignores the new fields |
+| B2+B3 native identity and jog admission, plus the TS consumer (this batch turns on `classify_outbound`'s `malformed` refusal) | `serial.rs`, `serial_session.rs`, `connection.ts`, `machineStatus.ts`, `jogBounds.ts`, `store/index.ts`, `store/storeTypes.ts`, and tests | B1 | **Only together.** The ABI break (`serial_connect` shape, required `conn`/`jog_basis`) and its callers ship in one batch. **Waiver:** 7 production files over two roots, because splitting them yields an undeployable intermediate (critic F7) |
 | B4 panel | `MachinePanel.tsx`, `machineJobLoop.test.tsx` | B2+B3 | Yes |
 | 3.5 | ROADMAP, ARCHITECTURE | B4 | none |
 
@@ -254,14 +258,14 @@ These are in-module tests using `ScriptedPort`, which records the written-bytes 
   - `$H` → `ok` with an ALARM line during the pump: no grant.
   - A banner drained at the start of the `$H` call (before the write), then `ok`, **does** grant. The drain precedes the `$H` write and its epoch bump, so the policy is "prior history is revoked; the new home re-earns it". This is stated in the transition table and pinned here.
   - `$H` → `error:9`: no grant.
-- **N4: STOP ordering (a deterministic barrier).** A `#[cfg(test)]` hook in the jog path fires after the check and before the write, and from another thread calls `serial_stop_inner`. **The hook then blocks until the spawned STOP has been observed parked on `submit`, bounded at 2 s.** It reuses the `assert_stop_parked_behind_write` pattern (`serial.rs:3716`). Only then does it let the write proceed. Without this, a mutant that writes after releasing `submit` would survive whenever the jog thread won the race.
+- **N4: STOP ordering (a deterministic barrier).** A `#[cfg(test)]` hook in the jog path fires after the check and before the write, and from another thread calls `serial_stop_inner`. **The hook then blocks until the spawned STOP has been observed parked on `submit`, bounded at 2 s.** It reuses the `assert_stop_parked_behind_write` pattern (`serial.rs:3716`). Only then does it let the write proceed. Without this, a mutant that writes after releasing `submit` would survive whenever the jog thread won the race. **The raw-reset and job-begin variants get test-only "entered" flags** (`#[cfg(test)]` atomics set just before each takes `submit`), and the hook waits on them the same way.
   - Assert STOP blocks on `submit` until the jog write finishes.
   - The trace order must be: jog bytes, then `0x18`.
   - STOP completes.
   - A second jog after STOP is refused (`stopping` or `not-homed`).
   - The same test with a raw `send_byte(0x18)` in place of STOP.
   - The same test with `serial_job_begin_inner` in place of STOP: job admission waits on `submit` and the jog is written first; a jog after it is refused `job-active`.
-- **N5: the barrier.** A scripted stream in which a stale `<Idle|MPos:10,…>` is already buffered after a jog's `ok`, and the real post-motion `<Idle|MPos:11,…>` is the reply to the barrier's `?`. The barrier drains the first, which does not become `observed`, and observes the second. A `$J=` with `jog_basis` equal to the stale frame's seq is refused `stale-basis`. With the barrier's seq, it is admitted.
+- **N5: the barrier.** (Also: a stale `<Idle|MPos:10,…>` split across the drain boundary, half of it in `pending`, is completed, noted and discarded, and the observation is the post-probe frame.) A scripted stream in which a stale `<Idle|MPos:10,…>` is already buffered after a jog's `ok`, and the real post-motion `<Idle|MPos:11,…>` is the reply to the barrier's `?`. The barrier drains the first, which does not become `observed`, and observes the second. A `$J=` with `jog_basis` equal to the stale frame's seq is refused `stale-basis`. With the barrier's seq, it is admitted.
 - **N6: the ledger.**
   - Two concurrent motion sends: the jog is refused `motion-pending`.
   - After both return, before the barrier runs: refused `not-observed`.
@@ -270,7 +274,7 @@ These are in-module tests using `ScriptedPort`, which records the written-bytes 
 - **N7: literal Idle.** `Check`, `Sleep`, `Hold`, a WPos frame, and a frame with no position all give `idle_mpos == false`.
 - **N8: stale connection.** Two schedules, because disconnect and connect both need `command` and cannot run while a test holds it (critic r2 F7).
   - **Uncontended:** disconnect and reconnect run to completion, then `serial_send(conn = old)` is called. It is refused, and the **new port's trace contains none of its bytes**.
-  - **In flight:** `serial_send(conn = old)` is parked behind a scripted pump. The reconnect completes before that pump's terminal is delivered. The parked send then acquires `command`, is refused, and writes nothing.
+  - **In flight:** a `#[cfg(test)]` hook parks `serial_send(conn = old)` **before its `command` wait**; for `send_byte`, before its `realtime` wait. The reconnect then runs to completion, and the hook releases. The parked call acquires the lock, is refused, and writes nothing. The RAII guard has decremented `motion_pending` (asserted). (Critic r3 F3: parking behind a pump cannot run, because reconnect needs `command`.)
   - The same two schedules for `send_byte(0x21, old)` (refused) and `serial_get_status(old)` (refused). `send_byte(0x18, old)` is written: that is the exception.
 - **N9: grammar.** `$J=G91 X1\n$J=G91 X50` is refused `malformed` with zero bytes. So are `$J=G91 X1\r`, `G0 X1\x18`, `$J=G91 X1?`, and a non-ASCII byte. `  $j=g91 x1 f100 `, `$ J=G91 X1` and `$J =G91X1` are each normalised and classified as Jog. `$N0=G21` is a settings write, and it clears units.
 - **N10: units.**
@@ -284,7 +288,7 @@ These are in-module tests using `ScriptedPort`, which records the written-bytes 
   - A banner does not clear units by itself, but it revokes homed. Units live with the connection plus writes. A controller reset also resets the controller's `$13` to its EEPROM value, which is the value `$$` read, so the units stay truthful. This is stated as an assumption and flagged for the card.
 - **N11: motion I/O error.** A motion send whose write succeeds and whose pump then errs: the epoch advances, and the next jog is refused `not-homed`.
 - **N12: source scan** (the E1b T12 pattern). Every `read_until(` and `pending.drain(` site under `src/commands` is in the pinned list of six, and each passes an `on_line` closure. The count is exact, so a new read site turns the test red. Behaviourally, N1 exercises each site's callback effect.
-- **N13: lock order.** A `#[cfg(test)]` debug assertion (a thread-local lock-rank tracker around `submit`, `trust` and `snapshot`) runs across N4-N8 and panics on an inversion.
+- **N13: lock order.** A `#[cfg(test)]` debug assertion (a thread-local lock-rank tracker ranking `command`, `submit`, `realtime`, `trust`, `snapshot` and `admitted_job`, so the `realtime` → `trust` edge and the connect install are inside it) runs across N4-N8 and panics on an inversion.
 - **Unchanged:** the existing suites (the fence, stop, golden, `mod sim_integration` and the full suite) pass unchanged. The existing `send_byte` tests are updated only for the new `conn` argument, and each change is listed.
 
 ### TS
@@ -303,6 +307,7 @@ These are in-module tests using `ScriptedPort`, which records the written-bytes 
   - At `emergencyStop()` the arrows disable at once (HOME) with no snapshot. A later snapshot with `homed: false` keeps them disabled.
   - At a motion send's entry they show MOTION at once.
 - **T-C8: `settingsGeneration`** bumps on disconnect.
+- **T-C9: fixture grammar golden.** Every committed job fixture and golden G-code line passes `classify_outbound` (exported for the test through a small Tauri-free Rust unit test over `tests/golden/*.gcode`) with no `malformed`. So a generator change that emits a tab-only line, a `\r` or a non-ASCII byte turns a test red, rather than refusing a job at the bench. `jobStream.ts:339` splits on `\n`.
 - **T-P1: the panel.** Titles for each reason. The three hold-note causes react to store changes (fake timers) without a remount.
 
 **Reproduce first.** For B1, write N1 (drain and status sites), N5 and N8 against the current behaviour first. N8's trace shows today's stale write, and N5 shows today's stale Idle accepted as the latest snapshot. For B2+B3, write T-C1 and T-C5 first.
@@ -407,7 +412,7 @@ Ted writes each `find` from the committed code, and `grep -cF` must be 1 for eac
   - A frame-affecting settings write revokes homed.
 - **Proposed at close, for Lee's yes (Engineering pins):**
   - (a) Amend the 2026-09-24 fence pin: "…and jog lines and the raw reset/cancel byte share the same critical section."
-  - (b) New pin: "A `$J=` jog is written only if the native session admits it inside `submit`: the current connection, a clean home at the current trust epoch, mm units, no pending motion, and a barrier observation since the last motion write, matching the jog's basis. TS clipping is advisory."
+  - (b) New pin: "A `$J=` jog is written only if the native session admits it inside `submit`: the current connection, a clean home at the current trust epoch, mm units, no pending motion, and a barrier observation since the last motion write, matching the jog's basis. The clip is computed in TS from the basis that native names; native verifies the basis, the home, the units and the observation, not the geometry."
 - **For Lee at close:** whether jogs refuse on machines whose frame is unqualified until S3e ships. See Out of scope 1.
 
 ## Fold table: critic round 1 (astra, FAIL)
@@ -438,4 +443,15 @@ Ted writes each `find` from the committed code, and `grep -cF` must be 1 for eac
 | F7: N8 and N4 cannot run as written | Yes. Disconnect and connect take `command`, and the N4 race is unforced | N8 has two runnable schedules. N4's hook waits for STOP to be parked on `submit` (the `serial.rs:3716` pattern) |
 | F2: busy-path claim false; partial line | Yes | The claim is restated: a busy `?` during the barrier is post-quiesce, so harmless. The partial-line case is covered by the qualified assumption |
 | F8: card clearance arithmetic | Yes | Step 4 requires at least 60 mm measured on +X and at least 20 mm on −X |
+
+## Fold table: critic round 3 (Fable, CONCERN, no gating FAIL)
+
+| Finding | Change |
+|---|---|
+| F1: `Observation` has no position; `settled` undefined | `Observation.mpos`, taken from the barrier frame, is the source of `observedPos`. `settled` is removed from the snapshot language (barrier drains publish ordinary snapshots with no observation) |
+| F2: `Jog` is comment-sensitive | `(…)` and `;…` are stripped before classifying, as GRBL does. `(a)$J=G91 X50` is `Jog` and gated. N9 gains the comment cases |
+| F3: N8 in-flight and N4 variants cannot run | N8 parks the call before its `command`/`realtime` wait and asserts the RAII decrement. N4's raw-reset and job-begin variants get test-only entered flags |
+| F4: partial-line reasoning | The barrier completes and notes any partial line before the probe. N5 gets a split-frame case |
+| F5: round-2 P2 items dropped | Pin (b) is reworded. The `send_byte_inner` doc invariant is amended and its pin test split. T-C9 adds a fixture grammar golden |
+| F6 (advisory) | The lock-order chain is written with the leaves grouped. N13 ranks every lock. `malformed` is assigned to B2+B3 (B1 classifies only). The busy-path refusal is swallowed as today. The UNITS reason already says to send `$$` (S3c rev 5 text) |
 
