@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
 import { useStore } from "../../app/store";
 import { fileOperations } from "../../lib/fileOps";
 import {
@@ -9,6 +10,8 @@ import {
   openVariableText,
   openNesting,
 } from "../../app/App";
+import { switchTool } from "../../lib/tools/toolHandler";
+import { deleteSelection, duplicateSelection, flipSelection } from "../../lib/editCommands";
 
 interface Command {
   id: string;
@@ -120,19 +123,14 @@ function getCommands(): Command[] {
       label: "Duplicate",
       shortcut: "Ctrl+D",
       category: "Edit",
-      action: () => s().duplicateInPlace(),
+      action: () => duplicateSelection(),
     },
     {
       id: "edit-delete",
       label: "Delete Selected",
       shortcut: "Del",
       category: "Edit",
-      action: () => {
-        const store = s();
-        store.withUndo("delete", () => {
-          store.removeObjects(store.selectedIds);
-        });
-      },
+      action: () => deleteSelection(),
     },
     {
       id: "edit-convert-path",
@@ -158,49 +156,63 @@ function getCommands(): Command[] {
       label: "Select Tool",
       shortcut: "V",
       category: "Tools",
-      action: () => s().setActiveTool("select"),
+      action: () => switchTool("select"),
     },
     {
       id: "tool-rect",
       label: "Rectangle Tool",
       shortcut: "R",
       category: "Tools",
-      action: () => s().setActiveTool("rectangle"),
+      action: () => switchTool("rectangle"),
     },
     {
       id: "tool-ellipse",
       label: "Ellipse Tool",
       shortcut: "E",
       category: "Tools",
-      action: () => s().setActiveTool("ellipse"),
+      action: () => switchTool("ellipse"),
     },
     {
       id: "tool-line",
       label: "Line Tool",
       shortcut: "L",
       category: "Tools",
-      action: () => s().setActiveTool("line"),
+      action: () => switchTool("line"),
     },
     {
       id: "tool-pen",
       label: "Pen Tool",
       shortcut: "P",
       category: "Tools",
-      action: () => s().setActiveTool("pen"),
+      action: () => switchTool("pen"),
     },
     {
       id: "tool-text",
       label: "Text Tool",
       shortcut: "T",
       category: "Tools",
-      action: () => s().setActiveTool("text"),
+      action: () => switchTool("text"),
     },
     {
       id: "tool-node",
       label: "Node Edit Tool",
       shortcut: "N",
       category: "Tools",
-      action: () => s().setActiveTool("node"),
+      action: () => switchTool("node"),
+    },
+    {
+      id: "tool-measure",
+      label: "Measure Tool",
+      shortcut: "M",
+      category: "Tools",
+      action: () => switchTool("measure"),
+    },
+    {
+      id: "tool-pan",
+      label: "Pan Tool",
+      shortcut: "H",
+      category: "Tools",
+      action: () => switchTool("pan"),
     },
 
     // View
@@ -214,6 +226,7 @@ function getCommands(): Command[] {
     {
       id: "view-snap",
       label: "Toggle Snap to Grid",
+      shortcut: "S",
       category: "View",
       action: () => s().setSnapToGrid(!s().snapToGrid),
     },
@@ -300,23 +313,26 @@ function getCommands(): Command[] {
       label: "Flip Horizontal",
       shortcut: "Ctrl+Shift+H",
       category: "Arrange",
-      action: () => s().flipObjects("horizontal"),
+      action: () => flipSelection("horizontal"),
     },
     {
       id: "arr-flip-v",
       label: "Flip Vertical",
+      shortcut: "Ctrl+Shift+V",
       category: "Arrange",
-      action: () => s().flipObjects("vertical"),
+      action: () => flipSelection("vertical"),
     },
     {
       id: "arr-rot90cw",
       label: "Rotate 90 CW",
+      shortcut: "]",
       category: "Arrange",
       action: () => s().rotate90("cw"),
     },
     {
       id: "arr-rot90ccw",
       label: "Rotate 90 CCW",
+      shortcut: "[",
       category: "Arrange",
       action: () => s().rotate90("ccw"),
     },
@@ -413,7 +429,8 @@ function getCommands(): Command[] {
 }
 
 export function CommandPalette() {
-  const [open, setOpen] = useState(false);
+  // Open state lives in the store's openDialogs, like every other dialog.
+  const open = useStore((s) => s.openDialogs.has("commandPalette"));
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -423,17 +440,19 @@ export function CommandPalette() {
     function handleKeyDown(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setOpen(true);
+        useStore.getState().openDialog("commandPalette");
         setQuery("");
         setSelectedIndex(0);
       }
-      if (e.key === "Escape" && open) {
-        setOpen(false);
+      if (e.key === "Escape" && useStore.getState().openDialogs.has("commandPalette")) {
+        // Consumed: keep it from the global shortcut handler (see ShortcutOverlay).
+        e.stopImmediatePropagation();
+        useStore.getState().closeDialog("commandPalette");
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open]);
+  }, []);
 
   // Focus input when opened
   useEffect(() => {
@@ -441,6 +460,10 @@ export function CommandPalette() {
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [open]);
+
+  // Every aria-modal root contains focus (F7 made Tab inert behind modals).
+  const trapRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(trapRef, open);
 
   if (!open) return null;
 
@@ -454,7 +477,7 @@ export function CommandPalette() {
         });
 
   const handleSelect = (cmd: Command) => {
-    setOpen(false);
+    useStore.getState().closeDialog("commandPalette");
     cmd.action();
   };
 
@@ -475,7 +498,7 @@ export function CommandPalette() {
     <>
       {/* Backdrop */}
       <div
-        onClick={() => setOpen(false)}
+        onClick={() => useStore.getState().closeDialog("commandPalette")}
         style={{
           position: "fixed",
           inset: 0,
@@ -485,6 +508,7 @@ export function CommandPalette() {
       />
       {/* Palette */}
       <div
+        ref={trapRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="command-palette-title"

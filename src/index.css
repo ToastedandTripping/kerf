@@ -103,6 +103,13 @@ input[type="number"]::-webkit-inner-spin-button {
   outline: none;
 }
 
+/* A non-interactive dialog root that useFocusTrap focused programmatically
+   (tabindex -1, e.g. the ? sheet) draws no ring round its whole frame.
+   Controls inside dialogs keep theirs. */
+[role="dialog"][tabindex="-1"]:focus-visible {
+  outline: none;
+}
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;

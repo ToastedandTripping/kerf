@@ -2,8 +2,15 @@ import { useState, useRef, useCallback } from "react";
 import { useStore } from "../../app/store";
 import { fileOperations } from "../../lib/fileOps";
 import { getRecentFiles, clearRecentFiles } from "../../lib/recentFiles";
-import { movePartial } from "../../lib/geometry";
 import { MIN_ZOOM, MAX_ZOOM } from "../../lib/constants";
+import {
+  copySelection,
+  cutSelection,
+  deleteSelection,
+  pasteClipboard,
+  duplicateSelection,
+  flipSelection,
+} from "../../lib/editCommands";
 import { resetOnboarding } from "../panels/OnboardingOverlay";
 import {
   openMaterialTest,
@@ -14,6 +21,7 @@ import {
   openGrblSettings,
   openSettings,
   openProjectNotes,
+  openKeyboardShortcuts,
 } from "../../app/App";
 
 function buildRecentFilesItems(): MenuItem[] {
@@ -130,14 +138,14 @@ export function MenuBar() {
           { label: "Undo", shortcut: "Ctrl+Z", action: () => useStore.getState().undo() },
           { label: "Redo", shortcut: "Ctrl+Shift+Z", action: () => useStore.getState().redo() },
           { type: "separator" },
-          { label: "Cut", shortcut: "Ctrl+X", action: () => clipboardOp("cut") },
-          { label: "Copy", shortcut: "Ctrl+C", action: () => clipboardOp("copy") },
-          { label: "Paste", shortcut: "Ctrl+V", action: () => clipboardOp("paste") },
-          { label: "Paste in Place", shortcut: "Alt+V", action: () => clipboardOp("pasteInPlace") },
+          { label: "Cut", shortcut: "Ctrl+X", action: cutSelection },
+          { label: "Copy", shortcut: "Ctrl+C", action: copySelection },
+          { label: "Paste", shortcut: "Ctrl+V", action: () => pasteClipboard(false) },
+          { label: "Paste in Place", shortcut: "Alt+V", action: () => pasteClipboard(true) },
           {
             label: "Duplicate",
             shortcut: "Ctrl+D",
-            action: () => useStore.getState().duplicateInPlace(),
+            action: duplicateSelection,
           },
           { type: "separator" },
           {
@@ -180,12 +188,7 @@ export function MenuBar() {
           {
             label: "Delete",
             shortcut: "Del",
-            action: () => {
-              const s = useStore.getState();
-              s.withUndo("delete", () => {
-                s.removeObjects(s.selectedIds);
-              });
-            },
+            action: deleteSelection,
           },
         ]}
       />
@@ -249,8 +252,16 @@ export function MenuBar() {
             action: () => useStore.getState().ungroupSelected(),
           },
           { type: "separator" },
-          { label: "Rotate 90 CW", action: () => useStore.getState().rotate90("cw") },
-          { label: "Rotate 90 CCW", action: () => useStore.getState().rotate90("ccw") },
+          {
+            label: "Rotate 90 CW",
+            shortcut: "]",
+            action: () => useStore.getState().rotate90("cw"),
+          },
+          {
+            label: "Rotate 90 CCW",
+            shortcut: "[",
+            action: () => useStore.getState().rotate90("ccw"),
+          },
           { type: "separator" },
           {
             label: "Align Left",
@@ -287,12 +298,12 @@ export function MenuBar() {
           {
             label: "Flip Horizontal",
             shortcut: "Ctrl+Shift+H",
-            action: () => useStore.getState().flipObjects("horizontal"),
+            action: () => flipSelection("horizontal"),
           },
           {
             label: "Flip Vertical",
             shortcut: "Ctrl+Shift+V",
-            action: () => useStore.getState().flipObjects("vertical"),
+            action: () => flipSelection("vertical"),
           },
           { type: "separator" },
           {
@@ -413,7 +424,7 @@ export function MenuBar() {
           {
             label: "Keyboard Shortcuts",
             shortcut: "?",
-            action: () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "?" })),
+            action: () => openKeyboardShortcuts(),
           },
           { type: "separator" },
           {
@@ -439,37 +450,6 @@ export function MenuBar() {
       </span>
     </div>
   );
-}
-
-// Test-only export — exercises the production paste/duplicate offset writer
-// without driving the menu UI. Not imported by production code.
-export { clipboardOp as _testClipboardOp };
-
-function clipboardOp(op: "cut" | "copy" | "paste" | "pasteInPlace") {
-  const s = useStore.getState();
-  if (op === "copy" || op === "cut") {
-    const selected = s.objects.filter((o) => s.selectedIds.includes(o.id));
-    s.setClipboard(selected);
-    if (op === "cut") {
-      s.withUndo("cut", () => {
-        s.removeObjects(s.selectedIds);
-      });
-    }
-  } else if (op === "paste" || op === "pasteInPlace") {
-    s.withUndo("paste", () => {
-      const { clipboard, addObject } = s;
-      const offset = op === "pasteInPlace" ? 0 : 10;
-      // W1b: movePartial shifts path points with the offset and returns fresh
-      // points arrays (clipboard objects hold live references to store points).
-      const newObjects = clipboard.map((o) => ({
-        ...o,
-        id: `obj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        ...movePartial(o, o.transform.x + offset, o.transform.y + offset),
-      }));
-      newObjects.forEach(addObject);
-      s.setSelectedIds(newObjects.map((o) => o.id));
-    });
-  }
 }
 
 interface MenuItem {

@@ -86,8 +86,10 @@ export function ImageImportDialog({
       imageData: imageData || undefined,
     };
 
-    store.addObject(obj);
-    store.setSelectedIds([obj.id]);
+    store.withUndo("image-import", () => {
+      store.addObject(obj);
+      store.setSelectedIds([obj.id]);
+    });
     const dpiNote = widthMmOverride ? "from source DPI" : `at ${effectiveDpi.toFixed(0)} dpi`;
     store.addConsoleLine(
       `Imported ${fileName} to ${layers[selectedLayer]?.name}${imageWidth > 0 ? ` (${imageWidth}x${imageHeight}px)` : ""} ${effectiveWidthMm.toFixed(0)}x${effectiveHeightMm.toFixed(0)}mm ${dpiNote}`,

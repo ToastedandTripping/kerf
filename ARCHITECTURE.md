@@ -129,7 +129,10 @@ src/
       toolHandler.ts         — Pointer event state machines for all tools, snap guides
     hooks/
       useEscapeClose.ts      — Escape-to-close for modal dialogs
-      useFocusTrap.ts        — Keyboard focus trap for modal dialogs
+      useFocusTrap.ts        — Keyboard focus trap for modal dialogs. Contract: every aria-modal root
+                               calls it (pinned by a source scan with a reasoned allowlist); focus
+                               moves in on open (optional initial target), Tab wraps, and focus is
+                               restored on close only if it is on body or inside the closing dialog.
     autoSave.ts              — 60s periodic save to Tauri appDataDir, crash recovery
     constants.ts             — Shared constants (PX_PER_MM, MM_PER_INCH, zoom limits, formatTime)
     fileDrop.ts              — Drag-and-drop file handler (SVG/DXF/image/PDF detection)
@@ -145,7 +148,11 @@ src/
     measure.ts               — Pure helpers for the Measure tool
     nesting.ts               — Skyline Bottom-Left-Fill bin-packing algorithm
     recentFiles.ts           — localStorage-backed recent file list
-    shortcuts.ts             — Keyboard shortcut registration (includes 1-6 layer assignment)
+    shortcuts.ts             — Keyboard shortcut registration (includes 1-6 layer assignment). First
+                               statement: any mounted [aria-modal="true"] makes every global shortcut
+                               inert (modals unmount when closed), with a central Tab containment
+                               fallback for modals without their own trap.
+    editCommands.ts          — The one copy/cut/paste/delete/duplicate/flip implementation; MenuBar, CommandPalette and shortcuts.ts all call it
     speedScale.ts            — Speed-to-display scaling utilities
     variableText.ts          — Template placeholder parser, serial number generator, CSV import
     __tests__/               — Cross-module tests (creator invariants, image pipeline, ...)

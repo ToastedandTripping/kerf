@@ -110,8 +110,10 @@ export function importImageData(data: Uint8Array, ext: string) {
       imageData: base64,
     };
 
-    store.addObject(obj);
-    store.setSelectedIds([obj.id]);
+    store.withUndo("image-import", () => {
+      store.addObject(obj);
+      store.setSelectedIds([obj.id]);
+    });
     const dpiNote = detectedDpi ? ` at ${detectedDpi.toFixed(0)} DPI` : " (300 DPI assumed)";
     store.addConsoleLine(
       `Image imported: ${img.width}x${img.height}px → ${widthMm.toFixed(0)}x${heightMm.toFixed(0)}mm${dpiNote}`,
