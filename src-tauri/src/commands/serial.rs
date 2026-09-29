@@ -11,8 +11,8 @@
 //! |-------|--------------|---------|----------|
 //! | leaf  | `session.admitted_job` | `serial_job_begin` (under `submit`), `serial_job_end`, `serial_stop_inner` (under `submit`), `admit_and_write` (under `submit`) | Microseconds (check+set) |
 //! | leaf  | `session.snapshot` | snapshot publish/read/invalidate (below `trust` and `admitted_job`) | Microseconds |
-//! | 1.5   | `session.trust` | every motion-trust transition (`SerialSession::trust()`), under `submit` in `close_admission`, `serial_job_begin` and a job line's write; under `command` + `realtime` at connect install | Microseconds; never held across I/O |
-//! | 2.5   | `session.submit` | `admit_and_write` (admission check + one `write()` of a job line), `serial_stop_inner` Step 2 (admission close), `send_byte_inner` for `0x18`/`0x85` (trust bump only, released before the write), `serial_job_begin` | Microseconds; at most one `write(2)` enqueue, bounded by the port timeout (1000 ms) |
+//! | 1.5   | `session.trust` | every motion-trust transition (`SerialSession::trust()`), under `submit` in `close_admission`, `serial_job_begin` and a job line's write; under `command` + `realtime` at connect install; under `submit` in jog admission (`admit_jog_and_write`); under `realtime` for `send_byte`'s connection check; under `command` for the send and status connection checks | Microseconds; never held across I/O |
+//! | 2.5   | `session.submit` | `admit_and_write` (admission check + one `write()` of a job line), `admit_jog_and_write` (jog admission check + one `write()` of the jog line), `serial_stop_inner` Step 2 (admission close), `send_byte_inner` for `0x18`/`0x85` (trust bump only, released before the write), `serial_job_begin` | Microseconds; at most one `write(2)` enqueue, bounded by the port timeout (1000 ms) |
 //! | leaf  | `session.last_stop` | `serial_stop_inner` (result write), joiner (result read) | Microseconds |
 //! | leaf  | `session.observer` | test setup, session event emission | Microseconds |
 //! | 2     | `realtime` | `send_byte_inner`, `serial_stop_inner` (for `0x18`), `disconnect_inner_with_job`, connect install (then `trust`) | Microseconds (one byte + flush) |
@@ -723,8 +723,8 @@ pub async fn serial_send(
     tokio::task::spawn_blocking(move || {
         serial_send_inner(&inner, &command, job_epoch, conn, jog_basis)
     })
-        .await
-        .map_err(|e| format!("Task join error: {}", e))?
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 /// Tests: the session's current connection id (what TS would pass as `conn`).
@@ -847,6 +847,8 @@ pub(crate) fn serial_get_status_inner(
     inner: &SerialInner,
     conn: u64,
 ) -> Result<StatusOutcome, String> {
+    #[cfg(test)]
+    inner.session.test_point("status_before_command");
     let mut guard = match inner.command.try_lock() {
         Ok(g) => g,
         Err(TryLockError::WouldBlock) => {
@@ -1401,6 +1403,8 @@ pub(crate) fn serial_stop_inner(inner: &SerialInner, sleeper: &dyn Fn(Duration))
             });
         }
     };
+    #[cfg(test)]
+    session.test_point("stop_entered");
 
     // Step 2: Close admission inside the submission critical section
     // (`submit` → `admitted_job`). A writer holding `submit` finishes its one
@@ -4263,6 +4267,134 @@ mod rf15 {
         .map(|b| b.deserialize::<serde_json::Value>().unwrap())
     }
 
+    /// B2+B3: the three conn-carrying commands behind the real IPC layer.
+    fn ipc_call(
+        inner: Arc<SerialInner>,
+        cmd: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, serde_json::Value> {
+        let app = tauri::test::mock_builder()
+            .manage(SerialState(inner))
+            .invoke_handler(tauri::generate_handler![
+                serial_send,
+                serial_send_byte,
+                serial_get_status
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+        tauri::test::get_ipc_response(
+            &webview,
+            tauri::webview::InvokeRequest {
+                cmd: cmd.into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: "http://tauri.localhost".parse().unwrap(),
+                body: tauri::ipc::InvokeBody::Json(body),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_string(),
+            },
+        )
+        .map(|b| b.deserialize::<serde_json::Value>().unwrap())
+    }
+
+    /// B2+B3: `conn` is required on all three commands (an omitted key is
+    /// rejected before the body runs, so nothing is written), and the IPC
+    /// key `jogBasis` reaches jog admission.
+    #[test]
+    fn b23_ipc_conn_is_required_and_jog_basis_reaches_admission() {
+        ScriptedPort::run_scenario(
+            || {
+                let (inner, base) = rig(vec![ScriptStep::Data(b"ok\r\n")]);
+                let writes = |b: &ScriptedPort| {
+                    b.trace()
+                        .iter()
+                        .filter(|t| matches!(t, TraceEvent::Write { .. }))
+                        .count()
+                };
+                for (cmd, body) in [
+                    ("serial_send", serde_json::json!({"command": "$G"})),
+                    ("serial_send_byte", serde_json::json!({"byte": 33})),
+                    ("serial_get_status", serde_json::json!({})),
+                ] {
+                    let r = ipc_call(inner.clone(), cmd, body);
+                    assert!(r.is_err(), "{cmd} without conn must be rejected: {r:?}");
+                }
+                assert_eq!(writes(&base), 0, "nothing written without conn");
+
+                // Seed an admissible jog state on connection 3.
+                {
+                    let mut t = inner.session.trust();
+                    t.conn_id = 3;
+                    t.homed_at = Some(t.trust_epoch);
+                    t.units_mm = Some(3);
+                    t.observed = Some(serial_session::Observation {
+                        conn_id: 3,
+                        trust_epoch: t.trust_epoch,
+                        after_writes: t.motion_writes,
+                        seq: 41,
+                        idle_mpos: true,
+                        mpos: Some([0.0, 0.0, 0.0]),
+                    });
+                }
+                let jog = "$J=G21 G91 X1.000 F100";
+                // A misspelt basis key deserialises to None: refused.
+                let r = ipc_call(
+                    inner.clone(),
+                    "serial_send",
+                    serde_json::json!({"command": jog, "conn": 3, "jog_basis": 41}),
+                );
+                assert!(
+                    r.as_ref().is_err_and(|e| e
+                        .as_str()
+                        .unwrap_or_default()
+                        .starts_with("refused: stale-basis:")),
+                    "{r:?}"
+                );
+                assert_eq!(writes(&base), 0);
+                // A stale conn is refused.
+                let r = ipc_call(
+                    inner.clone(),
+                    "serial_send",
+                    serde_json::json!({"command": jog, "conn": 2, "jogBasis": 41}),
+                );
+                assert!(
+                    r.as_ref().is_err_and(|e| e
+                        .as_str()
+                        .unwrap_or_default()
+                        .starts_with("refused: stale-connection:")),
+                    "{r:?}"
+                );
+                // The real keys admit it.
+                let r = ipc_call(
+                    inner.clone(),
+                    "serial_send",
+                    serde_json::json!({"command": jog, "conn": 3, "jogBasis": 41}),
+                );
+                // The refused attempts' drains consumed the scripted `ok`, so
+                // this pump may end on EOF; the write is what is asserted.
+                if let Ok(v) = &r {
+                    assert_eq!(v["connId"], 3);
+                } else {
+                    assert!(
+                        r.as_ref().is_err_and(|e| e
+                            .as_str()
+                            .unwrap_or_default()
+                            .starts_with("disconnected:")),
+                        "admitted, then the pump ended on EOF: {r:?}"
+                    );
+                }
+                assert!(base.trace().iter().any(
+                    |t| matches!(t, TraceEvent::Write { data, .. } if data == b"$J=G21 G91 X1.000 F100\n")
+                ));
+            },
+            SCENARIO,
+        )
+        .unwrap();
+    }
+
     /// R1: the literal IPC key `jobEpoch` reaches the real
     /// `#[tauri::command] serial_send` body and fences the job line.
     #[test]
@@ -4388,7 +4520,8 @@ mod rf15 {
 
                 let lock = inner.command.lock().unwrap();
                 let i2 = inner.clone();
-                let sender = thread::spawn(move || serial_send_inner(&i2, "G1 X9", Some(e), cur(&i2), None));
+                let sender =
+                    thread::spawn(move || serial_send_inner(&i2, "G1 X9", Some(e), cur(&i2), None));
                 wait_until("permit_prechecked", || {
                     has_session_event(&base, "permit_prechecked")
                 });
@@ -4439,7 +4572,8 @@ mod rf15 {
                 base.hold_next_write(HandleRole::Writer, "line");
 
                 let i2 = inner.clone();
-                let sender = thread::spawn(move || serial_send_inner(&i2, "G1 X5", Some(e), cur(&i2), None));
+                let sender =
+                    thread::spawn(move || serial_send_inner(&i2, "G1 X5", Some(e), cur(&i2), None));
                 wait_until("write parked", || has_hold_reached(&base, "line"));
 
                 let i3 = inner.clone();
@@ -4621,7 +4755,8 @@ mod rf15 {
 
                 let lock = inner.command.lock().unwrap();
                 let i2 = inner.clone();
-                let sender = thread::spawn(move || serial_send_inner(&i2, "G1 X9", Some(e), cur(&i2), None));
+                let sender =
+                    thread::spawn(move || serial_send_inner(&i2, "G1 X9", Some(e), cur(&i2), None));
                 wait_until("permit_prechecked", || {
                     has_session_event(&base, "permit_prechecked")
                 });

@@ -61,7 +61,7 @@ pub enum TraceEvent {
 
 #[allow(dead_code)]
 /// Which handle role issued an I/O event (for invariant checking).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HandleRole {
     Writer,
     Reader,
@@ -95,6 +95,10 @@ pub(crate) struct Brain {
     /// Write-failure fault: (role, n, count). That role's `write()` calls
     /// after the n-th (counted from when the fault was set) return an error.
     write_fail: Option<(HandleRole, usize, usize)>,
+    /// Per-role timeout set through `set_timeout` (absent: the 1000 ms
+    /// production default), and every `set_timeout` call in order.
+    timeouts: std::collections::HashMap<HandleRole, Duration>,
+    timeout_log: Vec<(HandleRole, Duration)>,
 }
 
 #[allow(dead_code)]
@@ -131,6 +135,8 @@ impl ScriptedPort {
                 holds,
                 write_hold: None,
                 write_fail: None,
+                timeouts: std::collections::HashMap::new(),
+                timeout_log: Vec::new(),
             })),
             role: HandleRole::Reader,
         }
@@ -230,6 +236,22 @@ impl ScriptedPort {
         brain.trace.push(TraceEvent::SessionEvent {
             name: name.to_string(),
         });
+    }
+
+    /// Every `set_timeout` call on any handle of this port, in order.
+    pub fn timeout_log(&self) -> Vec<(HandleRole, Duration)> {
+        self.brain.lock().unwrap().timeout_log.clone()
+    }
+
+    /// The timeout `role`'s handle currently has.
+    pub fn timeout_of(&self, role: HandleRole) -> Duration {
+        self.brain
+            .lock()
+            .unwrap()
+            .timeouts
+            .get(&role)
+            .copied()
+            .unwrap_or(Duration::from_millis(1000))
     }
 
     /// Get the shared brain Arc for wiring up session observers.
@@ -437,7 +459,13 @@ impl SerialPort for ScriptedPort {
     }
 
     fn timeout(&self) -> Duration {
-        Duration::from_millis(1000)
+        self.brain
+            .lock()
+            .unwrap()
+            .timeouts
+            .get(&self.role)
+            .copied()
+            .unwrap_or(Duration::from_millis(1000))
     }
 
     fn set_baud_rate(&mut self, _: u32) -> serialport::Result<()> {
@@ -460,7 +488,10 @@ impl SerialPort for ScriptedPort {
         Ok(())
     }
 
-    fn set_timeout(&mut self, _: Duration) -> serialport::Result<()> {
+    fn set_timeout(&mut self, t: Duration) -> serialport::Result<()> {
+        let mut brain = self.brain.lock().unwrap();
+        brain.timeouts.insert(self.role, t);
+        brain.timeout_log.push((self.role, t));
         Ok(())
     }
 

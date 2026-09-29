@@ -1310,3 +1310,640 @@ fn fix_partial_invalidating_line_completed_by_the_barrier_is_noted() {
     poll(&r);
     assert!(!tv(&r).homed, "the completed ALARM:1 was noted");
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// B2+B3 suite: connection identity and jog admission
+// ═══════════════════════════════════════════════════════════════════════════
+
+use super::serial_session::{TestHook, PHASE_STOPPING};
+
+const JOG: &str = "$J=G21 G91 X1.000 F100";
+
+/// The current observation's seq (the basis TS would send).
+fn basis(r: &Rig) -> Option<u64> {
+    tv(r).observed_seq
+}
+
+fn jog(r: &Rig, basis: Option<u64>) -> Result<SendOutcome, String> {
+    serial_send_inner(&r.inner, JOG, None, cur(&r.inner), basis)
+}
+
+fn jog_bytes_written(r: &Rig) -> usize {
+    let w = writer_bytes(&r.base.trace());
+    w.windows(3).filter(|x| x == b"$J=").count()
+}
+
+fn refused_with(res: &Result<SendOutcome, String>, code: &str) -> bool {
+    res.as_ref()
+        .is_err_and(|e| e.starts_with(&format!("refused: {code}:")))
+}
+
+fn set_hook(r: &Rig, h: impl Fn(&str) + Send + Sync + 'static) {
+    let h: TestHook = Arc::new(h);
+    *r.inner.session.test_hook.lock().unwrap() = Some(h);
+}
+
+/// mm_rig (homed, observed, `$13=0`, conn 1) plus the jog's `ok`.
+fn ready(rest: Vec<ScriptStep>) -> Rig {
+    let mut s = vec![sep(1), data(b"ok\r\n")];
+    s.extend(rest);
+    let r = mm_rig(s);
+    assert!(basis(&r).is_some(), "precondition: observed");
+    r
+}
+
+// ── Admission: the control and every condition ─────────────────────────────
+
+#[test]
+fn b23_ready_jog_is_admitted_written_and_counted() {
+    let r = ready(vec![]);
+    let w0 = r.inner.session.trust().motion_writes;
+    jog(&r, basis(&r)).expect("admitted");
+    assert_eq!(jog_bytes_written(&r), 1);
+    assert!(writer_bytes(&r.base.trace()).ends_with(b"$J=G21 G91 X1.000 F100\n"));
+    assert_eq!(r.inner.session.trust().motion_writes, w0 + 1);
+    assert!(basis(&r).is_none(), "a jog write clears the observation");
+    assert!(tv(&r).homed, "a jog keeps the home");
+}
+
+#[test]
+fn b23_not_homed_is_refused_with_nothing_written() {
+    let r = ready(vec![]);
+    r.inner.session.trust_bump();
+    // Re-observe so only the home is missing.
+    r.base.push_script(vec![sep(2), data(IDLE0)]);
+    release_seps(&r.base);
+    poll(&r);
+    assert!(basis(&r).is_some());
+    let res = jog(&r, basis(&r));
+    assert!(refused_with(&res, "not-homed"), "{res:?}");
+    assert_eq!(jog_bytes_written(&r), 0);
+}
+
+#[test]
+fn b23_units_not_mm_is_refused() {
+    let r = ready(vec![]);
+    r.inner.session.trust().units_mm = None;
+    let res = jog(&r, basis(&r));
+    assert!(refused_with(&res, "units"), "{res:?}");
+    assert_eq!(jog_bytes_written(&r), 0);
+}
+
+#[test]
+fn b23_units_from_an_earlier_connection_are_refused() {
+    let r = ready(vec![]);
+    r.inner.session.trust().units_mm = Some(99);
+    let res = jog(&r, basis(&r));
+    assert!(refused_with(&res, "units"), "{res:?}");
+}
+
+#[test]
+fn b23_another_counted_motion_send_refuses_motion_pending() {
+    let r = ready(vec![]);
+    // A second motion send, counted before its `command` wait (as a queued
+    // send is), is in flight.
+    let queued = r.inner.session.motion_enter();
+    let res = jog(&r, basis(&r));
+    assert!(refused_with(&res, "motion-pending"), "{res:?}");
+    assert_eq!(jog_bytes_written(&r), 0);
+    drop(queued);
+    jog(&r, basis(&r)).expect("admitted once the other send returned");
+}
+
+#[test]
+fn b23_after_motion_before_the_barrier_refuses_not_observed_then_admits() {
+    let r = ready(vec![sep(2), data(IDLE0), sep(3), data(b"ok\r\n")]);
+    let b = basis(&r);
+    jog(&r, b).expect("first jog");
+    let res = jog(&r, b);
+    assert!(refused_with(&res, "not-observed"), "{res:?}");
+    assert_eq!(jog_bytes_written(&r), 1);
+    poll(&r); // the barrier observes
+    assert!(basis(&r).is_some());
+    let res = jog(&r, b);
+    assert!(
+        refused_with(&res, "stale-basis"),
+        "the old basis is refused: {res:?}"
+    );
+    jog(&r, basis(&r)).expect("the barrier's basis is admitted");
+    assert_eq!(jog_bytes_written(&r), 2);
+}
+
+#[test]
+fn b23_non_idle_observation_is_not_observed() {
+    let r = ready(vec![]);
+    r.inner.session.trust().observed.as_mut().unwrap().idle_mpos = false;
+    let res = jog(&r, basis(&r).or(Some(1)));
+    assert!(refused_with(&res, "not-observed"), "{res:?}");
+}
+
+#[test]
+fn b23_missing_or_wrong_basis_is_refused_stale_basis() {
+    let r = ready(vec![]);
+    let b = basis(&r).unwrap();
+    for bad in [None, Some(b + 1), Some(b.wrapping_sub(1))] {
+        let res = jog(&r, bad);
+        assert!(refused_with(&res, "stale-basis"), "{bad:?}: {res:?}");
+    }
+    assert_eq!(jog_bytes_written(&r), 0);
+}
+
+#[test]
+fn b23_admitted_job_refuses_job_active() {
+    let r = ready(vec![sep(2), data(IDLE0)]);
+    let _job = serial_job_begin_inner(&r.inner).unwrap();
+    poll(&r); // re-observe, so only the job stands in the way
+    assert!(basis(&r).is_some());
+    let res = jog(&r, basis(&r));
+    assert!(refused_with(&res, "job-active"), "{res:?}");
+    assert_eq!(jog_bytes_written(&r), 0);
+}
+
+#[test]
+fn b23_stopping_phase_refuses_stopping() {
+    let r = ready(vec![]);
+    r.inner
+        .session
+        .phase
+        .store(PHASE_STOPPING, Ordering::SeqCst);
+    let res = jog(&r, basis(&r));
+    assert!(refused_with(&res, "stopping"), "{res:?}");
+    assert_eq!(jog_bytes_written(&r), 0);
+}
+
+#[test]
+fn b23_a_refused_jog_leaves_the_ledger_balanced() {
+    let r = ready(vec![]);
+    let _ = jog(&r, None);
+    let t = r.inner.session.trust();
+    assert_eq!(t.motion_pending, 0);
+}
+
+// ── N1 (Razor B1): a job admission during the barrier ──────────────────────
+
+/// Job begin runs between the barrier's basis capture and its record (the
+/// barrier holds `command`; job begin does not take it). The observation
+/// must stay cleared.
+#[test]
+fn b23_n1_job_admitted_during_the_barrier_is_not_overwritten() {
+    let r = ready(vec![sep(2), data(IDLE0)]);
+    // Make the observation stale without an epoch or write change.
+    r.inner.session.trust().observed = None;
+    let fired = Arc::new(AtomicBool::new(false));
+    {
+        let inner = r.inner.clone();
+        let fired = fired.clone();
+        set_hook(&r, move |p| {
+            if p == "barrier_after_basis" && !fired.swap(true, Ordering::SeqCst) {
+                serial_job_begin_inner(&inner).expect("job begin");
+            }
+        });
+    }
+    poll(&r);
+    assert!(fired.load(Ordering::SeqCst), "the interleaving ran");
+    assert!(
+        r.inner.session.trust().observed.is_none(),
+        "a barrier that straddled a job admission recorded an observation"
+    );
+    assert!(basis(&r).is_none());
+    // Control: the next barrier (after the admission) does observe.
+    r.base.push_script(vec![sep(3), data(IDLE0)]);
+    release_seps(&r.base);
+    poll(&r);
+    assert!(basis(&r).is_some(), "control: a later barrier observes");
+}
+
+// ── N4: STOP / raw reset / job begin against a jog inside `submit` ─────────
+
+/// Runs a ready jog whose `jog_before_write` point starts `other` on a
+/// second thread, waits (bounded) until `entered()` says it reached its
+/// `submit` wait, checks it is parked (`parked()`), then lets the write go.
+fn jog_against(
+    r: &Rig,
+    other: impl Fn(Arc<SerialInner>) + Send + Sync + 'static,
+    entered_point: &'static str,
+    parked: impl Fn(&SerialInner, &ScriptedPort) -> Result<(), String> + Send + Sync + 'static,
+) -> thread::JoinHandle<()> {
+    let fired = Arc::new(AtomicBool::new(false));
+    let entered = Arc::new(AtomicBool::new(false));
+    let handle: Arc<Mutex<Option<thread::JoinHandle<()>>>> = Arc::new(Mutex::new(None));
+    let other = Arc::new(other);
+    {
+        let inner = r.inner.clone();
+        let base = r.base.clone_with_role(HandleRole::Reader);
+        let fired = fired.clone();
+        let entered = entered.clone();
+        let handle = handle.clone();
+        set_hook(r, move |p| {
+            if p == entered_point {
+                entered.store(true, Ordering::SeqCst);
+            }
+            if p == "jog_before_write" && !fired.swap(true, Ordering::SeqCst) {
+                let i2 = inner.clone();
+                let o = other.clone();
+                *handle.lock().unwrap() = Some(thread::spawn(move || o(i2)));
+                let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                while !entered.load(Ordering::SeqCst) {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "the other side never reached its submit wait"
+                    );
+                    thread::sleep(Duration::from_millis(1));
+                }
+                // It must be parked on `submit`, not past it.
+                thread::sleep(Duration::from_millis(50));
+                if let Err(e) = parked(&inner, &base) {
+                    panic!("{e}");
+                }
+            }
+        });
+    }
+    jog(r, basis(r)).expect("the jog was admitted before the other side");
+    let h = handle.lock().unwrap().take().expect("the other side ran");
+    h
+}
+
+fn realtime_resets(base: &ScriptedPort) -> usize {
+    base.trace()
+        .iter()
+        .filter(|e| matches!(e, TraceEvent::Write { role: HandleRole::Realtime, data } if data == &[0x18]))
+        .count()
+}
+
+fn jog_then_reset_order(base: &ScriptedPort) {
+    let t = base.trace();
+    let j = t
+        .iter()
+        .position(|e| matches!(e, TraceEvent::Write { role: HandleRole::Writer, data } if data.starts_with(b"$J=")))
+        .expect("jog written");
+    let x = t
+        .iter()
+        .position(|e| matches!(e, TraceEvent::Write { role: HandleRole::Realtime, data } if data == &[0x18]))
+        .expect("0x18 written");
+    assert!(j < x, "the jog's bytes must precede the 0x18: {t:?}");
+}
+
+#[test]
+fn b23_n4_stop_waits_for_the_admitted_jog_write_then_resets() {
+    let r = ready(vec![data(BANNER)]);
+    let h = jog_against(
+        &r,
+        |i| {
+            serial_stop_inner(&i, &nap);
+        },
+        "stop_entered",
+        |inner, base| {
+            if realtime_resets(base) != 0 {
+                return Err("STOP's 0x18 was written while the jog held submit".into());
+            }
+            if inner.session.phase.load(Ordering::SeqCst) == PHASE_STOPPING {
+                return Err("STOP closed admission while the jog held submit".into());
+            }
+            Ok(())
+        },
+    );
+    h.join().unwrap();
+    jog_then_reset_order(&r.base);
+    assert_eq!(realtime_resets(&r.base), 1, "one stop, one reset");
+    let res = jog(&r, basis(&r));
+    assert!(
+        refused_with(&res, "stopping") || refused_with(&res, "not-homed"),
+        "{res:?}"
+    );
+    assert_eq!(jog_bytes_written(&r), 1);
+}
+
+#[test]
+fn b23_n4_raw_reset_waits_for_the_admitted_jog_write() {
+    let r = ready(vec![]);
+    let e0 = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    e0.store(epoch(&r), Ordering::SeqCst);
+    let e0c = e0.clone();
+    let h = jog_against(
+        &r,
+        |i| {
+            let c = cur(&i);
+            send_byte_inner(&i, c, 0x18).unwrap();
+        },
+        "send_byte_before_submit",
+        move |inner, base| {
+            if realtime_resets(base) != 0 {
+                return Err("the raw 0x18 was written while the jog held submit".into());
+            }
+            if inner.session.trust().trust_epoch != e0c.load(Ordering::SeqCst) {
+                return Err("the raw reset bumped trust while the jog held submit".into());
+            }
+            Ok(())
+        },
+    );
+    h.join().unwrap();
+    jog_then_reset_order(&r.base);
+    let res = jog(&r, basis(&r));
+    assert!(refused_with(&res, "not-homed"), "{res:?}");
+}
+
+#[test]
+fn b23_n4_job_begin_waits_for_the_admitted_jog_write() {
+    let r = ready(vec![]);
+    let h = jog_against(
+        &r,
+        |i| {
+            serial_job_begin_inner(&i).unwrap();
+        },
+        "job_begin_before_submit",
+        |inner, _| {
+            if inner.session.phase.load(Ordering::SeqCst) != PHASE_IDLE {
+                return Err("job admitted while the jog held submit".into());
+            }
+            Ok(())
+        },
+    );
+    h.join().unwrap();
+    assert_eq!(r.inner.session.phase.load(Ordering::SeqCst), PHASE_ACTIVE);
+    let res = jog(&r, basis(&r));
+    assert!(refused_with(&res, "job-active"), "{res:?}");
+    assert_eq!(jog_bytes_written(&r), 1);
+}
+
+// ── N8: stale connection ───────────────────────────────────────────────────
+
+struct Two {
+    inner: Arc<SerialInner>,
+    old_conn: u64,
+    new: ScriptedPort,
+}
+
+fn connect_to(inner: &SerialInner, port: &ScriptedPort, name: &str) -> u64 {
+    let p = port.clone_with_role(HandleRole::Writer);
+    serial_connect_inner(inner, name, 115200, &|_| {}, &move |_, _| p.try_clone())
+        .unwrap()
+        .conn_id
+}
+
+/// Connected to "old"; `new` is the port a reconnect will open.
+fn two() -> Two {
+    let old = ScriptedPort::new(vec![data(BANNER)]);
+    let new = ScriptedPort::new(vec![data(BANNER), data(b"ok\r\n"), data(IDLE0)]);
+    let inner = Arc::new(SerialInner::default());
+    let old_conn = connect_to(&inner, &old, "old");
+    Two {
+        inner,
+        old_conn,
+        new,
+    }
+}
+
+fn reconnect(t: &Two) {
+    disconnect_inner(&t.inner).unwrap();
+    let c = connect_to(&t.inner, &t.new, "new");
+    assert_ne!(c, t.old_conn);
+}
+
+/// Every write on `p` (the connect path clones all three handles from one
+/// port, so roles do not separate them here).
+fn port_writes(p: &ScriptedPort) -> Vec<Vec<u8>> {
+    p.trace()
+        .iter()
+        .filter_map(|e| match e {
+            TraceEvent::Write { data, .. } => Some(data.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The new port saw only its own connect's soft reset.
+fn only_connect_writes(p: &ScriptedPort) -> bool {
+    port_writes(p) == vec![vec![0x18u8]]
+}
+
+fn in_flight_reconnect(t: &Two, point: &'static str) {
+    let inner = t.inner.clone();
+    let new = t.new.clone_with_role(HandleRole::Writer);
+    let old_conn = t.old_conn;
+    let fired = Arc::new(AtomicBool::new(false));
+    let h: TestHook = Arc::new(move |p: &str| {
+        if p == point && !fired.swap(true, Ordering::SeqCst) {
+            disconnect_inner(&inner).unwrap();
+            let n = new.clone_with_role(HandleRole::Writer);
+            let c =
+                serial_connect_inner(&inner, "new", 115200, &|_| {}, &move |_, _| n.try_clone())
+                    .unwrap()
+                    .conn_id;
+            assert_ne!(c, old_conn);
+        }
+    });
+    *t.inner.session.test_hook.lock().unwrap() = Some(h);
+}
+
+#[test]
+fn b23_n8_uncontended_stale_send_byte_and_status() {
+    let t = two();
+    reconnect(&t);
+    assert!(only_connect_writes(&t.new), "{:?}", port_writes(&t.new));
+    let e = send_byte_inner(&t.inner, t.old_conn, b'!').unwrap_err();
+    assert!(e.starts_with("refused: stale-connection:"), "{e}");
+    let e = serial_get_status_inner(&t.inner, t.old_conn).unwrap_err();
+    assert!(e.starts_with("refused: stale-connection:"), "{e}");
+    assert!(
+        only_connect_writes(&t.new),
+        "a stale feed hold or status probe reached the new port: {:?}",
+        port_writes(&t.new)
+    );
+    // The exception: a reset is never refused.
+    send_byte_inner(&t.inner, t.old_conn, 0x18).unwrap();
+    assert_eq!(port_writes(&t.new), vec![vec![0x18u8], vec![0x18u8]]);
+    // Control: the current connection is accepted.
+    let c = cur(&t.inner);
+    send_byte_inner(&t.inner, c, b'!').unwrap();
+}
+
+#[test]
+fn b23_n8_in_flight_send_parked_before_command_is_refused_after_reconnect() {
+    let t = two();
+    in_flight_reconnect(&t, "send_before_command");
+    let res = serial_send_inner(&t.inner, "G91 G0 X50", None, t.old_conn, None);
+    assert!(
+        res.as_ref()
+            .is_err_and(|e| e.starts_with("refused: stale-connection:")),
+        "{res:?}"
+    );
+    assert!(
+        only_connect_writes(&t.new),
+        "the new port got some of its bytes: {:?}",
+        port_writes(&t.new)
+    );
+    assert_eq!(
+        t.inner.session.trust().motion_pending,
+        0,
+        "the RAII guard decremented"
+    );
+}
+
+#[test]
+fn b23_n8_in_flight_send_byte_parked_before_realtime_is_refused_after_reconnect() {
+    let t = two();
+    in_flight_reconnect(&t, "send_byte_before_realtime");
+    let e = send_byte_inner(&t.inner, t.old_conn, 0x21).unwrap_err();
+    assert!(e.starts_with("refused: stale-connection:"), "{e}");
+    assert!(
+        only_connect_writes(&t.new),
+        "the new port got the feed hold: {:?}",
+        port_writes(&t.new)
+    );
+    // 0x18 under the same schedule is written.
+    let t = two();
+    in_flight_reconnect(&t, "send_byte_before_realtime");
+    send_byte_inner(&t.inner, t.old_conn, 0x18).unwrap();
+    assert_eq!(port_writes(&t.new), vec![vec![0x18u8], vec![0x18u8]]);
+}
+
+#[test]
+fn b23_n8_in_flight_status_poll_is_refused_after_reconnect() {
+    let t = two();
+    in_flight_reconnect(&t, "status_before_command");
+    let e = serial_get_status_inner(&t.inner, t.old_conn).unwrap_err();
+    assert!(e.starts_with("refused: stale-connection:"), "{e}");
+    assert!(only_connect_writes(&t.new), "{:?}", port_writes(&t.new));
+}
+
+#[test]
+fn b23_n8_outcomes_carry_the_connection() {
+    let r = rig(vec![
+        sep(0),
+        data(b"ok\r\n"),
+        sep(1),
+        data(IDLE0),
+        sep(2),
+        data(IDLE0),
+    ]);
+    r.inner.session.trust().conn_id = 7;
+    assert_eq!(send(&r, "$G").unwrap().conn_id, 7);
+    assert_eq!(poll(&r).conn_id, 7, "barrier poll");
+    assert_eq!(poll(&r).conn_id, 7, "ordinary poll");
+    let busy = r.inner.command.lock().unwrap();
+    let o = serial_get_status_inner(&r.inner, 7).unwrap();
+    drop(busy);
+    assert_eq!((o.kind, o.conn_id), (StatusKind::Busy, 7));
+}
+
+// ── N9: grammar refusals through the send ─────────────────────────────────
+
+#[test]
+fn b23_n9_malformed_payloads_are_refused_with_zero_bytes() {
+    let r = ready(vec![]);
+    let before = writer_bytes(&r.base.trace()).len();
+    for bad in [
+        "$J=G91 X1\n$J=G91 X50",
+        "$J=G91 X1\r",
+        "G0 X1\u{18}",
+        "$J=G91 X1?",
+        "G0 X1 \u{e9}",
+        "$J=G91 X1\n",
+        "G0\tX1",
+    ] {
+        let res = serial_send_inner(&r.inner, bad, None, cur(&r.inner), basis(&r));
+        assert!(refused_with(&res, "malformed"), "{bad:?}: {res:?}");
+    }
+    assert_eq!(writer_bytes(&r.base.trace()).len(), before, "zero bytes");
+    assert!(tv(&r).homed, "a refusal changes no trust");
+}
+
+#[test]
+fn b23_n9_normalised_jog_spellings_are_gated_as_jogs() {
+    for spelling in [
+        "  $j=g91 x1 f100 ",
+        "$ J=G91 X1",
+        "$J =G91X1",
+        "(a)$J=G91 X50",
+    ] {
+        let r = ready(vec![]);
+        let res = serial_send_inner(&r.inner, spelling, None, cur(&r.inner), None);
+        assert!(
+            refused_with(&res, "stale-basis"),
+            "{spelling:?} must be gated as a jog: {res:?}"
+        );
+    }
+}
+
+// ── N10 / N11: units and motion errors refuse the next jog ────────────────
+
+#[test]
+fn b23_n10_units_write_then_frame_write_refuse() {
+    let r = ready(vec![sep(2), data(b"ok\r\n")]);
+    // `$13=1` is a settings write: units cleared (and a frame key, so the
+    // home goes too).
+    send(&r, "$13=1").unwrap();
+    let res = jog(&r, basis(&r));
+    assert!(res.is_err(), "{res:?}");
+    assert!(!tv(&r).units_mm && !tv(&r).homed);
+    let r = ready(vec![sep(2), data(b"ok\r\n")]);
+    send(&r, "$10=1").unwrap(); // not a frame key: units only
+    assert!(tv(&r).homed);
+    let res = jog(&r, basis(&r));
+    assert!(refused_with(&res, "units"), "{res:?}");
+}
+
+#[test]
+fn b23_n11_motion_error_after_write_refuses_the_next_jog_not_homed() {
+    let r = ready(vec![sep(2), ScriptStep::Error("gone".to_string())]);
+    // Consume the ready rig's jog `ok` with a console motion first.
+    send(&r, MOVE).unwrap();
+    assert!(send(&r, MOVE).is_err());
+    let res = jog(&r, basis(&r));
+    assert!(refused_with(&res, "not-homed"), "{res:?}");
+}
+
+// ── N4 (card note): the probe-timeout restore ─────────────────────────────
+
+#[test]
+fn b23_barrier_probe_timeout_is_set_then_restored() {
+    let r = homed_rig(vec![]);
+    let log = r.base.timeout_log();
+    let probe = Duration::from_millis(OBSERVE_PROBE_MS);
+    assert!(
+        log.iter()
+            .any(|(role, t)| *role == HandleRole::Reader && *t == probe),
+        "the barrier's probe read ran at OBSERVE_PROBE_MS: {log:?}"
+    );
+    assert_eq!(
+        r.base.timeout_of(HandleRole::Reader),
+        Duration::from_millis(1000),
+        "the reader's timeout is restored after the barrier: {log:?}"
+    );
+    assert!(
+        log.iter().all(|(role, _)| *role == HandleRole::Reader),
+        "only the reader handle's timeout is touched: {log:?}"
+    );
+}
+
+// ── T-C9: every golden G-code line passes the grammar ─────────────────────
+
+#[test]
+fn b23_golden_gcode_lines_pass_the_outbound_grammar() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
+    let mut files = 0;
+    let mut lines = 0;
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let p = entry.unwrap().path();
+        if p.extension().and_then(|e| e.to_str()) != Some("gcode") {
+            continue;
+        }
+        files += 1;
+        let text = std::fs::read_to_string(&p).unwrap();
+        // As both job paths do: split on '\n', trim, skip blanks and
+        // ';' comment lines.
+        for l in text.split('\n') {
+            let l = l.trim();
+            if l.is_empty() || l.starts_with(';') {
+                continue;
+            }
+            lines += 1;
+            assert!(
+                classify_outbound(l).is_ok(),
+                "{}: {l:?} is malformed to the grammar",
+                p.display()
+            );
+        }
+    }
+    assert!(files >= 10 && lines > 100, "files {files}, lines {lines}");
+}
