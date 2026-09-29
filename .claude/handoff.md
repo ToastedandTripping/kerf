@@ -82,6 +82,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 ## Log (newest first)
 
+### 2026-09-29 R3 batch 2 fix pass
+235ce63 (tests only): the onImportVector binding is pinned by appPdfWiring.test.tsx, and N1-N3 are pinned; vitest 1177. The Razor re-check is running (resumed). Pack next_action holds the rest of R3's close.
+
 ### 2026-09-29 motion-trust B1 fix pass
 64be256: three STOP-during-barrier tests (closing W1), plus N2, N3 and N6 pins, a comment-aware read-site scan, and lock table trust=1.5. cargo 436 passed. Razor re-check running (resumed). Unpinned: N5 and N4 (N4 goes to the owner card). Pack next_action holds the rest.
 
