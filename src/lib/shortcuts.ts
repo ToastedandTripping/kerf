@@ -96,7 +96,8 @@ export function useKeyboardShortcuts() {
         cutSelection();
         return;
       }
-      if (ctrl && key === "v") {
+      // shift guard: Ctrl+Shift+V is "flip vertical" below
+      if (ctrl && !shift && key === "v") {
         e.preventDefault();
         pasteClipboard(false);
         return;
@@ -164,8 +165,12 @@ export function useKeyboardShortcuts() {
         flipSelection("horizontal");
         return;
       }
-      // Note: Ctrl+Shift+V conflicts with "paste in place" in some apps
-      // but we use Alt+V for that, so this is fine
+      // Lee 2026-09-22: Ctrl+Shift+V = Flip Vertical (LightBurn parity); Alt+V is Paste in Place.
+      if (ctrl && shift && key === "v") {
+        e.preventDefault();
+        flipSelection("vertical");
+        return;
+      }
 
       // Alignment shortcuts (Ctrl+Shift+Arrow)
       if (ctrl && shift && key === "arrowleft") {

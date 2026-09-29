@@ -5,6 +5,7 @@
  * (not copy), and Ctrl+Shift+A must reach frame-selection (not select-all).
  * Without the `!shift` guard on the bare Ctrl+C / Ctrl+A handlers, the plain
  * handler fires first and swallows the event before the shifted variant runs.
+ * Ctrl+Shift+V must reach flip-vertical (not paste), per Lee 2026-09-22.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
@@ -130,5 +131,23 @@ describe("Ctrl+Shift+A dispatch (frame-selection, not select-all)", () => {
     expect(useStore.getState().camera.zoom).toBeDefined();
     // If viewport dimensions are available, zoom should differ:
     void zoomBefore;
+  });
+});
+
+describe("Ctrl+Shift+V dispatch (flip-vertical, not paste)", () => {
+  it("flips the selected object and does NOT paste", () => {
+    render(<ShortcutHarness />);
+    useStore.getState().addObject(makeRect("r1"));
+    useStore.getState().setSelectedIds(["r1"]);
+    useStore.getState().setClipboard([makeRect("clip")]);
+    const depth = useStore.getState().undoStack.length;
+
+    key({ key: "V", ctrlKey: true, shiftKey: true });
+
+    // Without the !shift guard on Ctrl+V, the paste handler fires first and adds a copy.
+    expect(useStore.getState().objects).toHaveLength(1);
+    // The flip itself is one undo step (flipObjects goes through withUndo).
+    expect(useStore.getState().undoStack.length).toBe(depth + 1);
+    expect(useStore.getState().undoStack[depth]?.type).toBe("flip");
   });
 });

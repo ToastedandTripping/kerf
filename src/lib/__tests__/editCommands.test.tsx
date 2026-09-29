@@ -220,3 +220,24 @@ describe("F2 Delete undo restores original array positions", () => {
     expect(depth()).toBe(before);
   });
 });
+
+describe("F3 Ctrl+Shift+V is Flip Vertical (Lee 2026-09-22)", () => {
+  it("flips the selection top-to-bottom and does not paste; plain Ctrl+V still pastes", () => {
+    render(<ShortcutHarness />);
+    useStore.getState().addObject(makePath("p1"));
+    useStore.getState().setSelectedIds(["p1"]);
+    key({ key: "c", ctrlKey: true }); // non-empty clipboard
+    const before = useStore.getState().objects[0];
+    const t = before.transform;
+    const cy = t.y + t.height / 2;
+
+    key({ key: "V", shiftKey: true, ctrlKey: true });
+    const objs = useStore.getState().objects;
+    expect(objs).toHaveLength(1);
+    expect(objs[0].points!.map((p) => p.y)).toEqual(before.points!.map((p) => 2 * cy - p.y));
+
+    // positive control: plain Ctrl+V still offset-pastes
+    key({ key: "v", ctrlKey: true });
+    expect(useStore.getState().objects).toHaveLength(2);
+  });
+});

@@ -55,6 +55,7 @@ const SHORTCUT_GROUPS = [
       { keys: "Shift+Arrow", action: "Nudge 10mm" },
       { keys: "] / [", action: "Rotate 90 CW/CCW" },
       { keys: "Ctrl+Shift+H", action: "Flip horizontal" },
+      { keys: "Ctrl+Shift+V", action: "Flip vertical" },
       { keys: "PgUp / PgDn", action: "Z-order up/down" },
       { keys: "Ctrl+PgUp/Dn", action: "Z-order front/back" },
     ],

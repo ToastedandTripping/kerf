@@ -301,6 +301,7 @@ function getCommands(): Command[] {
     {
       id: "arr-flip-v",
       label: "Flip Vertical",
+      shortcut: "Ctrl+Shift+V",
       category: "Arrange",
       action: () => flipSelection("vertical"),
     },
