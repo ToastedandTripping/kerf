@@ -283,6 +283,10 @@ describe("T-C2: the gate reads native's scalars and the clip reads the basis", (
     const basisSeq = barrier.snapshot.observedSeq!;
     handlers.serial_get_status = () => barrier;
     await machineConnection.pollStatus();
+    // TS-side property only: native (Razor b23 W2) ends the observation on a
+    // frame at a different position, so it never sends this pairing; if it
+    // did, TS would still clip from the observation it names, never from the
+    // frame. A later frame at the SAME position keeps the basis (test above).
     // A frame at X=0 that still names the X=200 observation as current.
     const later = status(0, { observedSeq: basisSeq });
     later.snapshot.observedPos = [200, 0, 0];
@@ -393,6 +397,9 @@ describe("T-C6: setMachineHomed does not exist", () => {
     return out;
   }
 
+  // Razor b23 N4: the walk takes ~30 ms alone but >5 s under a concurrent
+  // cargo build; an explicit generous timeout keeps a battery "kill" from
+  // being a timeout.
   it("no source file calls or defines it", () => {
     const needle = ["setMachine", "Homed("].join("");
     const files = sourceFiles(join(process.cwd(), "src"));
@@ -404,7 +411,7 @@ describe("T-C6: setMachineHomed does not exist", () => {
     expect(useStore.getState().machineHomed).toBe(true);
     useStore.getState().setTrust({ trustHomed: false });
     expect(useStore.getState().machineHomed).toBe(false);
-  });
+  }, 60_000);
 });
 
 // ── T-C7: provisional invalidation ────────────────────────────────────────
@@ -457,5 +464,110 @@ describe("T-C8", () => {
     await machineConnection.disconnect();
     expect(_testSettingsGeneration()).toBe(g + 1);
     expect(_testConnId()).toBe(0);
+  });
+});
+
+// ── Fix pass (Razor b23 N1): the remaining stale and provisional sites ────
+
+describe("Razor b23 N1 pins", () => {
+  async function reconnect() {
+    await machineConnection.disconnect();
+    await connect();
+  }
+
+  it("tz1: a late send() rejection on the new connection is dropped whole", async () => {
+    await machineConnection.pollStatus();
+    const d = deferred();
+    handlers.serial_send = () => d.promise;
+    const late = machineConnection.send("$G");
+    defaultHandlers();
+    await reconnect();
+    await machineConnection.pollStatus();
+    useStore.setState({ consoleLines: [] });
+    d.reject("disconnected: port closed");
+    expect(await late).toEqual([]);
+    expect(consoleTexts()).toEqual([]);
+    expect(useStore.getState().trustHomed).toBe(true); // no provisional revoke
+  });
+
+  it("tz11: a plain (non-refused) rejection on the current connection revokes homed", async () => {
+    await machineConnection.pollStatus();
+    handlers.serial_send = () => Promise.reject("disconnected: port closed");
+    expect(await machineConnection.send("$G")).toEqual(["error:disconnected"]);
+    expect(jogBlockReason(useStore.getState(), "by")).toBe(JOG_REASON_HOME);
+  });
+
+  it("tz9: jogTo sends { command, conn, jogBasis: basisSeq }", async () => {
+    const barrier = status(100);
+    handlers.serial_get_status = () => barrier;
+    await machineConnection.pollStatus();
+    await machineConnection.jogTo(10, 20);
+    expect(jogSends()).toEqual([
+      {
+        command: "$J=G21 G90 X10.000 Y20.000 F3000",
+        conn: 1,
+        jogBasis: barrier.snapshot.observedSeq,
+      },
+    ]);
+  });
+
+  it("tz8: a snapshot without motionPending reads as pending (MOTION)", async () => {
+    const s = status(100) as { snapshot: Record<string, unknown> };
+    delete s.snapshot.motionPending;
+    handlers.serial_get_status = () => s;
+    await machineConnection.pollStatus();
+    expect(useStore.getState().motionPending).toBe(true);
+    expect(jogBlockReason(useStore.getState(), "by")).toBe(JOG_REASON_MOTION);
+  });
+
+  it("tz5/tz10: a late $32=1 neither settles the new connection's laser mode nor reads back", async () => {
+    const d = deferred();
+    handlers.serial_send = (a) =>
+      a.command === "$32=1" ? d.promise : { responses: SETTINGS, drained: [], connId: a.conn };
+    const late = machineConnection.enableLaserMode();
+    defaultHandlers();
+    await reconnect();
+    expect(useStore.getState().grblLaserMode).toBe(true);
+    const readbacksBefore = sends().filter((a) => a.command === "$$").length;
+    d.resolve({ responses: ["ok"], drained: [], connId: 1 });
+    expect(await late).toBe(false);
+    expect(useStore.getState().grblLaserMode).toBe(true);
+    expect(sends().filter((a) => a.command === "$$").length).toBe(readbacksBefore);
+  });
+
+  it("tz2: a connect init poll for another connection writes nothing", async () => {
+    await machineConnection.disconnect();
+    handlers.serial_get_status = () => status(5, { state: "Alarm", connId: 99 });
+    await connect();
+    expect(useStore.getState().machineState).toBe("idle");
+    expect(consoleTexts().some((t) => t.includes("ALARM state"))).toBe(false);
+  });
+
+  it("tz3: a readback result for another connection is dropped", async () => {
+    useStore.getState().setGrblLaserMode(false);
+    handlers.serial_send = () => ({ responses: SETTINGS, drained: [], connId: 99 });
+    expect(await machineConnection.readbackGrblSettings()).toBe(false);
+    expect(useStore.getState().grblLaserMode).toBe(false);
+  });
+
+  it("tz4: a late readback rejection does not clear the new connection's laser mode", async () => {
+    const d = deferred();
+    handlers.serial_send = () => d.promise;
+    const late = machineConnection.readbackGrblSettings();
+    defaultHandlers();
+    await reconnect();
+    expect(useStore.getState().grblLaserMode).toBe(true);
+    useStore.setState({ consoleLines: [] });
+    d.reject("disconnected: port closed");
+    expect(await late).toBe(false);
+    expect(useStore.getState().grblLaserMode).toBe(true);
+    expect(consoleTexts()).toEqual([]);
+  });
+
+  it("tz6: getStatusReport drops a result for another connection", async () => {
+    handlers.serial_get_status = () => status(5, { connId: 99 });
+    expect(await machineConnection.getStatusReport()).toBe("");
+    handlers.serial_get_status = () => status(5);
+    expect(await machineConnection.getStatusReport()).toMatch(/^<Idle/);
   });
 });
