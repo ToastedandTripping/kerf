@@ -6,7 +6,9 @@
     "type": "progress"
   },
   "statusOutcome": {
-    "events": ["[MSG:Check Door]"],
+    "events": [
+      "[MSG:Check Door]"
+    ],
     "kind": "report",
     "snapshot": {
       "accessory": {
@@ -14,7 +16,11 @@
       },
       "epoch": 5,
       "feed": 500.0,
-      "position": [10.5, 20.3, 0.0],
+      "position": [
+        10.5,
+        20.3,
+        0.0
+      ],
       "positionKind": "MPos",
       "raw": "<Run|MPos:10.500,20.300,0.000|FS:500,1000|WCO:1.000,2.000,0.000|A:S>",
       "seq": 17,
@@ -22,7 +28,11 @@
       "state": "run",
       "units": "Unknown",
       "unknownFields": [],
-      "wco": [1.0, 2.0, 0.0]
+      "wco": [
+        1.0,
+        2.0,
+        0.0
+      ]
     },
     "status": "<Run|MPos:10.500,20.300,0.000|FS:500,1000|WCO:1.000,2.000,0.000|A:S>"
   }

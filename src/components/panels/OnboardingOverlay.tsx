@@ -33,7 +33,9 @@ const steps = [
 export function OnboardingOverlay({ onClose }: { onClose: () => void }) {
   // Every aria-modal root contains focus (F7 made Tab inert behind modals).
   const trapRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(trapRef, true);
+  // Initial focus on Next: Skip dismisses the guide permanently.
+  const nextRef = useRef<HTMLButtonElement>(null);
+  useFocusTrap(trapRef, true, nextRef);
   const [step, setStep] = useState(0);
 
   function finish() {
@@ -153,6 +155,7 @@ export function OnboardingOverlay({ onClose }: { onClose: () => void }) {
               </button>
             )}
             <button
+              ref={nextRef}
               onClick={() => (step < steps.length - 1 ? setStep(step + 1) : finish())}
               style={{
                 padding: "6px 14px",

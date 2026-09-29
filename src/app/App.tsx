@@ -168,7 +168,9 @@ export default function App() {
   const [recoveryOffer, setRecoveryOffer] = useState<{ timestamp: number } | null>(null);
   // Every aria-modal root contains focus (F7 made Tab inert behind modals).
   const trapRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(trapRef, !!recoveryOffer);
+  // Initial focus on Restore: Discard deletes the recovery file for good.
+  const restoreRef = useRef<HTMLButtonElement>(null);
+  useFocusTrap(trapRef, !!recoveryOffer, restoreRef);
   const [showOnboarding, setShowOnboarding] = useState(shouldShowOnboarding);
   // B5: MaterialLibrary and PropertiesPanel collapsed by default so LayerPanel
   // (the primary working surface) gets more room. State is local — no Zustand
@@ -451,6 +453,7 @@ export default function App() {
                 Discard
               </button>
               <button
+                ref={restoreRef}
                 onClick={async () => {
                   const result = await checkRecoveryFile();
                   if (result) {

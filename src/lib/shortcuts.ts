@@ -32,7 +32,8 @@ const warnedModals = new WeakSet<Element>();
 
 /**
  * Central focus-containment fallback for modal roots without their own trap
- * (GrblSettingsDialog and MaterialTestDialog are frozen). A per-dialog
+ * (GrblSettingsDialog is frozen and has none; MaterialTestDialog, also frozen,
+ * already has one). A per-dialog
  * useFocusTrap runs first on the dialog element; if it already handled the edge
  * (defaultPrevented) this does nothing, so there is no double step. A Tab moving
  * normally between two inside elements is left to the browser.

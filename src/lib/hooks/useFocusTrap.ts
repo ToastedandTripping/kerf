@@ -13,21 +13,33 @@ export const FOCUSABLE_SELECTORS = [
 /**
  * Traps keyboard focus within `ref` when `open` is true.
  *
- * On open:  focuses the first focusable element inside `ref`.
+ * On open:  focuses `initialFocus` if given, else the first focusable element inside `ref`
+ *           (pass initialFocus when the first element is destructive).
  * On Tab:   wraps to the first element when at the last.
  * On Shift+Tab: wraps to the last element when at the first.
- * On close: restores focus to the element that triggered the dialog.
+ * On close: restores focus to the element that triggered the dialog, but only
+ *           if focus is on body or still inside the closing dialog. Another dialog
+ *           that opened in the same commit keeps its focus.
  */
-export function useFocusTrap(ref: RefObject<HTMLElement | null>, open: boolean): void {
+export function useFocusTrap(
+  ref: RefObject<HTMLElement | null>,
+  open: boolean,
+  initialFocus?: RefObject<HTMLElement | null>
+): void {
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const dialogElRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!open) {
       // Restore focus on close
       if (previousFocusRef.current) {
-        previousFocusRef.current.focus();
+        const active = document.activeElement;
+        const focusLeftWithDialog =
+          !active || active === document.body || !!dialogElRef.current?.contains(active);
+        if (focusLeftWithDialog) previousFocusRef.current.focus();
         previousFocusRef.current = null;
       }
+      dialogElRef.current = null;
       return;
     }
 
@@ -36,6 +48,7 @@ export function useFocusTrap(ref: RefObject<HTMLElement | null>, open: boolean):
 
     const el = ref.current;
     if (!el) return;
+    dialogElRef.current = el;
 
     // Move initial focus to first focusable element
     const getFocusable = () =>
@@ -44,7 +57,9 @@ export function useFocusTrap(ref: RefObject<HTMLElement | null>, open: boolean):
       );
 
     const focusable = getFocusable();
-    if (focusable.length > 0) {
+    if (initialFocus?.current && el.contains(initialFocus.current)) {
+      initialFocus.current.focus();
+    } else if (focusable.length > 0) {
       focusable[0].focus();
     } else {
       el.setAttribute("tabindex", "-1");
@@ -80,5 +95,5 @@ export function useFocusTrap(ref: RefObject<HTMLElement | null>, open: boolean):
     return () => {
       el.removeEventListener("keydown", handleKeyDown);
     };
-  }, [open, ref]);
+  }, [open, ref, initialFocus]);
 }
