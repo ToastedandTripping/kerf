@@ -26,9 +26,32 @@ const toolShortcuts: Record<string, ToolType> = {
   h: "pan",
 };
 
+/** Hidden-but-mounted modal roots already reported (dev-only warning fires once each). */
+const warnedModals = new WeakSet<Element>();
+
 export function useKeyboardShortcuts() {
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      // A modal owns the keyboard: the canvas behind it is not the user's target.
+      // Contract: every modal root carries aria-modal="true" and UNMOUNTS when closed
+      // (hidden-by-CSS would kill every shortcut). ROADMAP Phase 5 ModalShell owns this.
+      // `?` (ShortcutOverlay) and Ctrl+K (CommandPalette) deliberately still work over
+      // other modals — they are separate listeners, not this handler. Do not "fix" that.
+      const modal = document.querySelector('[aria-modal="true"]');
+      if (modal) {
+        // Dev-only stuck-modal detector: warn only when the modal root is mounted but
+        // NOT visible (the contract breach above). A normal open dialog stays silent.
+        if (
+          import.meta.env.DEV &&
+          modal.checkVisibility?.() === false &&
+          !warnedModals.has(modal)
+        ) {
+          warnedModals.add(modal);
+          console.warn("[shortcuts] all shortcuts suppressed by a hidden aria-modal root:", modal);
+        }
+        return;
+      }
+
       // Tool-context key events (pen Enter/Escape, node Delete)
       if (handleViewportKeyDown(e)) return;
 
