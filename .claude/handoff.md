@@ -60,7 +60,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - From the 2026-09-27 grill, still owed by this session: the MIN PWR image-layers-only relay (plan, critic, relay; queue after E1b), and the kerf-d9 geometry design study (1-2 days, no code, unscheduled). Capture: .claude/grills/2026-09-27-kerf-remaining-open-decisions.md.
 
-- NEXT, in order (2026-09-27): (1) S3c motion trust. Plan revision 5; astra critic rounds 1-4 all FAIL, every finding verified real and folded. Round 5 is the cap: if it does not pass, the residual findings go to Lee as a decision. Split out of it: S3d, connection lifetime (a native connection token at the non-job write boundary: a queued send can write to a new controller after a reconnect), and S3e, frame qualification (a per-machine enforced refusal until the owner card's frame check passes). (2) R3 editing-shortcuts: the plan passed critic round 4, and its citations are being re-verified against HEAD because 8 of its files moved since 6e3378b. (3) Then S4a/b/c and S5 (lift from PLAN-safety-gate-class.md), E4, the Min Pwr image-only relay, S3d, S3e. E1b shipped on marvin/kerf-gap as d2dfd24 and is not yet on master.
+- S3c HELD, per Lee 2026-09-29 ("Hold for full fix", chosen over shipping revision 5 as a strict improvement): jog safety is redone TOGETHER with S3d connection lifetime and the native serial-layer fixes as one job, reviewed until it passes. Today's jogging stays as it is meanwhile. Inputs: .claude/plans/kerf-safety-s3c.md revision 5 plus critic rounds r1-r4 and critic.md (r5). Round 5's open findings: banners dropped natively (serial_pump.rs drain_classified and read_status_bounded send them to `dropped`); a units grant with no generation fence and no console $$ route; the post-motion sample order at the native boundary; the card's physical containment; enforced frame qualification (S3e) versus the full-feature release ruling.
+
+- NEXT, in order (2026-09-29): (1) R3 editing-shortcuts relay (citations re-verified at d2dfd24; audit in the plan addendum). (2) The combined jog-safety + connection-lifetime plan (S3c+S3d, native plus TS), critic until PASS. (3) S4a/b/c and S5 (lift from PLAN-safety-gate-class.md), E4, the Min Pwr image-only relay, S3e. E1b is on marvin/kerf-gap (d2dfd24), not on master.
 
 ## Open questions awaiting Lee
 
@@ -83,6 +85,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-09-29 S3c held for a full fix (Lee)
+The S3c plan hit its five-round cap: astra FAIL every round, each finding verified real. Lee chose "Hold for full fix" over shipping revision 5 as a strict improvement (recommended) and over core-only. The next jog-safety plan merges S3c with S3d and includes the native transport.
 
 ### 2026-09-27 E1b merged; S3c in critic
 E1b merged into marvin/kerf-gap as d2dfd24: an unknown mode or type is now an Err, the partition refuses strays, and goldens regenerate only on =1. Razor PASS: 0 CRITICAL, 0 WARNING, 6 NOTE, 29/29 covered. Battery 10/10 killed; 371 Rust. Razor N1 (a passes:0 layer omits objects silently) is parked. The S3c plan went through five revisions. The astra critic found real defects each round: raw console $J= escaped the hold, three alarm paths only logged, there was no reset-banner revoke, stale replies were unfenced, an accepted Idle could carry no position, a second position writer took WPos, units were unknown, and the card was unbounded. The connection-lifetime and frame classes were split out as S3d and S3e. Disk: cleared 16.6 GiB of build cache from two merged Phase 1 relay worktrees (cargo clean); 42 GB free.

@@ -398,3 +398,16 @@ Each line below is the exact entry the implementer appends to `ROADMAP.md -> ## 
   - an ordinary open dialog logs nothing;
   - a hidden-but-mounted `aria-modal` root logs exactly one `[shortcuts] all shortcuts suppressed by a hidden aria-modal root` line;
   - further keys log nothing more.
+
+## Orchestrator re-verification at `d2dfd24` (2026-09-29, before Stage 0.7)
+
+The critic rounds reviewed this plan at `6e3378b`. Since then, S1-S3, canvas-display, cut-vs-screen, engine-arm, engine-leadin and E1b have merged. A read-only citation audit ran at `d2dfd24` and is saved beside this file, at `refresh-editing-shortcuts-reverify.md`. **Use its MOVED table for line numbers, not the older numbers above.**
+
+- **Premises.** All of F1-F9 still reproduce at HEAD, and none is already fixed. F10's drop reasoning still holds. 41 citations HOLD, 28 MOVED, 5 CHANGED, 0 GONE.
+- **Baselines (supersedes "823 JS / 310 cargo" in Done when).** Measured at `72540d0` on 2026-09-27: **1133 JS** (61 files) and **371 Rust** (4 ignored, measured at `d2dfd24`). Ted re-measures at relay start and quotes both numbers.
+- **The Done-when grep gate is rescoped (C5).** `grep -n "clipboardOp\|obj_\${Date.now()}" src` also matches `generateId` itself (`storeTypes.ts:298`), so it could never pass. The gate is now `grep -rn "clipboardOp\|Math.random().toString(36)" src/components/topbar src/lib/shortcuts.ts src/lib/editCommands.ts`, and it must return nothing. The intent is unchanged: no private id scheme survives outside `generateId`.
+- **Obsolete notes (C1-C3).**
+  - `toolHandler.ts` is now 1,973 lines. `handleToolChange` and `handleViewportKeyDown` are byte-identical to the planned text.
+  - The F8 merge-risk note about lib-2 is obsolete. e65b10d already shipped `detectImageDpi` and the `detectedDpi` prop, and the `addObject` sites F8 wraps are untouched.
+  - The ARCHITECTURE refresh precondition is moot. Add F1's `editCommands.ts` line next to the `shortcuts.ts` entry, now at `ARCHITECTURE.md:148`.
+- **Anchors.** The plan has no mutation-battery table. Its find/replace targets were counted with `grep -cF` on HEAD, and four are above 1 by design, because the plan edits every copy: `handleToolChange(` 2 and `movePartial(` 2 in `shortcuts.ts`, `s().setActiveTool(` 7 in `CommandPalette.tsx`, and `_testClipboardOp` 4 in `shortcutsWriters.test`. Ted still mutation-verifies the new tests through `scripts/mutation-battery.mjs`, with each `find` unique (`grep -cF` = 1) on the committed relay HEAD.
