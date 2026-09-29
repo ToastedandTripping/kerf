@@ -208,4 +208,33 @@ describe("F7 modal guard", () => {
     expect(useStore.getState().activeTool).toBe("rectangle");
     await act(async () => {});
   });
+
+  it("the guard sits above handleViewportKeyDown: node-tool Delete is inert behind a modal", () => {
+    render(<ShortcutHarness />);
+    const p: DesignObject = {
+      ...makeRect("p1"),
+      type: "path",
+      points: [
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 10, y: 10 },
+      ],
+      closed: true,
+    };
+    useStore.getState().addObject(p);
+    useStore.setState({
+      activeTool: "node",
+      nodeEditState: { pathId: "p1", selectedNodeIndex: 1 },
+    });
+    const dialog = render(<NestingDialog open onClose={noop} />);
+    const button = dialog.container.querySelector("button")!;
+    button.focus();
+    keyAt(button, { key: "Delete" });
+    expect(useStore.getState().objects[0].points).toHaveLength(3);
+
+    // positive control: with the dialog gone the node Delete runs
+    dialog.rerender(<NestingDialog open={false} onClose={noop} />);
+    keyAt(document.body, { key: "Delete" });
+    expect(useStore.getState().objects[0].points).toHaveLength(2);
+  });
 });

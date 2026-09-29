@@ -305,3 +305,50 @@ describe("F5 keyboard tool keys and Escape go through switchTool", () => {
     expect(measureState.diameterLabel).toBeNull();
   });
 });
+
+describe("fix pass: Cut, paste selection, menu Flip Vertical", () => {
+  // Cut is the destructive half of F1: it must copy first and be one undo step, or the objects are unrecoverable.
+  function cutCase(doCut: () => void) {
+    for (const id of ["A", "B", "C"]) useStore.getState().addObject(makeRect(id));
+    useStore.getState().setSelectedIds(["B"]);
+    const before = useStore.getState().undoStack.length;
+    doCut();
+    expect(useStore.getState().clipboard.map((o) => o.id)).toEqual(["B"]);
+    expect(useStore.getState().objects.map((o) => o.id)).toEqual(["A", "C"]);
+    expect(useStore.getState().undoStack.length).toBe(before + 1);
+    useStore.getState().undo();
+    expect(useStore.getState().objects.map((o) => o.id)).toEqual(["A", "B", "C"]);
+  }
+
+  it("keyboard Ctrl+X copies, removes, is one undo step, and undo restores positions", () => {
+    render(<ShortcutHarness />);
+    cutCase(() => key({ key: "x", ctrlKey: true }));
+  });
+
+  it("Edit > Cut copies, removes, is one undo step, and undo restores positions", () => {
+    render(<MenuBar />);
+    cutCase(() => clickMenu("Edit", "Cut"));
+  });
+
+  it("paste selects exactly what it pasted", () => {
+    render(<ShortcutHarness />);
+    useStore.getState().addObject(makePath("p1"));
+    useStore.getState().setSelectedIds(["p1"]);
+    key({ key: "c", ctrlKey: true });
+    key({ key: "v", ctrlKey: true });
+    const pasted = useStore.getState().objects[1];
+    expect(useStore.getState().selectedIds).toEqual([pasted.id]);
+  });
+
+  it("Arrange > Flip Vertical flips vertically", () => {
+    render(<MenuBar />);
+    useStore.getState().addObject(makePath("p1"));
+    useStore.getState().setSelectedIds(["p1"]);
+    const before = useStore.getState().objects[0];
+    const cy = before.transform.y + before.transform.height / 2;
+    clickMenu("Arrange", "Flip Vertical");
+    const after = useStore.getState().objects[0];
+    expect(after.points!.map((p) => p.y)).toEqual(before.points!.map((p) => 2 * cy - p.y));
+    expect(after.points!.map((p) => p.x)).toEqual(before.points!.map((p) => p.x));
+  });
+});
