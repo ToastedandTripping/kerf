@@ -82,6 +82,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 ## Log (newest first)
 
+### 2026-09-29 motion-trust B1 closed
+The B1 Razor re-check is CLOSED (0 CRITICAL, 0 WARNING, 2 NOTE). B1 on relay/kerf-safety-motion-trust is reviewed and closed at HEAD 64be256, clean and not merged. Next: the B2+B3 brief (add dependency_graph/parallel_batches to the pack as done for R3), carrying pack carry_to_b23. The N1 race must be closed. The owner card needs an explicit N4 step.
+
 ### 2026-09-29 R3 review stages complete
 The R3 batch 2 re-check is CLOSED (0 CRITICAL, 0 WARNING). Both R3 batches are reviewed and closed; the relay branch HEAD is 235ce63, clean and not merged. Next for R3: Stage 2.7 onward, per the pack next_action. The motion-trust B1 Razor re-check is still running.
 
