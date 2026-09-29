@@ -846,7 +846,12 @@ fn note_banner_for_stop(inner: &SerialInner, line: &str) {
 /// A controller line the barrier consumed outside its probe read: noted
 /// already (by the hook), published if it is a status frame (an ordinary
 /// snapshot, never the observation), surfaced if console-meaningful.
-fn barrier_consume_line(inner: &SerialInner, line: &str, lock_epoch: u64, events: &mut Vec<String>) {
+fn barrier_consume_line(
+    inner: &SerialInner,
+    line: &str,
+    lock_epoch: u64,
+    events: &mut Vec<String>,
+) {
     match serial_pump::classify_line(line) {
         LineClass::Status => {
             inner.session.publish_snapshot(line, lock_epoch);
@@ -1684,6 +1689,11 @@ mod tests {
     /// in-flight pump — this is the e-stop guarantee. If `send_byte_inner` ever
     /// grows a dependency on the command lock, this test deadlocks its worker
     /// thread and fails by timeout.
+    ///
+    /// Split (relay kerf-safety-motion-trust): this case covers `?`, `!` and
+    /// `~`, which touch ONLY the realtime lock. `0x18`/`0x85` now take
+    /// `submit` for the trust bump; their case is
+    /// `motion_trust::realtime_reset_completes_while_command_lock_held_and_waits_only_on_submit`.
     #[test]
     fn realtime_write_completes_while_command_lock_held() {
         let inner = Arc::new(SerialInner {
@@ -1697,18 +1707,22 @@ mod tests {
 
         // Simulate an in-flight pump: hold the command lock for the whole test.
         let _command_guard = inner.command.lock().unwrap();
+        // And `submit`: these bytes must not depend on it either.
+        let _submit_guard = inner.session.submit.lock().unwrap();
 
-        let (tx, rx) = mpsc::channel();
-        let inner2 = inner.clone();
-        thread::spawn(move || {
-            let result = send_byte_inner(&inner2, 0x18);
-            let _ = tx.send(result);
-        });
+        for byte in [b'?', b'!', b'~'] {
+            let (tx, rx) = mpsc::channel();
+            let inner2 = inner.clone();
+            thread::spawn(move || {
+                let result = send_byte_inner(&inner2, byte);
+                let _ = tx.send(result);
+            });
 
-        let result = rx
-            .recv_timeout(Duration::from_millis(500))
-            .expect("realtime write blocked behind the command lock — e-stop would freeze");
-        assert!(result.is_ok());
+            let result = rx
+                .recv_timeout(Duration::from_millis(500))
+                .expect("realtime write blocked behind the command lock — e-stop would freeze");
+            assert!(result.is_ok());
+        }
     }
 
     /// Acceptance criterion 5: a mid-job Disconnect terminates the in-flight

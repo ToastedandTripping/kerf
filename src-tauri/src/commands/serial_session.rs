@@ -414,7 +414,6 @@ impl SerialSession {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Motion trust (relay kerf-safety-motion-trust, B1): state, ledger, units,
 // observation and the outbound grammar. B1 records; it never refuses.
@@ -758,7 +757,9 @@ impl SerialSession {
     pub(crate) fn record_observation(&self, basis: BarrierBasis, frame: &GrblSnapshot) {
         let idle_mpos = frame.state == MachineState::Idle
             && frame.position_kind == Some(PositionKind::MPos)
-            && frame.position.is_some_and(|p| p.iter().all(|v| v.is_finite()));
+            && frame
+                .position
+                .is_some_and(|p| p.iter().all(|v| v.is_finite()));
         let o = Observation {
             conn_id: basis.conn_id,
             trust_epoch: basis.trust_epoch,
@@ -803,7 +804,10 @@ pub(crate) enum Outbound {
     /// `$<n>=…` (`startup: false`) or `$N<n>=…` (`startup: true`, a stored
     /// startup line run after every reset). `key` is `u32::MAX` if `n`
     /// does not fit.
-    SettingsWrite { key: u32, startup: bool },
+    SettingsWrite {
+        key: u32,
+        startup: bool,
+    },
     /// `$$`
     SettingsRead,
     /// `$RST=…`
