@@ -120,6 +120,16 @@ pub fn classify_line(line: &str) -> LineClass {
     }
 }
 
+/// The line hook (relay kerf-safety-motion-trust): every native read function
+/// calls it for each complete, non-empty line AS SOON AS it is extracted,
+/// before any classification-based return or early `Err`, so no line read
+/// from the controller can escape the session's trust bookkeeping.
+pub type OnLine<'a> = &'a mut dyn FnMut(&str, LineClass);
+
+/// Test-only no-op hook for the pre-B1 entry points the pump tests use.
+#[cfg(test)]
+pub(crate) fn no_note(_: &str, _: LineClass) {}
+
 /// Why the pump stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PumpTerminal {
@@ -166,6 +176,7 @@ pub enum PumpFailure {
 /// A legitimately-slow line reports `Run` while the head is moving, which resets the
 /// counter — so slow engraving jobs are never incorrectly aborted.
 /// Use `DEFAULT_IDLE_STALL_TICKS` (3) for production; tests may inject smaller values.
+#[cfg(test)]
 pub fn run_pump<R: BufRead, P: ProbeWriter>(
     reader: &mut R,
     probe: &mut P,
@@ -173,6 +184,27 @@ pub fn run_pump<R: BufRead, P: ProbeWriter>(
     liveness_ticks: u32,
     idle_stall_ticks: u32,
     on_status: Option<&dyn Fn(&str)>,
+) -> Result<PumpOutput, PumpFailure> {
+    run_pump_noted(
+        reader,
+        probe,
+        pending,
+        liveness_ticks,
+        idle_stall_ticks,
+        on_status,
+        &mut no_note,
+    )
+}
+
+/// `run_pump` with the line hook (the production entry point).
+pub fn run_pump_noted<R: BufRead, P: ProbeWriter>(
+    reader: &mut R,
+    probe: &mut P,
+    pending: &mut Vec<u8>,
+    liveness_ticks: u32,
+    idle_stall_ticks: u32,
+    on_status: Option<&dyn Fn(&str)>,
+    on_line: OnLine<'_>,
 ) -> Result<PumpOutput, PumpFailure> {
     let mut lines: Vec<String> = Vec::new();
     let mut silent_ticks: u32 = 0;
@@ -197,6 +229,7 @@ pub fn run_pump<R: BufRead, P: ProbeWriter>(
                     continue;
                 }
                 let class = classify_line(&line);
+                on_line(&line, class);
                 // Idle-wedge detector: track consecutive Idle status replies.
                 // Any non-Idle status, any non-status byte, or a terminal resets the counter.
                 if class == LineClass::Status {
@@ -307,7 +340,17 @@ pub struct DrainOutcome {
 /// Pre-write drain rule: non-blockingly consume every complete line already
 /// buffered (persistent `pending` + reader internals + OS RX queue) and classify
 /// it. A trailing partial line (no `\n` yet) stays in `pending` untouched.
+#[cfg(test)]
 pub fn drain_classified<R: PumpReader>(reader: &mut R, pending: &mut Vec<u8>) -> DrainOutcome {
+    drain_classified_noted(reader, pending, &mut no_note)
+}
+
+/// `drain_classified` with the line hook (the production entry point).
+pub fn drain_classified_noted<R: PumpReader>(
+    reader: &mut R,
+    pending: &mut Vec<u8>,
+    on_line: OnLine<'_>,
+) -> DrainOutcome {
     let mut outcome = DrainOutcome::default();
     loop {
         // Extract complete lines already sitting in the persistent buffer.
@@ -317,7 +360,9 @@ pub fn drain_classified<R: PumpReader>(reader: &mut R, pending: &mut Vec<u8>) ->
             if line.is_empty() {
                 continue;
             }
-            match classify_line(&line) {
+            let class = classify_line(&line);
+            on_line(&line, class);
+            match class {
                 LineClass::Alarm | LineClass::Msg => outcome.surfaced.push(line),
                 _ => outcome.dropped.push(line),
             }
@@ -353,11 +398,23 @@ pub struct StatusRead {
 /// `max_ticks` timeout ticks. After the first tick the probe is rewritten once
 /// (a `?` can be eaten during GRBL's post-reset boot window). Junk lines are
 /// classified per the drain rule, never blind-skipped.
+#[cfg(test)]
 pub fn read_status_bounded<R: BufRead, P: ProbeWriter>(
     reader: &mut R,
     probe: &mut P,
     pending: &mut Vec<u8>,
     max_ticks: u32,
+) -> Result<StatusRead, String> {
+    read_status_bounded_noted(reader, probe, pending, max_ticks, &mut no_note)
+}
+
+/// `read_status_bounded` with the line hook (the production entry point).
+pub fn read_status_bounded_noted<R: BufRead, P: ProbeWriter>(
+    reader: &mut R,
+    probe: &mut P,
+    pending: &mut Vec<u8>,
+    max_ticks: u32,
+    on_line: OnLine<'_>,
 ) -> Result<StatusRead, String> {
     probe
         .write_probe()
@@ -376,7 +433,9 @@ pub fn read_status_bounded<R: BufRead, P: ProbeWriter>(
                 if line.is_empty() {
                     continue;
                 }
-                match classify_line(&line) {
+                let class = classify_line(&line);
+                on_line(&line, class);
+                match class {
                     LineClass::Status => {
                         read.status = Some(line);
                         return Ok(read);
@@ -400,6 +459,49 @@ pub fn read_status_bounded<R: BufRead, P: ProbeWriter>(
             }
             Err(e) => return Err(format!("Read error: {}", e)),
         }
+    }
+}
+
+/// Result of completing a partial line left in `pending` by a drain.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PartialLine {
+    /// `pending` held no partial line.
+    None,
+    /// The partial line completed (already noted).
+    Line(String),
+    /// One read tick passed and the line is still incomplete.
+    StillPartial,
+}
+
+/// The observation barrier's partial-line step: if a drain left a partial
+/// line in `pending`, complete it with ONE bounded `read_until` (one read
+/// tick), note it, and return it. Only after this may the barrier write its
+/// probe, so every frame the probe can return started arriving after the
+/// drain ended.
+pub fn complete_partial_line_noted<R: BufRead>(
+    reader: &mut R,
+    pending: &mut Vec<u8>,
+    on_line: OnLine<'_>,
+) -> Result<PartialLine, String> {
+    if pending.is_empty() {
+        return Ok(PartialLine::None);
+    }
+    match reader.read_until(b'\n', pending) {
+        Ok(0) => Err("port closed (EOF)".to_string()),
+        Ok(_) => {
+            if pending.len() > FRAME_LENGTH_CAP {
+                pending.truncate(FRAME_LENGTH_CAP);
+            }
+            let line = String::from_utf8_lossy(pending).trim().to_string();
+            pending.clear();
+            if line.is_empty() {
+                return Ok(PartialLine::None);
+            }
+            on_line(&line, classify_line(&line));
+            Ok(PartialLine::Line(line))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Ok(PartialLine::StillPartial),
+        Err(e) => Err(format!("Read error: {}", e)),
     }
 }
 
@@ -536,6 +638,7 @@ impl SubmissionGate for OpenGate {
 // The gate is the eighth parameter (RF-15 plan: an explicit per-line gate
 // keeps the pump session-agnostic); bundling it into a struct would touch
 // every call site for no behavioural gain.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn run_buffered_pump<R: BufRead, W: Write + ProbeWriter>(
     lines: &[String],
@@ -546,6 +649,32 @@ pub fn run_buffered_pump<R: BufRead, W: Write + ProbeWriter>(
     abort: &AtomicBool,
     gate: &dyn SubmissionGate,
     on_event: &dyn Fn(BufferedPumpEvent),
+) -> Result<BufferedPumpOutcome, PumpFailure> {
+    run_buffered_pump_noted(
+        lines,
+        reader,
+        writer,
+        pending,
+        config,
+        abort,
+        gate,
+        on_event,
+        &mut no_note,
+    )
+}
+
+/// `run_buffered_pump` with the line hook (the production entry point).
+#[allow(clippy::too_many_arguments)]
+pub fn run_buffered_pump_noted<R: BufRead, W: Write + ProbeWriter>(
+    lines: &[String],
+    reader: &mut R,
+    writer: &mut W,
+    pending: &mut Vec<u8>,
+    config: &BufferedPumpConfig,
+    abort: &AtomicBool,
+    gate: &dyn SubmissionGate,
+    on_event: &dyn Fn(BufferedPumpEvent),
+    on_line: OnLine<'_>,
 ) -> Result<BufferedPumpOutcome, PumpFailure> {
     // Pre-validation: reject any line that would exceed the RX budget.
     for (i, line) in lines.iter().enumerate() {
@@ -650,6 +779,7 @@ pub fn run_buffered_pump<R: BufRead, W: Write + ProbeWriter>(
                 }
 
                 let class = classify_line(&line);
+                on_line(&line, class);
 
                 match class {
                     LineClass::Ok => {

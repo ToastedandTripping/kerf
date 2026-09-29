@@ -126,6 +126,31 @@ pub struct GrblSnapshot {
     pub raw: String,
     /// Fields we didn't recognize (retained for debugging).
     pub unknown_fields: Vec<String>,
+    // ── Motion trust (relay kerf-safety-motion-trust, B1). Overlaid from the
+    // native trust state when the snapshot is READ (`read_snapshot`), never
+    // taken from the frame. Additive: TS ignores them until B2+B3.
+    /// Current connection id (0 = disconnected).
+    #[serde(default)]
+    pub conn_id: u64,
+    /// The native trust epoch.
+    #[serde(default)]
+    pub trust_epoch: u64,
+    /// A clean `$H` completed at the current trust epoch.
+    #[serde(default)]
+    pub homed: bool,
+    /// `$13=0` read on this connection with no settings write or reset since.
+    #[serde(default)]
+    pub units_mm: bool,
+    /// A motion send is entered and not returned.
+    #[serde(default)]
+    pub motion_pending: bool,
+    /// The seq of the current barrier observation (literal Idle with MPos),
+    /// else `None`. Every snapshot read while it is current carries it.
+    #[serde(default)]
+    pub observed_seq: Option<u64>,
+    /// The current barrier observation's MPos, else `None`.
+    #[serde(default)]
+    pub observed_pos: Option<[f64; 3]>,
 }
 
 impl GrblSnapshot {
@@ -219,6 +244,13 @@ pub fn parse_status_frame(raw: &str, epoch: u64, seq: u64) -> Option<GrblSnapsho
         units: UnitsValidity::Unknown,
         raw: raw.to_string(),
         unknown_fields,
+        conn_id: 0,
+        trust_epoch: 0,
+        homed: false,
+        units_mm: false,
+        motion_pending: false,
+        observed_seq: None,
+        observed_pos: None,
     })
 }
 
