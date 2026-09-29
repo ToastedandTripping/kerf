@@ -82,6 +82,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 ## Log (newest first)
 
+### 2026-09-29 resumed after compaction: B2+B3 dispatched, R3 at 2.8
+Motion-trust: the pack gained dependency_graph and parallel_batches, and the B2+B3 brief was written at state/relay/kerf-safety-motion-trust-ted-brief-b23.md with the B1 carries (N1 race must close; N2/N3 pins; N11 $1=255; N4 owner-card step; grammar trim for newline and tab). The brief's branch line was corrected by hand, because relay-brief's branchFor always adds the step id and has no batches[].branch override. A fresh Ted is implementing B2+B3 from 64be256. R3: Stage 2.7 pack finalised (21 files changed); the dev server is on :5401 from the relay worktree; an independent behavioural evaluator is running F1-F9 in headful Chrome through puppeteer. Next: Jen Stage 3, then 3.5 docs, 4.5, and the merge.
+
 ### 2026-09-29 motion-trust B1 closed
 The B1 Razor re-check is CLOSED (0 CRITICAL, 0 WARNING, 2 NOTE). B1 on relay/kerf-safety-motion-trust is reviewed and closed at HEAD 64be256, clean and not merged. Next: the B2+B3 brief (add dependency_graph/parallel_batches to the pack as done for R3), carrying pack carry_to_b23. The N1 race must be closed. The owner card needs an explicit N4 step.
 
