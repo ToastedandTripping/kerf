@@ -9,7 +9,7 @@ import {
   openVariableText,
   openNesting,
 } from "../../app/App";
-import { duplicateSelection, flipSelection } from "../../lib/editCommands";
+import { deleteSelection, duplicateSelection, flipSelection } from "../../lib/editCommands";
 
 interface Command {
   id: string;
@@ -128,12 +128,7 @@ function getCommands(): Command[] {
       label: "Delete Selected",
       shortcut: "Del",
       category: "Edit",
-      action: () => {
-        const store = s();
-        store.withUndo("delete", () => {
-          store.removeObjects(store.selectedIds);
-        });
-      },
+      action: () => deleteSelection(),
     },
     {
       id: "edit-convert-path",

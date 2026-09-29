@@ -44,6 +44,22 @@ function makePath(id: string, x = 10, y = 10): DesignObject {
   };
 }
 
+function makeRect(id: string): DesignObject {
+  return {
+    id,
+    type: "rectangle",
+    name: `Rect ${id}`,
+    transform: { x: 10, y: 10, width: 40, height: 30, rotation: 0, scaleX: 1, scaleY: 1 },
+    layerIndex: 0,
+    visible: true,
+    locked: false,
+    fill: "#cccccc",
+    stroke: "#4a90e2",
+    strokeWidth: 1,
+    opacity: 1,
+  };
+}
+
 /** Raw dispatch: store-only assertions follow (plan's keyboard dispatch rule). */
 function key(opts: KeyboardEventInit) {
   window.dispatchEvent(new KeyboardEvent("keydown", { cancelable: true, ...opts }));
@@ -150,5 +166,57 @@ describe("F1 paste deep-clones with fresh ids at every depth", () => {
     useStore.getState().setSelectedIds([]);
     key({ key: "c", ctrlKey: true });
     expect(useStore.getState().clipboard.map((o) => o.id)).toEqual(["p1"]);
+  });
+});
+
+describe("F2 Delete undo restores original array positions", () => {
+  it("Delete A from [A,B,C] then Ctrl+Z gives [A,B,C] with A selected", () => {
+    // Array order within a layer is cut order (toCutObjects stable sort; store F15): undo must restore original positions, or Delete+Undo silently re-sequences the job.
+    render(<ShortcutHarness />);
+    for (const id of ["A", "B", "C"]) useStore.getState().addObject(makeRect(id));
+    useStore.getState().setSelectedIds(["A"]);
+    key({ key: "Delete" });
+    expect(useStore.getState().objects.map((o) => o.id)).toEqual(["B", "C"]);
+    key({ key: "z", ctrlKey: true });
+    expect(useStore.getState().objects.map((o) => o.id)).toEqual(["A", "B", "C"]);
+    expect(useStore.getState().selectedIds).toEqual(["A"]);
+  });
+
+  it("Delete with nothing selected pushes no undo entry, from the key and from the menu (each with a positive control)", () => {
+    render(
+      <>
+        <ShortcutHarness />
+        <MenuBar />
+      </>
+    );
+    for (const id of ["A", "B", "C"]) useStore.getState().addObject(makeRect(id));
+    const depth = () => useStore.getState().undoStack.length;
+    const ids = () => useStore.getState().objects.map((o) => o.id);
+
+    // keyboard positive control
+    useStore.getState().setSelectedIds(["B"]);
+    let before = depth();
+    key({ key: "Delete" });
+    expect(depth()).toBe(before + 1);
+    expect(ids()).not.toContain("B");
+
+    // keyboard, empty selection
+    useStore.getState().setSelectedIds([]);
+    before = depth();
+    key({ key: "Delete" });
+    expect(depth()).toBe(before);
+
+    // menu positive control
+    useStore.getState().setSelectedIds(["C"]);
+    before = depth();
+    clickMenu("Edit", "Delete");
+    expect(depth()).toBe(before + 1);
+    expect(ids()).not.toContain("C");
+
+    // menu, empty selection
+    useStore.getState().setSelectedIds([]);
+    before = depth();
+    clickMenu("Edit", "Delete");
+    expect(depth()).toBe(before);
   });
 });

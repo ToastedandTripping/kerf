@@ -6,6 +6,7 @@ import { MIN_ZOOM, MAX_ZOOM } from "../../lib/constants";
 import {
   copySelection,
   cutSelection,
+  deleteSelection,
   pasteClipboard,
   duplicateSelection,
   flipSelection,
@@ -186,12 +187,7 @@ export function MenuBar() {
           {
             label: "Delete",
             shortcut: "Del",
-            action: () => {
-              const s = useStore.getState();
-              s.withUndo("delete", () => {
-                s.removeObjects(s.selectedIds);
-              });
-            },
+            action: deleteSelection,
           },
         ]}
       />

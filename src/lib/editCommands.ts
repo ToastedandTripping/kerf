@@ -44,6 +44,18 @@ export function pasteClipboard(inPlace: boolean) {
   });
 }
 
+/**
+ * Delete the selection as one withUndo step: undo restores the whole objects
+ * array (original positions, so cut order survives) and the selection.
+ * No-op (no undo entry) when nothing is selected.
+ */
+export function deleteSelection() {
+  const s = useStore.getState();
+  if (s.selectedIds.length === 0) return;
+  const ids = s.selectedIds.slice();
+  s.withUndo("delete", () => s.removeObjects(ids));
+}
+
 export function duplicateSelection() {
   useStore.getState().duplicateInPlace();
 }

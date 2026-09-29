@@ -7,6 +7,7 @@ import { MIN_ZOOM, MAX_ZOOM } from "./constants";
 import {
   copySelection,
   cutSelection,
+  deleteSelection,
   pasteClipboard,
   duplicateSelection,
   flipSelection,
@@ -224,19 +225,7 @@ export function useKeyboardShortcuts() {
       // Delete
       if (key === "delete" || key === "backspace") {
         e.preventDefault();
-        const s = useStore.getState();
-        const deletedObjects = s.objects.filter((o) => s.selectedIds.includes(o.id));
-        const deletedIds = s.selectedIds.slice();
-        s.removeObjects(deletedIds);
-        s.pushCommand({
-          type: "delete",
-          undo: () => {
-            deletedObjects.forEach((o) => useStore.getState().addObject(o));
-          },
-          redo: () => {
-            useStore.getState().removeObjects(deletedIds);
-          },
-        });
+        deleteSelection();
         return;
       }
 
