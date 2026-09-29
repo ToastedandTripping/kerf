@@ -92,15 +92,18 @@ describe("F8 image import through ImageImportDialog records one undo step", () =
     );
     fireEvent.click(screen.getByRole("button", { name: "Import" }));
     expect(images()).toHaveLength(1);
+    expect(useStore.getState().selectedIds).toEqual([images()[0].id]);
     expect(useStore.getState().undoStack.length).toBe(before + 1);
 
     useStore.getState().undo();
     expect(images()).toHaveLength(0);
     expect(rX()).toBe(15);
+    expect(useStore.getState().selectedIds).toEqual([]);
 
     useStore.getState().redo();
     expect(images()).toHaveLength(1);
     expect(images()[0].imageData).toBe("data:image/png;base64,AAAA");
+    expect(useStore.getState().selectedIds).toEqual([images()[0].id]);
   });
 });
 
@@ -127,6 +130,7 @@ describe("F8 importImageData (File > Import Image) records one undo step", () =>
     const before = useStore.getState().undoStack.length;
     importImageData(new Uint8Array([1, 2, 3, 4]), "png");
     expect(images()).toHaveLength(1);
+    expect(useStore.getState().selectedIds).toEqual([images()[0].id]);
     const data = images()[0].imageData;
     expect(data).toBe(`data:image/png;base64,${btoa("\x01\x02\x03\x04")}`);
     expect(useStore.getState().undoStack.length).toBe(before + 1);
@@ -134,10 +138,12 @@ describe("F8 importImageData (File > Import Image) records one undo step", () =>
     useStore.getState().undo();
     expect(images()).toHaveLength(0);
     expect(rX()).toBe(15);
+    expect(useStore.getState().selectedIds).toEqual([]);
 
     useStore.getState().redo();
     expect(images()).toHaveLength(1);
     expect(images()[0].imageData).toBe(data);
+    expect(useStore.getState().selectedIds).toEqual([images()[0].id]);
   });
 });
 
@@ -157,5 +163,8 @@ describe("F8 importPdfVectors (PDF onImportVector) records one undo step", () =>
     useStore.getState().undo();
     expect(ids()).toEqual(["r"]);
     expect(rX()).toBe(15);
+
+    useStore.getState().redo();
+    expect(ids()).toEqual(["r", "pa", "pb"]);
   });
 });

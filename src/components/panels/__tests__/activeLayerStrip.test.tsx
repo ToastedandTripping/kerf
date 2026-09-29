@@ -129,6 +129,21 @@ describe("ActiveLayerStrip", () => {
       );
     });
 
+    it("fillLine layer caps at the X axis too (raster predicate covers fillLine)", () => {
+      useStore.setState({
+        layers: DEFAULT_LAYERS.map((l) =>
+          l.index === 1 ? { ...l, mode: "fillLine" as const } : l
+        ),
+        activeLayerIndex: 1,
+        grblMaxFeedRateX: 6000,
+        grblMaxFeedRateY: 5000,
+      });
+      expect(speedChange("999999")).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({ speed: 6000 })
+      );
+    });
+
     it("the input carries max = the active layer's cap", () => {
       useStore.setState({ activeLayerIndex: 1, grblMaxFeedRateX: 6000, grblMaxFeedRateY: 5000 });
       const { getAllByRole } = render(<ActiveLayerStrip />);
