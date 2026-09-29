@@ -62,7 +62,7 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - S3c HELD, per Lee 2026-09-29 ("Hold for full fix", chosen over shipping revision 5 as a strict improvement): jog safety is redone TOGETHER with S3d connection lifetime and the native serial-layer fixes as one job, reviewed until it passes. Today's jogging stays as it is meanwhile. Inputs: .claude/plans/kerf-safety-s3c.md revision 5 plus critic rounds r1-r4 and critic.md (r5). Round 5's open findings: banners dropped natively (serial_pump.rs drain_classified and read_status_bounded send them to `dropped`); a units grant with no generation fence and no console $$ route; the post-motion sample order at the native boundary; the card's physical containment; enforced frame qualification (S3e) versus the full-feature release ruling.
 
-- NEXT, in order (2026-09-29): (1) R3 editing-shortcuts relay (citations re-verified at d2dfd24; audit in the plan addendum). (2) The combined jog-safety + connection-lifetime plan (S3c+S3d, native plus TS), critic until PASS. (3) S4a/b/c and S5 (lift from PLAN-safety-gate-class.md), E4, the Min Pwr image-only relay, S3e. E1b is on marvin/kerf-gap (d2dfd24), not on master.
+- IN FLIGHT (2026-09-29): (1) R3 relay kerf-refresh-editing-shortcuts: batch 1 (F1-F7) with Ted, Jen spec done. (2) Relay kerf-safety-motion-trust (the combined S3c+S3d job Lee chose on 2026-09-29): plan revision 4, critic astra r1 FAIL, Fable r2 FAIL (dim 8), Fable r3 CONCERN with no gating FAIL, folded. Architect review CONCERN: raw 0x18 now waits at most one write under submit; propose a fence-pin amendment at close. Batch B1 (native trust state and observation barrier, Rust only, no refusal) is with Ted. B2+B3 ship as one unit; merge only after B4. OWED AT CLOSE to Lee: pins (a) and (b), plus whether jogs refuse on frame-unqualified machines until S3e (touches the 2026-09-10 full-feature ruling). (3) Then S4a/b/c and S5, E4, the Min Pwr image-only relay, and S3e. The Codex 5h window hit 91% on 2026-09-29, so critics fall back to Fable until it resets.
 
 ## Open questions awaiting Lee
 
@@ -85,6 +85,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-09-29 combined motion-trust plan
+A native transport map (facts file) showed the TS side cannot own jog trust: banners are dropped on three native paths, the stop read drops ALARM, pump errors lose lines, and there is no native connection identity. The combined plan moves trust into the Rust layer, with the jog check and write inside the stop-shared submit critical section and a native observation barrier. It took 3 critic rounds to CONCERN. The ROADMAP Parking Lot now indexes its deferrals (S3e frame qualification, and others).
 
 ### 2026-09-29 S3c held for a full fix (Lee)
 The S3c plan hit its five-round cap: astra FAIL every round, each finding verified real. Lee chose "Hold for full fix" over shipping revision 5 as a strict improvement (recommended) and over core-only. The next jog-safety plan merges S3c with S3d and includes the native transport.
