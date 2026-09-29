@@ -144,8 +144,12 @@ describe("F8 importImageData (File > Import Image) records one undo step", () =>
 describe("F8 importPdfVectors (PDF onImportVector) records one undo step", () => {
   it("two paths import as one entry and one undo removes both", () => {
     seedNudge();
+    useStore.getState().openDialog("pdfImport");
+    useStore.getState().setDialogData({ pendingPdf: { data: new ArrayBuffer(0), name: "x.pdf" } });
     const before = useStore.getState().undoStack.length;
     importPdfVectors([makePath("pa"), makePath("pb")]);
+    expect(useStore.getState().openDialogs.has("pdfImport")).toBe(false);
+    expect(useStore.getState().dialogData.pendingPdf).toBeNull();
     const ids = () => useStore.getState().objects.map((o) => o.id);
     expect(ids()).toEqual(["r", "pa", "pb"]);
     expect(useStore.getState().undoStack.length).toBe(before + 1);
