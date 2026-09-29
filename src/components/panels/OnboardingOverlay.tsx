@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
+import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
 
 const ONBOARDING_KEY = "kerf-onboarding-seen";
 
@@ -30,6 +31,9 @@ const steps = [
 ];
 
 export function OnboardingOverlay({ onClose }: { onClose: () => void }) {
+  // Every aria-modal root contains focus (F7 made Tab inert behind modals).
+  const trapRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(trapRef, true);
   const [step, setStep] = useState(0);
 
   function finish() {
@@ -52,6 +56,7 @@ export function OnboardingOverlay({ onClose }: { onClose: () => void }) {
       }}
     >
       <div
+        ref={trapRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="onboarding-overlay-title"

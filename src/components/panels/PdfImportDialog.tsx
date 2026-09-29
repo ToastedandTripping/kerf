@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
 import pdfjsWorkerUrl from "pdfjs-dist/build/pdf.worker.mjs?url";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import type { DesignObject } from "../../app/types";
@@ -231,6 +232,10 @@ export function PdfImportDialog({
     return () => window.removeEventListener("keydown", handler);
   }, [open, onClose]);
 
+  // Every aria-modal root contains focus (F7 made Tab inert behind modals).
+  const trapRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(trapRef, open);
+
   if (!open) return null;
 
   // Calculate pixel dimensions for the DPI readout
@@ -266,6 +271,7 @@ export function PdfImportDialog({
       />
       {/* Dialog */}
       <div
+        ref={trapRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

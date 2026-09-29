@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
 import { useStore } from "../../app/store";
 import { fileOperations } from "../../lib/fileOps";
 import {
@@ -460,6 +461,10 @@ export function CommandPalette() {
     }
   }, [open]);
 
+  // Every aria-modal root contains focus (F7 made Tab inert behind modals).
+  const trapRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(trapRef, open);
+
   if (!open) return null;
 
   const commands = getCommands();
@@ -503,6 +508,7 @@ export function CommandPalette() {
       />
       {/* Palette */}
       <div
+        ref={trapRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="command-palette-title"

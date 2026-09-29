@@ -1,4 +1,5 @@
-import { Component, useState, useCallback, useEffect } from "react";
+import { Component, useState, useCallback, useEffect, useRef } from "react";
+import { useFocusTrap } from "../lib/hooks/useFocusTrap";
 import type { ReactNode, ErrorInfo } from "react";
 import type { DesignObject } from "./types";
 import { MenuBar } from "../components/topbar/MenuBar";
@@ -165,6 +166,9 @@ export default function App() {
   const closeDialog = useStore((s) => s.closeDialog);
   const setDialogData = useStore((s) => s.setDialogData);
   const [recoveryOffer, setRecoveryOffer] = useState<{ timestamp: number } | null>(null);
+  // Every aria-modal root contains focus (F7 made Tab inert behind modals).
+  const trapRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(trapRef, !!recoveryOffer);
   const [showOnboarding, setShowOnboarding] = useState(shouldShowOnboarding);
   // B5: MaterialLibrary and PropertiesPanel collapsed by default so LayerPanel
   // (the primary working surface) gets more room. State is local — no Zustand
@@ -406,6 +410,7 @@ export default function App() {
           }}
         >
           <div
+            ref={trapRef}
             role="dialog"
             aria-modal="true"
             aria-labelledby="recovery-dialog-title"

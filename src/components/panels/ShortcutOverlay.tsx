@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
 import { useStore } from "../../app/store";
 
 const SHORTCUT_GROUPS = [
@@ -108,6 +109,10 @@ export function ShortcutOverlay() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  // Every aria-modal root contains focus (F7 made Tab inert behind modals).
+  const trapRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(trapRef, visible);
+
   if (!visible) return null;
 
   return (
@@ -123,6 +128,7 @@ export function ShortcutOverlay() {
         }}
       />
       <div
+        ref={trapRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="shortcut-overlay-title"

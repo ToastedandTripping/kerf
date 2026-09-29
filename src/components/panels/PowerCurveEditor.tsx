@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
 
 export interface CurvePoint {
   x: number; // 0-255 (input shade)
@@ -316,6 +317,10 @@ export function PowerCurveEditor({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [open, onClose]);
 
+  // Every aria-modal root contains focus (F7 made Tab inert behind modals).
+  const trapRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(trapRef, open);
+
   if (!open) return null;
 
   return (
@@ -332,6 +337,7 @@ export function PowerCurveEditor({
       />
       {/* Dialog */}
       <div
+        ref={trapRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

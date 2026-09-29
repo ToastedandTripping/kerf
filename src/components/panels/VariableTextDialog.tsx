@@ -1,4 +1,5 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
+import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
 import { useStore } from "../../app/store";
 import type { VariableTextConfig, VariableDataSource, SerialConfig } from "../../app/types";
 import {
@@ -81,6 +82,10 @@ export function VariableTextDialog({ open, onClose }: Props) {
     return generateSerialValues(config);
   }, [mode, start, increment, count, zeroPad, prefix, suffix]);
 
+  // Every aria-modal root contains focus (F7 made Tab inert behind modals).
+  const trapRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(trapRef, open);
+
   if (!open) return null;
 
   function handleCsvUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -151,6 +156,7 @@ export function VariableTextDialog({ open, onClose }: Props) {
         style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999 }}
       />
       <div
+        ref={trapRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="variable-text-dialog-title"

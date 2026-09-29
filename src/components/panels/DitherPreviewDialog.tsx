@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
 import { previewImageDither } from "../../lib/machine/gcodeGen";
 import type { PreviewDitherResult } from "../../lib/machine/gcodeGen";
 
@@ -45,6 +46,10 @@ export function DitherPreviewDialog({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [open, onClose]);
 
+  // Every aria-modal root contains focus (F7 made Tab inert behind modals).
+  const trapRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(trapRef, open);
+
   if (!open) return null;
 
   const zoom = ZOOM_STEPS[zoomIndex];
@@ -83,6 +88,7 @@ export function DitherPreviewDialog({
       />
       {/* Dialog */}
       <div
+        ref={trapRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
