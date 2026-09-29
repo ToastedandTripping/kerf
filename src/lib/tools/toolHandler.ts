@@ -1888,6 +1888,13 @@ function handleMeasureMove(worldX: number, worldY: number) {
 
 // --- TOOL CHANGE ---
 
+/** Switch tools the one correct way: set the tool, then run handleToolChange. */
+export function switchTool(newTool: ToolType) {
+  const previousTool = useStore.getState().activeTool;
+  useStore.getState().setActiveTool(newTool);
+  handleToolChange(newTool, previousTool);
+}
+
 export function handleToolChange(newTool: ToolType, previousTool: ToolType) {
   if (previousTool === "pen" && penState.isDrawing) {
     cancelPen();

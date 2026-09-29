@@ -9,6 +9,7 @@ import {
   openVariableText,
   openNesting,
 } from "../../app/App";
+import { switchTool } from "../../lib/tools/toolHandler";
 import { deleteSelection, duplicateSelection, flipSelection } from "../../lib/editCommands";
 
 interface Command {
@@ -154,49 +155,63 @@ function getCommands(): Command[] {
       label: "Select Tool",
       shortcut: "V",
       category: "Tools",
-      action: () => s().setActiveTool("select"),
+      action: () => switchTool("select"),
     },
     {
       id: "tool-rect",
       label: "Rectangle Tool",
       shortcut: "R",
       category: "Tools",
-      action: () => s().setActiveTool("rectangle"),
+      action: () => switchTool("rectangle"),
     },
     {
       id: "tool-ellipse",
       label: "Ellipse Tool",
       shortcut: "E",
       category: "Tools",
-      action: () => s().setActiveTool("ellipse"),
+      action: () => switchTool("ellipse"),
     },
     {
       id: "tool-line",
       label: "Line Tool",
       shortcut: "L",
       category: "Tools",
-      action: () => s().setActiveTool("line"),
+      action: () => switchTool("line"),
     },
     {
       id: "tool-pen",
       label: "Pen Tool",
       shortcut: "P",
       category: "Tools",
-      action: () => s().setActiveTool("pen"),
+      action: () => switchTool("pen"),
     },
     {
       id: "tool-text",
       label: "Text Tool",
       shortcut: "T",
       category: "Tools",
-      action: () => s().setActiveTool("text"),
+      action: () => switchTool("text"),
     },
     {
       id: "tool-node",
       label: "Node Edit Tool",
       shortcut: "N",
       category: "Tools",
-      action: () => s().setActiveTool("node"),
+      action: () => switchTool("node"),
+    },
+    {
+      id: "tool-measure",
+      label: "Measure Tool",
+      shortcut: "M",
+      category: "Tools",
+      action: () => switchTool("measure"),
+    },
+    {
+      id: "tool-pan",
+      label: "Pan Tool",
+      shortcut: "H",
+      category: "Tools",
+      action: () => switchTool("pan"),
     },
 
     // View

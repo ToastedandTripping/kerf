@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useStore } from "../app/store";
 import { fileOperations } from "./fileOps";
-import { handleViewportKeyDown, handleToolChange } from "./tools/toolHandler";
+import { handleViewportKeyDown, switchTool } from "./tools/toolHandler";
 import { movePartial } from "./geometry";
 import { MIN_ZOOM, MAX_ZOOM } from "./constants";
 import {
@@ -262,12 +262,10 @@ export function useKeyboardShortcuts() {
       // Escape - deselect / switch to select tool
       if (key === "escape") {
         const s = useStore.getState();
-        const previousTool = s.activeTool;
         if (s.selectedIds.length > 0) {
           s.clearSelection();
         }
-        s.setActiveTool("select");
-        handleToolChange("select", previousTool);
+        switchTool("select");
         return;
       }
 
@@ -283,11 +281,7 @@ export function useKeyboardShortcuts() {
 
       // Tool shortcuts (single key, no modifier)
       if (!ctrl && !shift && !alt && toolShortcuts[key]) {
-        const s = useStore.getState();
-        const previousTool = s.activeTool;
-        const newTool = toolShortcuts[key];
-        s.setActiveTool(newTool);
-        handleToolChange(newTool, previousTool);
+        switchTool(toolShortcuts[key]);
         return;
       }
 
