@@ -276,17 +276,19 @@ describe("F7 modal guard", () => {
         <button>c</button>
       </div>
     );
-    const [a, , c] = Array.from(bare.container.querySelectorAll("button"));
+    const [, b, c] = Array.from(bare.container.querySelectorAll("button"));
     const dialog = bare.container.firstElementChild as HTMLElement;
-    // emulate a per-dialog trap: it wraps last -> first and prevents the default
+    // Emulate a per-dialog trap that moves focus itself and prevents the default
+    // (here b -> c). The fallback then sees focus on the last element; if it
+    // ignored defaultPrevented it would step again and wrap to the first.
     dialog.addEventListener("keydown", (e) => {
-      if (e.key === "Tab" && document.activeElement === c) {
+      if (e.key === "Tab" && document.activeElement === b) {
         e.preventDefault();
-        a.focus();
+        c.focus();
       }
     });
-    c.focus();
-    keyAt(c, { key: "Tab" });
-    expect(document.activeElement).toBe(a);
+    b.focus();
+    keyAt(b, { key: "Tab" });
+    expect(document.activeElement).toBe(c);
   });
 });
