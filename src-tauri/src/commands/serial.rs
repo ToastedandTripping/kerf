@@ -4460,3 +4460,8 @@ mod rf15 {
         );
     }
 }
+
+// Motion-trust tests (relay kerf-safety-motion-trust).
+#[cfg(test)]
+#[path = "serial_trust_tests.rs"]
+mod motion_trust;
