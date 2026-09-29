@@ -21,6 +21,7 @@ import {
   openGrblSettings,
   openSettings,
   openProjectNotes,
+  openKeyboardShortcuts,
 } from "../../app/App";
 
 function buildRecentFilesItems(): MenuItem[] {
@@ -415,7 +416,7 @@ export function MenuBar() {
           {
             label: "Keyboard Shortcuts",
             shortcut: "?",
-            action: () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "?" })),
+            action: () => openKeyboardShortcuts(),
           },
           { type: "separator" },
           {

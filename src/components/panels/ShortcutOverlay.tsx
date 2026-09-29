@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useEffect } from "react";
+import { useStore } from "../../app/store";
 
 const SHORTCUT_GROUPS = [
   {
@@ -77,30 +78,34 @@ const SHORTCUT_GROUPS = [
 ];
 
 export function ShortcutOverlay() {
-  const [visible, setVisible] = useState(false);
+  // Open state lives in the store's openDialogs (so Help > Keyboard Shortcuts can open it).
+  const visible = useStore((s) => s.openDialogs.has("shortcuts"));
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+      const s = useStore.getState();
+      const isOpen = s.openDialogs.has("shortcuts");
       if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
         e.preventDefault();
-        setVisible((v) => !v);
+        if (isOpen) s.closeDialog("shortcuts");
+        else s.openDialog("shortcuts");
       }
-      if (e.key === "Escape" && visible) {
-        setVisible(false);
+      if (e.key === "Escape" && isOpen) {
+        s.closeDialog("shortcuts");
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [visible]);
+  }, []);
 
   if (!visible) return null;
 
   return (
     <>
       <div
-        onClick={() => setVisible(false)}
+        onClick={() => useStore.getState().closeDialog("shortcuts")}
         style={{
           position: "fixed",
           inset: 0,

@@ -410,7 +410,8 @@ function getCommands(): Command[] {
 }
 
 export function CommandPalette() {
-  const [open, setOpen] = useState(false);
+  // Open state lives in the store's openDialogs, like every other dialog.
+  const open = useStore((s) => s.openDialogs.has("commandPalette"));
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -420,17 +421,17 @@ export function CommandPalette() {
     function handleKeyDown(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setOpen(true);
+        useStore.getState().openDialog("commandPalette");
         setQuery("");
         setSelectedIndex(0);
       }
-      if (e.key === "Escape" && open) {
-        setOpen(false);
+      if (e.key === "Escape" && useStore.getState().openDialogs.has("commandPalette")) {
+        useStore.getState().closeDialog("commandPalette");
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open]);
+  }, []);
 
   // Focus input when opened
   useEffect(() => {
@@ -451,7 +452,7 @@ export function CommandPalette() {
         });
 
   const handleSelect = (cmd: Command) => {
-    setOpen(false);
+    useStore.getState().closeDialog("commandPalette");
     cmd.action();
   };
 
@@ -472,7 +473,7 @@ export function CommandPalette() {
     <>
       {/* Backdrop */}
       <div
-        onClick={() => setOpen(false)}
+        onClick={() => useStore.getState().closeDialog("commandPalette")}
         style={{
           position: "fixed",
           inset: 0,

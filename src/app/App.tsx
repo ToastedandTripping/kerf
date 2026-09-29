@@ -116,6 +116,9 @@ export function openVariableText() {
 export function openNesting() {
   useStore.getState().openDialog("nesting");
 }
+export function openKeyboardShortcuts() {
+  useStore.getState().openDialog("shortcuts");
+}
 export function openSvgImport(svgContent: string) {
   const s = useStore.getState();
   s.setDialogData({ svgContent });
