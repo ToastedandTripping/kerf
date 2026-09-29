@@ -68,6 +68,11 @@ function staleResult(atInvoke: number, result?: { connId?: number } | null): boo
   return typeof result?.connId === "number" && result.connId !== atInvoke;
 }
 
+/** Test-only: the settings generation (T-C8). */
+export function _testSettingsGeneration(): number {
+  return settingsGeneration;
+}
+
 /** Test-only: the current connection id. */
 export function _testConnId(): number {
   return connId;
