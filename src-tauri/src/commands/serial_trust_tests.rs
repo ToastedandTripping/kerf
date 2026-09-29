@@ -1846,6 +1846,12 @@ fn b23_n9_malformed_payloads_are_refused_with_zero_bytes() {
     }
     assert_eq!(writer_bytes(&r.base.trace()).len(), before, "zero bytes");
     assert!(tv(&r).homed, "a refusal changes no trust");
+    // A newline or CR is named as a line delimiter (two commands to GRBL),
+    // not merely a control byte.
+    for bad in ["$J=G91 X1\n$J=G91 X50", "$J=G91 X1\r"] {
+        let e = classify_outbound(bad).unwrap_err();
+        assert!(e.contains("line delimiter"), "{bad:?}: {e}");
+    }
 }
 
 #[test]
