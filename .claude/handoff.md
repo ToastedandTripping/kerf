@@ -82,6 +82,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 ## Log (newest first)
 
+### 2026-09-29 R3 batch 2 Razor verdict
+R3 batch 2: WARNING, 0 CRITICAL, 1 WARNING, 5 NOTE. W1: the onImportVector binding is untested, and an onImportVector={undefined} mutant survives, which would silently turn a vector PDF import into raster. A fix pass was sent to the b2 Ted (resumed, pre-fix 917a2c8). After it: resume the b2 Razor for a re-check (diff 917a2c8..HEAD). Pack next_action holds the rest.
+
 ### 2026-09-29 context-floor hand-off (coordinator)
 Written at the coordinator's request at about 34% context. In flight: R3 batch 2 under Razor, and motion-trust B1 under Razor, both committed and clean, and neither merged. See RESUME HERE in Owed. Done in this window: /save to master 1c41a89; the grill (DECISIONS 30 to 33); v0.8.31 published, with the wedge release gate lifted per Lee; E1b merged into the session branch (d2dfd24); S3c held per Lee and replaced by the combined motion-trust plan (native transport facts file, 3 critic rounds to CONCERN); R3 batch 1 closed after one fix pass; motion-trust B1 built.
 
