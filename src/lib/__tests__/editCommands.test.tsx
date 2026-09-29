@@ -15,6 +15,7 @@ import { useStore } from "../../app/store";
 import type { DesignObject, PathPoint } from "../../app/types";
 import { useKeyboardShortcuts } from "../shortcuts";
 import { MenuBar } from "../../components/topbar/MenuBar";
+import { measureState } from "../tools/toolHandler";
 
 function ShortcutHarness() {
   useKeyboardShortcuts();
@@ -277,5 +278,30 @@ describe("F6 labelled keys are bound: S, ], [", () => {
 
     key({ key: "[" });
     expect(rot()).toBe(270);
+  });
+});
+
+describe("F5 keyboard tool keys and Escape go through switchTool", () => {
+  it("N with one path selected enters node editing; V leaves it and clears node-edit state", () => {
+    render(<ShortcutHarness />);
+    useStore.getState().addObject(makePath("p1"));
+    useStore.getState().setSelectedIds(["p1"]);
+    key({ key: "n" });
+    expect(useStore.getState().activeTool).toBe("node");
+    expect(useStore.getState().nodeEditState.pathId).toBe("p1");
+    key({ key: "v" });
+    expect(useStore.getState().activeTool).toBe("select");
+    expect(useStore.getState().nodeEditState.pathId).toBeNull();
+  });
+
+  it("Escape from the measure tool runs the tool-change cleanup (measure state reset)", () => {
+    render(<ShortcutHarness />);
+    useStore.setState({ activeTool: "measure" });
+    // A diameter readout with no active segment: the viewport handler does not
+    // intercept Escape, so the global branch switches to select.
+    measureState.diameterLabel = "Ø 12.0 mm";
+    key({ key: "Escape" });
+    expect(useStore.getState().activeTool).toBe("select");
+    expect(measureState.diameterLabel).toBeNull();
   });
 });
