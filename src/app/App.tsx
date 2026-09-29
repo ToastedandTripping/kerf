@@ -1,5 +1,6 @@
 import { Component, useState, useCallback, useEffect } from "react";
 import type { ReactNode, ErrorInfo } from "react";
+import type { DesignObject } from "./types";
 import { MenuBar } from "../components/topbar/MenuBar";
 import { Toolbar } from "../components/toolbar/Toolbar";
 import { Viewport } from "../components/viewport/Viewport";
@@ -148,6 +149,12 @@ export function openPdfImport(data: ArrayBuffer, name: string) {
   const s = useStore.getState();
   s.setDialogData({ pendingPdf: { data, name } });
   s.openDialog("pdfImport");
+}
+export function importPdfVectors(objects: DesignObject[]) {
+  const s = useStore.getState();
+  s.closeDialog("pdfImport");
+  s.setDialogData({ pendingPdf: null });
+  s.withUndo("pdf-import", () => objects.forEach((obj) => s.addObject(obj)));
 }
 
 export default function App() {
@@ -371,14 +378,7 @@ export default function App() {
             heightMm
           );
         }}
-        onImportVector={(objects) => {
-          closeDialog("pdfImport");
-          setDialogData({ pendingPdf: null });
-          const addObject = useStore.getState().addObject;
-          for (const obj of objects) {
-            addObject(obj);
-          }
-        }}
+        onImportVector={importPdfVectors}
         generateId={generateId}
         defaultLayerIndex={activeLayerIndex}
       />
