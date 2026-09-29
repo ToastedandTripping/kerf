@@ -2012,3 +2012,62 @@ fn fix_w2_control_an_idle_frame_at_the_same_position_keeps_the_basis() {
     assert_eq!(basis(&r), b, "same position: the basis stands");
     jog(&r, b).expect("admitted");
 }
+
+// ── Fix pass (Razor b23 NOTEs) ─────────────────────────────────────────────
+
+/// N3/N10: a buffered job with one malformed line is refused whole, before
+/// any write, and trust is untouched.
+#[test]
+fn fix_n3_buffered_job_with_a_malformed_line_is_refused_before_any_write() {
+    let r = homed_rig(vec![sep(1), data(b"ok\r\nok\r\n")]);
+    let before = writer_bytes(&r.base.trace()).len();
+    let v0 = tv(&r);
+    let job = serial_job_begin_inner(&r.inner).unwrap();
+    let res = serial_stream_job_inner(&r.inner, "G1 X1 F100\nG1\tX2", job, true, &|_| Ok(()));
+    let e = res.unwrap_err();
+    assert!(
+        e.starts_with("refused: malformed:") && e.contains("job line 2"),
+        "{e}"
+    );
+    assert_eq!(writer_bytes(&r.base.trace()).len(), before, "zero bytes");
+    let v = tv(&r);
+    assert_eq!((v.homed, v.trust_epoch), (v0.homed, v0.trust_epoch));
+    // Control: the same job without the tab streams.
+    let out =
+        serial_stream_job_inner(&r.inner, "G1 X1 F100\nG1 X2", job, true, &|_| Ok(())).unwrap();
+    assert_eq!(out, "complete");
+}
+
+/// N2 rz2: the connection check comes before the pre-write drain, so a
+/// stale send consumes none of the new connection's buffered lines.
+#[test]
+fn fix_n2_a_stale_send_drains_nothing() {
+    let r = rig(vec![data(b"ALARM:1\r\n"), sep(0), data(b"ok\r\n")]);
+    r.inner.session.trust().conn_id = 2;
+    let res = serial_send_inner(&r.inner, "$G", None, 1, None);
+    assert!(refused_with(&res, "stale-connection"), "{res:?}");
+    let out = serial_send_inner(&r.inner, "$G", None, 2, None).unwrap();
+    assert!(
+        out.drained.iter().any(|l| l == "ALARM:1"),
+        "the new connection's buffered ALARM reaches its own send: {out:?}"
+    );
+}
+
+/// N2 rz3: only 0x18 is exempt from the stale-connection refusal.
+#[test]
+fn fix_n2_a_stale_jog_cancel_is_refused() {
+    let t = two();
+    reconnect(&t);
+    let e = send_byte_inner(&t.inner, t.old_conn, 0x85).unwrap_err();
+    assert!(e.starts_with("refused: stale-connection:"), "{e}");
+    assert!(only_connect_writes(&t.new), "{:?}", port_writes(&t.new));
+}
+
+/// N11: a STOP's banner drained by a send's pre-write drain confirms it.
+#[test]
+fn fix_n11_a_banner_drained_before_a_send_is_the_stops_confirmation() {
+    let r = rig(vec![data(BANNER), sep(0), data(b"ok\r\n")]);
+    r.inner.session.stop_in_flight.store(true, Ordering::SeqCst);
+    send(&r, "$G").unwrap();
+    assert!(r.inner.session.banner_observed.load(Ordering::SeqCst));
+}

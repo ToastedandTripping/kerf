@@ -598,6 +598,9 @@ pub(crate) fn serial_send_inner(
     );
     for line in &drain.dropped {
         eprintln!("[serial] drained stale line: {}", line);
+        // A STOP's confirming banner drained here must still confirm it
+        // (Razor b23 N11): the stop's own read is blocked on `command`.
+        note_banner_for_stop(inner, line);
     }
 
     // The grammar refused any `\r`/`\n`, so this is exactly one line.
@@ -1199,6 +1202,23 @@ pub(crate) fn serial_stream_job_inner(
         return Ok("complete".to_string());
     }
 
+    // B2+B3 (Razor b23 N3): the grammar the per-line path enforces, applied to
+    // the whole job before its first write. One malformed line refuses the
+    // job with nothing written, rather than being sent and recorded as the
+    // worst case.
+    let classes: Vec<Option<Outbound>> = lines
+        .iter()
+        .map(|l| serial_session::classify_outbound(l).ok())
+        .collect();
+    if let Some(i) = classes.iter().position(|c| c.is_none()) {
+        let e = serial_session::classify_outbound(&lines[i]).unwrap_err();
+        let msg = format!("{e} (job line {})", i + 1);
+        let _ = on_event(JobEvent::Finished {
+            outcome: msg.clone(),
+        });
+        return Err(msg);
+    }
+
     // Drain again before the buffered pump starts.
     let drain = serial_pump::drain_classified_noted(
         &mut cmd_channel.reader,
@@ -1223,10 +1243,7 @@ pub(crate) fn serial_stream_job_inner(
                 session: &inner.session,
                 epoch: job_epoch,
             },
-            classes: lines
-                .iter()
-                .map(|l| serial_session::classify_outbound(l).ok())
-                .collect(),
+            classes,
             next: std::cell::Cell::new(0),
         },
         &|event| {
