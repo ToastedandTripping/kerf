@@ -14,7 +14,7 @@
   - B2+B3 (one releasable unit), native identity and jog admission plus the TS consumer;
   - B4, panel.
 - **Base:** `marvin/kerf-gap` at `97a72f9` or later.
-- **Revision 2.** Folds astra round 1 (`-critic-r1.md`, FAIL). See the fold table at the end.
+- **Revision 3.** Folds astra round 1 (`-critic-r1.md`, FAIL) and Fable round 2 (`-critic-r2.md`, FAIL on dimension 8 only; X1 and X5 sound). See the fold tables at the end.
 - **Supersedes** `.claude/plans/kerf-safety-s3c.md` (revision 5, held). Per Lee, 2026-09-29, it merges S3c with S3d and the native transport fixes, "reviewed until it passes".
 - **Facts:** `.claude/plans/kerf-safety-motion-connection-facts.md` (native transport map at `a6b5d65`). Ted re-verifies every cited line before editing.
 - **Owner capture:** `scripts/probe-20260914-153729.log`.
@@ -94,11 +94,11 @@ pub(crate) struct Observation { conn_id: u64, trust_epoch: u64, after_writes: u6
 - a byte `>= 0x7f`;
 - any of `?`, `!`, `~`, which are realtime characters to GRBL.
 
-Classification works on the trimmed, upper-cased text:
+Before classification, every byte `<= 0x20` (spaces and tabs; control bytes are already refused) and every `/` is deleted, and the text is upper-cased. That is what GRBL 1.1's line reader does, and what `normalizeGrblLine` does in `connection.ts:99-108`. So `$ J=G91 X1` is a Jog. Classification then works on that normalised text:
 - `Jog` for `$J=…`;
 - `Home` for exactly `$H`;
 - `HomeAxis` for `$H…`;
-- `SettingsWrite(key)` for `$<n>=…`;
+- `SettingsWrite(key)` for `$<n>=…`, and for `$N<n>=…` (startup lines, which are stored in EEPROM and run after every reset);
 - `SettingsRead` for `$$`;
 - `Reset` for `$RST=…`;
 - `Motion` for the axis-word, `G28`, `G30` or `G38` rules ported from S3c's `isMotionCommand`;
@@ -124,21 +124,23 @@ A line is noted as soon as it is extracted, before any classification-based retu
 | STOP's `close_admission` (under `submit`), before its `0x18` | `trust_epoch += 1` |
 | `send_byte` with `0x18` or `0x85` (raw reset, jog cancel): takes `submit`, bumps, releases, then writes | `trust_epoch += 1`. The byte is always written; see Admission |
 | Connect install (under `command` + `realtime`, `serial.rs:341-352`) | `conn_id = next`, `trust_epoch += 1`, `homed_at = None`, `observed = None`, `units_mm = None` |
-| Disconnect teardown (under `command`, `serial.rs:443-452`) | `conn_id = 0`, `trust_epoch += 1`, `homed_at = None`, `observed = None`, `units_mm = None` |
+| Disconnect teardown. `serial.rs:443-452` holds no guard across its two `None` stores, so this plan wraps the command-handle `None` store in a scoped `command` guard and writes these fields under it | `conn_id = 0`, `trust_epoch += 1`, `homed_at = None`, `observed = None`, `units_mm = None` |
 | `Home` or `HomeAxis` written | `trust_epoch += 1`, remembered as `h`. `observed = None` |
 | `Home` pump returns `Ok` with terminal `ok` and `trust_epoch == h` (no line during the call was Banner, Alarm, `<Alarm…>` or `error:`: those would have bumped the epoch or failed the terminal test) | `homed_at = Some(trust_epoch)` |
 | `SettingsWrite(k)` written, for `k` in {3, 13, 20-27, 100-102, 110-112, 120-122, 130-132} (direction, report units, limits/homing, steps/mm, max rate, accel, travel) | `trust_epoch += 1`, `units_mm = None` |
 | `SettingsWrite` of any other key, or `Reset`, written | `units_mm = None`. For `Reset`, also `trust_epoch += 1` |
 | A `SettingsRead` pump returns `Ok`, with a reply line `$13=0` and no `$13=` line with another value, for the current `conn_id` | `units_mm = Some(conn_id)` |
 | A `SettingsRead` pump returns without that (missing, other value, `Err`) | `units_mm = None` |
-| Any motion-class send enters (`Jog`, `Home`, `HomeAxis`, `Motion`, job lines) | `motion_pending += 1` (an RAII guard decrements it on return) |
+| Any motion-class send enters (`Jog`, `Home`, `HomeAxis`, `Motion`, job lines). The increment happens **after `classify_outbound` and before the `command` wait**, under `trust`, so concurrent sends queued on `command` are all counted | `motion_pending += 1` (an RAII guard held for the whole call decrements it on return) |
 | A motion write | `motion_writes += 1`, `observed = None` |
 | A motion send's pump returns `Err` after its write (I/O error, flush error, missing terminal) | `trust_epoch += 1` (position unknown). No stale-terminal reuse: each pump's terminal belongs to its own call, and a later call starts with a drain whose lines are noted, not reused |
 | `serial_job_begin_inner` admits a job | `observed = None` (under `submit`) |
 
 ### The observation barrier (`fn observe(inner) -> Result<Observation, String>`)
 
-This is new and native. It runs **inside `serial_get_status_inner`** when the command lock is free and `observed` is `None` or stale.
+This is new and native. It runs **inside `serial_get_status_inner`** on every poll where the command lock is free and the observation is stale.
+
+**Stale** means `observed` is `None`, or `o.conn_id != conn_id`, or `o.trust_epoch != trust_epoch`, or `o.after_writes != motion_writes`, or `!o.idle_mpos`. A barrier that observes Jog or Run therefore re-runs on the next poll, until an Idle observation is taken. After the first, each re-run costs a drain and one round trip, because the quiesce is already satisfied. It never locks the arrows for good (critic r2 F3).
 
 1. **Hold `command`** for the whole barrier. The status poller already runs under `try_lock`, so a pump in flight means busy and no barrier.
 2. **Quiesce.** Wait `Q` ms since the last motion terminal was read. `Q` is the constant `OBSERVE_QUIESCE_MS`, default 150. Its value is a hardware-qualified parameter (see Verification, card step 4).
@@ -151,7 +153,8 @@ This is new and native. It runs **inside `serial_get_status_inner`** when the co
 - In stock GRBL, cycle start follows a motion `ok` within one main-loop pass (much less than 1 ms). A report generated `Q` ms later reflects a started cycle: Run or Jog, or Idle only if the motion has finished (or was rejected, which gives `error:` and bumps nothing, and Idle is then true).
 - **The assumption: the owner's vendor fork starts cycles within `Q` of `ok`, and transmits a report within 500 ms of `?`.** This is not assumed silently. Card step 4 qualifies it: 20 back-to-back 1 mm jogs, each checked against the observed position. Until the card passes, the ROADMAP records "software-closed, hardware-unqualified".
 - A buffered frame from an earlier busy-path `?` is either drained (it arrived within `Q`) or generated after the drain began, and so also post-`Q`.
-- **The busy-path `?`** (`serial.rs:629-644`) cannot run during the barrier, because the barrier holds `command` and the busy path is the `try_lock`-failed branch of the same poller. A second poller does not exist.
+- **The busy-path `?`** (`serial.rs:629-644`) **can** run during the barrier. The poller's next tick finds `command` held and takes the busy branch, which writes `?` via `realtime`. That is harmless: its `?` is sent after the quiesce began, so its reply is post-quiesce like every frame the barrier can read. The barrier takes the first complete status frame read after its own probe, whichever `?` it answers.
+- **A partial line.** A status frame whose first bytes were already in `pending` when the drain ran is completed and read afterwards. It is covered by the same assumption: it was generated after the drain began, since the drain consumed every complete line, and the owner's fork emits its post-`ok` report well within `Q`, as qualified by card step 4. If the step-4 qualification fails, item 7 of the Parking Lot (a protocol barrier) replaces this.
 
 The barrier's cost is at most `Q` + 500 ms per motion, on the next poll after the motion. During a pump the poller is busy as today.
 
@@ -173,12 +176,12 @@ The barrier's cost is at most `Q` + 500 ms per motion, on the next poll after th
 
    The order is fixed: check, then count, then write, all under `submit`. **STOP's `close_admission` needs `submit`**, so a STOP either runs entirely before the check, in which case the check sees the phase and `trust_epoch` and refuses, or waits for this one `write()` and then sends its `0x18` after the jog's bytes. That is the existing fence's ordering, extended to jogs. **Raw `0x18`/`0x85` via `send_byte` take `submit` the same way** (held only across the bump). The realtime write itself happens after `submit` is released, exactly as STOP's `0x18` does. No reset is ever refused or delayed beyond one in-progress `write()`.
 4. For non-jog commands: the stale-connection check; the transitions above; and the write under `command` as today.
-5. **`send_byte(conn, b)`:** refused on a stale `conn`, except `0x18`. **`serial_get_status(conn)`:** refused on a stale `conn`.
+5. **`send_byte(conn, b)`** reads `conn_id` while holding `realtime`: the order is `realtime` → `trust`, which is added to the lock-order table. It cannot cycle, because nothing holds `trust` and waits on `realtime` or `submit`. So the check is atomic with the handle it writes. It is refused on a stale `conn`, except `0x18`. **`serial_get_status(conn)`** checks under `command` or `realtime`, whichever path it takes, and is refused on a stale `conn`.
 6. **Refusal reasons:** `stale-connection`, `malformed`, `job-active`, `stopping`, `not-homed`, `units`, `motion-pending`, `not-observed` or `stale-basis`.
 
 ### Snapshot and result fields (serialised to TS)
 
-- **`GrblSnapshot`** gains `connId`, `trustEpoch`, `homed` (`homed_at == Some(trust_epoch)`), `unitsMm`, `motionPending` (bool), and `observed`, which is true only on the frame the barrier produced and while `observed` is still current.
+- **`GrblSnapshot`** gains `connId`, `trustEpoch`, `homed` (`homed_at == Some(trust_epoch)`), `unitsMm` and `motionPending` (bool). It also gains **`observedSeq: Option<u64>`** and **`observedPos: Option<[f64;3]>`**, copied from the current native observation when it is current and Idle-with-MPos, and `None` otherwise. Every frame taken while an observation is current therefore carries the same basis, and a cleared observation shows on the next frame (critic r2 F4).
 - **`SendOutcome`** and **`StatusOutcome`** gain `connId`.
 - **`serial_connect`** returns `{ banner, connId }`. This is a breaking change, delivered together with B3 (see Batches).
 - **`UnitsValidity`** is `Mm` when `unitsMm`. `Inches` is never set: Kerf refuses rather than converts.
@@ -190,9 +193,11 @@ The barrier's cost is at most `Q` + 500 ms per motion, on the next poll after th
   - `trustHomed`;
   - `trustUnitsMm`;
   - `motionPending`;
-  - `trustObserved` (the latest snapshot has `observed: true`);
-  - `basisSeq` (that snapshot's `seq`);
-  - `basisPosition` (that snapshot's MPos).
+  - `trustObserved` (`observedSeq !== null` on the latest snapshot);
+  - `basisSeq` (`observedSeq`);
+  - `basisPosition` (`observedPos`).
+
+  The clip reads `basisPosition` only, never the latest frame's position.
 
   `machineHomed` becomes a read-only alias of `trustHomed`, and its setters are removed.
 - **Provisional display invalidation (TS, display only):**
@@ -249,7 +254,7 @@ These are in-module tests using `ScriptedPort`, which records the written-bytes 
   - `$H` → `ok` with an ALARM line during the pump: no grant.
   - A banner drained at the start of the `$H` call (before the write), then `ok`, **does** grant. The drain precedes the `$H` write and its epoch bump, so the policy is "prior history is revoked; the new home re-earns it". This is stated in the transition table and pinned here.
   - `$H` → `error:9`: no grant.
-- **N4: STOP ordering (a deterministic barrier).** A `#[cfg(test)]` hook in the jog path fires after the check and before the write, and from another thread calls `serial_stop_inner`.
+- **N4: STOP ordering (a deterministic barrier).** A `#[cfg(test)]` hook in the jog path fires after the check and before the write, and from another thread calls `serial_stop_inner`. **The hook then blocks until the spawned STOP has been observed parked on `submit`, bounded at 2 s.** It reuses the `assert_stop_parked_behind_write` pattern (`serial.rs:3716`). Only then does it let the write proceed. Without this, a mutant that writes after releasing `submit` would survive whenever the jog thread won the race.
   - Assert STOP blocks on `submit` until the jog write finishes.
   - The trace order must be: jog bytes, then `0x18`.
   - STOP completes.
@@ -263,8 +268,11 @@ These are in-module tests using `ScriptedPort`, which records the written-bytes 
   - After the barrier: admitted.
   - A short job (admit, write two lines, end) after an observation: the next jog is refused `not-observed` until a new barrier.
 - **N7: literal Idle.** `Check`, `Sleep`, `Hold`, a WPos frame, and a frame with no position all give `idle_mpos == false`.
-- **N8: stale connection.** A `serial_send(conn = old)` is parked on `command` (the test holds the lock), then disconnect and reconnect run, then the lock is released. The send is refused, and the **new port's trace contains none of its bytes**. The same holds for `send_byte(0x21, old)`, which is refused. `send_byte(0x18, old)` is written: that is the exception. `serial_get_status(old)` is refused.
-- **N9: grammar.** `$J=G91 X1\n$J=G91 X50` is refused `malformed` with zero bytes. So are `$J=G91 X1\r`, `G0 X1\x18`, `$J=G91 X1?`, and a non-ASCII byte. `  $j=g91 x1 f100 ` is normalised and classified as Jog.
+- **N8: stale connection.** Two schedules, because disconnect and connect both need `command` and cannot run while a test holds it (critic r2 F7).
+  - **Uncontended:** disconnect and reconnect run to completion, then `serial_send(conn = old)` is called. It is refused, and the **new port's trace contains none of its bytes**.
+  - **In flight:** `serial_send(conn = old)` is parked behind a scripted pump. The reconnect completes before that pump's terminal is delivered. The parked send then acquires `command`, is refused, and writes nothing.
+  - The same two schedules for `send_byte(0x21, old)` (refused) and `serial_get_status(old)` (refused). `send_byte(0x18, old)` is written: that is the exception.
+- **N9: grammar.** `$J=G91 X1\n$J=G91 X50` is refused `malformed` with zero bytes. So are `$J=G91 X1\r`, `G0 X1\x18`, `$J=G91 X1?`, and a non-ASCII byte. `  $j=g91 x1 f100 `, `$ J=G91 X1` and `$J =G91X1` are each normalised and classified as Jog. `$N0=G21` is a settings write, and it clears units.
 - **N10: units.**
   - `$$` → `$13=0` makes the units mm.
   - After that, a `$13=1` write refuses on `units`.
@@ -286,7 +294,7 @@ These are in-module tests using `ScriptedPort`, which records the written-bytes 
   - A late poll result writes nothing.
   - Three late poll rejections do not disconnect the new connection.
   - A late settings `finally` does not touch the new connection's laser mode.
-- **T-C2: the gate from snapshot scalars.** This is edge-sensitive: `basisPosition` X=200, bed 205, +10 sends `X5.000` with `jogBasis` equal to the basis seq. Each reason renders its text, with zero invokes.
+- **T-C2: the gate from snapshot scalars.** This is edge-sensitive: `basisPosition` X=200, bed 205, +10 sends `X5.000` with `jogBasis` equal to the basis seq. **A second, ordinary snapshot after the barrier frame (a new `seq`, same `observedSeq`) leaves the arrows enabled, and the jog still sends `jogBasis` equal to the barrier's seq.** A snapshot with `observedSeq: null` disables them (MOTION). Each reason renders its text, with zero invokes.
 - **T-C3: every invoke carries `conn`.** This is a single interception of `invoke` for the whole suite (in `setupTests`), not only in the jog tests. Any `serial_*` call without `conn` fails the suite.
 - **T-C4: a native refusal is surfaced verbatim as a plain reason,** with no retry.
 - **T-C5: reply `<…>` lines never write position.**
@@ -351,7 +359,7 @@ Ted writes each `find` from the committed code, and `grep -cF` must be 1 for eac
     1. Connect. The arrows are disabled with the Home reason.
     2. Home. While homing, press an arrow: it is refused, and nothing moves afterwards.
     3. After Home, jog +X 1 mm and −X 1 mm, then +Y 1 mm and −Y 1 mm. Each moves 1 mm, and the panel position changes by 1.000 each time.
-    4. **Barrier qualification.** Twenty +X 1 mm jogs back-to-back, as fast as the arrows allow. Kerf admits each only after its observation. Afterwards the panel X equals the start + 20.000 within 0.01. Twenty −X then return it. An arrow press that Kerf refused shows the MOTION reason; it does not queue a move.
+    4. **Barrier qualification.** **Before the first press, measure at least 60 mm of clearance on +X** (20 mm of travel, times 2 as a scale margin, plus 20 mm), **and at least 20 mm on −X.** Then twenty +X 1 mm jogs back-to-back, as fast as the arrows allow. Kerf admits each only after its observation. Afterwards the panel X equals the start + 20.000 within 0.01. Twenty −X then return it. An arrow press that Kerf refused shows the MOTION reason; it does not queue a move.
     5. From the console, `$J=G21 G91 X1 F100`, then press an arrow at once. It is refused until the head stops and the barrier observes.
     6. From the console, `$J=G21 G91 X1 F20` (a 3 s move), then press STOP mid-move. The arrows show the Home reason. Unlock (`$X`): still the Home reason until Home.
     7. Unplug USB and reconnect. The Home reason shows until Home.
@@ -416,3 +424,18 @@ Ted writes each `find` from the committed code, and `grep -cF` must be 1 for eac
 | F8: tests that pass on false invariants | Yes (N2 was unreachable; N11 was structural) | N2 now uses a Status-then-error path. N4 uses deterministic hooks and asserts byte order. N12 counts six sites exactly. N13 is a lock-rank tracker. Reach is confirmed per mutation |
 | F9: UI lags trust changes | Yes | Provisional TS invalidation at motion entry, STOP, reset and refusal (display only). Reason order puts HOME before MOTION. T-C7 |
 | X3: "every other write needs command" | Yes, it was false | Removed. The ordering argument now rests on `submit` |
+
+## Fold table: critic round 2 (Fable, FAIL on dimension 8 only)
+
+| Finding | Verified | Change |
+|---|---|---|
+| F4 (dim 8): the observed/basis contract fails under both readings | Yes. `serial_get_status_inner` returns the latest frame, whose `seq` moves each poll | The snapshot carries `observedSeq` and `observedPos` from the current observation. TS derives its basis from them and clips from `basisPosition`. T-C2 now asserts that a second ordinary snapshot keeps the arrows live and the basis unchanged |
+| F3: no re-run predicate, so the arrows lock for good | Yes. A barrier frame of `Jog` became a non-stale observation | Stale is defined to include `!idle_mpos`, and the barrier re-runs every poll until an Idle observation |
+| F5: the grammar is spacing-sensitive; `$N` | Yes (`normalizeGrblLine`, `connection.ts:99-108`) | Bytes `<= 0x20` and `/` are deleted before classifying. `$N<n>=` counts as a settings write. N9 cases added |
+| F6.1: disconnect citation | Yes. No guard is held across `:443-452` | A scoped `command` guard around the `None` store, and the fields are written under it |
+| F6.2: `send_byte` conn atomicity | Yes | `conn_id` is read under `realtime`. `realtime` → `trust` is added to the order |
+| F6.3: pending increment placement | Yes. Sends serialise on `command` | The increment happens after `classify_outbound` and before the `command` wait, under `trust` |
+| F7: N8 and N4 cannot run as written | Yes. Disconnect and connect take `command`, and the N4 race is unforced | N8 has two runnable schedules. N4's hook waits for STOP to be parked on `submit` (the `serial.rs:3716` pattern) |
+| F2: busy-path claim false; partial line | Yes | The claim is restated: a busy `?` during the barrier is post-quiesce, so harmless. The partial-line case is covered by the qualified assumption |
+| F8: card clearance arithmetic | Yes | Step 4 requires at least 60 mm measured on +X and at least 20 mm on −X |
+
