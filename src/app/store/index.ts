@@ -13,7 +13,7 @@ function clampLayerPower<T extends { power: number; powerMin: number }>(v: T): T
 }
 import { DEFAULT_MATERIALS } from "../../lib/materials";
 import { createGeometryActions } from "./geometryActions";
-import type { AppState } from "./storeTypes";
+import type { AppState, TrustScalars } from "./storeTypes";
 import { deepCloneObject } from "./storeTypes";
 import { buildObjectsById, selectionPatch } from "./storeHelpers";
 import { PX_PER_MM } from "../../lib/constants";
@@ -196,6 +196,16 @@ function withZOrder(
     });
   });
 }
+
+/** Motion trust with nothing vouched for (initial, and on disconnect). */
+const UNTRUSTED: TrustScalars = {
+  trustHomed: false,
+  trustUnitsMm: false,
+  motionPending: false,
+  trustObserved: false,
+  basisSeq: null,
+  basisPosition: null,
+};
 
 export const useStore = create<AppState>((set, get) => ({
   // Tool
@@ -592,7 +602,12 @@ export const useStore = create<AppState>((set, get) => ({
     set(
       connected
         ? { machineConnected: true }
-        : { machineConnected: false, machineHomed: false, softLimitsActive: false }
+        : {
+            machineConnected: false,
+            machineHomed: false,
+            softLimitsActive: false,
+            ...UNTRUSTED,
+          }
     ),
   setMachineState: (state) => set({ machineState: state }),
   setMachinePosition: (pos) => set({ machinePosition: pos }),
@@ -631,10 +646,16 @@ export const useStore = create<AppState>((set, get) => ({
       const active = state.grblSoftLimits && v && state.machineHomed;
       return { grblHoming: v, softLimitsActive: active };
     }),
-  setMachineHomed: (v) =>
+  // Motion trust (B2+B3). `machineHomed` is written here only, as an alias.
+  ...UNTRUSTED,
+  setTrust: (p) =>
     set((state) => {
-      const active = state.grblSoftLimits && state.grblHoming && v;
-      return { machineHomed: v, softLimitsActive: active };
+      const trustHomed = p.trustHomed ?? state.trustHomed;
+      return {
+        ...p,
+        machineHomed: trustHomed,
+        softLimitsActive: state.grblSoftLimits && state.grblHoming && trustHomed,
+      };
     }),
 
   // Workstream B: work coordinate offset

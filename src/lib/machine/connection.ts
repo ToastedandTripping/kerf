@@ -11,9 +11,10 @@ import {
 } from "./machineStatus";
 import {
   JOG_REASON_AXIS,
-  JOG_REASON_PENDING,
+  JOG_REASON_MOTION,
   JOG_REASON_TARGET,
   clipJog,
+  isMotionCommand,
   jogBlockReason,
   targetInEnvelope,
 } from "./jogBounds";
@@ -33,6 +34,8 @@ interface PortInfo {
 interface SendOutcome {
   responses: string[];
   drained: string[];
+  /** The connection the send ran on (B2+B3). */
+  connId?: number;
 }
 
 /** Mirror of Rust `StatusOutcome` (B2a extended). `kind` and `snapshot` are
@@ -43,6 +46,48 @@ interface StatusOutcome {
   events: string[];
   kind: "report" | "busy" | "noResponse" | "transportError";
   snapshot: GrblSnapshot | null;
+  connId?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Connection identity (motion trust B2+B3). Native issues a `connId` at
+// connect; every serial_send / serial_send_byte / serial_get_status names it
+// as `conn`, and native refuses a stale one. On this side, a result or a
+// rejection that belongs to another connection is discarded before any
+// processing: it must not write the store, count toward the 3-strike
+// disconnect, or settle a settings write for the new connection.
+// ---------------------------------------------------------------------------
+
+/** The current connection's id; 0 = none. */
+let connId = 0;
+
+/** True when a result from an invoke made under `atInvoke` must be dropped:
+ *  the connection changed since, or native says it ran on another one. */
+function staleResult(atInvoke: number, result?: { connId?: number } | null): boolean {
+  if (atInvoke !== connId) return true;
+  return typeof result?.connId === "number" && result.connId !== atInvoke;
+}
+
+/** Test-only: the current connection id. */
+export function _testConnId(): number {
+  return connId;
+}
+
+/** Motion trust, TS side (display only): make the store MORE conservative at
+ *  once; the next accepted native snapshot overwrites these. */
+function provisionalMotion(): void {
+  useStore.getState().setTrust({ motionPending: true, trustObserved: false });
+}
+function provisionalRevoke(): void {
+  useStore.getState().setTrust({ trustHomed: false, trustObserved: false });
+}
+
+/** The plain reason inside a native `refused: <code>: <reason>` string. */
+function refusalReason(msg: string): string {
+  const rest = msg.slice(PERMIT_REFUSED_PREFIX.length).trim();
+  const i = rest.indexOf(": ");
+  const reason = i >= 0 ? rest.slice(i + 2) : rest;
+  return reason.charAt(0).toUpperCase() + reason.slice(1);
 }
 
 /** Surface an unsolicited protocol line (drained debris or status junk-skip)
@@ -271,21 +316,11 @@ function markStatusUnknown(): void {
   st.setPositionKind(null);
 }
 
-// S3 D1: one jog in flight. jogTick moves at submit and at acknowledgement so a
-// poll in flight across either edge cannot count as "after the jog".
-let jogPending = false;
-let jogTick = 0;
-
-async function sendJogLine(line: string): Promise<void> {
-  if (jogPending) {
-    useStore.getState().addConsoleLine(JOG_REASON_PENDING, "info");
-    return;
-  }
-  jogPending = true;
-  jogTick++;
-  const responses = await machineConnection.send(line);
-  jogTick++;
-  if (!responses.includes("ok")) jogPending = false;
+// B2+B3: one jog in flight is native's rule now (motion ledger + barrier);
+// the gate's MOTION reason reflects it. `jogBasis` names the observation the
+// clip was computed from; native refuses the jog if anything moved since.
+async function sendJogLine(line: string, jogBasis: number): Promise<void> {
+  await machineConnection.send(line, { jogBasis });
 }
 
 /**
@@ -430,10 +465,12 @@ export const machineConnection = {
     const doConnect = async (): Promise<string> => {
       const store = useStore.getState();
       try {
-        const response = await invoke<string>("serial_connect", {
+        const connected = await invoke<{ banner: string; connId: number }>("serial_connect", {
           portName,
           baudRate,
         });
+        const response = connected.banner;
+        connId = connected.connId;
         store.setMachineConnected(true);
         connectedPort = portName;
         markStatusUnknown();
@@ -491,7 +528,9 @@ export const machineConnection = {
         // 250ms poll fires. This closes the window where the UI shows "idle" while
         // the machine is actually locked.
         try {
-          const initOutcome = await invoke<StatusOutcome>("serial_get_status");
+          const c = connId;
+          const initOutcome = await invoke<StatusOutcome>("serial_get_status", { conn: c });
+          if (staleResult(c, initOutcome)) return response;
           // consumeStatusOutcome handles event surfacing — no separate loop
           // to avoid double surfacing.
           consumeStatusOutcome(initOutcome);
@@ -577,7 +616,10 @@ export const machineConnection = {
       connectedPort = null;
       forgetConnectionBed();
       markBed(null);
-      jogPending = false;
+      // B2+B3: nothing from this connection is current any more; a settings
+      // readback begun under it can never count.
+      connId = 0;
+      settingsGeneration++;
       await invoke("serial_disconnect", { jobActive: needsEstop });
       store.setMachineConnected(false);
       // Tail clear: a job-running flag must never outlive the connection,
@@ -598,10 +640,17 @@ export const machineConnection = {
    * `$H`, jog and settings writes omit it and are unchanged on the wire.
    * A refusal returns `[<refusal string>]` (never `error:disconnected`).
    */
-  async send(command: string, opts?: { jobEpoch?: number }): Promise<string[]> {
+  async send(command: string, opts?: { jobEpoch?: number; jogBasis?: number }): Promise<string[]> {
     const store = useStore.getState();
+    // B2+B3: native refuses a payload with a line delimiter, tab or other
+    // control character. Leading/trailing whitespace (a pasted `\n`, a
+    // trailing tab) means nothing to GRBL, so it is trimmed here; anything
+    // inside the line is refused natively with a plain reason.
+    command = command.trim();
+    const c = connId;
     try {
       store.addConsoleLine(command, "sent");
+      if (opts?.jobEpoch !== undefined || isMotionCommand(command)) provisionalMotion();
       // S1: the one settings-write chokepoint — invalidate before the write.
       const isWrite = isGrblSettingsWrite(command);
       if (isWrite) invalidateGrblSettings();
@@ -609,23 +658,27 @@ export const machineConnection = {
       // S1: a `$$` re-verifies; capture the generation BEFORE the invoke.
       const isReadback = command.trim() === "$$";
       const readbackGen = settingsGeneration;
-      const args =
-        opts?.jobEpoch === undefined ? { command } : { command, jobEpoch: opts.jobEpoch };
+      const args: Record<string, unknown> = { command, conn: c };
+      if (opts?.jobEpoch !== undefined) args.jobEpoch = opts.jobEpoch;
+      if (opts?.jogBasis !== undefined) args.jogBasis = opts.jogBasis;
       let outcome: SendOutcome;
       try {
         outcome = await invoke<SendOutcome>("serial_send", args);
       } finally {
-        // S1 W1: invalidate again once the write has settled.
-        if (isWrite) invalidateGrblSettingsSilently();
+        // S1 W1: invalidate again once the write has settled — only for the
+        // connection it was made on (a late settle must not touch the next).
+        if (isWrite && c === connId) invalidateGrblSettingsSilently();
       }
+      // A reply for an earlier connection is dropped whole: that connection's
+      // end was already reported, and nothing in it describes this machine.
+      if (staleResult(c, outcome)) return [];
       for (const d of outcome.drained) surfaceUnsolicited(d);
-      let lastStatusReport: string | null = null;
       for (const r of outcome.responses) {
         if (r.startsWith("<")) {
           // In-pump status reports: filter from console (a 60s segment would
-          // flood it at ~1/sec) — keep the most recent for the DRO below.
+          // flood it at ~1/sec). B2+B3: they never write position; native
+          // publishes in-pump frames as snapshots and the DRO reads those.
           noteSpindleSample(r);
-          lastStatusReport = r;
           continue;
         }
         // F17 Fix 2.2: ALARM lines are protocol errors, not "received" chatter.
@@ -635,34 +688,23 @@ export const machineConnection = {
             : ("received" as const);
         store.addConsoleLine(r, type);
       }
-      // In-pump reports refresh POSITION ONLY — never machineState: a stale
-      // <Hold…> consumed after resume would re-arm the job loop's pause-wait
-      // with polling suspended (permanently wedged job).
-      if (lastStatusReport) {
-        // F19: accept both MPos and WPos for $10=0 machines
-        const m = lastStatusReport.match(/[MW]Pos:([-\d.]+),([-\d.]+),([-\d.]+)/);
-        if (m) {
-          store.setMachinePosition({
-            x: parseFloat(m[1]),
-            y: parseFloat(m[2]),
-            z: parseFloat(m[3]),
-          });
-        }
-      }
       // S1 W3: a console/dialog `$$` applies the $32 readback only; the full
       // settings parse runs only via queryGrblSettings().
       if (isReadback) applyLaserModeReadback(outcome.responses, readbackGen);
       return outcome.responses;
     } catch (e) {
+      // A rejection for an earlier connection: dropped (see staleResult).
+      if (c !== connId) return [];
       const msg = String(e);
+      provisionalRevoke();
       if (msg.startsWith(PERMIT_REFUSED_PREFIX)) {
         // RF-15: an admission refusal is not a dead port. Not-admitted lines
-        // were never written; any other `refused:` string is unknown to the
-        // contract and is logged verbatim.
+        // were never written; B2+B3 refusals (jog admission, malformed,
+        // stale-connection) carry a plain reason, shown as is. No retry.
         if (msg.startsWith(`${PERMIT_REFUSED_PREFIX} not-admitted:`)) {
           store.addConsoleLine(`Not sent: ${msg}`, "error");
         } else {
-          store.addConsoleLine(msg, "error");
+          store.addConsoleLine(`Not sent: ${refusalReason(msg)}`, "error");
         }
         return [msg];
       }
@@ -673,7 +715,7 @@ export const machineConnection = {
 
   async sendByte(byte: number): Promise<void> {
     try {
-      await invoke("serial_send_byte", { byte });
+      await invoke("serial_send_byte", { conn: connId, byte });
     } catch (e) {
       console.error("Send byte error:", e);
       // Re-throw so callers (e.g. feedHold, cycleResume) can detect failures
@@ -686,7 +728,9 @@ export const machineConnection = {
    * command lock was busy or the bounded read expired (Ok-typed sentinel from
    * Rust — never a thrown error, so it can never feed the 3-strike counter). */
   async getStatusReport(): Promise<string> {
-    const outcome = await invoke<StatusOutcome>("serial_get_status");
+    const c = connId;
+    const outcome = await invoke<StatusOutcome>("serial_get_status", { conn: c });
+    if (staleResult(c, outcome)) return "";
     for (const e of outcome.events) surfaceUnsolicited(e);
     if (outcome.status.startsWith("<")) noteSpindleSample(outcome.status);
     return outcome.status;
@@ -704,9 +748,11 @@ export const machineConnection = {
     }
     if (jobPollingSuspended) return;
 
-    const tickAtInvoke = jogTick;
+    const c = connId;
     try {
-      const outcome = await invoke<StatusOutcome>("serial_get_status");
+      const outcome = await invoke<StatusOutcome>("serial_get_status", { conn: c });
+      // A late result for an earlier connection writes nothing.
+      if (staleResult(c, outcome)) return;
       // Busy/none sentinel included: the strike counter RESETS on it — the
       // command lock being held (e.g. a 30s $H pump) proves the port path is
       // alive; a genuinely dead port surfaces as a write failure (rejection).
@@ -723,14 +769,6 @@ export const machineConnection = {
       // This drives the canStartJob gate (3s eligibility rule).
       store.setStatusStale(!isStatusEligible());
 
-      // S3 D1: only a real Idle report from a poll begun after the jog's
-      // acknowledgement releases it. Busy/no-response writes no state, so the
-      // store's machineState is never consulted here.
-      const noJogOverlap = tickAtInvoke === jogTick;
-      const realReport = outcome.kind === "report" && outcome.snapshot !== null;
-      const reportedIdle = realReport && machineStateToStore(outcome.snapshot!.state) === "idle";
-      if (accepted && jogPending && noJogOverlap && reportedIdle) jogPending = false;
-
       // Spindle-drop evidence (status only); fed here when no job is running.
       if (accepted && outcome.snapshot) {
         const snap = outcome.snapshot;
@@ -741,6 +779,9 @@ export const machineConnection = {
         });
       }
     } catch {
+      // A rejection of a poll made under an earlier connection is not a
+      // strike against this one.
+      if (c !== connId) return;
       consecutivePollFailures++;
       if (consecutivePollFailures >= 3) {
         store.setMachineConnected(false);
@@ -768,10 +809,18 @@ export const machineConnection = {
       store.addConsoleLine(JOG_REASON_AXIS, "warning");
       return;
     }
+    // B2+B3: the clip reads the native observation's position only (the
+    // basis native will verify), never the latest frame's.
+    const basis = store.basisPosition;
+    const basisSeq = store.basisSeq;
+    if (basis === null || basisSeq === null) {
+      store.addConsoleLine(JOG_REASON_MOTION, "warning");
+      return;
+    }
     const clip = clipJog({
       axis: ax,
       distance,
-      position: ax === "X" ? store.machinePosition.x : store.machinePosition.y,
+      position: ax === "X" ? basis.x : basis.y,
       bed: ax === "X" ? store.workspaceWidth : store.workspaceHeight,
       originTop: store.originTop,
     });
@@ -779,7 +828,7 @@ export const machineConnection = {
       store.addConsoleLine(clip.reason, "warning");
       return;
     }
-    await sendJogLine(`$J=G21 G91 ${ax}${clip.distance.toFixed(3)} F${feedRate}`);
+    await sendJogLine(`$J=G21 G91 ${ax}${clip.distance.toFixed(3)} F${feedRate}`, basisSeq);
   },
 
   async jogTo(x: number, y: number, feedRate: number = 3000): Promise<void> {
@@ -793,7 +842,12 @@ export const machineConnection = {
       store.addConsoleLine(JOG_REASON_TARGET, "warning");
       return;
     }
-    await sendJogLine(`$J=G21 G90 X${x.toFixed(3)} Y${y.toFixed(3)} F${feedRate}`);
+    const basisSeq = store.basisSeq;
+    if (basisSeq === null) {
+      store.addConsoleLine(JOG_REASON_MOTION, "warning");
+      return;
+    }
+    await sendJogLine(`$J=G21 G90 X${x.toFixed(3)} Y${y.toFixed(3)} F${feedRate}`, basisSeq);
   },
 
   /** Cooperative cancel for a buffered streaming job. Sets the Rust-side abort
@@ -807,12 +861,9 @@ export const machineConnection = {
   },
 
   async home(): Promise<void> {
-    const responses = await this.send("$H");
-    // A successful homing cycle returns "ok"; ALARM/error responses leave machineHomed false.
-    const success = responses.some((r) => r === "ok");
-    if (success) {
-      useStore.getState().setMachineHomed(true);
-    }
+    // B2+B3: homed comes only from native snapshots (a clean `$H` at the
+    // current trust epoch), never from this reply.
+    await this.send("$H");
   },
 
   async setOrigin(): Promise<void> {
@@ -841,6 +892,7 @@ export const machineConnection = {
   },
 
   async softReset(): Promise<void> {
+    provisionalRevoke();
     try {
       await this.sendByte(0x18); // Ctrl+X
     } catch {
@@ -886,6 +938,7 @@ export const machineConnection = {
    */
   async emergencyStop(): Promise<void> {
     const store = useStore.getState();
+    provisionalRevoke();
     store.addConsoleLine("Emergency stop initiated", "warning");
 
     try {
@@ -927,13 +980,16 @@ export const machineConnection = {
       // S1: this write bypasses send(), so invalidate explicitly.
       invalidateGrblSettings();
       store.addConsoleLine("$32=1", "sent");
+      const c = connId;
       let outcome: SendOutcome;
       try {
-        outcome = await invoke<SendOutcome>("serial_send", { command: "$32=1" });
+        outcome = await invoke<SendOutcome>("serial_send", { command: "$32=1", conn: c });
       } finally {
-        // S1 W1: invalidate again once the write has settled.
-        invalidateGrblSettingsSilently();
+        // S1 W1: invalidate again once the write has settled (this
+        // connection's write only).
+        if (c === connId) invalidateGrblSettingsSilently();
       }
+      if (staleResult(c, outcome)) return false;
       for (const d of outcome.drained) surfaceUnsolicited(d);
       await this.readbackGrblSettings({ laserModeOnly: true });
       const enabled = useStore.getState().grblLaserMode;
@@ -958,9 +1014,11 @@ export const machineConnection = {
   async readbackGrblSettings(opts?: { laserModeOnly?: boolean }): Promise<boolean> {
     const store = useStore.getState();
     const gen = settingsGeneration;
+    const c = connId;
     try {
       store.addConsoleLine("$$", "sent");
-      const outcome = await invoke<SendOutcome>("serial_send", { command: "$$" });
+      const outcome = await invoke<SendOutcome>("serial_send", { command: "$$", conn: c });
+      if (staleResult(c, outcome)) return false;
       for (const d of outcome.drained) surfaceUnsolicited(d);
       if (opts?.laserModeOnly) {
         applyLaserModeReadback(outcome.responses, gen);
@@ -968,6 +1026,7 @@ export const machineConnection = {
       }
       return parseSettingsResponses(outcome.responses, gen);
     } catch (e) {
+      if (c !== connId) return false;
       applyLaserModeReadback([], gen);
       store.addConsoleLine(`Failed to query GRBL settings: ${e}`, "error");
       return false;
@@ -1013,8 +1072,7 @@ export const machineConnection = {
    * parsed as settings (at least one `$N=V` line) — the $32 warning and the
    * "unverified" fallback in connect() key off this. */
   async queryGrblSettings(): Promise<boolean> {
-    // New connection: machineHomed resets — must home again this session for soft limits
-    useStore.getState().setMachineHomed(false);
+    // Homed is native (reset per connection there) and arrives by snapshot.
     return this.readbackGrblSettings();
   },
 };
@@ -1098,8 +1156,6 @@ export function _testResetPollFailures(): void {
 // otherwise leak between tests that share this module instance.
 // Not imported anywhere in production code.
 export function _testResetJogAndBedState(): void {
-  jogPending = false;
-  jogTick = 0;
   connectedPort = null;
   bedKey = null;
   bedSource = null;

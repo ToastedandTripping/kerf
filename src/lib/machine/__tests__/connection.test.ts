@@ -18,16 +18,22 @@ import {
 import {
   JOG_REASON_AXIS,
   JOG_REASON_JOB,
+  JOG_REASON_HOME,
+  JOG_REASON_MOTION,
+  JOG_REASON_NO_HOMING,
   JOG_REASON_OFFSET,
-  JOG_REASON_PENDING,
   JOG_REASON_STALE,
   JOG_REASON_TARGET,
 } from "../jogBounds";
 import { _testResetJobEvidence } from "../lastSentLine";
 import { resetStatusConsumer } from "../machineStatus";
 import { SerialTraceRecorder } from "../../../lib/machine/__tests__/serialTraceHarness";
+import { trustedSnapshotFields, trustedStore } from "./trustFixture";
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+
+/** B2+B3: `serial_connect` returns the banner and the connection id. */
+const CONNECTED = { banner: "Grbl 1.1h ['$' for help]", connId: 1 };
 
 function seedConnectedStore() {
   useStore.setState({
@@ -60,7 +66,13 @@ let snapshotSeq = 0;
 function makeStatusOutcome(
   raw: string,
   events: string[] = [],
-  opts?: { epoch?: number; busy?: boolean; noResponse?: boolean }
+  opts?: {
+    epoch?: number;
+    busy?: boolean;
+    noResponse?: boolean;
+    trust?: Record<string, unknown>;
+    connId?: number;
+  }
 ) {
   if (opts?.busy) {
     return { status: "", events, kind: "busy", snapshot: null };
@@ -105,7 +117,9 @@ function makeStatusOutcome(
       units: "Unknown",
       raw,
       unknownFields: [],
+      ...(opts?.trust ?? {}),
     },
+    ...(opts?.connId !== undefined ? { connId: opts.connId } : {}),
   };
 }
 
@@ -302,8 +316,8 @@ describe("connection.ts (TN3)", () => {
       expect(consoleLine("ALARM:1")?.type).toBe("error");
     });
 
-    it("filters <...> reports from the console and refreshes POSITION ONLY", async () => {
-      useStore.setState({ machineState: "run" });
+    it("filters <...> reports from the console and never writes state or position (T-C5)", async () => {
+      useStore.setState({ machineState: "run", machinePosition: { x: 7, y: 8, z: 9 } });
       mockInvoke.mockResolvedValueOnce({
         responses: ["<Hold|MPos:1.000,2.000,3.000|FS:0,0>", "ok"],
         drained: [],
@@ -312,8 +326,8 @@ describe("connection.ts (TN3)", () => {
       // Raw responses keep the report; console does not.
       expect(responses).toHaveLength(2);
       expect(consoleTexts().some((t) => t.startsWith("<"))).toBe(false);
-      // Position refreshed from the in-pump report…
-      expect(useStore.getState().machinePosition).toEqual({ x: 1, y: 2, z: 3 });
+      // B2+B3: no position from a reply line; the DRO updates from snapshots.
+      expect(useStore.getState().machinePosition).toEqual({ x: 7, y: 8, z: 9 });
       // …but machineState is NEVER written from in-pump data: a stale <Hold…>
       // consumed after resume would re-arm the pause-wait loop (wedged job).
       expect(useStore.getState().machineState).toBe("run");
@@ -341,7 +355,7 @@ describe("connection.ts (TN3)", () => {
   describe("connect/autoConnect settings parity", () => {
     function mockMachine(settings: string[]) {
       mockInvoke.mockImplementation(async (cmd: string, args?: { command?: string }) => {
-        if (cmd === "serial_connect") return "Grbl 1.1h ['$' for help]";
+        if (cmd === "serial_connect") return CONNECTED;
         // Soft-reset byte sent during connect — accept and ignore
         if (cmd === "serial_send_byte") return undefined;
         if (cmd === "serial_send" && args?.command === "$$")
@@ -428,7 +442,7 @@ describe("connection.ts (TN3)", () => {
       const invokeOrder: string[] = [];
       mockInvoke.mockImplementation(
         async (cmd: string, args?: { command?: string; byte?: number }) => {
-          if (cmd === "serial_connect") return "Grbl 1.1h ['$' for help]";
+          if (cmd === "serial_connect") return CONNECTED;
           if (cmd === "serial_send_byte") {
             invokeOrder.push(`byte(${args?.byte?.toString(16) ?? "?"})`);
             return undefined;
@@ -660,7 +674,7 @@ describe("connection.ts (TN3)", () => {
     it("coalesces concurrent connect() calls — serial_connect fires once", async () => {
       vi.useFakeTimers();
       mockInvoke.mockImplementation(async (cmd: string) => {
-        if (cmd === "serial_connect") return "Grbl 1.1h ['$' for help]";
+        if (cmd === "serial_connect") return CONNECTED;
         if (cmd === "serial_send_byte") return undefined;
         if (cmd === "serial_send") return { responses: ["$30=1000", "$32=1"], drained: [] };
         if (cmd === "serial_get_status")
@@ -784,14 +798,18 @@ describe("connection.send — RF-15 job epoch and refusal", () => {
   it("a job line invokes serial_send with exactly { command, jobEpoch }", async () => {
     mockInvoke.mockResolvedValue({ responses: ["ok"], drained: [] });
     await machineConnection.send("G1 X1", { jobEpoch: 7 });
-    expect(mockInvoke).toHaveBeenCalledWith("serial_send", { command: "G1 X1", jobEpoch: 7 });
+    expect(mockInvoke).toHaveBeenCalledWith("serial_send", {
+      command: "G1 X1",
+      jobEpoch: 7,
+      conn: 0,
+    });
   });
 
   it("a console line invokes serial_send with { command } and no jobEpoch key", async () => {
     mockInvoke.mockResolvedValue({ responses: ["ok"], drained: [] });
     await machineConnection.send("$$");
     const args = mockInvoke.mock.calls.find((c) => c[0] === "serial_send")![1];
-    expect(args).toEqual({ command: "$$" });
+    expect(args).toEqual({ command: "$$", conn: 0 });
     expect("jobEpoch" in args).toBe(false);
   });
 
@@ -1050,6 +1068,11 @@ describe("S3 — jog frame", () => {
 
   function jogReady(patch: Record<string, unknown> = {}) {
     seedConnectedStore();
+    const pos = (patch.machinePosition as { x: number; y: number; z: number } | undefined) ?? {
+      x: 100,
+      y: 100,
+      z: 0,
+    };
     useStore.setState({
       jobRunning: false,
       statusStale: false,
@@ -1060,6 +1083,7 @@ describe("S3 — jog frame", () => {
       workspaceHeight: 300,
       originTop: false,
       machinePosition: { x: 100, y: 100, z: 0 },
+      ...trustedStore(pos),
       ...patch,
     });
   }
@@ -1090,7 +1114,15 @@ describe("S3 — jog frame", () => {
     jogReady();
   });
 
-  const idle = () => makeStatusOutcome("<Idle|MPos:100.000,100.000,0.000|FS:0,0>");
+  /** A trusted Idle report at X=100 whose observation is `observedSeq`. */
+  const trustedIdle = (observedSeq: number | null) =>
+    makeStatusOutcome("<Idle|MPos:100.000,100.000,0.000|FS:0,0>", [], {
+      trust: {
+        ...trustedSnapshotFields([100, 100, 0], observedSeq ?? 0),
+        observedSeq,
+        observedPos: observedSeq === null ? null : [100, 100, 0],
+      },
+    });
 
   it("A3-5: a relative jog sends $J=G21 G91 with the clipped distance", async () => {
     await machineConnection.jog("x", 10);
@@ -1122,46 +1154,24 @@ describe("S3 — jog frame", () => {
     expect(sends()).toEqual(["$J=G21 G91 Y-1.000 F1000"]);
   });
 
-  it("D1: two jogs with no poll between them make exactly one send", async () => {
+  it("D1 (B2+B3): a second jog before any snapshot is held by the provisional MOTION", async () => {
     await machineConnection.jog("X", 1);
     await machineConnection.jog("X", 1);
     expect(sends()).toHaveLength(1);
-    expect(consoleTexts()).toContain(JOG_REASON_PENDING);
+    expect(consoleTexts()).toContain(JOG_REASON_MOTION);
   });
 
-  it("D1: a poll in flight across the acknowledgement does not release the jog", async () => {
-    let release!: (v: unknown) => void;
-    statusQueue.push(
-      () =>
-        new Promise((r) => {
-          release = r;
-        })
-    );
-    const poll = machineConnection.pollStatus(); // invoke begins before the jog
-    await machineConnection.jog("X", 1); // sent and acknowledged
-    release(idle());
-    await poll;
-    await machineConnection.jog("X", 1);
-    expect(sends()).toHaveLength(1);
-    // Positive half: a poll begun after the acknowledgement that reports Idle releases it.
-    await machineConnection.pollStatus();
-    await machineConnection.jog("X", 1);
-    expect(sends()).toHaveLength(2);
-  });
-
-  it("D1: a busy poll never releases the jog, whatever the store's state says", async () => {
-    await machineConnection.pollStatus(); // a real report first, so status is fresh
-    expect(useStore.getState().statusStale).toBe(false);
+  it("D1 (B2+B3): a busy poll writes no trust, so the jog stays held", async () => {
     await machineConnection.jog("X", 1);
     statusQueue.push(async () => makeStatusOutcome("", [], { busy: true }));
     await machineConnection.pollStatus();
-    expect(useStore.getState().machineState).toBe("idle");
-    expect(useStore.getState().statusStale).toBe(false);
     useStore.setState({ consoleLines: [] });
     await machineConnection.jog("X", 1);
     expect(sends()).toHaveLength(1);
-    expect(consoleTexts()).toEqual([JOG_REASON_PENDING]);
-    await machineConnection.pollStatus(); // a real Idle report
+    expect(consoleTexts()).toEqual([JOG_REASON_MOTION]);
+    // A snapshot carrying a new native observation releases it.
+    statusQueue.push(async () => trustedIdle(77));
+    await machineConnection.pollStatus();
     await machineConnection.jog("X", 1);
     expect(sends()).toHaveLength(2);
   });
@@ -1212,6 +1222,12 @@ describe("S3 — jog frame", () => {
     await machineConnection.setOrigin();
     expect(sends()).toEqual(["G92 X0 Y0"]);
     expect(useStore.getState().workCoordOffset).toEqual({ x: 120, y: -80 });
+    // G92 X0 Y0 carries axis words, so native counts it as motion (MOTION
+    // until the next observation); after one, the offset refusal stands.
+    await machineConnection.jogTo(10, -10);
+    expect(consoleTexts()).toContain(JOG_REASON_MOTION);
+    statusQueue.push(async () => trustedIdle(88));
+    await machineConnection.pollStatus();
     await machineConnection.jogTo(10, -10);
     expect(sends()).toEqual(["G92 X0 Y0"]);
     expect(consoleTexts()).toContain(JOG_REASON_OFFSET);
@@ -1252,7 +1268,7 @@ describe("S3 — remembered bed", () => {
 
   function mockMachine(settings: string[]) {
     mockInvoke.mockImplementation(async (cmd: string, args?: { command?: string }) => {
-      if (cmd === "serial_connect") return "Grbl 1.1h ['$' for help]";
+      if (cmd === "serial_connect") return CONNECTED;
       if (cmd === "serial_send" && args?.command === "$$")
         return { responses: settings, drained: [] };
       if (cmd === "serial_send") return { responses: ["ok"], drained: [] };
@@ -1423,6 +1439,10 @@ describe("S3 — remembered bed", () => {
     mockInvoke.mockClear();
     await machineConnection.jog("X", 1);
     expect(mockInvoke.mock.calls.filter((c) => c[0] === "serial_send")).toHaveLength(0);
-    expect(consoleTexts()).toContain(JOG_REASON_STALE);
+    // B2+B3: a reconnect has no native home; the trust reasons come before
+    // the stale one.
+    expect(consoleTexts().some((t) => t === JOG_REASON_HOME || t === JOG_REASON_NO_HOMING)).toBe(
+      true
+    );
   });
 });

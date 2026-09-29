@@ -1067,7 +1067,7 @@ describe("S3 — MachinePanel and StatusBar", () => {
   function mockPanelMachine(settings: string[]) {
     let seq = 0;
     mockInvoke.mockImplementation(async (cmd: string, args?: { command?: string }) => {
-      if (cmd === "serial_connect") return "Grbl 1.1h ['$' for help]";
+      if (cmd === "serial_connect") return { banner: "Grbl 1.1h ['$' for help]", connId: 1 };
       if (cmd === "list_serial_ports") return [];
       if (cmd === "serial_send" && args?.command === "$$")
         return { responses: settings, drained: [] };
