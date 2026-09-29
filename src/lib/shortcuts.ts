@@ -1,9 +1,16 @@
 import { useEffect } from "react";
-import { useStore, generateId } from "../app/store";
+import { useStore } from "../app/store";
 import { fileOperations } from "./fileOps";
 import { handleViewportKeyDown, handleToolChange } from "./tools/toolHandler";
 import { movePartial } from "./geometry";
 import { MIN_ZOOM, MAX_ZOOM } from "./constants";
+import {
+  copySelection,
+  cutSelection,
+  pasteClipboard,
+  duplicateSelection,
+  flipSelection,
+} from "./editCommands";
 import type { ToolType } from "../app/types";
 
 const toolShortcuts: Record<string, ToolType> = {
@@ -80,49 +87,24 @@ export function useKeyboardShortcuts() {
       // Copy/Cut/Paste (shift guard: Ctrl+Shift+C is "convert to path" below)
       if (ctrl && !shift && key === "c") {
         e.preventDefault();
-        const s = useStore.getState();
-        s.setClipboard(s.objects.filter((o) => s.selectedIds.includes(o.id)));
+        copySelection();
         return;
       }
       if (ctrl && key === "x") {
         e.preventDefault();
-        const s = useStore.getState();
-        s.setClipboard(s.objects.filter((o) => s.selectedIds.includes(o.id)));
-        s.withUndo("cut", () => {
-          s.removeObjects(s.selectedIds);
-        });
+        cutSelection();
         return;
       }
       if (ctrl && key === "v") {
         e.preventDefault();
-        const s = useStore.getState();
-        s.withUndo("paste", () => {
-          // W1b: movePartial shifts path points with the +10 offset AND returns
-          // fresh points arrays (the clipboard holds live references — a shared
-          // array here would couple the copy to the original).
-          const newObjects = s.clipboard.map((o) => ({
-            ...o,
-            id: generateId(),
-            ...movePartial(o, o.transform.x + 10, o.transform.y + 10),
-          }));
-          newObjects.forEach(s.addObject);
-          s.setSelectedIds(newObjects.map((o) => o.id));
-        });
+        pasteClipboard(false);
         return;
       }
 
       // Paste in Place (Alt+V)
       if (alt && key === "v") {
         e.preventDefault();
-        const s = useStore.getState();
-        s.withUndo("paste", () => {
-          const newObjects = s.clipboard.map((o) => ({
-            ...o,
-            id: generateId(),
-          }));
-          newObjects.forEach(s.addObject);
-          s.setSelectedIds(newObjects.map((o) => o.id));
-        });
+        pasteClipboard(true);
         return;
       }
 
@@ -156,7 +138,7 @@ export function useKeyboardShortcuts() {
       // Duplicate in Place (Ctrl+D)
       if (ctrl && key === "d") {
         e.preventDefault();
-        useStore.getState().duplicateInPlace();
+        duplicateSelection();
         return;
       }
 
@@ -178,7 +160,7 @@ export function useKeyboardShortcuts() {
       // Flip (Ctrl+Shift+H / Ctrl+Shift+V)
       if (ctrl && shift && key === "h") {
         e.preventDefault();
-        useStore.getState().flipObjects("horizontal");
+        flipSelection("horizontal");
         return;
       }
       // Note: Ctrl+Shift+V conflicts with "paste in place" in some apps

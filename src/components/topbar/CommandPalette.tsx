@@ -9,6 +9,7 @@ import {
   openVariableText,
   openNesting,
 } from "../../app/App";
+import { duplicateSelection, flipSelection } from "../../lib/editCommands";
 
 interface Command {
   id: string;
@@ -120,7 +121,7 @@ function getCommands(): Command[] {
       label: "Duplicate",
       shortcut: "Ctrl+D",
       category: "Edit",
-      action: () => s().duplicateInPlace(),
+      action: () => duplicateSelection(),
     },
     {
       id: "edit-delete",
@@ -300,13 +301,13 @@ function getCommands(): Command[] {
       label: "Flip Horizontal",
       shortcut: "Ctrl+Shift+H",
       category: "Arrange",
-      action: () => s().flipObjects("horizontal"),
+      action: () => flipSelection("horizontal"),
     },
     {
       id: "arr-flip-v",
       label: "Flip Vertical",
       category: "Arrange",
-      action: () => s().flipObjects("vertical"),
+      action: () => flipSelection("vertical"),
     },
     {
       id: "arr-rot90cw",
