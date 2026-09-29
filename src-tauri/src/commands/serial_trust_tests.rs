@@ -1953,3 +1953,62 @@ fn b23_golden_gcode_lines_pass_the_outbound_grammar() {
     }
     assert!(files >= 10 && lines > 100, "files {files}, lines {lines}");
 }
+
+// ── Fix pass (Razor b23 W2): a contradicting frame ends the observation ────
+
+/// mm_rig (observed at MPos 0) then one ordinary poll that reads `frame`.
+fn observed_then_frame(frame: &'static [u8], rest: Vec<ScriptStep>) -> (Rig, Option<u64>) {
+    let mut s = vec![sep(1), data(frame)];
+    s.extend(rest);
+    let r = mm_rig(s);
+    let b = basis(&r);
+    assert!(b.is_some(), "precondition: observed");
+    poll(&r); // observation current: the ordinary status read
+    (r, b)
+}
+
+#[test]
+fn fix_w2_a_jog_state_frame_ends_the_observation() {
+    let (r, b) = observed_then_frame(b"<Jog|MPos:0.500,0.000,0.000|FS:100,0>\r\n", vec![]);
+    let e = epoch(&r);
+    assert!(
+        basis(&r).is_none(),
+        "a Jog frame contradicts an Idle observation"
+    );
+    let res = jog(&r, b);
+    assert!(refused_with(&res, "not-observed"), "{res:?}");
+    assert_eq!(jog_bytes_written(&r), 0);
+    assert_eq!(epoch(&r), e, "no epoch bump: homed survives");
+    assert!(tv(&r).homed);
+}
+
+#[test]
+fn fix_w2_an_idle_frame_elsewhere_ends_the_observation_until_re_observed() {
+    let (r, b) = observed_then_frame(
+        b"<Idle|MPos:5.000,0.000,0.000|FS:0,0>\r\n",
+        vec![
+            sep(2),
+            data(b"<Idle|MPos:5.000,0.000,0.000|FS:0,0>\r\n"),
+            sep(3),
+            data(b"ok\r\n"),
+        ],
+    );
+    let res = jog(&r, b);
+    assert!(refused_with(&res, "not-observed"), "{res:?}");
+    assert!(tv(&r).homed, "no epoch bump");
+    poll(&r); // the barrier re-observes at the new position
+    let v = tv(&r);
+    assert_eq!(v.observed_pos, Some([5.0, 0.0, 0.0]));
+    jog(&r, v.observed_seq).expect("admitted after the barrier re-observed");
+    assert_eq!(jog_bytes_written(&r), 1);
+}
+
+#[test]
+fn fix_w2_control_an_idle_frame_at_the_same_position_keeps_the_basis() {
+    let (r, b) = observed_then_frame(
+        b"<Idle|MPos:0.000,0.000,0.000|FS:0,0>\r\n",
+        vec![sep(2), data(b"ok\r\n")],
+    );
+    assert_eq!(basis(&r), b, "same position: the basis stands");
+    jog(&r, b).expect("admitted");
+}

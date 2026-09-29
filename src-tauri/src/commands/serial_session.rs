@@ -450,6 +450,12 @@ impl SerialSession {
 /// controller starts a cycle within this window of the motion's `ok`.
 pub(crate) const OBSERVE_QUIESCE_MS: u64 = 150;
 
+/// Tolerance for "the same position" between a status frame and the
+/// observation: GRBL prints MPos in mm to 3 decimals (`$13=0`), so a
+/// stationary machine repeats the identical text. 0.002 mm is two print
+/// steps: above any rounding of one fixed position, far below any real move.
+pub(crate) const OBSERVE_SAME_POS_MM: f64 = 0.002;
+
 /// Bound on the barrier's probe read: the first status frame after its `?`.
 pub(crate) const OBSERVE_PROBE_MS: u64 = 500;
 
@@ -651,6 +657,39 @@ impl SerialSession {
         };
         if invalidates {
             self.trust().bump();
+        } else if class == LineClass::Status {
+            self.trust_note_status_frame(line);
+        }
+    }
+
+    /// A status frame that contradicts the current observation ends it
+    /// (Razor b23 W2): a state other than literal Idle, a frame without a
+    /// finite MPos, or an MPos more than `OBSERVE_SAME_POS_MM` from the
+    /// observed one on any axis. The machine moved (or may be moving) by
+    /// something Kerf did not count: a second client, a pendant, a button.
+    /// The observation is cleared, so the barrier re-observes at the new
+    /// position; the epoch is NOT bumped, because Kerf's own jog is followed
+    /// by `<Jog…>` frames with no motion pending, and a bump would revoke the
+    /// home after every jog.
+    fn trust_note_status_frame(&self, line: &str) {
+        let frame = super::grbl_status::parse_status_frame(line, 0, 0);
+        let mut t = self.trust();
+        let Some(o) = t.observed else {
+            return;
+        };
+        let agrees = frame.is_some_and(|f| {
+            f.state == MachineState::Idle
+                && f.position_kind == Some(PositionKind::MPos)
+                && match (f.position, o.mpos) {
+                    (Some(p), Some(q)) => p
+                        .iter()
+                        .zip(q.iter())
+                        .all(|(a, b)| a.is_finite() && (a - b).abs() <= OBSERVE_SAME_POS_MM),
+                    _ => false,
+                }
+        });
+        if !agrees {
+            t.observed = None;
         }
     }
 
