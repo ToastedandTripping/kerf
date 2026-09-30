@@ -2071,3 +2071,21 @@ fn fix_n11_a_banner_drained_before_a_send_is_the_stops_confirmation() {
     send(&r, "$G").unwrap();
     assert!(r.inner.session.banner_observed.load(Ordering::SeqCst));
 }
+
+/// W2, the state half isolated: a non-Idle frame AT the observed position
+/// still ends the observation (a cycle that has started but not yet moved).
+#[test]
+fn fix_w2_a_non_idle_frame_at_the_same_position_ends_the_observation() {
+    for frame in [
+        &b"<Jog|MPos:0.000,0.000,0.000|FS:100,0>\r\n"[..],
+        &b"<Run|MPos:0.000,0.000,0.000|FS:100,0>\r\n"[..],
+        &b"<Hold:0|MPos:0.000,0.000,0.000|FS:0,0>\r\n"[..],
+    ] {
+        let leaked: &'static [u8] = Box::leak(frame.to_vec().into_boxed_slice());
+        let (r, b) = observed_then_frame(leaked, vec![]);
+        assert!(basis(&r).is_none(), "{:?}", String::from_utf8_lossy(frame));
+        let res = jog(&r, b);
+        assert!(refused_with(&res, "not-observed"), "{res:?}");
+        assert!(tv(&r).homed);
+    }
+}
