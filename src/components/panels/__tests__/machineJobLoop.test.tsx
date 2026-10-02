@@ -1381,6 +1381,11 @@ describe("S3 — MachinePanel and StatusBar", () => {
       expect(slot().textContent).toBe(JOG_HOLD_COMMAND);
       act(() => useStore.getState().setTrust({ motionPending: false, trustObserved: true }));
       expect(() => getByTestId("jog-blocked-note")).toThrow();
+      // A hold note once shown does not carry over: MOTION again restarts the 5 s.
+      act(() => useStore.getState().setTrust({ motionPending: true }));
+      expect(slot().textContent).toBe(JOG_REASON_MOTION);
+      act(() => void vi.advanceTimersByTime(4999));
+      expect(slot().textContent).toBe(JOG_REASON_MOTION);
     });
   });
 
