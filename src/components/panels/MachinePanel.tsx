@@ -14,7 +14,9 @@ const JOG_HOLD_NOTE_MS = 5000;
 export const JOG_HOLD_COMMAND =
   "Still waiting on the machine. If nothing is moving, press STOP, then reconnect and Home again.";
 export const JOG_HOLD_POSITION =
-  "The machine isn't reporting its machine position (MPos). Kerf can't jog until it does. Check $10 in the machine settings.";
+  "The machine isn't reporting the head's position from home, and jogging needs it. Set $10 in the machine settings to machine position (MPos).";
+export const JOG_HOLD_STALE =
+  "Kerf hasn't had a status report from the machine for a few seconds, so the status reads Stale. If it doesn't recover on its own, reconnect.";
 export const JOG_HOLD_STATE = "The machine isn't reporting Idle. Kerf jogs only from Idle.";
 import { generateGcode } from "../../lib/machine/gcodeGen";
 import {
@@ -189,6 +191,7 @@ export function MachinePanel() {
   let holdNote: string | null = null;
   if (motionShown && holdElapsed) {
     if (motionPending) holdNote = JOG_HOLD_COMMAND;
+    else if (statusStale) holdNote = JOG_HOLD_STALE;
     else if (!trustObserved && machineState === "idle") holdNote = JOG_HOLD_POSITION;
     else if (!trustObserved) holdNote = JOG_HOLD_STATE;
   }
@@ -1021,19 +1024,35 @@ export function MachinePanel() {
                 padding: "8px",
               }}
             >
-              {jogNote !== null && (
-                <div
-                  data-testid="jog-blocked-note"
-                  style={{
-                    fontSize: "10px",
-                    color: jogFlash !== null ? "var(--accent-warm)" : "var(--text-secondary)",
-                    textAlign: "center",
-                    marginBottom: "4px",
-                  }}
-                >
-                  {jogNote}
-                </div>
-              )}
+              {/* Jen Stage 3 C1: a fixed 3-line box so the pad never moves. */}
+              <div
+                data-testid="jog-note-slot"
+                style={{
+                  alignSelf: "stretch",
+                  height: "45px",
+                  marginBottom: "4px",
+                  overflow: "hidden",
+                }}
+              >
+                {jogNote !== null && (
+                  <div
+                    data-testid="jog-blocked-note"
+                    title={jogNote}
+                    style={{
+                      fontSize: "10px",
+                      lineHeight: "15px",
+                      color: jogFlash !== null ? "var(--accent-warm)" : "var(--text-secondary)",
+                      textAlign: "center",
+                      display: "-webkit-box",
+                      WebkitLineClamp: 3,
+                      WebkitBoxOrient: "vertical",
+                      overflow: "hidden",
+                    }}
+                  >
+                    {jogNote}
+                  </div>
+                )}
+              </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 32px)", gap: "2px" }}>
                 <div />
                 <JogButton
@@ -1053,7 +1072,7 @@ export function MachinePanel() {
                   label="&#x2302;"
                   onClick={() => machineConnection.home()}
                   title={homeTitle}
-                  accent={grblHoming}
+                  accent={grblHoming && machineConnected && !jobRunning}
                   disabled={!machineConnected || jobRunning || !grblHoming}
                 />
                 <JogButton

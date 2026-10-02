@@ -6,7 +6,8 @@
 
 export const JOG_REASON_NOT_CONNECTED = "Machine not connected";
 export const JOG_REASON_BED = "Confirm bed size before jogging — Machine panel, Set bed size";
-export const JOG_REASON_ALARM = "Jog blocked: machine in alarm state — unlock ($X) first";
+export const JOG_REASON_ALARM =
+  "Jogging is off while the machine is in alarm. Press Unlock ($X) or Home ($H) to clear it.";
 export const JOG_REASON_STALE =
   "Waiting for the machine to report its position — try again in a moment";
 export const JOG_REASON_BUSY = "Wait for the machine to stop before jogging";

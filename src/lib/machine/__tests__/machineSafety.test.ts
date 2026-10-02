@@ -14,7 +14,7 @@ import { trustedStore } from "./trustFixture";
 import { useStore } from "../../../app/store";
 import { DEFAULT_LAYERS } from "../../../app/types";
 import { machineConnection, _testResetPollFailures, _testResetJogAndBedState } from "../connection";
-import { JOG_REASON_BED } from "../jogBounds";
+import { JOG_REASON_ALARM, JOG_REASON_BED } from "../jogBounds";
 import { resetStatusConsumer } from "../machineStatus";
 import {
   canStartJob,
@@ -349,7 +349,10 @@ describe("jog clamp + alarm guard", () => {
     await machineConnection.jog("X", 10);
     // invoke should NOT have been called with serial_send
     expect(mockInvoke).not.toHaveBeenCalled();
-    expect(consoleTexts().some((t) => t.includes("Jog blocked"))).toBe(true);
+    expect(consoleTexts()).toContain(JOG_REASON_ALARM);
+    expect(JOG_REASON_ALARM).toBe(
+      "Jogging is off while the machine is in alarm. Press Unlock ($X) or Home ($H) to clear it."
+    );
   });
 
   it("clamps X jog when destination would exceed workspaceWidth", async () => {

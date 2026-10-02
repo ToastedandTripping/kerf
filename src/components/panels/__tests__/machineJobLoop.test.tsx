@@ -43,7 +43,12 @@ import {
   JOG_REASON_MOTION,
 } from "../../../lib/machine/jogBounds";
 import { act } from "@testing-library/react";
-import { JOG_HOLD_COMMAND, JOG_HOLD_POSITION, JOG_HOLD_STATE } from "../MachinePanel";
+import {
+  JOG_HOLD_COMMAND,
+  JOG_HOLD_POSITION,
+  JOG_HOLD_STALE,
+  JOG_HOLD_STATE,
+} from "../MachinePanel";
 import { StatusBar } from "../../bottom/StatusBar";
 import { resetStatusConsumer } from "../../../lib/machine/machineStatus";
 import { SerialTraceRecorder } from "../../../lib/machine/__tests__/serialTraceHarness";
@@ -1247,7 +1252,7 @@ describe("S3 — MachinePanel and StatusBar", () => {
     fireEvent.click(getByText("Positioning (10mm)"));
     // Four arrows plus POSITION (Jen S3) share the reason.
     const buttons = (getAllByTitle(JOG_REASON_BED) as HTMLButtonElement[]).filter(
-      (b) => b.textContent !== "Position"
+      (b) => b.tagName === "BUTTON" && b.textContent !== "Position"
     );
     expect(buttons).toHaveLength(4);
     for (const b of buttons) expect(b.disabled).toBe(true);
@@ -1267,7 +1272,7 @@ describe("S3 — MachinePanel and StatusBar", () => {
   const homeKey = (container: HTMLElement) =>
     [...container.querySelectorAll("button")].find((b) => b.textContent === "\u2302") ?? null;
   const arrowsAndPosition = (getAllByTitle: (t: string) => HTMLElement[], reason: string) =>
-    getAllByTitle(reason) as HTMLButtonElement[];
+    (getAllByTitle(reason) as HTMLButtonElement[]).filter((e) => e.tagName === "BUTTON");
 
   it.each([
     ["HOME", { trustHomed: false }, JOG_REASON_HOME],
@@ -1336,6 +1341,39 @@ describe("S3 — MachinePanel and StatusBar", () => {
     expect(queryByTestId("jog-blocked-note")).toBeNull();
   });
 
+  it("Jen C1: the note slot is a fixed 45 px box: empty, one line and three lines alike", () => {
+    const { getByText, getByTestId, queryByTestId } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    const slot = getByTestId("jog-note-slot");
+    const box = () => [
+      slot.style.height,
+      slot.style.marginBottom,
+      slot.style.alignSelf,
+      slot.style.overflow,
+    ];
+    expect(queryByTestId("jog-blocked-note")).toBeNull();
+    expect(box()).toEqual(["45px", "4px", "stretch", "hidden"]);
+    for (const patch of [{ trustHomed: false }, { trustHomed: true, trustUnitsMm: false }]) {
+      act(() => useStore.getState().setTrust(patch));
+      expect(getByTestId("jog-note-slot")).toBe(slot);
+      expect(box()).toEqual(["45px", "4px", "stretch", "hidden"]);
+      const note = getByTestId("jog-blocked-note");
+      expect(note.style.lineHeight).toBe("15px");
+      expect(note.style.marginBottom).toBe("");
+      expect(note.style.webkitLineClamp).toBe("3");
+      expect(note.title).toBe(note.textContent);
+    }
+  });
+
+  it("Jen C2/C4 copy: the position and stale hold texts", () => {
+    expect(JOG_HOLD_POSITION).toBe(
+      "The machine isn't reporting the head's position from home, and jogging needs it. Set $10 in the machine settings to machine position (MPos)."
+    );
+    expect(JOG_HOLD_STALE).toBe(
+      "Kerf hasn't had a status report from the machine for a few seconds, so the status reads Stale. If it doesn't recover on its own, reconnect."
+    );
+  });
+
   describe("T-P1 hold note (fake timers)", () => {
     beforeEach(() => vi.useFakeTimers());
     afterEach(() => vi.useRealTimers());
@@ -1362,6 +1400,26 @@ describe("S3 — MachinePanel and StatusBar", () => {
       expect(getByText("Positioning (10mm)").parentElement?.textContent).not.toContain(
         JOG_REASON_MOTION
       );
+    });
+
+    it("Jen C4: cause order is command, stale, position, state", () => {
+      useStore.getState().setTrust({ motionPending: true, trustObserved: false });
+      const { getByText, getByTestId } = render(<MachinePanel />);
+      fireEvent.click(getByText("Positioning (10mm)"));
+      const slot = () => getByTestId("jog-blocked-note");
+      act(() => void vi.advanceTimersByTime(5000));
+      act(() => useStore.setState({ statusStale: true }));
+      expect(slot().textContent).toBe(JOG_HOLD_COMMAND);
+      // Razor N3: idle, not observed, stale reads STALE, not POSITION.
+      act(() => useStore.setState({ motionPending: false, machineState: "idle" }));
+      expect(slot().textContent).toBe(JOG_HOLD_STALE);
+      expect(slot().title).toBe(JOG_HOLD_STALE);
+      act(() => useStore.setState({ machineState: "run" }));
+      expect(slot().textContent).toBe(JOG_HOLD_STALE);
+      act(() => useStore.setState({ statusStale: false }));
+      expect(slot().textContent).toBe(JOG_HOLD_STATE);
+      act(() => useStore.setState({ machineState: "idle" }));
+      expect(slot().textContent).toBe(JOG_HOLD_POSITION);
     });
 
     it("a reason change clears the timer; MOTION again starts a fresh 5 s", () => {
@@ -1462,6 +1520,31 @@ describe("S3 — MachinePanel and StatusBar", () => {
     }
   });
 
+  it.each([
+    ["an ALARM reply", async () => ({ responses: ["ALARM:2"], drained: [] }), "ALARM:2"],
+    [
+      "a not-admitted refusal",
+      async () => Promise.reject("refused: not-admitted: session not active (phase=stopping)"),
+      "Not sent: refused: not-admitted: session not active (phase=stopping)",
+    ],
+    [
+      "a failed send (port gone)",
+      async () => Promise.reject("port closed"),
+      "Send failed: port closed",
+    ],
+  ] as const)("Razor RN3: the click flashes its own outcome for %s", async (_l, onSend, shown) => {
+    mockSerial(() => ({ responses: ["ok"], drained: [] }));
+    const base = mockInvoke.getMockImplementation() as (c: string, a?: unknown) => Promise<unknown>;
+    mockInvoke.mockImplementation(async (cmd: string, args?: unknown) =>
+      cmd === "serial_send" ? onSend() : base(cmd, args)
+    );
+    const { getByText, getByTitle, getByTestId } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    fireEvent.click(getByTitle("X+"));
+    await waitFor(() => expect(getByTestId("jog-blocked-note").textContent).toBe(shown));
+    expect(getByTestId("jog-blocked-note").style.color).toBe("var(--accent-warm)");
+  });
+
   it("Stage 2.8 C1 positive: a controller error:N reply to the click still flashes", async () => {
     mockSerial(() => ({ responses: ["error:15"], drained: [] }));
     const { getByText, getByTitle, getByTestId } = render(<MachinePanel />);
@@ -1526,6 +1609,8 @@ describe("S3 — MachinePanel and StatusBar", () => {
     const home = homeKey(container)!;
     expect(home.title).toBe(title);
     expect(home.disabled).toBe(true);
+    // Jen C5: a dead key never carries the action accent.
+    expect(home.style.background).toBe("var(--bg-input)");
   });
 
   it("P70 positive sibling: connected, idle, no job, $22=1: the Home key is live", () => {
@@ -1534,6 +1619,7 @@ describe("S3 — MachinePanel and StatusBar", () => {
     const home = homeKey(container)!;
     expect(home.title).toBe("Home ($H)");
     expect(home.disabled).toBe(false);
+    expect(home.style.background).not.toBe("var(--bg-input)");
   });
 
   it("C3: a stale status reads Stale in the StatusBar, never Ready", () => {
