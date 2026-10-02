@@ -800,3 +800,10 @@ Round 2 failed on dimension 7 only, narrowly: two Track A strings asserted physi
 | Must-fix 6 (P2): header and ROADMAP citations | | as above | yes | |
 
 **Found while folding, not in the critique.** `machineJobLoop.test.tsx` also clicks `getByText("Positioning (10mm)")` three times and asserts the Machine header reads "stale" (:1255-1260); P50 and P57a would break both, and revision 2's A12 claimed the file passes unmodified. `getByText("Fire")` (:534) would have broken under revision 2's "Fire (0.5 s pulse)". A `Banner` with a default `role="alert"` would have made `queryByRole("alert")` throw (:1003-1005). `commandSurfaces.test.tsx:45-50` asserts "Ctrl+Shift+V" in the palette, which A10's macOS glyphs leave alone only because jsdom's `navigator.platform` is "" (checked). Each is now named in its batch.
+
+## Critic round 3 (Fable): PASS, with three non-blocking notes carried into the batch briefs
+
+Round 3 passed 12 of 12 gating dimensions, with no CONCERNs (`kerf-ui-polish-critic-r3.md`). It made three non-blocking notes. They are recorded here so each lands in the brief for its batch, rather than being edited into the tables above after the pass:
+1. **P29a (A9):** cite `gcodeStale` where it is read and decided, as the critic gives it (`:395-398`, `:610`, `:844`, `:853`), not the setter-field lines in `store/index.ts`. Re-verify the lines on the tree when A9 is briefed.
+2. **P52 (ledger):** the P52 ledger row covers several batches. Read it per batch: each batch migrates only the files it lists. No A6→A3 dependency is implied; A6's inline slider accents follow D1 through the declared one-line commit.
+3. **Onboarding step 5 (P56a, A11):** consider dropping the word "laser" from "with the laser commanded off". "FRAME sends moves around the job's bounding box at zero power" is the plainer command description; decide when A11 is briefed.
