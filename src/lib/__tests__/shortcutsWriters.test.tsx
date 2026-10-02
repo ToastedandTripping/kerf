@@ -1,8 +1,8 @@
 /**
  * W1b — F1 writer tests for the keyboard pipeline (arrow nudge, Ctrl+V paste)
- * and the MenuBar clipboard writer, through the PRODUCTION handlers:
+ * and the shared paste writer (editCommands), through the PRODUCTION handlers:
  * useKeyboardShortcuts is mounted in a harness component and real KeyboardEvents
- * are dispatched on window; the MenuBar paste runs via its test-only export.
+ * are dispatched on window; the shared paste writer is called directly.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
@@ -15,7 +15,7 @@ import { useStore } from "../../app/store";
 import type { DesignObject, PathPoint } from "../../app/types";
 import { useKeyboardShortcuts } from "../shortcuts";
 import { assertPointsInvariant } from "../geometry/__tests__/pointsInvariant";
-import { _testClipboardOp } from "../../components/topbar/MenuBar";
+import { copySelection, pasteClipboard } from "../editCommands";
 
 function ShortcutHarness() {
   useKeyboardShortcuts();
@@ -114,13 +114,13 @@ describe("Ctrl+V paste (+10 offset)", () => {
   });
 });
 
-describe("MenuBar clipboardOp paste (production writer via test-only export)", () => {
+describe("editCommands paste (the writer every surface calls)", () => {
   it("paste offsets path points by +10 with fresh arrays; pasteInPlace keeps position", () => {
     useStore.getState().addObject(makePath("p1"));
     useStore.getState().setSelectedIds(["p1"]);
 
-    _testClipboardOp("copy");
-    _testClipboardOp("paste");
+    copySelection();
+    pasteClipboard(false);
     let objects = useStore.getState().objects;
     expect(objects).toHaveLength(2);
     const pasted = objects[1];
@@ -129,7 +129,7 @@ describe("MenuBar clipboardOp paste (production writer via test-only export)", (
     assertPointsInvariant(pasted);
     expect(pasted.points).not.toBe(get("p1").points);
 
-    _testClipboardOp("pasteInPlace");
+    pasteClipboard(true);
     objects = useStore.getState().objects;
     expect(objects).toHaveLength(3);
     const inPlace = objects[2];

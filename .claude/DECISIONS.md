@@ -80,6 +80,41 @@ Min Pwr reaches no G-code on line, fill, offset-fill or fill-line layers in eith
 
 Gate D4 (2026-07-05) waited on whether the hardware exists. Lee answered in the 2026-09-27 grill: no, keep it parked. It stays on the ROADMAP with no planning, and it is not removed, so re-adding it later does not mean re-planning from nothing. Reopen only if Lee says he has, or will buy, a camera or rotary.
 
+### Ctrl+Shift+V is Flip Vertical and Alt+V is Paste in Place (LightBurn parity).
+*2026-09-22, Lee*
+
+Illustrator binds Ctrl+Shift+V to Paste in Place and LightBurn binds it to Flip Vertical. Kerf's labels had always been LightBurn's, but the key silently pasted instead. It is hard-bound, with no switch. Implemented and merged into marvin/kerf-gap by kerf-refresh-editing-shortcuts (ccd99a4); recorded 2026-09-29.
+
+### Jogging is not refused on machines whose frame is not yet qualified; frame qualification (S3e) ships as its own relay.
+*2026-09-29, decided by the kerf-gap session under Lee's 2026-09-29 technical delegation*
+
+Every machine is frame-unqualified until S3e exists, so refusing would disable jogging for everyone, which contradicts the 2026-09-10 ruling that the release keeps the full feature set rather than visibly disabling unqualified features. Until then the protection is the native motion-trust gate (homed this trust epoch, a current post-motion observation, mm units, the current connection, admitted inside the stop-shared critical section) plus the per-machine bed confirmation (2026-09-26). S3e must not add a refusal without amending this entry.
+
+### One blue is the action, selection and slider colour everywhere; tan is kept only for the KERF name and Engrave in Preview.
+*2026-10-02, Lee ("All recs", UI polish D1)*
+
+Before this, some dialogs used tan primary buttons with white text (2.33:1, below the readability floor) and others used blue, so two colours both meant "do this". One colour now carries one meaning. White text sits on a darker blue (5.42:1). The plan is .claude/plans/kerf-ui-polish.md (Track A, batches A3, A4, A5 and A11, plus the one-line slider commit).
+
+### Import and trace previews show the artwork on a light paper-coloured panel (#f4f1ea); the rest of the app stays dark.
+*2026-10-02, Lee ("All recs", UI polish D2)*
+
+Illustrator, Inkscape and Figma all default to black strokes, and black line art on the old navy preview panel was nearly invisible (1.23:1, against 18.62:1 on the paper colour). The panel covers the Import SVG, Import Image, Trace Image and Import PDF previews, and Dither's only if its render draws burned pixels dark. It is one colour token.
+
+### A new project's starting layer is Score, so drawn shapes and DXF files land on a line layer at low power.
+*2026-10-02, Lee ("All recs", UI polish D3)*
+
+The old default was Engrave, a fill layer, so a drawn outline or a DXF burned as a filled block. When Kerf has to guess what an outline means, the guess should be the one whose mistake is cheapest: a mark that can be re-run on Cut (one key), not a part cut through. Saved projects keep their layers. This is implemented by the Track B follow-on plan TB5 in .claude/plans/kerf-ui-polish.md, and governs that plan.
+
+### While the machine is connected and running, paused, door-open or in alarm, the whole status bar takes the state's colour and the state word is larger.
+*2026-10-02, Lee ("All recs", UI polish D4)*
+
+The state used to be an 11 px word and a 6 px dot in the bottom-left corner, unreadable from the bench. The colours are blue for running, amber for paused or door open and dark red for alarm, with text at 8.35:1 or better. Idle and disconnected stay untinted. The plan is .claude/plans/kerf-ui-polish.md, batch A8.
+
+### Canvas shapes are drawn in their layer's colour, not the colour they had in the imported file.
+*2026-10-02, Lee ("All recs", UI polish D5)*
+
+The layer decides power, speed and passes, and the file colour has no effect on the job, so the canvas shows the layer, as LightBurn does. Each shape keeps its file colour in the project and in SVG export, and the G-code does not change. Fills keep a light tint, text follows its layer, and images are untouched. The plan is .claude/plans/kerf-ui-polish.md, batch A9 (one switch in layerDisplayColor.ts).
+
 ---
 
 ## Engineering pins
@@ -201,6 +236,11 @@ Asked whether the Air Assist switch should be removed because nothing might be l
 *2026-09-27, per Lee*
 
 The header says hardware identity is kept private, yet the committed 2026-09-14 probe log and several entries here quote the controller's firmware version, vendor string and buffer sizes. Lee chose to accept that and correct the rule, over moving the log private or rewriting history. A firmware string identifies a commercial controller model, not the owner. For that class of detail this entry supersedes the header's hardware-identity clause (the writer cannot edit the header). Account, contact and incident detail stay private as before. The committed log stays, because entries cite it as re-countable evidence. New diagnostic captures are kept out of the repository and cited by summary.
+
+### The owner's controller keeps its motors powered between moves ($1=255); jog safety assumes the gantry cannot move unseen.
+*2026-09-29, decided by the kerf-gap session under Lee's 2026-09-29 technical delegation ("I defer to your judgement and research")*
+
+The controller capture shows $1=250 and $20=0: the steppers de-energise 250 ms after every move and soft limits are off, so a gantry pushed by hand moves with no serial event. Kerf would still count it homed and observed, and a jog clipped only by Kerf could drive the head into the frame (a crash, not fire; the beam is off and hard limits are on). GRBL's own configuration guide recommends $1=255 to keep the axes powered so they hold position, with the caveat that some drivers dislike staying on for long periods. So the owner sets $1=255 once from the console, as an owner-card step with a motor-temperature check after ten idle minutes. Kerf does not refuse jogs when $1 is below 255, because that would disable jogging on this controller today; the owner card states the assumption instead. Source: https://github.com/gnea/grbl/wiki/Grbl-v1.1-Configuration ($1 Step idle delay).
 
 ---
 

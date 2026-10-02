@@ -1,5 +1,7 @@
-import { Component, useState, useCallback, useEffect } from "react";
+import { Component, useState, useCallback, useEffect, useRef } from "react";
+import { useFocusTrap } from "../lib/hooks/useFocusTrap";
 import type { ReactNode, ErrorInfo } from "react";
+import type { DesignObject } from "./types";
 import { MenuBar } from "../components/topbar/MenuBar";
 import { Toolbar } from "../components/toolbar/Toolbar";
 import { Viewport } from "../components/viewport/Viewport";
@@ -116,6 +118,9 @@ export function openVariableText() {
 export function openNesting() {
   useStore.getState().openDialog("nesting");
 }
+export function openKeyboardShortcuts() {
+  useStore.getState().openDialog("shortcuts");
+}
 export function openSvgImport(svgContent: string) {
   const s = useStore.getState();
   s.setDialogData({ svgContent });
@@ -146,6 +151,12 @@ export function openPdfImport(data: ArrayBuffer, name: string) {
   s.setDialogData({ pendingPdf: { data, name } });
   s.openDialog("pdfImport");
 }
+export function importPdfVectors(objects: DesignObject[]) {
+  const s = useStore.getState();
+  s.closeDialog("pdfImport");
+  s.setDialogData({ pendingPdf: null });
+  s.withUndo("pdf-import", () => objects.forEach((obj) => s.addObject(obj)));
+}
 
 export default function App() {
   useKeyboardShortcuts();
@@ -155,6 +166,11 @@ export default function App() {
   const closeDialog = useStore((s) => s.closeDialog);
   const setDialogData = useStore((s) => s.setDialogData);
   const [recoveryOffer, setRecoveryOffer] = useState<{ timestamp: number } | null>(null);
+  // Every aria-modal root contains focus (F7 made Tab inert behind modals).
+  const trapRef = useRef<HTMLDivElement>(null);
+  // Initial focus on Restore: Discard deletes the recovery file for good.
+  const restoreRef = useRef<HTMLButtonElement>(null);
+  useFocusTrap(trapRef, !!recoveryOffer, restoreRef);
   const [showOnboarding, setShowOnboarding] = useState(shouldShowOnboarding);
   // B5: MaterialLibrary and PropertiesPanel collapsed by default so LayerPanel
   // (the primary working surface) gets more room. State is local — no Zustand
@@ -368,14 +384,7 @@ export default function App() {
             heightMm
           );
         }}
-        onImportVector={(objects) => {
-          closeDialog("pdfImport");
-          setDialogData({ pendingPdf: null });
-          const addObject = useStore.getState().addObject;
-          for (const obj of objects) {
-            addObject(obj);
-          }
-        }}
+        onImportVector={importPdfVectors}
         generateId={generateId}
         defaultLayerIndex={activeLayerIndex}
       />
@@ -403,6 +412,7 @@ export default function App() {
           }}
         >
           <div
+            ref={trapRef}
             role="dialog"
             aria-modal="true"
             aria-labelledby="recovery-dialog-title"
@@ -443,6 +453,7 @@ export default function App() {
                 Discard
               </button>
               <button
+                ref={restoreRef}
                 onClick={async () => {
                   const result = await checkRecoveryFile();
                   if (result) {

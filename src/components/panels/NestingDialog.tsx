@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { useFocusTrap } from "../../lib/hooks/useFocusTrap";
 import { useStore } from "../../app/store";
 import type { NestRotation, NestResult } from "../../app/types";
 
@@ -47,6 +48,12 @@ export function NestingDialog({ open, onClose }: Props) {
     return { count, label: `Nesting ${count} visible object${count !== 1 ? "s" : ""}` };
   }, [objects, selectedIds]);
 
+  // Every aria-modal root contains focus (F7 made Tab inert behind modals).
+  const trapRef = useRef<HTMLDivElement>(null);
+  // Initial focus on the Spacing number field: the range slider paints no focus ring.
+  const spacingFieldRef = useRef<HTMLInputElement>(null);
+  useFocusTrap(trapRef, open, spacingFieldRef);
+
   if (!open) return null;
 
   async function handleNest() {
@@ -79,6 +86,7 @@ export function NestingDialog({ open, onClose }: Props) {
         style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999 }}
       />
       <div
+        ref={trapRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="nesting-dialog-title"
@@ -137,6 +145,7 @@ export function NestingDialog({ open, onClose }: Props) {
               style={{ flex: 1 }}
             />
             <input
+              ref={spacingFieldRef}
               type="number"
               min={0}
               max={20}

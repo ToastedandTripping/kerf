@@ -25,6 +25,9 @@ export const MIN_ZOOM = 0.05;
 /** Maximum zoom level (5000% -- closest in). */
 export const MAX_ZOOM = 50;
 
+/** Offset (mm, both axes) applied by plain Paste; Paste in Place uses 0. */
+export const PASTE_OFFSET_MM = 10;
+
 /** Format a duration in seconds to a human-readable string (e.g. "3m 12s", "1h 5m"). */
 export function formatTime(secs: number): string {
   if (secs < 60) return `${Math.ceil(secs)}s`;

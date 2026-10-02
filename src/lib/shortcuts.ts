@@ -1,9 +1,18 @@
 import { useEffect } from "react";
-import { useStore, generateId } from "../app/store";
+import { useStore } from "../app/store";
 import { fileOperations } from "./fileOps";
-import { handleViewportKeyDown, handleToolChange } from "./tools/toolHandler";
+import { handleViewportKeyDown, switchTool } from "./tools/toolHandler";
+import { FOCUSABLE_SELECTORS } from "./hooks/useFocusTrap";
 import { movePartial } from "./geometry";
 import { MIN_ZOOM, MAX_ZOOM } from "./constants";
+import {
+  copySelection,
+  cutSelection,
+  deleteSelection,
+  pasteClipboard,
+  duplicateSelection,
+  flipSelection,
+} from "./editCommands";
 import type { ToolType } from "../app/types";
 
 const toolShortcuts: Record<string, ToolType> = {
@@ -18,9 +27,65 @@ const toolShortcuts: Record<string, ToolType> = {
   h: "pan",
 };
 
+/** Hidden-but-mounted modal roots already reported (dev-only warning fires once each). */
+const warnedModals = new WeakSet<Element>();
+
+/**
+ * Central focus-containment fallback for modal roots without their own trap
+ * (GrblSettingsDialog is frozen and has none; MaterialTestDialog, also frozen,
+ * already has one). A per-dialog
+ * useFocusTrap runs first on the dialog element; if it already handled the edge
+ * (defaultPrevented) this does nothing, so there is no double step. A Tab moving
+ * normally between two inside elements is left to the browser.
+ */
+function containTab(e: KeyboardEvent, modal: Element) {
+  if (e.defaultPrevented) return;
+  const nodes = Array.from(modal.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTORS)).filter(
+    (n) => !n.closest("[disabled]") && n.checkVisibility?.() !== false
+  );
+  const active = document.activeElement;
+  if (nodes.length === 0) {
+    e.preventDefault();
+    return;
+  }
+  const first = nodes[0];
+  const last = nodes[nodes.length - 1];
+  if (!active || !modal.contains(active)) {
+    e.preventDefault();
+    (e.shiftKey ? last : first).focus();
+  } else if (e.shiftKey && active === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && active === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
 export function useKeyboardShortcuts() {
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      // A modal owns the keyboard: the canvas behind it is not the user's target.
+      // Contract: every modal root carries aria-modal="true" and UNMOUNTS when closed
+      // (hidden-by-CSS would kill every shortcut). ROADMAP Phase 5 ModalShell owns this.
+      // `?` (ShortcutOverlay) and Ctrl+K (CommandPalette) deliberately still work over
+      // other modals — they are separate listeners, not this handler. Do not "fix" that.
+      const modal = document.querySelector('[aria-modal="true"]');
+      if (modal) {
+        // Dev-only stuck-modal detector: warn only when the modal root is mounted but
+        // NOT visible (the contract breach above). A normal open dialog stays silent.
+        if (
+          import.meta.env.DEV &&
+          modal.checkVisibility?.() === false &&
+          !warnedModals.has(modal)
+        ) {
+          warnedModals.add(modal);
+          console.warn("[shortcuts] all shortcuts suppressed by a hidden aria-modal root:", modal);
+        }
+        if (e.key === "Tab") containTab(e, modal);
+        return;
+      }
+
       // Tool-context key events (pen Enter/Escape, node Delete)
       if (handleViewportKeyDown(e)) return;
 
@@ -80,49 +145,25 @@ export function useKeyboardShortcuts() {
       // Copy/Cut/Paste (shift guard: Ctrl+Shift+C is "convert to path" below)
       if (ctrl && !shift && key === "c") {
         e.preventDefault();
-        const s = useStore.getState();
-        s.setClipboard(s.objects.filter((o) => s.selectedIds.includes(o.id)));
+        copySelection();
         return;
       }
       if (ctrl && key === "x") {
         e.preventDefault();
-        const s = useStore.getState();
-        s.setClipboard(s.objects.filter((o) => s.selectedIds.includes(o.id)));
-        s.withUndo("cut", () => {
-          s.removeObjects(s.selectedIds);
-        });
+        cutSelection();
         return;
       }
-      if (ctrl && key === "v") {
+      // shift guard: Ctrl+Shift+V is "flip vertical" below
+      if (ctrl && !shift && key === "v") {
         e.preventDefault();
-        const s = useStore.getState();
-        s.withUndo("paste", () => {
-          // W1b: movePartial shifts path points with the +10 offset AND returns
-          // fresh points arrays (the clipboard holds live references — a shared
-          // array here would couple the copy to the original).
-          const newObjects = s.clipboard.map((o) => ({
-            ...o,
-            id: generateId(),
-            ...movePartial(o, o.transform.x + 10, o.transform.y + 10),
-          }));
-          newObjects.forEach(s.addObject);
-          s.setSelectedIds(newObjects.map((o) => o.id));
-        });
+        pasteClipboard(false);
         return;
       }
 
       // Paste in Place (Alt+V)
       if (alt && key === "v") {
         e.preventDefault();
-        const s = useStore.getState();
-        s.withUndo("paste", () => {
-          const newObjects = s.clipboard.map((o) => ({
-            ...o,
-            id: generateId(),
-          }));
-          newObjects.forEach(s.addObject);
-          s.setSelectedIds(newObjects.map((o) => o.id));
-        });
+        pasteClipboard(true);
         return;
       }
 
@@ -156,7 +197,7 @@ export function useKeyboardShortcuts() {
       // Duplicate in Place (Ctrl+D)
       if (ctrl && key === "d") {
         e.preventDefault();
-        useStore.getState().duplicateInPlace();
+        duplicateSelection();
         return;
       }
 
@@ -178,11 +219,15 @@ export function useKeyboardShortcuts() {
       // Flip (Ctrl+Shift+H / Ctrl+Shift+V)
       if (ctrl && shift && key === "h") {
         e.preventDefault();
-        useStore.getState().flipObjects("horizontal");
+        flipSelection("horizontal");
         return;
       }
-      // Note: Ctrl+Shift+V conflicts with "paste in place" in some apps
-      // but we use Alt+V for that, so this is fine
+      // Lee 2026-09-22: Ctrl+Shift+V = Flip Vertical (LightBurn parity); Alt+V is Paste in Place.
+      if (ctrl && shift && key === "v") {
+        e.preventDefault();
+        flipSelection("vertical");
+        return;
+      }
 
       // Alignment shortcuts (Ctrl+Shift+Arrow)
       if (ctrl && shift && key === "arrowleft") {
@@ -242,19 +287,7 @@ export function useKeyboardShortcuts() {
       // Delete
       if (key === "delete" || key === "backspace") {
         e.preventDefault();
-        const s = useStore.getState();
-        const deletedObjects = s.objects.filter((o) => s.selectedIds.includes(o.id));
-        const deletedIds = s.selectedIds.slice();
-        s.removeObjects(deletedIds);
-        s.pushCommand({
-          type: "delete",
-          undo: () => {
-            deletedObjects.forEach((o) => useStore.getState().addObject(o));
-          },
-          redo: () => {
-            useStore.getState().removeObjects(deletedIds);
-          },
-        });
+        deleteSelection();
         return;
       }
 
@@ -286,12 +319,10 @@ export function useKeyboardShortcuts() {
       // Escape - deselect / switch to select tool
       if (key === "escape") {
         const s = useStore.getState();
-        const previousTool = s.activeTool;
         if (s.selectedIds.length > 0) {
           s.clearSelection();
         }
-        s.setActiveTool("select");
-        handleToolChange("select", previousTool);
+        switchTool("select");
         return;
       }
 
@@ -305,13 +336,26 @@ export function useKeyboardShortcuts() {
         }
       }
 
+      // Snap toggle (S). Same modifier guard as the tool keys, so Shift+S does nothing.
+      if (!ctrl && !shift && !alt && key === "s") {
+        const s = useStore.getState();
+        s.setSnapToGrid(!s.snapToGrid);
+        return;
+      }
+
+      // Rotate 90 CW / CCW (] / [)
+      if (!ctrl && !alt && e.key === "]") {
+        useStore.getState().rotate90("cw");
+        return;
+      }
+      if (!ctrl && !alt && e.key === "[") {
+        useStore.getState().rotate90("ccw");
+        return;
+      }
+
       // Tool shortcuts (single key, no modifier)
       if (!ctrl && !shift && !alt && toolShortcuts[key]) {
-        const s = useStore.getState();
-        const previousTool = s.activeTool;
-        const newTool = toolShortcuts[key];
-        s.setActiveTool(newTool);
-        handleToolChange(newTool, previousTool);
+        switchTool(toolShortcuts[key]);
         return;
       }
 
