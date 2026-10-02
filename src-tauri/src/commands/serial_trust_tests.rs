@@ -2089,3 +2089,16 @@ fn fix_w2_a_non_idle_frame_at_the_same_position_ends_the_observation() {
         assert!(tv(&r).homed);
     }
 }
+
+/// Razor b23 R1: W2 compares every axis at a tight epsilon. An Idle frame
+/// 0.01 mm off in Y alone (X and Z identical) still ends the observation, so
+/// neither an X-only compare nor a loosened tolerance survives.
+#[test]
+fn fix_r1_an_idle_frame_a_hundredth_off_in_y_ends_the_observation() {
+    let (r, b) = observed_then_frame(b"<Idle|MPos:0.000,0.010,0.000|FS:0,0>\r\n", vec![]);
+    assert!(basis(&r).is_none(), "a 0.01 mm Y move is a move");
+    let res = jog(&r, b);
+    assert!(refused_with(&res, "not-observed"), "{res:?}");
+    assert_eq!(jog_bytes_written(&r), 0);
+    assert!(tv(&r).homed, "no epoch bump");
+}

@@ -30,7 +30,7 @@ export const JOG_REASON_NO_HOMING =
 export const JOG_REASON_MOTION =
   "Waiting for the machine to finish the last command and report its position";
 export const JOG_REASON_UNITS =
-  "Jogging is off until Kerf reads $13=0 (positions in mm) from the machine. Reconnect, or send $$";
+  "Jogging is off until Kerf reads $13=0 (positions in mm) from the machine. Reconnect, or send $$ to re-read its settings";
 
 export type JogAxis = "X" | "Y";
 

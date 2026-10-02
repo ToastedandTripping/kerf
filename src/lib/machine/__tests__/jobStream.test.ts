@@ -572,6 +572,25 @@ describe("RF-15 admission fence (jobStream)", () => {
     expect(useStore.getState().machineConnected).toBe(true);
   });
 
+  it("Razor b23 R2: a malformed buffered job says Kerf refused it, not the controller", async () => {
+    localStorage.setItem("streamingMode", "buffered");
+    fenced({ deferStream: true });
+    const session = (await beginJobSession("Job"))!;
+    const job = streamJob("G1 X1", { label: "Job", session });
+    await recorder.waitUntilInvoked("serial_stream_job");
+    recorder.releaseInvokeReject(
+      recorder.getRecordIndex("serial_stream_job"),
+      "refused: malformed: control byte (0x09). Nothing was sent. (job line 2)"
+    );
+    const result = await job;
+    expect(result.endState).toBe("cancelled");
+    expect(count("serial_stop")).toBe(0);
+    expect(texts()).toContain(
+      "Job stopped: Kerf refused a job line before sending it (control byte (0x09). Nothing was sent. (job line 2)). Nothing further was sent."
+    );
+    expect(texts().some((t) => t.includes("no longer accepting"))).toBe(false);
+  });
+
   it("T4: a refusal string unknown to the contract is cancelled, never complete or disconnected", async () => {
     fenced({ deferSend: true });
     const session = (await beginJobSession("Job"))!;

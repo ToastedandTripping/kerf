@@ -6,24 +6,16 @@ import {
   subscribeBedSource,
   type ConnectionError,
 } from "../../lib/machine/connection";
-import {
-  JOG_REASON_AXIS,
-  JOG_REASON_EDGE,
-  JOG_REASON_OUTSIDE,
-  JOG_REASON_NUMBER,
-  JOG_REASON_PENDING,
-  jogBlockReason,
-} from "../../lib/machine/jogBounds";
+import { JOG_REASON_MOTION, jogBlockReason } from "../../lib/machine/jogBounds";
 
-/** Reasons connection.jog() can print that the render-time gate cannot see. */
-const JOG_CLICK_REASONS = new Set<string>([
-  JOG_REASON_AXIS,
-  JOG_REASON_EDGE,
-  JOG_REASON_OUTSIDE,
-  JOG_REASON_NUMBER,
-  JOG_REASON_PENDING,
-]);
 const JOG_FLASH_MS = 2000;
+/** Jen B4 §2: MOTION standing this long swaps the slot to its recovery note. */
+const JOG_HOLD_NOTE_MS = 5000;
+export const JOG_HOLD_COMMAND =
+  "Still waiting on the machine. If nothing is moving, press STOP, then reconnect and Home again.";
+export const JOG_HOLD_POSITION =
+  "The machine isn't reporting its machine position (MPos). Kerf can't jog until it does. Check $10 in the machine settings.";
+export const JOG_HOLD_STATE = "The machine isn't reporting Idle. Kerf jogs only from Idle.";
 import { generateGcode } from "../../lib/machine/gcodeGen";
 import {
   MACHINE_STATE_COLORS,
@@ -91,6 +83,11 @@ export function MachinePanel() {
   const grblSoftLimits = useStore((s) => s.grblSoftLimits);
   const grblHoming = useStore((s) => s.grblHoming);
   const machineHomed = useStore((s) => s.machineHomed);
+  // B4: motion trust, one scalar selector each (React error 185 rule).
+  const trustHomed = useStore((s) => s.trustHomed);
+  const trustUnitsMm = useStore((s) => s.trustUnitsMm);
+  const motionPending = useStore((s) => s.motionPending);
+  const trustObserved = useStore((s) => s.trustObserved);
   const softLimitsActive = useStore((s) => s.softLimitsActive);
   const grblLaserMode = useStore((s) => s.grblLaserMode);
   const workCoordOffset = useStore((s) => s.workCoordOffset);
@@ -135,6 +132,11 @@ export function MachinePanel() {
       workspaceVerified,
       positionKind,
       workCoordOffset,
+      grblHoming,
+      trustHomed,
+      trustUnitsMm,
+      motionPending,
+      trustObserved,
     },
     "by"
   );
@@ -148,6 +150,11 @@ export function MachinePanel() {
       workspaceVerified,
       positionKind,
       workCoordOffset,
+      grblHoming,
+      trustHomed,
+      trustUnitsMm,
+      motionPending,
+      trustObserved,
     },
     "to"
   );
@@ -166,11 +173,36 @@ export function MachinePanel() {
     if (positionBlocked !== null && activeTool === "positionLaser") setActiveTool("select");
   }, [positionBlocked, activeTool, setActiveTool]);
 
+  // Jen B4 §2: the hold note. The only state is "5 s of MOTION elapsed"; the
+  // cause is derived on every render from the store scalars, so a snapshot
+  // flips it in place.
+  const motionShown = jogBlocked === JOG_REASON_MOTION;
+  const [holdElapsed, setHoldElapsed] = useState(false);
+  useEffect(() => {
+    if (!motionShown) return;
+    const t = setTimeout(() => setHoldElapsed(true), JOG_HOLD_NOTE_MS);
+    return () => {
+      clearTimeout(t);
+      setHoldElapsed(false);
+    };
+  }, [motionShown]);
+  let holdNote: string | null = null;
+  if (motionShown && holdElapsed) {
+    if (motionPending) holdNote = JOG_HOLD_COMMAND;
+    else if (!trustObserved && machineState === "idle") holdNote = JOG_HOLD_POSITION;
+    else if (!trustObserved) holdNote = JOG_HOLD_STATE;
+  }
+  const jogNote = jogFlash ?? holdNote ?? jogBlocked;
+
+  // Jen B4 §5.6: every refusal a click produces is answered in the slot. The
+  // handler prints its own refusals as warnings and a native refusal as an
+  // error ("Not sent: <reason>"), so the first warning or error line the
+  // click added is flashed; nothing is filtered by a fixed set of texts.
   async function jogAndReport(axis: "X" | "Y", distance: number) {
     const before = useStore.getState().consoleLines.length;
     await machineConnection.jog(axis, distance);
     const added = useStore.getState().consoleLines.slice(before);
-    const refused = added.find((l) => JOG_CLICK_REASONS.has(l.text));
+    const refused = added.find((l) => l.type === "warning" || l.type === "error");
     if (!refused) return;
     if (jogFlashTimer.current) clearTimeout(jogFlashTimer.current);
     setJogFlash(refused.text);
@@ -983,7 +1015,7 @@ export function MachinePanel() {
                 padding: "8px",
               }}
             >
-              {(jogFlash ?? jogBlocked) !== null && (
+              {jogNote !== null && (
                 <div
                   data-testid="jog-blocked-note"
                   style={{
@@ -993,7 +1025,7 @@ export function MachinePanel() {
                     marginBottom: "4px",
                   }}
                 >
-                  {jogFlash ?? jogBlocked}
+                  {jogNote}
                 </div>
               )}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 32px)", gap: "2px" }}>
@@ -1015,12 +1047,16 @@ export function MachinePanel() {
                   label="&#x2302;"
                   onClick={() => machineConnection.home()}
                   title={
-                    grblHoming
-                      ? "Home ($H)"
-                      : "Home disabled — machine has no limit switches ($22=0)"
+                    !machineConnected
+                      ? "Home disabled — machine not connected"
+                      : jobRunning
+                        ? "Home disabled — a job is running"
+                        : grblHoming
+                          ? "Home ($H)"
+                          : "Home disabled — machine has no limit switches ($22=0)"
                   }
                   accent={grblHoming}
-                  disabled={!grblHoming}
+                  disabled={!machineConnected || jobRunning || !grblHoming}
                 />
                 <JogButton
                   label="&#x25B6;"

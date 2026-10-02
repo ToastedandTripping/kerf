@@ -128,6 +128,16 @@ export function getStreamingMode(): "perLine" | "buffered" {
  */
 function handleRefusal(reason: string, label: string): StreamJobResult["endState"] {
   const store = useStore.getState();
+  // Razor b23 R2: a malformed line is refused by Kerf before it is written;
+  // the controller never saw it, so the text must not blame the controller.
+  const malformed = reason.match(/^refused: malformed: (.*)$/);
+  if (malformed) {
+    store.addConsoleLine(
+      `${label} stopped: Kerf refused a job line before sending it (${malformed[1]}). Nothing further was sent.`,
+      "warning"
+    );
+    return "cancelled";
+  }
   const detailMatch = reason.match(/^refused: not-admitted: (.*)$/);
   const detail = detailMatch ? detailMatch[1] : reason;
   store.addConsoleLine(
