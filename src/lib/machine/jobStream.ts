@@ -130,10 +130,15 @@ function handleRefusal(reason: string, label: string): StreamJobResult["endState
   const store = useStore.getState();
   // Razor b23 R2: a malformed line is refused by Kerf before it is written;
   // the controller never saw it, so the text must not blame the controller.
-  const malformed = reason.match(/^refused: malformed: (.*)$/);
+  // Native's text carries console advice ("Retype the command…") that means
+  // nothing inside a job, so only the cause and the line number are kept.
+  const malformed = reason.match(
+    /^refused: malformed: (.+?)\. Nothing was sent\..*?(?: \(job line (\d+)\))?$/
+  );
   if (malformed) {
+    const which = malformed[2] ? `job line ${malformed[2]}` : "a job line";
     store.addConsoleLine(
-      `${label} stopped: Kerf refused a job line before sending it (${malformed[1]}). Nothing further was sent.`,
+      `${label} stopped: Kerf refused ${which} before sending it: ${malformed[1]}. Nothing further was sent.`,
       "warning"
     );
     return "cancelled";

@@ -1403,6 +1403,21 @@ describe("S3 — MachinePanel and StatusBar", () => {
     expect(sentCommands()).toEqual([]);
   });
 
+  it("Razor b4 W1: the flash still shows the refusal with the console at its cap", async () => {
+    mockSerial(() => ({ responses: ["ok"], drained: [] }));
+    const add = useStore.getState().addConsoleLine;
+    for (let i = 0; i < 600; i++) add(`prefill ${i}`, "info");
+    expect(useStore.getState().consoleLines).toHaveLength(501);
+    useStore.getState().setTrust({ basisSeq: null });
+    const { getByText, getByTitle, getByTestId } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    fireEvent.click(getByTitle("X+"));
+    await waitFor(() =>
+      expect(getByTestId("jog-blocked-note").textContent).toBe(JOG_REASON_MOTION)
+    );
+    expect(getByTestId("jog-blocked-note").style.color).toBe("var(--accent-warm)");
+  });
+
   it("T-P1 flash: a native refused: line reaches the slot in warm for 2 s", async () => {
     mockSerial(() => ({ responses: ["ok"], drained: [] }));
     const base = mockInvoke.getMockImplementation() as (c: string, a?: unknown) => Promise<unknown>;

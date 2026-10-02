@@ -199,9 +199,15 @@ export function MachinePanel() {
   // error ("Not sent: <reason>"), so the first warning or error line the
   // click added is flashed; nothing is filtered by a fixed set of texts.
   async function jogAndReport(axis: "X" | "Y", distance: number) {
-    const before = useStore.getState().consoleLines.length;
+    // Razor b4 W1: the console is capped (store keeps the last 501), so a
+    // length index goes empty at the cap. Find the click's lines by identity:
+    // lines are appended as new objects and kept by reference, so everything
+    // after the pre-click last line was added during the click.
+    const lines0 = useStore.getState().consoleLines;
+    const last = lines0.length > 0 ? lines0[lines0.length - 1] : null;
     await machineConnection.jog(axis, distance);
-    const added = useStore.getState().consoleLines.slice(before);
+    const lines = useStore.getState().consoleLines;
+    const added = last === null ? lines : lines.slice(lines.lastIndexOf(last) + 1);
     const refused = added.find((l) => l.type === "warning" || l.type === "error");
     if (!refused) return;
     if (jogFlashTimer.current) clearTimeout(jogFlashTimer.current);
