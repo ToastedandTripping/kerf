@@ -1418,6 +1418,22 @@ describe("S3 — MachinePanel and StatusBar", () => {
     expect(getByTestId("jog-blocked-note").style.color).toBe("var(--accent-warm)");
   });
 
+  it("Razor b4 W1 sibling: a warning from before the click is never flashed", async () => {
+    mockSerial(() => ({ responses: ["ok"], drained: [] }));
+    const add = useStore.getState().addConsoleLine;
+    for (let i = 0; i < 600; i++) add(`prefill ${i}`, "info");
+    add("an older warning", "warning");
+    const { getByText, getByTitle, queryByTestId } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    fireEvent.click(getByTitle("X+"));
+    await waitFor(() => expect(sentCommands()).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 50));
+    // The sent jog shows the standing MOTION reason (provisional), not a flash.
+    const note = queryByTestId("jog-blocked-note");
+    expect(note?.textContent).toBe(JOG_REASON_MOTION);
+    expect(note?.style.color).toBe("var(--text-secondary)");
+  });
+
   it("T-P1 flash: a native refused: line reaches the slot in warm for 2 s", async () => {
     mockSerial(() => ({ responses: ["ok"], drained: [] }));
     const base = mockInvoke.getMockImplementation() as (c: string, a?: unknown) => Promise<unknown>;
