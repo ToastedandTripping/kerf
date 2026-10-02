@@ -670,6 +670,8 @@ Already parked, so no new line: unified time formats (ROADMAP.md:673, :677); pal
 
 ## Decisions for Lee
 
+**ANSWERED 2026-10-02: Lee chose "All recs".** D1 (a) one blue, D2 (a) paper panels, D3 (a) Score, D4 (a) tint plus the larger word, D5 (a) layer colour. All five are recorded as DECISIONS product rulings. Nothing below waits on Lee any more.
+
 Only look-and-feel and product-default calls. Everything technical (the track split, STOP's solid style in every uncertain state, hiding Min Pwr per your 2026-09-27 ruling, the shell design, the white selection outline on the canvas) was decided under your 2026-09-29 delegation ("I defer to your judgement and research"). Revision 2 also counted canvas strokes in layer colours as technical; the round-2 critic was right that it changes what you see while checking a job, so it is D5 now.
 
 **Which answer matters most.** D1: it alone holds back four batches, among them the Trace dialog fix (its main button is below the bottom of the screen on a laptop) and the Material Test copy fixes. D2 and D5 hold nothing back; each answer later is a two-line change. D4 holds back only the tint. D3 holds back only TB5.

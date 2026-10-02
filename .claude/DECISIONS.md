@@ -90,6 +90,31 @@ Illustrator binds Ctrl+Shift+V to Paste in Place and LightBurn binds it to Flip 
 
 Every machine is frame-unqualified until S3e exists, so refusing would disable jogging for everyone, which contradicts the 2026-09-10 ruling that the release keeps the full feature set rather than visibly disabling unqualified features. Until then the protection is the native motion-trust gate (homed this trust epoch, a current post-motion observation, mm units, the current connection, admitted inside the stop-shared critical section) plus the per-machine bed confirmation (2026-09-26). S3e must not add a refusal without amending this entry.
 
+### One blue is the action, selection and slider colour everywhere; tan is kept only for the KERF name and Engrave in Preview.
+*2026-10-02, Lee ("All recs", UI polish D1)*
+
+Before this, some dialogs used tan primary buttons with white text (2.33:1, below the readability floor) and others used blue, so two colours both meant "do this". One colour now carries one meaning. White text sits on a darker blue (5.42:1). The plan is .claude/plans/kerf-ui-polish.md (Track A, batches A3, A4, A5 and A11, plus the one-line slider commit).
+
+### Import and trace previews show the artwork on a light paper-coloured panel (#f4f1ea); the rest of the app stays dark.
+*2026-10-02, Lee ("All recs", UI polish D2)*
+
+Illustrator, Inkscape and Figma all default to black strokes, and black line art on the old navy preview panel was nearly invisible (1.23:1, against 18.62:1 on the paper colour). The panel covers the Import SVG, Import Image, Trace Image and Import PDF previews, and Dither's only if its render draws burned pixels dark. It is one colour token.
+
+### A new project's starting layer is Score, so drawn shapes and DXF files land on a line layer at low power.
+*2026-10-02, Lee ("All recs", UI polish D3)*
+
+The old default was Engrave, a fill layer, so a drawn outline or a DXF burned as a filled block. When Kerf has to guess what an outline means, the guess should be the one whose mistake is cheapest: a mark that can be re-run on Cut (one key), not a part cut through. Saved projects keep their layers. This is implemented by the Track B follow-on plan TB5 in .claude/plans/kerf-ui-polish.md, and governs that plan.
+
+### While the machine is connected and running, paused, door-open or in alarm, the whole status bar takes the state's colour and the state word is larger.
+*2026-10-02, Lee ("All recs", UI polish D4)*
+
+The state used to be an 11 px word and a 6 px dot in the bottom-left corner, unreadable from the bench. The colours are blue for running, amber for paused or door open and dark red for alarm, with text at 8.35:1 or better. Idle and disconnected stay untinted. The plan is .claude/plans/kerf-ui-polish.md, batch A8.
+
+### Canvas shapes are drawn in their layer's colour, not the colour they had in the imported file.
+*2026-10-02, Lee ("All recs", UI polish D5)*
+
+The layer decides power, speed and passes, and the file colour has no effect on the job, so the canvas shows the layer, as LightBurn does. Each shape keeps its file colour in the project and in SVG export, and the G-code does not change. Fills keep a light tint, text follows its layer, and images are untouched. The plan is .claude/plans/kerf-ui-polish.md, batch A9 (one switch in layerDisplayColor.ts).
+
 ---
 
 ## Engineering pins
