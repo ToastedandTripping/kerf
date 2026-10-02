@@ -10,10 +10,11 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
+import { trustedStore } from "./trustFixture";
 import { useStore } from "../../../app/store";
 import { DEFAULT_LAYERS } from "../../../app/types";
 import { machineConnection, _testResetPollFailures, _testResetJogAndBedState } from "../connection";
-import { JOG_REASON_BED } from "../jogBounds";
+import { JOG_REASON_ALARM, JOG_REASON_BED } from "../jogBounds";
 import { resetStatusConsumer } from "../machineStatus";
 import {
   canStartJob,
@@ -133,14 +134,14 @@ describe("softLimitsActive truth table", () => {
   it("is false when $20=0 regardless of homing/homed", () => {
     useStore.getState().setGrblSoftLimits(false);
     useStore.getState().setGrblHoming(true);
-    useStore.getState().setMachineHomed(true);
+    useStore.getState().setTrust({ trustHomed: true });
     expect(useStore.getState().softLimitsActive).toBe(false);
   });
 
   it("is false when $22=0 (no limit switches) even if $20=1", () => {
     useStore.getState().setGrblSoftLimits(true);
     useStore.getState().setGrblHoming(false);
-    useStore.getState().setMachineHomed(true);
+    useStore.getState().setTrust({ trustHomed: true });
     expect(useStore.getState().softLimitsActive).toBe(false);
   });
 
@@ -149,21 +150,21 @@ describe("softLimitsActive truth table", () => {
     // but the machine has not been homed — limits are inactive, must NOT show as safe
     useStore.getState().setGrblSoftLimits(true);
     useStore.getState().setGrblHoming(true);
-    useStore.getState().setMachineHomed(false);
+    useStore.getState().setTrust({ trustHomed: false });
     expect(useStore.getState().softLimitsActive).toBe(false);
   });
 
   it("is true ONLY when $20=1 AND $22=1 AND homed this session", () => {
     useStore.getState().setGrblSoftLimits(true);
     useStore.getState().setGrblHoming(true);
-    useStore.getState().setMachineHomed(true);
+    useStore.getState().setTrust({ trustHomed: true });
     expect(useStore.getState().softLimitsActive).toBe(true);
   });
 
   it("resets to false when machine disconnects (machineHomed clears)", () => {
     useStore.getState().setGrblSoftLimits(true);
     useStore.getState().setGrblHoming(true);
-    useStore.getState().setMachineHomed(true);
+    useStore.getState().setTrust({ trustHomed: true });
     expect(useStore.getState().softLimitsActive).toBe(true);
     useStore.getState().setMachineConnected(false);
     expect(useStore.getState().machineHomed).toBe(false);
@@ -200,9 +201,12 @@ describe("queryGrblSettings — $20/$21/$22 + workspaceVerified", () => {
     expect(useStore.getState().workspaceVerified).toBe(false);
   });
 
-  it("resets machineHomed to false on queryGrblSettings (new connect)", async () => {
-    useStore.setState({ machineHomed: true });
+  it("B2+B3: queryGrblSettings leaves homed to native (it neither sets nor clears it)", async () => {
+    useStore.getState().setTrust({ trustHomed: true });
     mockInvoke.mockResolvedValueOnce({ responses: ["$30=1000"], drained: [] });
+    await machineConnection.queryGrblSettings();
+    expect(useStore.getState().machineHomed).toBe(true);
+    useStore.getState().setTrust({ trustHomed: false });
     await machineConnection.queryGrblSettings();
     expect(useStore.getState().machineHomed).toBe(false);
   });
@@ -345,13 +349,17 @@ describe("jog clamp + alarm guard", () => {
     await machineConnection.jog("X", 10);
     // invoke should NOT have been called with serial_send
     expect(mockInvoke).not.toHaveBeenCalled();
-    expect(consoleTexts().some((t) => t.includes("Jog blocked"))).toBe(true);
+    expect(consoleTexts()).toContain(JOG_REASON_ALARM);
+    expect(JOG_REASON_ALARM).toBe(
+      "Jogging is off while the machine is in alarm. Press Unlock ($X) or Home ($H) to clear it."
+    );
   });
 
   it("clamps X jog when destination would exceed workspaceWidth", async () => {
     useStore.setState({
       machineState: "idle",
       machinePosition: { x: 490, y: 50, z: 0 },
+      ...trustedStore({ x: 490, y: 50, z: 0 }),
       workspaceWidth: 500,
       workspaceHeight: 300,
       statusStale: false,
@@ -367,6 +375,7 @@ describe("jog clamp + alarm guard", () => {
     useStore.setState({
       machineState: "idle",
       machinePosition: { x: 5, y: 50, z: 0 },
+      ...trustedStore({ x: 5, y: 50, z: 0 }),
       workspaceWidth: 500,
       workspaceHeight: 300,
       statusStale: false,
@@ -382,6 +391,7 @@ describe("jog clamp + alarm guard", () => {
     useStore.setState({
       machineState: "idle",
       machinePosition: { x: 0, y: 50, z: 0 },
+      ...trustedStore({ x: 0, y: 50, z: 0 }),
       workspaceWidth: 500,
       statusStale: false,
       positionKind: "machine",
@@ -393,14 +403,40 @@ describe("jog clamp + alarm guard", () => {
 
 // ---- Home button gates on $22 (verified via store state, Workstream G) ----
 describe("grblHoming gates home — store state", () => {
-  it("machineHomed becomes true after home() receives ok", async () => {
+  it("B2+B3 (T-C6): home()'s ok alone does not set homed; only a native snapshot does", async () => {
     useStore.setState({ machineState: "idle" });
+    useStore.getState().setTrust({ trustHomed: false });
     mockInvoke.mockResolvedValueOnce({ responses: ["ok"], drained: [] });
     await machineConnection.home();
+    expect(useStore.getState().machineHomed).toBe(false);
+    // Positive sibling: the snapshot that follows says homed.
+    mockInvoke.mockResolvedValueOnce({
+      status: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>",
+      events: [],
+      kind: "report",
+      snapshot: {
+        epoch: 1,
+        seq: 999,
+        state: "idle",
+        positionKind: "MPos",
+        position: [0, 0, 0],
+        wco: null,
+        feed: 0,
+        spindle: 0,
+        accessory: "Unknown",
+        units: "Mm",
+        raw: "<Idle|MPos:0.000,0.000,0.000|FS:0,0>",
+        unknownFields: [],
+        homed: true,
+      },
+    });
+    await machineConnection.pollStatus();
     expect(useStore.getState().machineHomed).toBe(true);
+    expect(useStore.getState().trustHomed).toBe(true);
   });
 
   it("machineHomed stays false after home() fails (no ok response)", async () => {
+    useStore.getState().setTrust({ trustHomed: false });
     mockInvoke.mockResolvedValueOnce({ responses: ["ALARM:8"], drained: [] });
     await machineConnection.home();
     expect(useStore.getState().machineHomed).toBe(false);
@@ -609,6 +645,7 @@ describe("WARNING-1 — jog refused when workspaceVerified=false (kerf-f1)", () 
     useStore.setState({
       machineState: "idle",
       machinePosition: { x: 490, y: 50, z: 0 },
+      ...trustedStore({ x: 490, y: 50, z: 0 }),
       workspaceWidth: 500,
       workspaceHeight: 300,
       workspaceVerified: false,
@@ -624,6 +661,7 @@ describe("WARNING-1 — jog refused when workspaceVerified=false (kerf-f1)", () 
     useStore.setState({
       machineState: "idle",
       machinePosition: { x: 490, y: 50, z: 0 },
+      ...trustedStore({ x: 490, y: 50, z: 0 }),
       workspaceWidth: 500,
       workspaceHeight: 300,
       workspaceVerified: true,

@@ -6,24 +6,18 @@ import {
   subscribeBedSource,
   type ConnectionError,
 } from "../../lib/machine/connection";
-import {
-  JOG_REASON_AXIS,
-  JOG_REASON_EDGE,
-  JOG_REASON_OUTSIDE,
-  JOG_REASON_NUMBER,
-  JOG_REASON_PENDING,
-  jogBlockReason,
-} from "../../lib/machine/jogBounds";
+import { JOG_REASON_MOTION, jogBlockReason } from "../../lib/machine/jogBounds";
 
-/** Reasons connection.jog() can print that the render-time gate cannot see. */
-const JOG_CLICK_REASONS = new Set<string>([
-  JOG_REASON_AXIS,
-  JOG_REASON_EDGE,
-  JOG_REASON_OUTSIDE,
-  JOG_REASON_NUMBER,
-  JOG_REASON_PENDING,
-]);
 const JOG_FLASH_MS = 2000;
+/** Jen B4 §2: MOTION standing this long swaps the slot to its recovery note. */
+const JOG_HOLD_NOTE_MS = 5000;
+export const JOG_HOLD_COMMAND =
+  "Still waiting on the machine. If nothing is moving, press STOP, then reconnect and Home again.";
+export const JOG_HOLD_POSITION =
+  "The machine isn't reporting the head's position from home, and jogging needs it. Set $10 in the machine settings to machine position (MPos).";
+export const JOG_HOLD_STALE =
+  "Kerf hasn't had a status report from the machine for a few seconds, so the status reads Stale. If it doesn't recover on its own, reconnect.";
+export const JOG_HOLD_STATE = "The machine isn't reporting Idle. Kerf jogs only from Idle.";
 import { generateGcode } from "../../lib/machine/gcodeGen";
 import {
   MACHINE_STATE_COLORS,
@@ -91,6 +85,11 @@ export function MachinePanel() {
   const grblSoftLimits = useStore((s) => s.grblSoftLimits);
   const grblHoming = useStore((s) => s.grblHoming);
   const machineHomed = useStore((s) => s.machineHomed);
+  // B4: motion trust, one scalar selector each (React error 185 rule).
+  const trustHomed = useStore((s) => s.trustHomed);
+  const trustUnitsMm = useStore((s) => s.trustUnitsMm);
+  const motionPending = useStore((s) => s.motionPending);
+  const trustObserved = useStore((s) => s.trustObserved);
   const softLimitsActive = useStore((s) => s.softLimitsActive);
   const grblLaserMode = useStore((s) => s.grblLaserMode);
   const workCoordOffset = useStore((s) => s.workCoordOffset);
@@ -135,6 +134,11 @@ export function MachinePanel() {
       workspaceVerified,
       positionKind,
       workCoordOffset,
+      grblHoming,
+      trustHomed,
+      trustUnitsMm,
+      motionPending,
+      trustObserved,
     },
     "by"
   );
@@ -148,6 +152,11 @@ export function MachinePanel() {
       workspaceVerified,
       positionKind,
       workCoordOffset,
+      grblHoming,
+      trustHomed,
+      trustUnitsMm,
+      motionPending,
+      trustObserved,
     },
     "to"
   );
@@ -166,14 +175,46 @@ export function MachinePanel() {
     if (positionBlocked !== null && activeTool === "positionLaser") setActiveTool("select");
   }, [positionBlocked, activeTool, setActiveTool]);
 
+  // Jen B4 §2: the hold note. The only state is "5 s of MOTION elapsed"; the
+  // cause is derived on every render from the store scalars, so a snapshot
+  // flips it in place.
+  const motionShown = jogBlocked === JOG_REASON_MOTION;
+  const [holdElapsed, setHoldElapsed] = useState(false);
+  useEffect(() => {
+    if (!motionShown) return;
+    const t = setTimeout(() => setHoldElapsed(true), JOG_HOLD_NOTE_MS);
+    return () => {
+      clearTimeout(t);
+      setHoldElapsed(false);
+    };
+  }, [motionShown]);
+  let holdNote: string | null = null;
+  if (motionShown && holdElapsed) {
+    if (motionPending) holdNote = JOG_HOLD_COMMAND;
+    else if (statusStale) holdNote = JOG_HOLD_STALE;
+    else if (!trustObserved && machineState === "idle") holdNote = JOG_HOLD_POSITION;
+    else if (!trustObserved) holdNote = JOG_HOLD_STATE;
+  }
+  const jogNote = jogFlash ?? holdNote ?? jogBlocked;
+  // Both Home keys (pad and action row) share one guard and one reason (P70, Stage 2.8 C2).
+  const homeTitle = !machineConnected
+    ? "Home disabled — machine not connected"
+    : jobRunning
+      ? "Home disabled — a job is running"
+      : grblHoming
+        ? "Home ($H)"
+        : "Home disabled — machine has no limit switches ($22=0)";
+
+  // Jen B4 §5.6: every refusal a click produces is answered in the slot.
   async function jogAndReport(axis: "X" | "Y", distance: number) {
-    const before = useStore.getState().consoleLines.length;
-    await machineConnection.jog(axis, distance);
-    const added = useStore.getState().consoleLines.slice(before);
-    const refused = added.find((l) => JOG_CLICK_REASONS.has(l.text));
+    // Stage 2.8 C1: only this click's own outcome flashes (a handler refusal,
+    // a native refusal, a failed send, or a controller error reply). Lines
+    // other producers log meanwhile (STOP, a lost port) never do, and the
+    // console's cap cannot hide the answer (Razor b4 W1).
+    const refused = await machineConnection.jog(axis, distance);
     if (!refused) return;
     if (jogFlashTimer.current) clearTimeout(jogFlashTimer.current);
-    setJogFlash(refused.text);
+    setJogFlash(refused);
     jogFlashTimer.current = setTimeout(() => setJogFlash(null), JOG_FLASH_MS);
   }
 
@@ -983,19 +1024,35 @@ export function MachinePanel() {
                 padding: "8px",
               }}
             >
-              {(jogFlash ?? jogBlocked) !== null && (
-                <div
-                  data-testid="jog-blocked-note"
-                  style={{
-                    fontSize: "10px",
-                    color: jogFlash !== null ? "var(--accent-warm)" : "var(--text-secondary)",
-                    textAlign: "center",
-                    marginBottom: "4px",
-                  }}
-                >
-                  {jogFlash ?? jogBlocked}
-                </div>
-              )}
+              {/* Jen Stage 3 C1: a fixed 3-line box so the pad never moves. */}
+              <div
+                data-testid="jog-note-slot"
+                style={{
+                  alignSelf: "stretch",
+                  height: "45px",
+                  marginBottom: "4px",
+                  overflow: "hidden",
+                }}
+              >
+                {jogNote !== null && (
+                  <div
+                    data-testid="jog-blocked-note"
+                    title={jogNote}
+                    style={{
+                      fontSize: "10px",
+                      lineHeight: "15px",
+                      color: jogFlash !== null ? "var(--accent-warm)" : "var(--text-secondary)",
+                      textAlign: "center",
+                      display: "-webkit-box",
+                      WebkitLineClamp: 3,
+                      WebkitBoxOrient: "vertical",
+                      overflow: "hidden",
+                    }}
+                  >
+                    {jogNote}
+                  </div>
+                )}
+              </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 32px)", gap: "2px" }}>
                 <div />
                 <JogButton
@@ -1014,13 +1071,9 @@ export function MachinePanel() {
                 <JogButton
                   label="&#x2302;"
                   onClick={() => machineConnection.home()}
-                  title={
-                    grblHoming
-                      ? "Home ($H)"
-                      : "Home disabled — machine has no limit switches ($22=0)"
-                  }
-                  accent={grblHoming}
-                  disabled={!grblHoming}
+                  title={homeTitle}
+                  accent={grblHoming && machineConnected && !jobRunning}
+                  disabled={!machineConnected || jobRunning || !grblHoming}
                 />
                 <JogButton
                   label="&#x25B6;"
@@ -1081,9 +1134,7 @@ export function MachinePanel() {
               label="Home"
               color="var(--accent)"
               disabled={!machineConnected || jobRunning || !grblHoming}
-              title={
-                grblHoming ? "Home ($H)" : "Home disabled — machine has no limit switches ($22=0)"
-              }
+              title={homeTitle}
               onClick={() => machineConnection.home()}
             />
             <ActionButton

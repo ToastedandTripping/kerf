@@ -6,7 +6,8 @@
 
 export const JOG_REASON_NOT_CONNECTED = "Machine not connected";
 export const JOG_REASON_BED = "Confirm bed size before jogging — Machine panel, Set bed size";
-export const JOG_REASON_ALARM = "Jog blocked: machine in alarm state — unlock ($X) first";
+export const JOG_REASON_ALARM =
+  "Jogging is off while the machine is in alarm. Press Unlock ($X) or Home ($H) to clear it.";
 export const JOG_REASON_STALE =
   "Waiting for the machine to report its position — try again in a moment";
 export const JOG_REASON_BUSY = "Wait for the machine to stop before jogging";
@@ -21,6 +22,16 @@ export const JOG_REASON_EDGE = "Already at the edge of the bed";
 export const JOG_REASON_TARGET = "That spot is outside the bed";
 export const JOG_REASON_NUMBER =
   "Kerf can't read the head position, bed size or jog step — try again in a moment";
+// Motion trust (S3c rev 5 texts; B2+B3). Native enforces; these are display
+// plus the first check.
+export const JOG_REASON_HOME =
+  "Home the machine ($H) before jogging. Kerf only knows where the bed edge is after homing";
+export const JOG_REASON_NO_HOMING =
+  "Jogging is off: this machine doesn't home ($22=0), so Kerf can't tell where the bed edge is";
+export const JOG_REASON_MOTION =
+  "Waiting for the machine to finish the last command and report its position";
+export const JOG_REASON_UNITS =
+  "Jogging is off until Kerf reads $13=0 (positions in mm) from the machine. Reconnect, or send $$ to re-read its settings";
 
 export type JogAxis = "X" | "Y";
 
@@ -33,6 +44,14 @@ export interface JogGateState {
   workspaceVerified: boolean;
   positionKind: "machine" | "work" | null;
   workCoordOffset: { x: number; y: number };
+  // Motion trust (B2+B3), from native snapshots. Optional only so a caller
+  // that does not pass them yet (MachinePanel until B4) type-checks; an
+  // absent value refuses, never admits.
+  grblHoming?: boolean;
+  trustHomed?: boolean;
+  trustUnitsMm?: boolean;
+  motionPending?: boolean;
+  trustObserved?: boolean;
 }
 
 export type JogResult = { kind: "send"; distance: number } | { kind: "refuse"; reason: string };
@@ -50,6 +69,10 @@ export function jogBlockReason(s: JogGateState, mode: "by" | "to"): string | nul
   if (!s.machineConnected) return JOG_REASON_NOT_CONNECTED;
   if (s.machineState === "alarm") return JOG_REASON_ALARM;
   if (s.jobRunning) return JOG_REASON_JOB;
+  if (s.grblHoming !== true) return JOG_REASON_NO_HOMING;
+  if (s.trustHomed !== true) return JOG_REASON_HOME;
+  if (s.trustUnitsMm !== true) return JOG_REASON_UNITS;
+  if (s.motionPending !== false || s.trustObserved !== true) return JOG_REASON_MOTION;
   if (!s.workspaceVerified) return JOG_REASON_BED;
   if (s.statusStale || s.positionKind === null) return JOG_REASON_STALE;
   if (s.machineState !== "idle") return JOG_REASON_BUSY;
@@ -87,4 +110,22 @@ export function targetInEnvelope(
   const [xLo, xHi] = jogEnvelope("X", w, originTop);
   const [yLo, yHi] = jogEnvelope("Y", h, originTop);
   return x >= xLo && x <= xHi && y >= yLo && y <= yHi;
+}
+
+/**
+ * True for a line that can move the head (S3c's `isMotionCommand`, the rule
+ * native `classify_outbound` ports): `$J=`, any `$H`, or G-code with an axis
+ * word or `G28`/`G30`/`G38`. Normalised as GRBL does first. Used only for
+ * the provisional (display) invalidation at a send's entry.
+ */
+export function isMotionCommand(command: string): boolean {
+  const n = command
+    .replace(/\([^)]*\)?/g, "")
+    .split(";")[0]
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x20/]/g, "")
+    .toUpperCase();
+  if (n.startsWith("$J=") || n.startsWith("$H")) return true;
+  if (n.startsWith("$")) return false;
+  return /[XYZABC][-+]?[.\d]/.test(n) || /G0*(28|30|38)(?!\d)/.test(n);
 }

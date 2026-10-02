@@ -6,6 +6,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
+import { trustedStore } from "../../machine/__tests__/trustFixture";
 import { useStore } from "../../../app/store";
 import { _testResetJogAndBedState } from "../../machine/connection";
 import type { DesignObject } from "../../../app/types";
@@ -242,6 +243,7 @@ describe("S3 — Position Laser frame (moved from parent S5)", () => {
     );
     useStore.setState({
       activeTool: "positionLaser",
+      ...trustedStore({ x: 0, y: 0, z: 0 }),
       machineConnected: true,
       machineState: "idle",
       jobRunning: false,

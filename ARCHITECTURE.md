@@ -167,7 +167,10 @@ src-tauri/src/
                                buffered stream wrapper; tests + sim_integration module
     serial_session.rs        — Session-level admission fence: epoch, phase transitions,
                                permit generation, StopResult enum, StopGuard RAII,
-                               status snapshot slot (monotonic epoch/seq)
+                               status snapshot slot (monotonic epoch/seq). MotionTrust
+                               (conn_id, trust_epoch, homed_at, motion ledger, observation,
+                               units) and native jog admission (`admit_jog_and_write`),
+                               classify_outbound (the GRBL-normalised outbound grammar)
     serial_pump.rs           — Line-protocol pumps: run_pump (wait-for-terminal, `?`
                                liveness probing, idle-stall detector, line classification
                                ok/error/ALARM/banner), drain_classified, read_status_bounded,
@@ -337,7 +340,9 @@ connection starts stale, and a stale status displays as "Stale" in grey, never a
 Idle/Ready. `setOrigin` records WCO = MPos after `G92 X0 Y0` only from a fresh machine-frame
 position; otherwise the offset is NaN (unknown) and `jogTo` refuses. The material-test program
 is mirrored in Y on origin-top machines. Known residuals (MPos 0 trusted as the bed corner;
-a jog racing Home) are queued as S3c.
+a jog racing Home) were queued as S3c; motion trust (below) took them over natively.
+
+**Motion trust (kerf-safety-motion-trust).** Jog trust is native. `MotionTrust` (behind its own `trust` mutex in `serial_session.rs`) holds the connection id, a trust epoch, `homed_at`, a motion ledger (`motion_pending`, `motion_writes`, job admissions) and the current observation. Every native line-extraction site calls one `on_line` hook. Banners, alarms, `<Alarm>` frames, STOP's admission close, raw `0x18`/`0x85`, connect and disconnect, `$RST`, frame-affecting settings writes and motion I/O errors bump the epoch. A status frame that is not literal Idle, has no MPos, or sits more than 0.002 mm from the observation clears the observation without bumping the epoch. Only an exact `$H` that returns `ok` in the epoch it was written in grants `homed_at`. The observation barrier runs in `serial_get_status` while the observation is stale: it quiesces 150 ms since the last motion terminal, drains, completes any partial line, probes `?` with a bounded read and takes the first frame. The barrier basis includes the job-admission count, so a barrier that spans a job begin records nothing. A jog is admitted in `admit_jog_and_write` under `submit` then `trust`. It needs no job, no stop in progress, homed in this epoch, mm units on this connection, exactly this call pending, and a current observation whose seq equals the caller's `jog_basis`. The line is then written while `submit` is still held, so a STOP either refuses it or waits for that one write. Lock order: command → submit → trust → {snapshot, admitted_job}, plus realtime → trust. `serial_connect` returns `{banner, connId}`; `serial_send`, `serial_send_byte` and `serial_get_status` require `conn`; a stale conn is refused, except for `0x18`. TS (`connection.ts`, `machineStatus.ts`) stores `connId`, discards any result or rejection from an older connection, and mirrors trust from snapshots into store scalars (`trustHomed`, `trustUnitsMm`, `motionPending`, `trustObserved`, `basisSeq`, `basisPosition`). The jog clip reads `basisPosition` only. `jogBlockReason` orders its reasons: not connected, alarm, job, NO_HOMING/HOME, units, motion, bed, stale, busy, offset. `MachinePanel` shows one reason per control, a hold note after 5 s naming the cause, and a flash of `jog()`'s own returned outcome. Bed confirmation (S3) is unchanged. Frame correctness is S3e, and no frame refusal exists before it (DECISIONS 2026-09-29).
 
 **Job-session lifetime (`jobSession.ts`).** One module-level active session. `beginJobSession`
 refuses while another session is active or a stop is settling, and when `serial_job_begin`

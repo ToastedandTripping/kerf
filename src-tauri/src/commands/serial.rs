@@ -4,13 +4,22 @@
 //!
 //! | Order | Lock / guard | Held by | Duration |
 //! |-------|--------------|---------|----------|
-//! | leaf  | `session.admitted_job` | `serial_job_begin`, `serial_job_end`, `serial_stop_inner` (under `submit`), `admit_and_write` (under `submit`) | Microseconds (check+set) |
-//! | 2.5   | `session.submit` | `admit_and_write` (admission check + one `write()` of a job line), `serial_stop_inner` Step 2 (admission close) | Microseconds; at most one `write(2)` enqueue, bounded by the port timeout (1000 ms) |
+//! Acquisition order, outermost first: `command` → `submit` → `trust` →
+//! {`admitted_job`, `snapshot`} (leaves), plus `realtime` → `trust`.
+//!
+//! | Order | Lock / guard | Held by | Duration |
+//! |-------|--------------|---------|----------|
+//! | leaf  | `session.admitted_job` | `serial_job_begin` (under `submit`), `serial_job_end`, `serial_stop_inner` (under `submit`), `admit_and_write` (under `submit`) | Microseconds (check+set) |
+//! | leaf  | `session.snapshot` | snapshot publish/read/invalidate (below `trust` and `admitted_job`) | Microseconds |
+//! | 1.5   | `session.trust` | every motion-trust transition (`SerialSession::trust()`), under `submit` in `close_admission`, `serial_job_begin` and a job line's write; under `command` + `realtime` at connect install; under `submit` in jog admission (`admit_jog_and_write`); under `realtime` for `send_byte`'s connection check; under `command` for the send and status connection checks | Microseconds; never held across I/O |
+//! | 2.5   | `session.submit` | `admit_and_write` (admission check + one `write()` of a job line), `admit_jog_and_write` (jog admission check + one `write()` of the jog line), `serial_stop_inner` Step 2 (admission close), `send_byte_inner` for `0x18`/`0x85` (trust bump only, released before the write), `serial_job_begin` | Microseconds; at most one `write(2)` enqueue, bounded by the port timeout (1000 ms) |
 //! | leaf  | `session.last_stop` | `serial_stop_inner` (result write), joiner (result read) | Microseconds |
 //! | leaf  | `session.observer` | test setup, session event emission | Microseconds |
-//! | leaf  | `session.snapshot` | snapshot publish/read/invalidate | Microseconds |
-//! | 2     | `realtime` | `send_byte_inner`, `serial_stop_inner` (for `0x18`), `disconnect_inner_with_job` | Microseconds (one byte + flush) |
-//! | 3     | `command` | `serial_send_inner`, `serial_stream_job_inner`, `serial_connect_inner`, `disconnect_inner_with_job` | Seconds to minutes (pump duration) |
+//! | 2     | `realtime` | `send_byte_inner`, `serial_stop_inner` (for `0x18`), `disconnect_inner_with_job`, connect install (then `trust`) | Microseconds (one byte + flush) |
+//! | 3     | `command` | `serial_send_inner`, `serial_stream_job_inner`, `serial_connect_inner`, `disconnect_inner_with_job` (with the trust teardown under it), the status poll and its observation barrier (`try_lock`) | Seconds to minutes (pump duration); the barrier holds it for at most `OBSERVE_QUIESCE_MS` + one read tick + `OBSERVE_PROBE_MS` |
+//!
+//! In tests, `serial_session::lock_rank` tracks every blocking acquisition of
+//! these six locks per thread and panics on an inversion (N13).
 //!
 //! **Invariants:**
 //! - **Connect is the one nesting exception:** `serial_connect_inner` acquires
@@ -32,7 +41,7 @@
 //! - `SerialSession` tracks connection epoch, job phase, submission permits, and
 //!   the stop operation. See `serial_session.rs` for the full design.
 //! - **Job-line admission (RF-15, submission critical section).** Lock order
-//!   `command` → `submit` → `admitted_job` (leaf). Nothing takes `submit`
+//!   `command` → `submit` → `trust` → `admitted_job` (leaf). Nothing takes `submit`
 //!   while holding `realtime` or `admitted_job`, and `submit` is never held
 //!   across a read, a flush, a drain, a pump wait, or an observer emit. Every
 //!   acquisition recovers from poison. **Every job-epoch write goes through
@@ -55,14 +64,16 @@ use std::time::Duration;
 use tauri::{ipc::Channel, State};
 
 use super::serial_pump::{
-    self, BufferedPumpConfig, BufferedPumpEvent, BufferedPumpOutcome, ProbeWriter, PumpFailure,
-    PumpReader, DEFAULT_LIVENESS_TICKS, STATUS_MAX_TICKS,
+    self, BufferedPumpConfig, BufferedPumpEvent, BufferedPumpOutcome, LineClass, ProbeWriter,
+    PumpFailure, PumpReader, DEFAULT_LIVENESS_TICKS, STATUS_MAX_TICKS,
 };
+#[cfg(test)]
+use super::serial_session::lock_rank;
 #[cfg(test)]
 use super::serial_session::PHASE_STOPPING;
 use super::serial_session::{
-    self, SerialSession, StopGuard, StopResult, PHASE_ACTIVE, PHASE_DISCONNECTED, PHASE_IDLE,
-    PHASE_UNKNOWN,
+    self, Outbound, SerialSession, StopGuard, StopResult, OBSERVE_PROBE_MS, OBSERVE_QUIESCE_MS,
+    PHASE_ACTIVE, PHASE_DISCONNECTED, PHASE_IDLE, PHASE_UNKNOWN,
 };
 
 /// Type alias for the port-factory parameter to avoid clippy::type_complexity.
@@ -88,6 +99,19 @@ pub struct PortInfo {
 pub struct SendOutcome {
     pub responses: Vec<String>,
     pub drained: Vec<String>,
+    /// The connection this send ran on (B2+B3). TS discards a result whose
+    /// `connId` is not its current connection.
+    pub conn_id: u64,
+}
+
+/// Result of `serial_connect` (B2+B3): the banner and the new connection's
+/// identity, which every later `serial_send` / `serial_send_byte` /
+/// `serial_get_status` must name as `conn`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectOutcome {
+    pub banner: String,
+    pub conn_id: u64,
 }
 
 /// Semantic kind of a status query result.
@@ -122,6 +146,8 @@ pub struct StatusOutcome {
     /// Parsed snapshot, if available. For `Busy`, this is the last-known
     /// snapshot (possibly stale). For `Report`, this is freshly parsed.
     pub snapshot: Option<super::grbl_status::GrblSnapshot>,
+    /// The current connection when this result was produced (B2+B3).
+    pub conn_id: u64,
 }
 
 /// The line-protocol channel: command writes, the ONE persistent reader created at
@@ -253,7 +279,16 @@ pub async fn list_serial_ports() -> Result<Vec<PortInfo>, String> {
 ///
 /// The function is `pub(crate)` so the startup-banner test can call it
 /// directly and guard the production path rather than a re-implementation.
+#[cfg(test)]
 pub(crate) fn drain_startup_banner(channel: &mut CommandChannel) -> String {
+    drain_startup_banner_noted(channel, &mut serial_pump::no_note)
+}
+
+/// `drain_startup_banner` with the line hook (the production entry point).
+pub(crate) fn drain_startup_banner_noted(
+    channel: &mut CommandChannel,
+    on_line: serial_pump::OnLine<'_>,
+) -> String {
     let mut startup = String::new();
     for _ in 0..5 {
         match channel.reader.read_until(b'\n', &mut channel.pending) {
@@ -264,6 +299,10 @@ pub(crate) fn drain_startup_banner(channel: &mut CommandChannel) -> String {
             Ok(_) => {
                 let line = String::from_utf8_lossy(&channel.pending).to_string();
                 channel.pending.clear();
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    on_line(trimmed, serial_pump::classify_line(trimmed));
+                }
                 let done = line.contains("Grbl");
                 startup.push_str(&line);
                 if done {
@@ -289,7 +328,7 @@ pub(crate) fn serial_connect_inner(
     baud_rate: u32,
     sleeper: &dyn Fn(Duration),
     open_port: &PortFactory,
-) -> Result<String, String> {
+) -> Result<ConnectOutcome, String> {
     // P1-C: already-connected guard — if a connection is live, disconnect
     // first to prevent resource leaks. This handles rapid reconnect or
     // StrictMode double-mount on the frontend.
@@ -319,14 +358,15 @@ pub(crate) fn serial_connect_inner(
 
     // Read the GRBL startup banner through THE persistent reader — no reader
     // is ever constructed after connect.
-    let startup = drain_startup_banner(&mut channel);
+    let note = |l: &str, c: LineClass| inner.session.trust_note_line(l, c);
+    let startup = drain_startup_banner_noted(&mut channel, &mut { note });
 
     // Soft-reset fallback for non-Arduino boards (STM32, ESP32, etc.)
     // that lack the DTR-to-RESET capacitor circuit.
     let _ = channel.writer.write_all(b"\x18");
     let _ = channel.writer.flush();
     sleeper(Duration::from_millis(500));
-    let soft_banner = drain_startup_banner(&mut channel);
+    let soft_banner = drain_startup_banner_noted(&mut channel, &mut { note });
 
     // Prefer the hardware-reset banner; fall back to soft-reset banner.
     let banner = if !startup.trim().is_empty() {
@@ -338,18 +378,25 @@ pub(crate) fn serial_connect_inner(
     // P1-C: store both channels in one critical section to prevent
     // cross-wiring if two connects race. Lock order: command first,
     // realtime second (same order as disconnect_inner teardown).
-    {
+    // Motion trust: the new connection id and a fresh, untrusted state are
+    // installed under both handle locks, atomically with the handles.
+    let conn_id = {
+        #[cfg(test)]
+        let _rk_cmd = lock_rank::hold(lock_rank::COMMAND, "command");
         let mut cmd_guard = inner
             .command
             .lock()
             .map_err(|e| format!("Lock failed: {}", e))?;
+        #[cfg(test)]
+        let _rk_rt = lock_rank::hold(lock_rank::REALTIME, "realtime");
         let mut rt_guard = inner
             .realtime
             .lock()
             .map_err(|e| format!("Lock failed: {}", e))?;
         *cmd_guard = Some(channel);
         *rt_guard = Some(realtime);
-    }
+        inner.session.trust_on_connect()
+    };
     inner.connected.store(true, Ordering::SeqCst);
 
     // Session lifecycle: increment epoch and set phase to idle.
@@ -358,11 +405,12 @@ pub(crate) fn serial_connect_inner(
     inner.session.increment_epoch();
     inner.session.set_idle_on_connect();
 
-    if banner.trim().is_empty() {
-        Ok(format!("Connected to {} at {} baud", port_name, baud_rate))
+    let banner = if banner.trim().is_empty() {
+        format!("Connected to {} at {} baud", port_name, baud_rate)
     } else {
-        Ok(banner.trim().to_string())
-    }
+        banner.trim().to_string()
+    };
+    Ok(ConnectOutcome { banner, conn_id })
 }
 
 /// Connect to a serial port
@@ -371,7 +419,7 @@ pub async fn serial_connect(
     state: State<'_, SerialState>,
     port_name: String,
     baud_rate: u32,
-) -> Result<String, String> {
+) -> Result<ConnectOutcome, String> {
     let inner = state.0.clone();
     tokio::task::spawn_blocking(move || {
         serial_connect_inner(
@@ -439,12 +487,23 @@ pub(crate) fn disconnect_inner_with_job(
         let _ = serial_stop_inner(inner, &std::thread::sleep);
     }
 
-    // Teardown: None both handles in one nested block.
+    // Teardown: None both handles. The command handle's None store and the
+    // motion-trust teardown (`conn_id = 0`, epoch advanced, trust cleared)
+    // happen under one scoped `command` guard, so no send that acquires
+    // `command` afterwards can see the old trust with no handle, or vice versa.
     {
-        *inner
+        #[cfg(test)]
+        let _rk = lock_rank::hold(lock_rank::COMMAND, "command");
+        let mut cmd_guard = inner
             .command
             .lock()
-            .map_err(|e| format!("Lock failed: {}", e))? = None;
+            .map_err(|e| format!("Lock failed: {}", e))?;
+        *cmd_guard = None;
+        inner.session.trust_on_disconnect();
+    }
+    {
+        #[cfg(test)]
+        let _rk = lock_rank::hold(lock_rank::REALTIME, "realtime");
         *inner
             .realtime
             .lock()
@@ -471,22 +530,49 @@ pub(crate) fn disconnect_inner_with_job(
 /// close). The flush follows outside the `submit` lock.
 /// Refusals are `refused:`-prefixed contract strings (see `serial_session`).
 /// When `None` (console command, `$H`, jog, settings), no permit check.
+///
+/// `conn` (B2+B3) must be the current connection id, checked under `command`
+/// before anything is drained or written (`refused: stale-connection`). A
+/// `$J=` jog (non-job) is admitted and written inside `submit` by
+/// `SerialSession::admit_jog_and_write`, which checks `jog_basis` against
+/// the current barrier observation.
 pub(crate) fn serial_send_inner(
     inner: &SerialInner,
     command: &str,
     job_epoch: Option<u64>,
+    conn: u64,
+    jog_basis: Option<u64>,
 ) -> Result<SendOutcome, String> {
+    // Motion trust: the outbound grammar runs first. A malformed payload is
+    // refused with nothing written (B2+B3).
+    let class = serial_session::classify_outbound(command)?;
+    let is_jog = job_epoch.is_none() && class == Outbound::Jog;
+    let class = Some(class);
+    let is_motion = job_epoch.is_some() || class.is_none_or(|c| c.is_motion());
+
     // Pre-lock fast-fail (optimisation only; never parks a stale send behind
     // a long pump).
     if let Some(epoch) = job_epoch {
         inner.session.permit_precheck(epoch)?;
     }
 
+    // The motion ledger counts this send BEFORE the `command` wait, so sends
+    // queued behind a pump are all counted. The guard decrements on return.
+    let _motion = is_motion.then(|| inner.session.motion_enter());
+
+    #[cfg(test)]
+    inner.session.test_point("send_before_command");
+    #[cfg(test)]
+    let _rk = lock_rank::hold(lock_rank::COMMAND, "command");
     let mut guard = inner
         .command
         .lock()
         .map_err(|e| format!("Lock failed: {}", e))?;
     let channel = guard.as_mut().ok_or("Not connected")?;
+
+    // The stale-connection check, under `command` (connect and disconnect
+    // change `conn_id` under it), before any drain or write.
+    inner.session.check_conn(conn)?;
 
     // Pre-drain admission check (non-authoritative): under the command lock,
     // before the drain and before PumpFlight, so a send refused HERE consumes
@@ -505,31 +591,61 @@ pub(crate) fn serial_send_inner(
     // Pre-write drain: classify anything already buffered (a banner left by an
     // idle-time 0x18, an unsolicited ALARM, …) so it is never attributed to
     // THIS command.
-    let drain = serial_pump::drain_classified(&mut channel.reader, &mut channel.pending);
+    let drain = serial_pump::drain_classified_noted(
+        &mut channel.reader,
+        &mut channel.pending,
+        &mut |l: &str, c: LineClass| inner.session.trust_note_line(l, c),
+    );
     for line in &drain.dropped {
         eprintln!("[serial] drained stale line: {}", line);
+        // A STOP's confirming banner drained here must still confirm it
+        // (Razor b23 N11): the stop's own read is blocked on `command`.
+        note_banner_for_stop(inner, line);
     }
 
-    let cmd = if command.ends_with('\n') {
-        command.to_string()
-    } else {
-        format!("{}\n", command)
-    };
+    // The grammar refused any `\r`/`\n`, so this is exactly one line.
+    let cmd = format!("{}\n", command);
+    // The trust transition for this write is recorded immediately before
+    // it (inside `submit` for a job line, after admission).
+    let mut note = None;
     let write_result = match job_epoch {
         // Job line: admission check + the one write, atomic under `submit`.
-        Some(epoch) => inner
-            .session
-            .admit_and_write(epoch, || channel.writer.write_all(cmd.as_bytes()))?,
-        None => channel.writer.write_all(cmd.as_bytes()),
+        Some(epoch) => inner.session.admit_and_write(epoch, || {
+            note = Some(inner.session.trust_note_write(class, true));
+            channel.writer.write_all(cmd.as_bytes())
+        })?,
+        // Jog: admission, the write count and the one write, under `submit`.
+        None if is_jog => {
+            let r = inner
+                .session
+                .admit_jog_and_write(jog_basis, || channel.writer.write_all(cmd.as_bytes()))?;
+            note = Some(serial_session::WriteNote {
+                home_at: None,
+                motion: true,
+            });
+            r
+        }
+        None => {
+            note = Some(inner.session.trust_note_write(class, false));
+            channel.writer.write_all(cmd.as_bytes())
+        }
     };
-    write_result.map_err(|e| format!("Write error: {}", e))?;
+    let wrote_motion = note.is_some_and(|n| n.motion);
+    if let Err(e) = write_result {
+        if wrote_motion {
+            inner.session.trust_note_motion_failure();
+        }
+        return Err(format!("Write error: {}", e));
+    }
     // Flush (`tcdrain`) outside the `submit` lock.
-    channel
-        .writer
-        .flush()
-        .map_err(|e| format!("Flush error: {}", e))?;
+    if let Err(e) = channel.writer.flush() {
+        if wrote_motion {
+            inner.session.trust_note_motion_failure();
+        }
+        return Err(format!("Flush error: {}", e));
+    }
 
-    let pump_result = serial_pump::run_pump(
+    let pump_result = serial_pump::run_pump_noted(
         &mut channel.reader,
         &mut channel.writer,
         &mut channel.pending,
@@ -538,7 +654,31 @@ pub(crate) fn serial_send_inner(
         Some(&|status_line: &str| {
             inner.session.publish_snapshot(status_line, lock_epoch);
         }),
+        &mut |l: &str, c: LineClass| inner.session.trust_note_line(l, c),
     );
+
+    // Motion trust, after the pump and still under `command`.
+    if is_motion {
+        inner.session.trust_note_motion_end();
+    }
+    if wrote_motion && pump_result.is_err() {
+        // Written, then no terminal: position unknown.
+        inner.session.trust_note_motion_failure();
+    }
+    let ok_terminal = matches!(
+        pump_result,
+        Ok(ref out) if out.terminal == serial_pump::PumpTerminal::Ok
+    );
+    if let Some(h) = note.and_then(|n| n.home_at) {
+        inner.session.trust_note_home(h, ok_terminal);
+    }
+    if class == Some(Outbound::SettingsRead) {
+        let lines = match pump_result {
+            Ok(ref out) if ok_terminal => Some(out.lines.as_slice()),
+            _ => None,
+        };
+        inner.session.trust_note_settings_read(lines);
+    }
 
     // Banner publication: if the pump saw Banner while a stop is in flight,
     // publish the observation.
@@ -555,6 +695,7 @@ pub(crate) fn serial_send_inner(
         Ok(out) => Ok(SendOutcome {
             responses: out.lines,
             drained: drain.surfaced,
+            conn_id: conn,
         }),
         // Err here surfaces as an invoke rejection; the frontend maps it to
         // its existing "error:disconnected" contract.
@@ -570,34 +711,84 @@ pub(crate) fn serial_send_inner(
 /// `job_epoch` (IPC key `jobEpoch`): present for job lines, absent for console,
 /// `$H`, jog and settings writes. A renamed key would deserialize to `None` and
 /// silently unfence the job; `rf15_ipc_serial_send_carries_job_epoch` pins it.
+///
+/// `conn` (IPC key `conn`) is REQUIRED from B2+B3: an omitted key is
+/// rejected by Tauri's argument deserialization. `jog_basis` (IPC key
+/// `jogBasis`) is the barrier observation seq a jog was clipped from.
 pub async fn serial_send(
     state: State<'_, SerialState>,
     command: String,
     job_epoch: Option<u64>,
+    conn: u64,
+    jog_basis: Option<u64>,
 ) -> Result<SendOutcome, String> {
     let inner = state.0.clone();
-    tokio::task::spawn_blocking(move || serial_send_inner(&inner, &command, job_epoch))
-        .await
-        .map_err(|e| format!("Task join error: {}", e))?
+    tokio::task::spawn_blocking(move || {
+        serial_send_inner(&inner, &command, job_epoch, conn, jog_basis)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// Tests: the session's current connection id (what TS would pass as `conn`).
+#[cfg(test)]
+pub(crate) fn cur(inner: &SerialInner) -> u64 {
+    inner.session.trust().conn_id
 }
 
 /// Send a raw real-time byte (`!`, `~`, 0x18, `?`).
 #[tauri::command]
-pub async fn serial_send_byte(state: State<'_, SerialState>, byte: u8) -> Result<(), String> {
+///
+/// `conn` (IPC key `conn`) is required from B2+B3; a stale `conn` is
+/// refused for every byte except `0x18`, which is always written.
+pub async fn serial_send_byte(
+    state: State<'_, SerialState>,
+    conn: u64,
+    byte: u8,
+) -> Result<(), String> {
     let inner = state.0.clone();
-    tokio::task::spawn_blocking(move || send_byte_inner(&inner, byte))
+    tokio::task::spawn_blocking(move || send_byte_inner(&inner, conn, byte))
         .await
         .map_err(|e| format!("Task join error: {}", e))?
 }
 
-/// The realtime write path. INVARIANT: touches ONLY the realtime lock — it must
-/// reach the wire while a command pump holds the command lock for minutes.
-/// (Pinned by `realtime_write_completes_while_command_lock_held`.)
-pub(crate) fn send_byte_inner(inner: &SerialInner, byte: u8) -> Result<(), String> {
+/// The realtime write path. INVARIANT: never touches the command lock — it
+/// must reach the wire while a command pump holds the command lock for
+/// minutes. For `?`, `!` and `~` it touches ONLY the realtime lock. For
+/// `0x18` (reset) and `0x85` (jog cancel) it first takes `submit` for the
+/// motion-trust epoch bump and releases it before the write, so it waits at
+/// most behind one in-progress job-line `write()`, the fence's own bound; the
+/// byte is always written. (Pinned by
+/// `realtime_write_completes_while_command_lock_held` and
+/// `realtime_reset_completes_while_command_lock_held_and_waits_only_on_submit`.)
+///
+/// `conn` is read under `realtime` (order `realtime` → `trust`), so the
+/// check is atomic with the handle written. A stale `conn` is refused with
+/// nothing written, except `0x18`: a reset is never refused.
+pub(crate) fn send_byte_inner(inner: &SerialInner, conn: u64, byte: u8) -> Result<(), String> {
+    #[cfg(test)]
+    inner.session.test_point("send_byte_before_submit");
+    if byte == 0x18 || byte == 0x85 {
+        #[cfg(test)]
+        let _rk = lock_rank::hold(lock_rank::SUBMIT, "submit");
+        let _submit = inner
+            .session
+            .submit
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        inner.session.trust_bump();
+    }
+    #[cfg(test)]
+    inner.session.test_point("send_byte_before_realtime");
+    #[cfg(test)]
+    let _rk = lock_rank::hold(lock_rank::REALTIME, "realtime");
     let mut rt = inner
         .realtime
         .lock()
         .map_err(|e| format!("Lock failed: {}", e))?;
+    if byte != 0x18 {
+        inner.session.check_conn(conn)?;
+    }
     let port = rt.as_mut().ok_or("Not connected")?;
     port.write_all(&[byte])
         .map_err(|e| format!("Write error: {}", e))?;
@@ -619,19 +810,56 @@ impl serial_pump::SubmissionGate for JobPermit<'_> {
     }
 }
 
+/// `JobPermit` plus motion trust: records each ADMITTED line's transition,
+/// in order, inside `submit` (its write closure runs only after admission).
+/// The pump writes lines in order and calls the gate once per line.
+struct TrustedJobPermit<'a> {
+    permit: JobPermit<'a>,
+    /// `classify_outbound` of each job line, by index (`None` = malformed).
+    classes: Vec<Option<Outbound>>,
+    /// Index of the next line to be written.
+    next: std::cell::Cell<usize>,
+}
+
+impl serial_pump::SubmissionGate for TrustedJobPermit<'_> {
+    fn admit_write(
+        &self,
+        write: &mut dyn FnMut() -> std::io::Result<()>,
+    ) -> Result<std::io::Result<()>, String> {
+        self.permit.admit_write(&mut || {
+            let i = self.next.get();
+            self.next.set(i + 1);
+            let class = self.classes.get(i).copied().flatten();
+            self.permit.session.trust_note_write(class, true);
+            write()
+        })
+    }
+}
+
 /// Status body: extracted for testability. Uses try_lock to avoid blocking.
 ///
 /// When the command lock is busy (a pump holds it), the busy-path realtime
 /// probe writes `?` via `send_byte_inner` so the pump's existing timeout-tick
 /// reads the response and publishes a snapshot. This is how AC1 is met during
 /// fast buffered streams that never time out on their own.
-pub(crate) fn serial_get_status_inner(inner: &SerialInner) -> Result<StatusOutcome, String> {
+///
+/// `conn` (B2+B3): on the command path a stale `conn` is refused under
+/// `command`; on the busy path the `?` is refused under `realtime` and the
+/// refusal is swallowed (Busy with the last snapshot, as ever).
+pub(crate) fn serial_get_status_inner(
+    inner: &SerialInner,
+    conn: u64,
+) -> Result<StatusOutcome, String> {
+    #[cfg(test)]
+    inner.session.test_point("status_before_command");
     let mut guard = match inner.command.try_lock() {
         Ok(g) => g,
         Err(TryLockError::WouldBlock) => {
             // Busy-path realtime probe: write `?` via the realtime lock so the
             // pump (which holds command) reads the response on its next tick.
-            let _ = send_byte_inner(inner, b'?');
+            // A refusal (stale `conn`, no handle) writes nothing and is
+            // swallowed so a busy poll never surfaces as an error.
+            let _ = send_byte_inner(inner, conn, b'?');
 
             // Return the last-known snapshot with Busy kind.
             let snapshot = inner.session.read_snapshot();
@@ -640,31 +868,36 @@ pub(crate) fn serial_get_status_inner(inner: &SerialInner) -> Result<StatusOutco
                 events: Vec::new(),
                 kind: StatusKind::Busy,
                 snapshot,
+                conn_id: inner.session.trust().conn_id,
             });
         }
         Err(TryLockError::Poisoned(e)) => return Err(format!("Lock failed: {}", e)),
     };
+    #[cfg(test)]
+    let _rk = lock_rank::hold_try(lock_rank::COMMAND, "command");
     let channel = guard.as_mut().ok_or("Not connected")?;
+    inner.session.check_conn(conn)?;
 
     // Capture the epoch now (while holding the command lock) for snapshot publication.
     let lock_epoch = inner.session.epoch.load(Ordering::SeqCst);
 
-    let read = serial_pump::read_status_bounded(
+    // Motion trust: while the observation is stale, this poll IS the
+    // observation barrier (it re-runs every poll until it observes a literal
+    // Idle with MPos).
+    if inner.session.observation_stale() {
+        return observe(inner, channel, lock_epoch);
+    }
+
+    let read = serial_pump::read_status_bounded_noted(
         &mut channel.reader,
         &mut channel.writer,
         &mut channel.pending,
         STATUS_MAX_TICKS,
+        &mut |l: &str, c: LineClass| inner.session.trust_note_line(l, c),
     )?;
     for line in &read.dropped {
         eprintln!("[serial] status junk-skip: {}", line);
-        // Banner publication: if a Banner was encountered during status polling
-        // while a stop is in flight, publish the observation.
-        if serial_pump::classify_line(line) == serial_pump::LineClass::Banner
-            && inner.session.stop_in_flight.load(Ordering::SeqCst)
-        {
-            inner.session.banner_observed.store(true, Ordering::SeqCst);
-            inner.session.emit("banner_observed");
-        }
+        note_banner_for_stop(inner, line);
     }
 
     if let Some(ref status_str) = read.status {
@@ -684,6 +917,151 @@ pub(crate) fn serial_get_status_inner(inner: &SerialInner) -> Result<StatusOutco
         events: read.surfaced,
         kind,
         snapshot,
+        conn_id: conn,
+    })
+}
+
+/// Banner publication: a Banner read by a status poll (or its barrier) while
+/// a stop is in flight is the stop's confirmation.
+fn note_banner_for_stop(inner: &SerialInner, line: &str) {
+    if serial_pump::classify_line(line) == LineClass::Banner
+        && inner.session.stop_in_flight.load(Ordering::SeqCst)
+    {
+        inner.session.banner_observed.store(true, Ordering::SeqCst);
+        inner.session.emit("banner_observed");
+    }
+}
+
+/// A controller line the barrier consumed outside its probe read: noted
+/// already (by the hook), published if it is a status frame (an ordinary
+/// snapshot, never the observation), surfaced if console-meaningful.
+fn barrier_consume_line(
+    inner: &SerialInner,
+    line: &str,
+    lock_epoch: u64,
+    events: &mut Vec<String>,
+) {
+    match serial_pump::classify_line(line) {
+        LineClass::Status => {
+            inner.session.publish_snapshot(line, lock_epoch);
+        }
+        LineClass::Alarm | LineClass::Msg => events.push(line.to_string()),
+        _ => {
+            eprintln!("[serial] barrier drained: {}", line);
+            note_banner_for_stop(inner, line);
+        }
+    }
+}
+
+/// The observation barrier (motion trust). Runs inside the status poll, with
+/// `command` held for its whole duration (the poller's `try_lock`), whenever
+/// the observation is stale:
+///
+/// 1. Capture the basis (connection, epoch, motion writes) BEFORE anything
+///    is read, so any invalidating line consumed during the barrier leaves
+///    the observation stale (re-run next poll).
+/// 2. Quiesce: wait until `OBSERVE_QUIESCE_MS` after the last motion send
+///    returned.
+/// 3. Drain everything buffered (noted; statuses published as ordinary
+///    snapshots). If a partial line remains in `pending`, complete it with
+///    one bounded read (noted, published) BEFORE the probe; if it does not
+///    complete in one tick, no probe is written and no observation is made.
+/// 4. Probe: write `?` and take the first status frame after it, bounded at
+///    `OBSERVE_PROBE_MS`.
+/// 5. Record the observation from exactly that frame.
+///
+/// Assumption (hardware-qualified by the owner card, step 4): the owner's
+/// controller starts a cycle within `OBSERVE_QUIESCE_MS` of a motion's `ok`,
+/// and answers `?` within `OBSERVE_PROBE_MS`.
+fn observe(
+    inner: &SerialInner,
+    channel: &mut CommandChannel,
+    lock_epoch: u64,
+) -> Result<StatusOutcome, String> {
+    let session = &inner.session;
+    let basis = session.barrier_basis();
+    #[cfg(test)]
+    session.test_point("barrier_after_basis");
+
+    if let Some(end) = basis.last_motion_end {
+        let q = Duration::from_millis(OBSERVE_QUIESCE_MS);
+        let elapsed = end.elapsed();
+        if elapsed < q {
+            std::thread::sleep(q - elapsed);
+        }
+    }
+
+    let mut events = Vec::new();
+    let drain = serial_pump::drain_classified_noted(
+        &mut channel.reader,
+        &mut channel.pending,
+        &mut |l: &str, c: LineClass| session.trust_note_line(l, c),
+    );
+    for line in drain.dropped.iter().chain(drain.surfaced.iter()) {
+        barrier_consume_line(inner, line, lock_epoch, &mut events);
+    }
+
+    match serial_pump::complete_partial_line_noted(
+        &mut channel.reader,
+        &mut channel.pending,
+        &mut |l: &str, c: LineClass| session.trust_note_line(l, c),
+    )? {
+        serial_pump::PartialLine::None => {}
+        serial_pump::PartialLine::Line(line) => {
+            barrier_consume_line(inner, &line, lock_epoch, &mut events);
+        }
+        serial_pump::PartialLine::StillPartial => {
+            // No probe behind an unfinished line: its tail could be read as
+            // the probe's reply. Retry on the next poll.
+            return Ok(StatusOutcome {
+                status: String::new(),
+                events,
+                kind: StatusKind::NoResponse,
+                snapshot: session.read_snapshot(),
+                conn_id: basis.conn_id,
+            });
+        }
+    }
+
+    // Probe, bounded at OBSERVE_PROBE_MS: one read tick at that timeout
+    // (the reader handle's own timeout; the writer's is untouched).
+    let prev_timeout = channel.reader.get_ref().timeout();
+    let _ = channel
+        .reader
+        .get_mut()
+        .set_timeout(Duration::from_millis(OBSERVE_PROBE_MS));
+    let read = serial_pump::read_status_bounded_noted(
+        &mut channel.reader,
+        &mut channel.writer,
+        &mut channel.pending,
+        1,
+        &mut |l: &str, c: LineClass| session.trust_note_line(l, c),
+    );
+    let _ = channel.reader.get_mut().set_timeout(prev_timeout);
+    let read = read?;
+    for line in &read.dropped {
+        eprintln!("[serial] status junk-skip: {}", line);
+        note_banner_for_stop(inner, line);
+    }
+    events.extend(read.surfaced);
+
+    if let Some(ref status_str) = read.status {
+        if let Some(frame) = session.publish_snapshot(status_str, lock_epoch) {
+            session.record_observation(basis, &frame);
+        }
+    }
+
+    let kind = if read.status.is_some() {
+        StatusKind::Report
+    } else {
+        StatusKind::NoResponse
+    };
+    Ok(StatusOutcome {
+        status: read.status.unwrap_or_default(),
+        events,
+        kind,
+        snapshot: session.read_snapshot(),
+        conn_id: basis.conn_id,
     })
 }
 
@@ -693,9 +1071,14 @@ pub(crate) fn serial_get_status_inner(inner: &SerialInner) -> Result<StatusOutco
 /// manual `$H` legitimately pumps for 30s+ — polls must skip, not stack. The busy
 /// skip returns the Ok-typed empty sentinel (see `StatusOutcome`).
 #[tauri::command]
-pub async fn serial_get_status(state: State<'_, SerialState>) -> Result<StatusOutcome, String> {
+///
+/// `conn` (IPC key `conn`) is required from B2+B3.
+pub async fn serial_get_status(
+    state: State<'_, SerialState>,
+    conn: u64,
+) -> Result<StatusOutcome, String> {
     let inner = state.0.clone();
-    tokio::task::spawn_blocking(move || serial_get_status_inner(&inner))
+    tokio::task::spawn_blocking(move || serial_get_status_inner(&inner, conn))
         .await
         .map_err(|e| format!("Task join error: {}", e))?
 }
@@ -764,6 +1147,11 @@ pub(crate) fn serial_stream_job_inner(
 ) -> Result<String, String> {
     inner.session.permit_precheck(job_epoch)?;
 
+    // Motion trust: job lines are motion; counted before the `command` wait.
+    let _motion = inner.session.motion_enter();
+
+    #[cfg(test)]
+    let _rk = lock_rank::hold(lock_rank::COMMAND, "command");
     let mut guard = inner
         .command
         .lock()
@@ -788,7 +1176,11 @@ pub(crate) fn serial_stream_job_inner(
     let lock_epoch = inner.session.epoch.load(Ordering::SeqCst);
 
     // Drain stale controller output before the job; ALARM/MSG lines reach the console.
-    let drain = serial_pump::drain_classified(&mut cmd_channel.reader, &mut cmd_channel.pending);
+    let drain = serial_pump::drain_classified_noted(
+        &mut cmd_channel.reader,
+        &mut cmd_channel.pending,
+        &mut |l: &str, c: LineClass| inner.session.trust_note_line(l, c),
+    );
     for line in &drain.dropped {
         eprintln!("[serial] stream job drained: {}", line);
     }
@@ -810,24 +1202,49 @@ pub(crate) fn serial_stream_job_inner(
         return Ok("complete".to_string());
     }
 
+    // B2+B3 (Razor b23 N3): the grammar the per-line path enforces, applied to
+    // the whole job before its first write. One malformed line refuses the
+    // job with nothing written, rather than being sent and recorded as the
+    // worst case.
+    let classes: Vec<Option<Outbound>> = lines
+        .iter()
+        .map(|l| serial_session::classify_outbound(l).ok())
+        .collect();
+    if let Some(i) = classes.iter().position(|c| c.is_none()) {
+        let e = serial_session::classify_outbound(&lines[i]).unwrap_err();
+        let msg = format!("{e} (job line {})", i + 1);
+        let _ = on_event(JobEvent::Finished {
+            outcome: msg.clone(),
+        });
+        return Err(msg);
+    }
+
     // Drain again before the buffered pump starts.
-    let drain = serial_pump::drain_classified(&mut cmd_channel.reader, &mut cmd_channel.pending);
+    let drain = serial_pump::drain_classified_noted(
+        &mut cmd_channel.reader,
+        &mut cmd_channel.pending,
+        &mut |l: &str, c: LineClass| inner.session.trust_note_line(l, c),
+    );
     for line in &drain.surfaced {
         let _ = on_event(JobEvent::Console { text: line.clone() });
     }
 
     let config = BufferedPumpConfig::default();
 
-    let result = serial_pump::run_buffered_pump(
+    let result = serial_pump::run_buffered_pump_noted(
         &lines,
         &mut cmd_channel.reader,
         &mut cmd_channel.writer,
         &mut cmd_channel.pending,
         &config,
         &inner.job_abort,
-        &JobPermit {
-            session: &inner.session,
-            epoch: job_epoch,
+        &TrustedJobPermit {
+            permit: JobPermit {
+                session: &inner.session,
+                epoch: job_epoch,
+            },
+            classes,
+            next: std::cell::Cell::new(0),
         },
         &|event| {
             let job_event = match event {
@@ -849,7 +1266,19 @@ pub(crate) fn serial_stream_job_inner(
                 eprintln!("[serial] event sink failed: {}", e);
             }
         },
+        &mut |l: &str, c: LineClass| inner.session.trust_note_line(l, c),
     );
+
+    // Motion trust, still under `command`: stamp the quiesce anchor; a job
+    // that ended without completing (or erroring cleanly on a line) leaves
+    // the position unknown.
+    inner.session.trust_note_motion_end();
+    if !matches!(
+        result,
+        Ok(BufferedPumpOutcome::Complete) | Ok(BufferedPumpOutcome::Error { .. })
+    ) {
+        inner.session.trust_note_motion_failure();
+    }
 
     // Drop the command lock before potentially calling stop.
     drop(_flight);
@@ -991,6 +1420,8 @@ pub(crate) fn serial_stop_inner(inner: &SerialInner, sleeper: &dyn Fn(Duration))
             });
         }
     };
+    #[cfg(test)]
+    session.test_point("stop_entered");
 
     // Step 2: Close admission inside the submission critical section
     // (`submit` → `admitted_job`). A writer holding `submit` finishes its one
@@ -999,6 +1430,8 @@ pub(crate) fn serial_stop_inner(inner: &SerialInner, sleeper: &dyn Fn(Duration))
     // released before the `0x18`, which needs no lock: ordering is already
     // fixed. Poison is recovered so a panicked writer can never stop STOP.
     {
+        #[cfg(test)]
+        let _rk = lock_rank::hold(lock_rank::SUBMIT, "submit");
         let submit = session.submit.lock().unwrap_or_else(|e| e.into_inner());
         session.close_admission(&submit);
     }
@@ -1020,6 +1453,8 @@ pub(crate) fn serial_stop_inner(inner: &SerialInner, sleeper: &dyn Fn(Duration))
 
     // Step 5: Send 0x18. Take realtime lock, write, retry once on failure.
     let send_result = {
+        #[cfg(test)]
+        let _rk = lock_rank::hold(lock_rank::REALTIME, "realtime");
         let mut rt = match inner.realtime.lock() {
             Ok(g) => g,
             Err(e) => e.into_inner(),
@@ -1075,13 +1510,21 @@ pub(crate) fn serial_stop_inner(inner: &SerialInner, sleeper: &dyn Fn(Duration))
         }
         // Try to take the command lock for a bounded read.
         if let Ok(mut guard) = inner.command.try_lock() {
+            #[cfg(test)]
+            let _rk = lock_rank::hold_try(lock_rank::COMMAND, "command");
             if let Some(channel) = guard.as_mut() {
                 // Bounded read: look for a Banner line.
                 let mut read_buf = Vec::new();
                 match channel.reader.read_until(b'\n', &mut read_buf) {
                     Ok(n) if n > 0 => {
                         let line = String::from_utf8_lossy(&read_buf).trim().to_string();
-                        if serial_pump::classify_line(&line) == serial_pump::LineClass::Banner {
+                        let class = serial_pump::classify_line(&line);
+                        // Motion trust: every line this read takes is noted
+                        // (a reset's `ALARM:3` as well as the banner).
+                        if !line.is_empty() {
+                            session.trust_note_line(&line, class);
+                        }
+                        if class == serial_pump::LineClass::Banner {
                             session.banner_observed.store(true, Ordering::SeqCst);
                             break;
                         }
@@ -1151,24 +1594,40 @@ pub async fn serial_stop(state: State<'_, SerialState>) -> Result<StopResult, St
 
 /// Begin a per-line job: set phase to active, store epoch in admitted_job,
 /// return the epoch as job id. Fails if phase is not idle.
+///
+/// Admission happens under `submit` (motion trust: a job's admission clears
+/// the observation inside the same critical section as the stop's close and
+/// every job-line write). `admitted_job` is released before `trust` is taken
+/// (lock order `submit` → `trust` → leaves).
 pub(crate) fn serial_job_begin_inner(inner: &SerialInner) -> Result<u64, String> {
     let session = &inner.session;
-    let mut aj = session
-        .admitted_job
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    #[cfg(test)]
+    session.test_point("job_begin_before_submit");
+    #[cfg(test)]
+    let _rk = lock_rank::hold(lock_rank::SUBMIT, "submit");
+    let _submit = session.submit.lock().unwrap_or_else(|e| e.into_inner());
+    let epoch = {
+        #[cfg(test)]
+        let _rk = lock_rank::hold(lock_rank::ADMITTED_JOB, "admitted_job");
+        let mut aj = session
+            .admitted_job
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
-    let current_phase = session.phase.load(Ordering::SeqCst);
-    if current_phase != PHASE_IDLE {
-        return Err(format!(
-            "cannot begin job: session not idle (phase={})",
-            serial_session::phase_name(current_phase)
-        ));
-    }
+        let current_phase = session.phase.load(Ordering::SeqCst);
+        if current_phase != PHASE_IDLE {
+            return Err(format!(
+                "cannot begin job: session not idle (phase={})",
+                serial_session::phase_name(current_phase)
+            ));
+        }
 
-    let epoch = session.epoch.load(Ordering::SeqCst);
-    session.phase.store(PHASE_ACTIVE, Ordering::SeqCst);
-    *aj = Some(epoch);
+        let epoch = session.epoch.load(Ordering::SeqCst);
+        session.phase.store(PHASE_ACTIVE, Ordering::SeqCst);
+        *aj = Some(epoch);
+        epoch
+    };
+    session.trust_note_job_admitted();
     inner.job_abort.store(false, Ordering::SeqCst);
     Ok(epoch)
 }
@@ -1179,6 +1638,8 @@ pub(crate) fn serial_job_begin_inner(inner: &SerialInner) -> Result<u64, String>
 /// the job is over either way, and ending a job never overwrites Unknown.
 pub(crate) fn serial_job_end_inner(inner: &SerialInner, job_id: u64) -> Result<(), String> {
     let session = &inner.session;
+    #[cfg(test)]
+    let _rk = lock_rank::hold(lock_rank::ADMITTED_JOB, "admitted_job");
     let mut aj = session
         .admitted_job
         .lock()
@@ -1344,6 +1805,11 @@ mod tests {
     /// in-flight pump — this is the e-stop guarantee. If `send_byte_inner` ever
     /// grows a dependency on the command lock, this test deadlocks its worker
     /// thread and fails by timeout.
+    ///
+    /// Split (relay kerf-safety-motion-trust): this case covers `?`, `!` and
+    /// `~`, which touch ONLY the realtime lock. `0x18`/`0x85` now take
+    /// `submit` for the trust bump; their case is
+    /// `motion_trust::realtime_reset_completes_while_command_lock_held_and_waits_only_on_submit`.
     #[test]
     fn realtime_write_completes_while_command_lock_held() {
         let inner = Arc::new(SerialInner {
@@ -1357,18 +1823,22 @@ mod tests {
 
         // Simulate an in-flight pump: hold the command lock for the whole test.
         let _command_guard = inner.command.lock().unwrap();
+        // And `submit`: these bytes must not depend on it either.
+        let _submit_guard = inner.session.submit.lock().unwrap();
 
-        let (tx, rx) = mpsc::channel();
-        let inner2 = inner.clone();
-        thread::spawn(move || {
-            let result = send_byte_inner(&inner2, 0x18);
-            let _ = tx.send(result);
-        });
+        for byte in [b'?', b'!', b'~'] {
+            let (tx, rx) = mpsc::channel();
+            let inner2 = inner.clone();
+            thread::spawn(move || {
+                let result = send_byte_inner(&inner2, cur(&inner2), byte);
+                let _ = tx.send(result);
+            });
 
-        let result = rx
-            .recv_timeout(Duration::from_millis(500))
-            .expect("realtime write blocked behind the command lock — e-stop would freeze");
-        assert!(result.is_ok());
+            let result = rx
+                .recv_timeout(Duration::from_millis(500))
+                .expect("realtime write blocked behind the command lock — e-stop would freeze");
+            assert!(result.is_ok());
+        }
     }
 
     /// Acceptance criterion 5: a mid-job Disconnect terminates the in-flight
@@ -1685,7 +2155,7 @@ mod tests {
         };
         inner.session.epoch.store(1, Ordering::SeqCst);
 
-        let outcome = serial_get_status_inner(&inner).unwrap();
+        let outcome = serial_get_status_inner(&inner, cur(&inner)).unwrap();
         assert_eq!(
             outcome.kind,
             StatusKind::NoResponse,
@@ -1723,7 +2193,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let inner2 = inner.clone();
         thread::spawn(move || {
-            let result = serial_get_status_inner(&inner2);
+            let result = serial_get_status_inner(&inner2, cur(&inner2));
             let _ = tx.send(result);
         });
 
@@ -1871,7 +2341,7 @@ mod tests {
 
         let inner2 = inner.clone();
         let _send_handle = thread::spawn(move || {
-            let _ = serial_send_inner(&inner2, "G0 X10", None);
+            let _ = serial_send_inner(&inner2, "G0 X10", None, cur(&inner2), None);
         });
 
         thread::sleep(Duration::from_millis(50));
@@ -1940,7 +2410,7 @@ mod tests {
         let _ = serial_stop_inner(&inner, &|_| {});
 
         // After stop, send with the old epoch must fail.
-        let result = serial_send_inner(&inner, "G0 X10\n", Some(job_id));
+        let result = serial_send_inner(&inner, "G0 X10", Some(job_id), cur(&inner), None);
         assert!(result.is_err(), "send after stop must be refused");
 
         // Verify no G-code bytes reached the writer. (The writer and realtime
@@ -2186,7 +2656,7 @@ mod tests {
         // Console send (None epoch) should still attempt the write.
         // It will fail on the read pump (MockPort returns TimedOut), but
         // it should NOT be refused by the permit check.
-        let result = serial_send_inner(&inner, "$I\n", None);
+        let result = serial_send_inner(&inner, "$I", None, cur(&inner), None);
         // The error should be about the pump (disconnected/timeout), not about permits.
         if let Err(msg) = result {
             assert!(
@@ -2527,7 +2997,7 @@ mod sim_integration {
         let (tx, rx) = mpsc::channel();
         let inner2 = inner.clone();
         thread::spawn(move || {
-            let result = send_byte_inner(&inner2, 0x18);
+            let result = send_byte_inner(&inner2, cur(&inner2), 0x18);
             let _ = tx.send(result);
         });
 
@@ -3129,12 +3599,20 @@ mod sim_integration {
             units: UnitsValidity::Unknown,
             raw: "<Run|MPos:10.500,20.300,0.000|FS:500,1000|WCO:1.000,2.000,0.000|A:S>".to_string(),
             unknown_fields: vec![],
+            conn_id: 0,
+            trust_epoch: 0,
+            homed: false,
+            units_mm: false,
+            motion_pending: false,
+            observed_seq: None,
+            observed_pos: None,
         };
         let status_outcome = StatusOutcome {
             status: snapshot.raw.clone(),
             events: vec!["[MSG:Check Door]".to_string()],
             kind: StatusKind::Report,
             snapshot: Some(snapshot),
+            conn_id: 0,
         };
         let outcome_json = serde_json::to_value(&status_outcome).unwrap();
         assert_eq!(outcome_json["kind"], "report");
@@ -3190,7 +3668,7 @@ mod sim_integration {
         let (tx, rx) = mpsc::channel();
         let inner2 = inner.clone();
         thread::spawn(move || {
-            let result = serial_get_status_inner(&inner2);
+            let result = serial_get_status_inner(&inner2, cur(&inner2));
             let _ = tx.send(result);
         });
 
@@ -3454,7 +3932,7 @@ mod sim_integration {
             job_abort: AtomicBool::new(false),
             session: SerialSession::default(),
         };
-        send_byte_inner(&inner, 0x18).unwrap();
+        send_byte_inner(&inner, cur(&inner), 0x18).unwrap();
         pending.clear();
         let _ = serial_pump::drain_classified(&mut reader, &mut pending); // reset banner
         pending.clear();
@@ -3806,6 +4284,134 @@ mod rf15 {
         .map(|b| b.deserialize::<serde_json::Value>().unwrap())
     }
 
+    /// B2+B3: the three conn-carrying commands behind the real IPC layer.
+    fn ipc_call(
+        inner: Arc<SerialInner>,
+        cmd: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, serde_json::Value> {
+        let app = tauri::test::mock_builder()
+            .manage(SerialState(inner))
+            .invoke_handler(tauri::generate_handler![
+                serial_send,
+                serial_send_byte,
+                serial_get_status
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock app");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+        tauri::test::get_ipc_response(
+            &webview,
+            tauri::webview::InvokeRequest {
+                cmd: cmd.into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: "http://tauri.localhost".parse().unwrap(),
+                body: tauri::ipc::InvokeBody::Json(body),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_string(),
+            },
+        )
+        .map(|b| b.deserialize::<serde_json::Value>().unwrap())
+    }
+
+    /// B2+B3: `conn` is required on all three commands (an omitted key is
+    /// rejected before the body runs, so nothing is written), and the IPC
+    /// key `jogBasis` reaches jog admission.
+    #[test]
+    fn b23_ipc_conn_is_required_and_jog_basis_reaches_admission() {
+        ScriptedPort::run_scenario(
+            || {
+                let (inner, base) = rig(vec![ScriptStep::Data(b"ok\r\n")]);
+                let writes = |b: &ScriptedPort| {
+                    b.trace()
+                        .iter()
+                        .filter(|t| matches!(t, TraceEvent::Write { .. }))
+                        .count()
+                };
+                for (cmd, body) in [
+                    ("serial_send", serde_json::json!({"command": "$G"})),
+                    ("serial_send_byte", serde_json::json!({"byte": 33})),
+                    ("serial_get_status", serde_json::json!({})),
+                ] {
+                    let r = ipc_call(inner.clone(), cmd, body);
+                    assert!(r.is_err(), "{cmd} without conn must be rejected: {r:?}");
+                }
+                assert_eq!(writes(&base), 0, "nothing written without conn");
+
+                // Seed an admissible jog state on connection 3.
+                {
+                    let mut t = inner.session.trust();
+                    t.conn_id = 3;
+                    t.homed_at = Some(t.trust_epoch);
+                    t.units_mm = Some(3);
+                    t.observed = Some(serial_session::Observation {
+                        conn_id: 3,
+                        trust_epoch: t.trust_epoch,
+                        after_writes: t.motion_writes,
+                        seq: 41,
+                        idle_mpos: true,
+                        mpos: Some([0.0, 0.0, 0.0]),
+                    });
+                }
+                let jog = "$J=G21 G91 X1.000 F100";
+                // A misspelt basis key deserialises to None: refused.
+                let r = ipc_call(
+                    inner.clone(),
+                    "serial_send",
+                    serde_json::json!({"command": jog, "conn": 3, "jog_basis": 41}),
+                );
+                assert!(
+                    r.as_ref().is_err_and(|e| e
+                        .as_str()
+                        .unwrap_or_default()
+                        .starts_with("refused: stale-basis:")),
+                    "{r:?}"
+                );
+                assert_eq!(writes(&base), 0);
+                // A stale conn is refused.
+                let r = ipc_call(
+                    inner.clone(),
+                    "serial_send",
+                    serde_json::json!({"command": jog, "conn": 2, "jogBasis": 41}),
+                );
+                assert!(
+                    r.as_ref().is_err_and(|e| e
+                        .as_str()
+                        .unwrap_or_default()
+                        .starts_with("refused: stale-connection:")),
+                    "{r:?}"
+                );
+                // The real keys admit it.
+                let r = ipc_call(
+                    inner.clone(),
+                    "serial_send",
+                    serde_json::json!({"command": jog, "conn": 3, "jogBasis": 41}),
+                );
+                // The refused attempts' drains consumed the scripted `ok`, so
+                // this pump may end on EOF; the write is what is asserted.
+                if let Ok(v) = &r {
+                    assert_eq!(v["connId"], 3);
+                } else {
+                    assert!(
+                        r.as_ref().is_err_and(|e| e
+                            .as_str()
+                            .unwrap_or_default()
+                            .starts_with("disconnected:")),
+                        "admitted, then the pump ended on EOF: {r:?}"
+                    );
+                }
+                assert!(base.trace().iter().any(
+                    |t| matches!(t, TraceEvent::Write { data, .. } if data == b"$J=G21 G91 X1.000 F100\n")
+                ));
+            },
+            SCENARIO,
+        )
+        .unwrap();
+    }
+
     /// R1: the literal IPC key `jobEpoch` reaches the real
     /// `#[tauri::command] serial_send` body and fences the job line.
     #[test]
@@ -3822,7 +4428,7 @@ mod rf15 {
                 // (a) Positive control: an admitted job line is written and acked.
                 let ok = ipc_serial_send(
                     inner.clone(),
-                    serde_json::json!({"command": "G1 X1", "jobEpoch": e}),
+                    serde_json::json!({"command": "G1 X1", "jobEpoch": e, "conn": 0}),
                 );
                 assert!(ok.is_ok(), "admitted line must succeed: {ok:?}");
                 assert!(base.trace().iter().any(
@@ -3833,7 +4439,7 @@ mod rf15 {
                 assert!(matches!(stop(&inner), StopResult::Confirmed { .. }));
                 let refused = ipc_serial_send(
                     inner.clone(),
-                    serde_json::json!({"command": "G1 X1", "jobEpoch": e}),
+                    serde_json::json!({"command": "G1 X1", "jobEpoch": e, "conn": 0}),
                 );
                 let err = refused.expect_err("stale job line must be refused");
                 assert!(
@@ -3849,7 +4455,10 @@ mod rf15 {
 
                 // (c) Without jobEpoch (console path) the line is still written.
                 // Assert on the trace: the pump may hit EOF on the exhausted script.
-                let _ = ipc_serial_send(inner.clone(), serde_json::json!({"command": "$$"}));
+                let _ = ipc_serial_send(
+                    inner.clone(),
+                    serde_json::json!({"command": "$$", "conn": 0}),
+                );
                 assert!(
                     writer_writes_after_reset(&base.trace()).iter().any(
                         |t| matches!(t, TraceEvent::Write { data, .. } if data == b"$$\n")
@@ -3879,11 +4488,11 @@ mod rf15 {
                     ScriptStep::Data(b"ok\n"),
                 ]);
                 let e = serial_job_begin_inner(&inner).unwrap();
-                serial_send_inner(&inner, "G1 X1", Some(e)).expect("accepted first line");
+                serial_send_inner(&inner, "G1 X1", Some(e), cur(&inner), None).expect("accepted first line");
                 assert!(matches!(stop(&inner), StopResult::Confirmed { .. }));
 
                 base.push_session_event("stale_send_begin");
-                let result = serial_send_inner(&inner, "G1 X2", Some(e));
+                let result = serial_send_inner(&inner, "G1 X2", Some(e), cur(&inner), None);
 
                 let err = result.expect_err("stale send must be refused");
                 assert!(
@@ -3928,7 +4537,8 @@ mod rf15 {
 
                 let lock = inner.command.lock().unwrap();
                 let i2 = inner.clone();
-                let sender = thread::spawn(move || serial_send_inner(&i2, "G1 X9", Some(e)));
+                let sender =
+                    thread::spawn(move || serial_send_inner(&i2, "G1 X9", Some(e), cur(&i2), None));
                 wait_until("permit_prechecked", || {
                     has_session_event(&base, "permit_prechecked")
                 });
@@ -3979,7 +4589,8 @@ mod rf15 {
                 base.hold_next_write(HandleRole::Writer, "line");
 
                 let i2 = inner.clone();
-                let sender = thread::spawn(move || serial_send_inner(&i2, "G1 X5", Some(e)));
+                let sender =
+                    thread::spawn(move || serial_send_inner(&i2, "G1 X5", Some(e), cur(&i2), None));
                 wait_until("write parked", || has_hold_reached(&base, "line"));
 
                 let i3 = inner.clone();
@@ -4161,7 +4772,8 @@ mod rf15 {
 
                 let lock = inner.command.lock().unwrap();
                 let i2 = inner.clone();
-                let sender = thread::spawn(move || serial_send_inner(&i2, "G1 X9", Some(e)));
+                let sender =
+                    thread::spawn(move || serial_send_inner(&i2, "G1 X9", Some(e), cur(&i2), None));
                 wait_until("permit_prechecked", || {
                     has_session_event(&base, "permit_prechecked")
                 });
@@ -4460,3 +5072,8 @@ mod rf15 {
         );
     }
 }
+
+// Motion-trust tests (relay kerf-safety-motion-trust).
+#[cfg(test)]
+#[path = "serial_trust_tests.rs"]
+mod motion_trust;

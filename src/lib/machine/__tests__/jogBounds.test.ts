@@ -124,6 +124,11 @@ describe("jogBlockReason ordering", () => {
     workspaceVerified: true,
     positionKind: "machine",
     workCoordOffset: { x: 0, y: 0 },
+    grblHoming: true,
+    trustHomed: true,
+    trustUnitsMm: true,
+    motionPending: false,
+    trustObserved: true,
   };
 
   it("ready passes in both modes", () => {

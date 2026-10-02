@@ -129,11 +129,24 @@ export interface AppState {
   grblSoftLimits: boolean; // $20: soft limits enabled in firmware
   grblHardLimits: boolean; // $21: hard limits enabled in firmware
   grblHoming: boolean; // $22: homing cycle enabled (requires limit switches)
-  machineHomed: boolean; // true after a successful homing cycle this session
+  // Read-only alias of `trustHomed` (motion trust B2+B3): written only by
+  // `setTrust`, never set directly. Homed comes from native snapshots.
+  machineHomed: boolean;
   setGrblSoftLimits: (v: boolean) => void;
   setGrblHardLimits: (v: boolean) => void;
   setGrblHoming: (v: boolean) => void;
-  setMachineHomed: (v: boolean) => void;
+
+  // Motion trust (relay kerf-safety-motion-trust B2+B3): scalars copied from
+  // accepted current-connection native snapshots by `consumeStatusOutcome`.
+  // Native is authoritative; TS may only make them MORE conservative
+  // between snapshots (provisional invalidation in connection.ts).
+  trustHomed: boolean; // native: a clean $H at the current trust epoch
+  trustUnitsMm: boolean; // native: $13=0 read on this connection since the last settings write
+  motionPending: boolean; // native: a motion send is in flight
+  trustObserved: boolean; // native: a barrier observation is current (observedSeq present)
+  basisSeq: number | null; // the observation's snapshot seq: a jog's `jogBasis`
+  basisPosition: { x: number; y: number; z: number } | null; // the observation's MPos: the clip's position
+  setTrust: (p: Partial<TrustScalars>) => void;
 
   // Work coordinate offset (WCO from GRBL status reports)
   workCoordOffset: { x: number; y: number };
@@ -310,4 +323,14 @@ export function deepCloneObject(obj: DesignObject): DesignObject {
     clone.children = obj.children.map((child) => deepCloneObject(child));
   }
   return clone;
+}
+
+/** The motion-trust scalars `setTrust` writes. */
+export interface TrustScalars {
+  trustHomed: boolean;
+  trustUnitsMm: boolean;
+  motionPending: boolean;
+  trustObserved: boolean;
+  basisSeq: number | null;
+  basisPosition: { x: number; y: number; z: number } | null;
 }

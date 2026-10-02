@@ -37,7 +37,18 @@ import {
   JOG_REASON_EDGE,
   JOG_REASON_STALE,
   JOG_REASON_OFFSET,
+  JOG_REASON_HOME,
+  JOG_REASON_NO_HOMING,
+  JOG_REASON_UNITS,
+  JOG_REASON_MOTION,
 } from "../../../lib/machine/jogBounds";
+import { act } from "@testing-library/react";
+import {
+  JOG_HOLD_COMMAND,
+  JOG_HOLD_POSITION,
+  JOG_HOLD_STALE,
+  JOG_HOLD_STATE,
+} from "../MachinePanel";
 import { StatusBar } from "../../bottom/StatusBar";
 import { resetStatusConsumer } from "../../../lib/machine/machineStatus";
 import { SerialTraceRecorder } from "../../../lib/machine/__tests__/serialTraceHarness";
@@ -88,6 +99,20 @@ function seedReadyToStart() {
     grblLaserMode: true,
     // B2b: statusStale must be false for canStartJob to pass.
     statusStale: false,
+  });
+}
+
+/** B4: a homed, mm, observed machine (what native snapshots publish after a
+ * clean $H and a barrier observation at MPos 0,0,0). */
+function seedTrusted() {
+  useStore.setState({ grblHoming: true });
+  useStore.getState().setTrust({
+    trustHomed: true,
+    trustUnitsMm: true,
+    motionPending: false,
+    trustObserved: true,
+    basisSeq: 1,
+    basisPosition: { x: 0, y: 0, z: 0 },
   });
 }
 
@@ -1067,7 +1092,7 @@ describe("S3 — MachinePanel and StatusBar", () => {
   function mockPanelMachine(settings: string[]) {
     let seq = 0;
     mockInvoke.mockImplementation(async (cmd: string, args?: { command?: string }) => {
-      if (cmd === "serial_connect") return "Grbl 1.1h ['$' for help]";
+      if (cmd === "serial_connect") return { banner: "Grbl 1.1h ['$' for help]", connId: 1 };
       if (cmd === "list_serial_ports") return [];
       if (cmd === "serial_send" && args?.command === "$$")
         return { responses: settings, drained: [] };
@@ -1106,6 +1131,7 @@ describe("S3 — MachinePanel and StatusBar", () => {
     localStorage.clear();
     seedReadyToStart();
     useStore.setState({ positionKind: "machine", workCoordOffset: { x: 0, y: 0 } });
+    seedTrusted();
   });
 
   afterEach(async () => {
@@ -1226,7 +1252,7 @@ describe("S3 — MachinePanel and StatusBar", () => {
     fireEvent.click(getByText("Positioning (10mm)"));
     // Four arrows plus POSITION (Jen S3) share the reason.
     const buttons = (getAllByTitle(JOG_REASON_BED) as HTMLButtonElement[]).filter(
-      (b) => b.textContent !== "Position"
+      (b) => b.tagName === "BUTTON" && b.textContent !== "Position"
     );
     expect(buttons).toHaveLength(4);
     for (const b of buttons) expect(b.disabled).toBe(true);
@@ -1240,6 +1266,360 @@ describe("S3 — MachinePanel and StatusBar", () => {
       expect((getByTitle(t) as HTMLButtonElement).disabled).toBe(false);
     }
     expect(queryByTestId("jog-blocked-note")).toBeNull();
+  });
+
+  // ── B4 T-P1: the panel reads the motion-trust scalars ─────────────────────
+  const homeKey = (container: HTMLElement) =>
+    [...container.querySelectorAll("button")].find((b) => b.textContent === "\u2302") ?? null;
+  const arrowsAndPosition = (getAllByTitle: (t: string) => HTMLElement[], reason: string) =>
+    (getAllByTitle(reason) as HTMLButtonElement[]).filter((e) => e.tagName === "BUTTON");
+
+  it.each([
+    ["HOME", { trustHomed: false }, JOG_REASON_HOME],
+    ["UNITS", { trustUnitsMm: false }, JOG_REASON_UNITS],
+    ["MOTION (pending)", { motionPending: true }, JOG_REASON_MOTION],
+    ["MOTION (not observed)", { trustObserved: false }, JOG_REASON_MOTION],
+  ] as const)(
+    "T-P1: %s reaches every arrow, POSITION and the slot verbatim",
+    (_l, patch, reason) => {
+      useStore.getState().setTrust(patch);
+      const { getByText, getAllByTitle, getByTestId } = render(<MachinePanel />);
+      fireEvent.click(getByText("Positioning (10mm)"));
+      const all = arrowsAndPosition(getAllByTitle, reason);
+      expect(all.map((b) => b.textContent).filter((t) => t === "Position")).toHaveLength(1);
+      expect(all).toHaveLength(5);
+      for (const b of all) {
+        expect(b.disabled).toBe(true);
+        expect(b.style.opacity).toBe("0.4");
+      }
+      expect(getByTestId("jog-blocked-note").textContent).toBe(reason);
+    }
+  );
+
+  it("Jen B4 copy: UNITS says what sending $$ achieves", () => {
+    expect(JOG_REASON_UNITS).toBe(
+      "Jogging is off until Kerf reads $13=0 (positions in mm) from the machine. Reconnect, or send $$ to re-read its settings"
+    );
+  });
+
+  it("T-P1: NO_HOMING ($22=0) reaches the arrows and POSITION; the Home key keeps its own title", () => {
+    useStore.setState({ grblHoming: false });
+    const { getByText, getAllByTitle, getByTestId, container } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    const all = arrowsAndPosition(getAllByTitle, JOG_REASON_NO_HOMING);
+    expect(all).toHaveLength(5);
+    for (const b of all) expect(b.disabled).toBe(true);
+    expect(getByTestId("jog-blocked-note").textContent).toBe(JOG_REASON_NO_HOMING);
+    const home = homeKey(container)!;
+    expect(home.title).toBe("Home disabled — machine has no limit switches ($22=0)");
+    expect(home.disabled).toBe(true);
+  });
+
+  it("T-P1 order: not homed and a command pending reads HOME, not MOTION", () => {
+    useStore.getState().setTrust({ trustHomed: false, motionPending: true, trustObserved: false });
+    const { getByText, getByTestId, container } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    expect(getByTestId("jog-blocked-note").textContent).toBe(JOG_REASON_HOME);
+    expect(getByText("Position").title).toBe(JOG_REASON_HOME);
+    // Home stays the live recovery while jogging is blocked for HOME.
+    const home = homeKey(container)!;
+    expect(home.title).toBe("Home ($H)");
+    expect(home.disabled).toBe(false);
+  });
+
+  it("T-P1 positive sibling: every trust scalar true clears the gate (titles by axis, no slot)", () => {
+    const { getByText, getByTitle, queryByTestId } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    for (const t of ["Y+", "X-", "X+", "Y-"]) {
+      const b = getByTitle(t) as HTMLButtonElement;
+      expect(b.disabled).toBe(false);
+      expect(b.style.opacity).toBe("1");
+    }
+    const pos = getByText("Position") as HTMLButtonElement;
+    expect(pos.disabled).toBe(false);
+    expect(pos.title).toBe("");
+    expect(queryByTestId("jog-blocked-note")).toBeNull();
+  });
+
+  it("Jen C1: the note slot is a fixed 45 px box: empty, one line and three lines alike", () => {
+    const { getByText, getByTestId, queryByTestId } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    const slot = getByTestId("jog-note-slot");
+    const box = () => [
+      slot.style.height,
+      slot.style.marginBottom,
+      slot.style.alignSelf,
+      slot.style.overflow,
+    ];
+    expect(queryByTestId("jog-blocked-note")).toBeNull();
+    expect(box()).toEqual(["45px", "4px", "stretch", "hidden"]);
+    for (const patch of [{ trustHomed: false }, { trustHomed: true, trustUnitsMm: false }]) {
+      act(() => useStore.getState().setTrust(patch));
+      expect(getByTestId("jog-note-slot")).toBe(slot);
+      expect(box()).toEqual(["45px", "4px", "stretch", "hidden"]);
+      const note = getByTestId("jog-blocked-note");
+      expect(note.style.lineHeight).toBe("15px");
+      expect(note.style.marginBottom).toBe("");
+      expect(note.style.webkitLineClamp).toBe("3");
+      expect(note.title).toBe(note.textContent);
+    }
+  });
+
+  it("Jen C2/C4 copy: the position and stale hold texts", () => {
+    expect(JOG_HOLD_POSITION).toBe(
+      "The machine isn't reporting the head's position from home, and jogging needs it. Set $10 in the machine settings to machine position (MPos)."
+    );
+    expect(JOG_HOLD_STALE).toBe(
+      "Kerf hasn't had a status report from the machine for a few seconds, so the status reads Stale. If it doesn't recover on its own, reconnect."
+    );
+  });
+
+  describe("T-P1 hold note (fake timers)", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it("5 s of MOTION swaps the slot to the cause, which follows the store in place", () => {
+      useStore.getState().setTrust({ motionPending: true, trustObserved: false });
+      const { getByText, getByTestId, getAllByTitle } = render(<MachinePanel />);
+      fireEvent.click(getByText("Positioning (10mm)"));
+      const slot = () => getByTestId("jog-blocked-note");
+      act(() => void vi.advanceTimersByTime(4999));
+      expect(slot().textContent).toBe(JOG_REASON_MOTION);
+      act(() => void vi.advanceTimersByTime(1));
+      expect(slot().textContent).toBe(JOG_HOLD_COMMAND);
+      expect(slot().style.color).toBe("var(--text-secondary)");
+      // The tooltip keeps the reason; only the slot states the recovery.
+      expect(arrowsAndPosition(getAllByTitle, JOG_REASON_MOTION)).toHaveLength(5);
+      act(() => useStore.setState({ motionPending: false, machineState: "idle" }));
+      expect(slot().textContent).toBe(JOG_HOLD_POSITION);
+      act(() => useStore.setState({ machineState: "run" }));
+      expect(slot().textContent).toBe(JOG_HOLD_STATE);
+      act(() => useStore.setState({ motionPending: true }));
+      expect(slot().textContent).toBe(JOG_HOLD_COMMAND);
+      // One line: the reason is replaced, never stacked under the note.
+      expect(getByText("Positioning (10mm)").parentElement?.textContent).not.toContain(
+        JOG_REASON_MOTION
+      );
+    });
+
+    it("Jen C4: cause order is command, stale, position, state", () => {
+      useStore.getState().setTrust({ motionPending: true, trustObserved: false });
+      const { getByText, getByTestId } = render(<MachinePanel />);
+      fireEvent.click(getByText("Positioning (10mm)"));
+      const slot = () => getByTestId("jog-blocked-note");
+      act(() => void vi.advanceTimersByTime(5000));
+      act(() => useStore.setState({ statusStale: true }));
+      expect(slot().textContent).toBe(JOG_HOLD_COMMAND);
+      // Razor N3: idle, not observed, stale reads STALE, not POSITION.
+      act(() => useStore.setState({ motionPending: false, machineState: "idle" }));
+      expect(slot().textContent).toBe(JOG_HOLD_STALE);
+      expect(slot().title).toBe(JOG_HOLD_STALE);
+      act(() => useStore.setState({ machineState: "run" }));
+      expect(slot().textContent).toBe(JOG_HOLD_STALE);
+      act(() => useStore.setState({ statusStale: false }));
+      expect(slot().textContent).toBe(JOG_HOLD_STATE);
+      act(() => useStore.setState({ machineState: "idle" }));
+      expect(slot().textContent).toBe(JOG_HOLD_POSITION);
+    });
+
+    it("a reason change clears the timer; MOTION again starts a fresh 5 s", () => {
+      useStore.getState().setTrust({ motionPending: true });
+      const { getByText, getByTestId } = render(<MachinePanel />);
+      fireEvent.click(getByText("Positioning (10mm)"));
+      const slot = () => getByTestId("jog-blocked-note");
+      act(() => void vi.advanceTimersByTime(4000));
+      act(() => useStore.getState().setTrust({ trustHomed: false }));
+      expect(slot().textContent).toBe(JOG_REASON_HOME);
+      act(() => void vi.advanceTimersByTime(4000));
+      expect(slot().textContent).toBe(JOG_REASON_HOME);
+      act(() => useStore.getState().setTrust({ trustHomed: true }));
+      act(() => void vi.advanceTimersByTime(4999));
+      expect(slot().textContent).toBe(JOG_REASON_MOTION);
+      act(() => void vi.advanceTimersByTime(1));
+      expect(slot().textContent).toBe(JOG_HOLD_COMMAND);
+      act(() => useStore.getState().setTrust({ motionPending: false, trustObserved: true }));
+      expect(() => getByTestId("jog-blocked-note")).toThrow();
+      // A hold note once shown does not carry over: MOTION again restarts the 5 s.
+      act(() => useStore.getState().setTrust({ motionPending: true }));
+      expect(slot().textContent).toBe(JOG_REASON_MOTION);
+      act(() => void vi.advanceTimersByTime(4999));
+      expect(slot().textContent).toBe(JOG_REASON_MOTION);
+    });
+  });
+
+  it("T-P1 flash: a handler-side MOTION refusal reaches the slot in warm", async () => {
+    mockSerial(() => ({ responses: ["ok"], drained: [] }));
+    // Gate clear, but no basis seq: jog() prints MOTION from the handler.
+    useStore.getState().setTrust({ basisSeq: null });
+    const { getByText, getByTitle, getByTestId } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    fireEvent.click(getByTitle("X+"));
+    await waitFor(() =>
+      expect(getByTestId("jog-blocked-note").textContent).toBe(JOG_REASON_MOTION)
+    );
+    expect(getByTestId("jog-blocked-note").style.color).toBe("var(--accent-warm)");
+    expect(sentCommands()).toEqual([]);
+  });
+
+  it("Razor b4 W1: the flash still shows the refusal with the console at its cap", async () => {
+    mockSerial(() => ({ responses: ["ok"], drained: [] }));
+    const add = useStore.getState().addConsoleLine;
+    for (let i = 0; i < 600; i++) add(`prefill ${i}`, "info");
+    expect(useStore.getState().consoleLines).toHaveLength(501);
+    useStore.getState().setTrust({ basisSeq: null });
+    const { getByText, getByTitle, getByTestId } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    fireEvent.click(getByTitle("X+"));
+    await waitFor(() =>
+      expect(getByTestId("jog-blocked-note").textContent).toBe(JOG_REASON_MOTION)
+    );
+    expect(getByTestId("jog-blocked-note").style.color).toBe("var(--accent-warm)");
+  });
+
+  it("Razor b4 W1 sibling: a warning from before the click is never flashed", async () => {
+    mockSerial(() => ({ responses: ["ok"], drained: [] }));
+    const add = useStore.getState().addConsoleLine;
+    for (let i = 0; i < 600; i++) add(`prefill ${i}`, "info");
+    add("an older warning", "warning");
+    const { getByText, getByTitle, queryByTestId } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    fireEvent.click(getByTitle("X+"));
+    await waitFor(() => expect(sentCommands()).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 50));
+    // The sent jog shows the standing MOTION reason (provisional), not a flash.
+    const note = queryByTestId("jog-blocked-note");
+    expect(note?.textContent).toBe(JOG_REASON_MOTION);
+    expect(note?.style.color).toBe("var(--text-secondary)");
+  });
+
+  it("Stage 2.8 C1: a STOP during a held jog that then returns ok flashes nothing", async () => {
+    mockSerial(() => ({ responses: ["ok"], drained: [] }));
+    const base = mockInvoke.getMockImplementation() as (c: string, a?: unknown) => Promise<unknown>;
+    let release: (v: unknown) => void = () => {};
+    mockInvoke.mockImplementation(async (cmd: string, args?: unknown) =>
+      cmd === "serial_send" ? new Promise((r) => (release = r)) : base(cmd, args)
+    );
+    const { getByText, getByTitle, getByTestId } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      fireEvent.click(getByTitle("X+"));
+      act(() => void vi.advanceTimersByTime(5000));
+      await waitFor(() =>
+        expect(getByTestId("jog-blocked-note").textContent).toBe(JOG_HOLD_COMMAND)
+      );
+      await act(async () => machineConnection.emergencyStop());
+      expect(consoleTexts()).toContain("Emergency stop initiated");
+      await act(async () => release({ responses: ["ok"], drained: [], connId: 0 }));
+      await act(async () => void vi.advanceTimersByTime(50));
+      const note = getByTestId("jog-blocked-note");
+      expect(note.textContent).toBe(JOG_REASON_HOME);
+      expect(note.style.color).toBe("var(--text-secondary)");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ["an ALARM reply", async () => ({ responses: ["ALARM:2"], drained: [] }), "ALARM:2"],
+    [
+      "a not-admitted refusal",
+      async () => Promise.reject("refused: not-admitted: session not active (phase=stopping)"),
+      "Not sent: refused: not-admitted: session not active (phase=stopping)",
+    ],
+    [
+      "a failed send (port gone)",
+      async () => Promise.reject("port closed"),
+      "Send failed: port closed",
+    ],
+  ] as const)("Razor RN3: the click flashes its own outcome for %s", async (_l, onSend, shown) => {
+    mockSerial(() => ({ responses: ["ok"], drained: [] }));
+    const base = mockInvoke.getMockImplementation() as (c: string, a?: unknown) => Promise<unknown>;
+    mockInvoke.mockImplementation(async (cmd: string, args?: unknown) =>
+      cmd === "serial_send" ? onSend() : base(cmd, args)
+    );
+    const { getByText, getByTitle, getByTestId } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    fireEvent.click(getByTitle("X+"));
+    await waitFor(() => expect(getByTestId("jog-blocked-note").textContent).toBe(shown));
+    expect(getByTestId("jog-blocked-note").style.color).toBe("var(--accent-warm)");
+  });
+
+  it("Stage 2.8 C1 positive: a controller error:N reply to the click still flashes", async () => {
+    mockSerial(() => ({ responses: ["error:15"], drained: [] }));
+    const { getByText, getByTitle, getByTestId } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    fireEvent.click(getByTitle("X+"));
+    await waitFor(() => expect(getByTestId("jog-blocked-note").textContent).toBe("error:15"));
+    expect(getByTestId("jog-blocked-note").style.color).toBe("var(--accent-warm)");
+  });
+
+  it.each([
+    [
+      "disconnected",
+      { machineConnected: false, machineState: "disconnected" },
+      "Home disabled — machine not connected",
+    ],
+    ["a job running", { jobRunning: true }, "Home disabled — a job is running"],
+    ["$22=0", { grblHoming: false }, "Home disabled — machine has no limit switches ($22=0)"],
+    ["clear", {}, "Home ($H)"],
+  ] as const)("Stage 2.8 C2: the action-row HOME titles its state (%s)", (_l, patch, title) => {
+    useStore.setState(patch);
+    const { getAllByText } = render(<MachinePanel />);
+    const btn = getAllByText(/^Home$/i).find((e) => e.tagName === "BUTTON") as HTMLButtonElement;
+    expect(btn.title).toBe(title);
+  });
+
+  it("T-P1 flash: a native refused: line reaches the slot in warm for 2 s", async () => {
+    mockSerial(() => ({ responses: ["ok"], drained: [] }));
+    const base = mockInvoke.getMockImplementation() as (c: string, a?: unknown) => Promise<unknown>;
+    mockInvoke.mockImplementation(async (cmd: string, args?: unknown) =>
+      cmd === "serial_send"
+        ? Promise.reject("refused: jog-basis: the head moved since Kerf last saw it")
+        : base(cmd, args)
+    );
+    const { getByText, getByTitle, getByTestId, queryByTestId } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      fireEvent.click(getByTitle("X+"));
+      const flashed = "Not sent: The head moved since Kerf last saw it";
+      await waitFor(() => expect(getByTestId("jog-blocked-note").textContent).toBe(flashed));
+      expect(getByTestId("jog-blocked-note").style.color).toBe("var(--accent-warm)");
+      // The refusal revoked trust provisionally, so after the flash the slot
+      // falls back to the standing reason, not to nothing.
+      act(() => void vi.advanceTimersByTime(2000));
+      expect(queryByTestId("jog-blocked-note")?.textContent).toBe(JOG_REASON_HOME);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ["during a job", { jobRunning: true }, "Home disabled — a job is running"],
+    [
+      "when disconnected",
+      { machineConnected: false, machineState: "disconnected" },
+      "Home disabled — machine not connected",
+    ],
+  ] as const)("P70: the jog-pad Home key is off %s, with the reason", (_l, patch, title) => {
+    useStore.setState(patch);
+    const { getByText, container } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    const home = homeKey(container)!;
+    expect(home.title).toBe(title);
+    expect(home.disabled).toBe(true);
+    // Jen C5: a dead key never carries the action accent.
+    expect(home.style.background).toBe("var(--bg-input)");
+  });
+
+  it("P70 positive sibling: connected, idle, no job, $22=1: the Home key is live", () => {
+    const { getByText, container } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    const home = homeKey(container)!;
+    expect(home.title).toBe("Home ($H)");
+    expect(home.disabled).toBe(false);
+    expect(home.style.background).not.toBe("var(--bg-input)");
   });
 
   it("C3: a stale status reads Stale in the StatusBar, never Ready", () => {

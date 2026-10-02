@@ -572,6 +572,44 @@ describe("RF-15 admission fence (jobStream)", () => {
     expect(useStore.getState().machineConnected).toBe(true);
   });
 
+  it("Razor b23 R2: a malformed buffered job says Kerf refused it, not the controller", async () => {
+    localStorage.setItem("streamingMode", "buffered");
+    fenced({ deferStream: true });
+    const session = (await beginJobSession("Job"))!;
+    const job = streamJob("G1 X1", { label: "Job", session });
+    await recorder.waitUntilInvoked("serial_stream_job");
+    recorder.releaseInvokeReject(
+      recorder.getRecordIndex("serial_stream_job"),
+      // The exact string native builds (classify_outbound + the buffered pump's suffix).
+      "refused: malformed: control byte (0x09). Nothing was sent. Kerf sends one command per line, with no tabs or other control characters and none of the realtime characters ? ! ~ inside it. Retype the command without them. (job line 2)"
+    );
+    const result = await job;
+    expect(result.endState).toBe("cancelled");
+    expect(count("serial_stop")).toBe(0);
+    expect(texts()).toContain(
+      "Job stopped: Kerf refused job line 2 before sending it: control byte (0x09). Nothing further was sent."
+    );
+    expect(texts().some((t) => t.includes("Retype"))).toBe(false);
+    expect(texts().some((t) => t.includes("no longer accepting"))).toBe(false);
+  });
+
+  it("Razor b4 N2: a per-line malformed refusal (no line suffix) reads the same way", async () => {
+    fenced({ deferSend: true });
+    const session = (await beginJobSession("Job"))!;
+    useStore.setState({ jobRunning: true });
+    const job = streamJob("G1 X1\nG1 X2", { label: "Job", session });
+    await recorder.waitUntilInvoked("serial_send");
+    recorder.releaseInvokeReject(
+      recorder.getRecordIndex("serial_send"),
+      "refused: malformed: realtime character (0x3f). Nothing was sent. Kerf sends one command per line, with no tabs or other control characters and none of the realtime characters ? ! ~ inside it. Retype the command without them."
+    );
+    const result = await job;
+    expect(result.endState).toBe("cancelled");
+    expect(texts()).toContain(
+      "Job stopped: Kerf refused a job line before sending it: realtime character (0x3f). Nothing further was sent."
+    );
+  });
+
   it("T4: a refusal string unknown to the contract is cancelled, never complete or disconnected", async () => {
     fenced({ deferSend: true });
     const session = (await beginJobSession("Job"))!;

@@ -50,6 +50,17 @@ export interface GrblSnapshot {
   units: UnitsValidity;
   raw: string;
   unknownFields: string[];
+  // Motion trust (B1 native fields; consumed from B2+B3). Overlaid by native
+  // from its CURRENT trust state when the snapshot is read.
+  connId?: number;
+  trustEpoch?: number;
+  homed?: boolean;
+  unitsMm?: boolean;
+  motionPending?: boolean;
+  /** The current barrier observation's seq, or null: a jog's basis. */
+  observedSeq?: number | null;
+  /** The current barrier observation's MPos, or null. */
+  observedPos?: [number, number, number] | null;
 }
 
 /** B2a's StatusOutcome with the additive fields.
@@ -60,6 +71,8 @@ export interface StatusOutcome {
   events: string[];
   kind: "report" | "busy" | "noResponse" | "transportError";
   snapshot: GrblSnapshot | null;
+  /** The connection this result belongs to (B2+B3). */
+  connId?: number;
 }
 
 // ---- Consumer state ----
@@ -221,6 +234,25 @@ export function consumeStatusOutcome(outcome: StatusOutcome): boolean {
       store.setFeedRate(currentFeed);
     }
   }
+
+  // Motion trust (B2+B3): native's scalars, from this accepted snapshot. A
+  // missing field reads as not vouched for.
+  const op = snap.observedPos;
+  const basisPosition =
+    typeof snap.observedSeq === "number" &&
+    Array.isArray(op) &&
+    op.length === 3 &&
+    op.every((v) => typeof v === "number" && Number.isFinite(v))
+      ? { x: op[0], y: op[1], z: op[2] }
+      : null;
+  store.setTrust({
+    trustHomed: snap.homed === true,
+    trustUnitsMm: snap.unitsMm === true,
+    motionPending: snap.motionPending !== false,
+    trustObserved: basisPosition !== null,
+    basisSeq: basisPosition !== null ? (snap.observedSeq as number) : null,
+    basisPosition,
+  });
 
   // Accessory state: Unknown ≠ off. Only Present gives us data.
   // We store the raw accessory flags for the UI. We NEVER infer "beam off"

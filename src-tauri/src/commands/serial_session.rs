@@ -70,9 +70,37 @@
 //!   `close_admission`, which takes the `submit` guard by reference, so the
 //!   caller must hold it while phase and `admitted_job` are written (a
 //!   barrier-only take-and-drop would let a writer pass the check in the gap).
-//! - **Lock order:** `command` → `submit` → `admitted_job` (leaf). Nothing
-//!   takes `submit` while holding `realtime` or `admitted_job`. Every
-//!   acquisition recovers from poison, so a panicked writer never stops STOP.
+//! - **Lock order:** `command` → `submit` → `trust` → {`admitted_job`,
+//!   `snapshot`} (leaves; `admitted_job` may nest `snapshot` in
+//!   `set_disconnected`), plus `realtime` → `trust` (connect install).
+//!   Nothing takes `submit` while holding `realtime`, `trust` or a leaf.
+//!   Every holder of `trust` releases it before any I/O. Every acquisition
+//!   recovers from poison, so a panicked writer never stops STOP.
+//!
+//! ## Motion trust (relay kerf-safety-motion-trust, B1)
+//!
+//! `trust: Mutex<MotionTrust>` records what the native layer has SEEN, so a
+//! later batch can admit a jog only from a clean home, a post-motion
+//! observation, mm units and the current connection. B1 keeps the state and
+//! never refuses anything:
+//!
+//! - `conn_id`: issued at connect install (under `command` + `realtime`),
+//!   zeroed at disconnect (under `command`).
+//! - `trust_epoch`: advanced by every position-invalidating event: a noted
+//!   Banner, ALARM line or `<Alarm…>` frame on ANY read path (the `on_line`
+//!   hook), STOP's `close_admission`, a raw `0x18`/`0x85` (bumped under
+//!   `submit`), a `$H…` write, a frame-affecting settings write, `$RST=`, a
+//!   motion send that fails after its write, connect and disconnect.
+//! - `homed_at`: the epoch at which a plain `$H` returned `ok` with no
+//!   invalidating line during its call.
+//! - The motion ledger: `motion_pending` (RAII-counted motion sends, counted
+//!   before the `command` wait) and `motion_writes` (bumped at each motion
+//!   write, clearing `observed`). Job lines are motion.
+//! - `observed`: the observation barrier's frame (`serial.rs`, run from the
+//!   status poll), current only while connection, epoch and write count all
+//!   still match and it was a literal Idle with a finite MPos.
+//! - `units_mm`: the `conn_id` at which `$$` returned `$13=0`; cleared by any
+//!   settings write, `$RST=`, a `$$` without it, and connect/disconnect.
 //!
 //! Ending a job (`serial_job_end`) moves Active→Idle only (CAS); it never
 //! overwrites Unknown.
@@ -80,9 +108,11 @@
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
+use std::time::Instant;
 
-use super::grbl_status::GrblSnapshot;
+use super::grbl_status::{GrblSnapshot, MachineState, PositionKind};
+use super::serial_pump::LineClass;
 
 /// Phase of the serial session.
 pub const PHASE_DISCONNECTED: u8 = 0;
@@ -166,7 +196,7 @@ pub struct SerialSession {
     /// Submission critical section: held only across a job line's admission
     /// check plus its single `write()` call (`admit_and_write`), and by the
     /// stop's admission close. Never held across a read, flush, drain, pump
-    /// wait or emit. Lock order: `command` → `submit` → `admitted_job`.
+    /// wait or emit. Lock order: `command` → `submit` → `trust` → `admitted_job`.
     pub(crate) submit: Mutex<()>,
     /// Result slot for joiners — written by the stop, read+cleared by the joiner.
     pub(crate) last_stop: Mutex<Option<StopResult>>,
@@ -178,9 +208,22 @@ pub struct SerialSession {
     /// Monotonic status snapshot sequence counter.
     pub(crate) snapshot_seq: AtomicU64,
     /// Last parsed status snapshot. Leaf lock — never held while waiting on
-    /// anything (lock-order table: leaf, alongside admitted_job/last_stop/observer).
+    /// anything (lock-order table: leaf below `trust`, alongside
+    /// admitted_job/last_stop/observer).
     pub(crate) snapshot: Mutex<Option<GrblSnapshot>>,
+    /// Motion trust (see the module doc). Order: below `submit` and
+    /// `realtime`, above the leaves. Never held across I/O. Take it only
+    /// through `trust()`, which recovers poison.
+    pub(crate) trust: Mutex<MotionTrust>,
+    /// Test-only interleaving hook: called with a point name at the named
+    /// schedule points (`test_point`). Production has no such field.
+    #[cfg(test)]
+    pub(crate) test_hook: Mutex<Option<TestHook>>,
 }
+
+/// A test interleaving hook (see `SerialSession::test_point`).
+#[cfg(test)]
+pub(crate) type TestHook = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
 
 impl Default for SerialSession {
     fn default() -> Self {
@@ -196,11 +239,29 @@ impl Default for SerialSession {
             sink_failed: AtomicBool::new(false),
             snapshot_seq: AtomicU64::new(0),
             snapshot: Mutex::new(None),
+            trust: Mutex::new(MotionTrust::default()),
+            #[cfg(test)]
+            test_hook: Mutex::new(None),
         }
     }
 }
 
 impl SerialSession {
+    /// Test-only schedule point. The hook is cloned out and called with the
+    /// hook mutex released, so a hook may drive other threads that reach
+    /// their own points.
+    #[cfg(test)]
+    pub(crate) fn test_point(&self, name: &str) {
+        let hook = self
+            .test_hook
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(h) = hook {
+            h(name);
+        }
+    }
+
     /// Emit a session event to the observer (if set).
     pub(crate) fn emit(&self, event: &str) {
         if let Ok(guard) = self.observer.lock() {
@@ -243,6 +304,8 @@ impl SerialSession {
         epoch: u64,
         write: impl FnOnce() -> io::Result<()>,
     ) -> Result<io::Result<()>, String> {
+        #[cfg(test)]
+        let _rk = lock_rank::hold(lock_rank::SUBMIT, "submit");
         let _submit = self.submit.lock().unwrap_or_else(|e| e.into_inner());
         self.check_admission(Some(epoch))?;
         Ok(write())
@@ -265,6 +328,8 @@ impl SerialSession {
             return Err(refused_not_active(current_phase));
         }
         if let Some(ep) = epoch {
+            #[cfg(test)]
+            let _rk = lock_rank::hold(lock_rank::ADMITTED_JOB, "admitted_job");
             let admitted = *self.admitted_job.lock().unwrap_or_else(|e| e.into_inner());
             if admitted != Some(ep) {
                 return Err(refused_epoch_mismatch(ep, admitted));
@@ -283,6 +348,10 @@ impl SerialSession {
             self.submit.try_lock().is_err(),
             "close_admission: submit must be held while admission closes"
         );
+        // Motion trust: a STOP invalidates position, before its `0x18`.
+        self.trust().bump();
+        #[cfg(test)]
+        let _rk = lock_rank::hold(lock_rank::ADMITTED_JOB, "admitted_job");
         let mut aj = self.admitted_job.lock().unwrap_or_else(|e| e.into_inner());
         self.phase.store(PHASE_STOPPING, Ordering::SeqCst);
         *aj = None;
@@ -311,43 +380,816 @@ impl SerialSession {
     /// a snapshot with a stale epoch or lower seq is silently dropped.
     /// `lock_epoch` is the epoch captured when the command lock was acquired
     /// (not the current epoch — prevents post-stop snapshots carrying pre-stop epochs).
-    pub(crate) fn publish_snapshot(&self, raw: &str, lock_epoch: u64) {
+    ///
+    /// Returns the parsed frame (published or not), so the observation
+    /// barrier can build its observation from exactly the frame it read.
+    pub(crate) fn publish_snapshot(&self, raw: &str, lock_epoch: u64) -> Option<GrblSnapshot> {
         let seq = self.snapshot_seq.fetch_add(1, Ordering::SeqCst) + 1;
-        if let Some(parsed) = super::grbl_status::parse_status_frame(raw, lock_epoch, seq) {
-            let mut guard = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
-            // Monotonic: reject if epoch regressed or (same epoch, lower seq).
-            if let Some(ref existing) = *guard {
-                if lock_epoch < existing.epoch
-                    || (lock_epoch == existing.epoch && seq <= existing.seq)
-                {
-                    return;
-                }
+        let parsed = super::grbl_status::parse_status_frame(raw, lock_epoch, seq)?;
+        #[cfg(test)]
+        let _rk = lock_rank::hold(lock_rank::SNAPSHOT, "snapshot");
+        let mut guard = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        // Monotonic: reject if epoch regressed or (same epoch, lower seq).
+        if let Some(ref existing) = *guard {
+            if lock_epoch < existing.epoch || (lock_epoch == existing.epoch && seq <= existing.seq)
+            {
+                return Some(parsed);
             }
-            *guard = Some(parsed);
         }
+        *guard = Some(parsed.clone());
+        Some(parsed)
     }
 
     /// Invalidate the snapshot (on stop or disconnect). The next reader sees None.
     pub(crate) fn invalidate_snapshot(&self) {
+        #[cfg(test)]
+        let _rk = lock_rank::hold(lock_rank::SNAPSHOT, "snapshot");
         let mut guard = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
         *guard = None;
     }
 
     /// Read the current snapshot (if any). Returns a clone.
+    ///
+    /// The trust fields (`connId`, `trustEpoch`, `homed`, `unitsMm`,
+    /// `motionPending`, `observedSeq`, `observedPos`, and `units`) are
+    /// overlaid from the CURRENT trust state at read time, so every reader
+    /// sees trust as it is now, not as it was when the frame arrived.
     pub(crate) fn read_snapshot(&self) -> Option<GrblSnapshot> {
+        let view = self.trust_view();
+        #[cfg(test)]
+        let _rk = lock_rank::hold(lock_rank::SNAPSHOT, "snapshot");
         let guard = self.snapshot.lock().unwrap_or_else(|e| e.into_inner());
-        guard.clone()
+        guard.clone().map(|mut s| {
+            view.apply(&mut s);
+            s
+        })
     }
 
     /// Transition to disconnected phase and reset state.
     pub(crate) fn set_disconnected(&self) {
         self.phase.store(PHASE_DISCONNECTED, Ordering::SeqCst);
         // Clear admitted job
+        #[cfg(test)]
+        let _rk = lock_rank::hold(lock_rank::ADMITTED_JOB, "admitted_job");
         let mut aj = self.admitted_job.lock().unwrap_or_else(|e| e.into_inner());
         *aj = None;
         // Invalidate snapshot: after disconnect + reconnect to a different
         // machine, stale position data must not be readable.
         self.invalidate_snapshot();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Motion trust (relay kerf-safety-motion-trust, B1): state, ledger, units,
+// observation and the outbound grammar. B1 records; it never refuses.
+// ---------------------------------------------------------------------------
+
+/// Quiesce before the observation barrier's drain: the barrier waits until
+/// this long after the last motion send returned. A hardware-qualified
+/// parameter (owner card step 4): the assumption is that the owner's
+/// controller starts a cycle within this window of the motion's `ok`.
+pub(crate) const OBSERVE_QUIESCE_MS: u64 = 150;
+
+/// Tolerance for "the same position" between a status frame and the
+/// observation: GRBL prints MPos in mm to 3 decimals (`$13=0`), so a
+/// stationary machine repeats the identical text. 0.002 mm is two print
+/// steps: above any rounding of one fixed position, far below any real move.
+pub(crate) const OBSERVE_SAME_POS_MM: f64 = 0.002;
+
+/// Bound on the barrier's probe read: the first status frame after its `?`.
+pub(crate) const OBSERVE_PROBE_MS: u64 = 500;
+
+/// One barrier observation: the status frame read after the barrier's own
+/// probe, with the trust basis captured when the barrier began.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Observation {
+    pub(crate) conn_id: u64,
+    pub(crate) trust_epoch: u64,
+    pub(crate) after_writes: u64,
+    /// The frame's snapshot `seq`.
+    pub(crate) seq: u64,
+    /// Literal `Idle` with a finite MPos.
+    pub(crate) idle_mpos: bool,
+    /// The frame's MPos when `idle_mpos`.
+    pub(crate) mpos: Option<[f64; 3]>,
+}
+
+/// Native motion-trust state. See the module doc.
+#[derive(Debug, Default)]
+pub(crate) struct MotionTrust {
+    /// Current connection; 0 = disconnected.
+    pub(crate) conn_id: u64,
+    /// Advances on every position-invalidating event.
+    pub(crate) trust_epoch: u64,
+    /// `trust_epoch` at which a clean `$H` completed.
+    pub(crate) homed_at: Option<u64>,
+    /// Motion sends (jog, `$H`, console motion, job lines) entered and not
+    /// returned.
+    pub(crate) motion_pending: u32,
+    /// Motion writes made (bumped at write).
+    pub(crate) motion_writes: u64,
+    /// The latest barrier observation.
+    pub(crate) observed: Option<Observation>,
+    /// `conn_id` at which `$13=0` was read.
+    pub(crate) units_mm: Option<u64>,
+    /// Last connection id issued (ids start at 1).
+    pub(crate) last_conn_id: u64,
+    /// When the last motion send returned (the barrier's quiesce anchor).
+    pub(crate) last_motion_end: Option<Instant>,
+    /// Job admissions made (bumped under `submit` by job begin). Part of the
+    /// barrier's basis: a barrier that straddles a job admission records
+    /// nothing (Razor B1 N1).
+    pub(crate) job_admissions: u64,
+}
+
+impl MotionTrust {
+    pub(crate) fn bump(&mut self) {
+        self.trust_epoch += 1;
+    }
+
+    pub(crate) fn homed(&self) -> bool {
+        self.homed_at == Some(self.trust_epoch)
+    }
+
+    /// The observation, if it is still current: same connection, same
+    /// epoch, no motion write since, and a literal Idle with MPos.
+    pub(crate) fn current_observation(&self) -> Option<Observation> {
+        self.observed.filter(|o| {
+            o.conn_id == self.conn_id
+                && o.trust_epoch == self.trust_epoch
+                && o.after_writes == self.motion_writes
+                && o.idle_mpos
+        })
+    }
+
+    fn reset_for_connection(&mut self, conn_id: u64) {
+        self.conn_id = conn_id;
+        self.bump();
+        self.homed_at = None;
+        self.observed = None;
+        self.units_mm = None;
+    }
+}
+
+/// Trust as serialised onto a snapshot (and read by tests).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct TrustView {
+    pub(crate) conn_id: u64,
+    pub(crate) trust_epoch: u64,
+    pub(crate) homed: bool,
+    pub(crate) units_mm: bool,
+    pub(crate) motion_pending: bool,
+    pub(crate) observed_seq: Option<u64>,
+    pub(crate) observed_pos: Option<[f64; 3]>,
+}
+
+impl TrustView {
+    pub(crate) fn apply(&self, s: &mut GrblSnapshot) {
+        s.conn_id = self.conn_id;
+        s.trust_epoch = self.trust_epoch;
+        s.homed = self.homed;
+        s.units_mm = self.units_mm;
+        s.motion_pending = self.motion_pending;
+        s.observed_seq = self.observed_seq;
+        s.observed_pos = self.observed_pos;
+        // Kerf refuses rather than converts: `Inches` is never set.
+        s.units = if self.units_mm {
+            super::grbl_status::UnitsValidity::Mm
+        } else {
+            super::grbl_status::UnitsValidity::Unknown
+        };
+    }
+}
+
+/// The barrier's basis, captured when it begins (before its drain).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BarrierBasis {
+    pub(crate) conn_id: u64,
+    pub(crate) trust_epoch: u64,
+    pub(crate) motion_writes: u64,
+    pub(crate) last_motion_end: Option<Instant>,
+    pub(crate) job_admissions: u64,
+}
+
+/// `trust` guard: poison-recovering, rank-tracked in tests.
+pub(crate) struct TrustGuard<'a> {
+    g: MutexGuard<'a, MotionTrust>,
+    #[cfg(test)]
+    _rank: lock_rank::Token,
+}
+
+impl std::ops::Deref for TrustGuard<'_> {
+    type Target = MotionTrust;
+    fn deref(&self) -> &MotionTrust {
+        &self.g
+    }
+}
+
+impl std::ops::DerefMut for TrustGuard<'_> {
+    fn deref_mut(&mut self) -> &mut MotionTrust {
+        &mut self.g
+    }
+}
+
+/// RAII count of one motion send in the ledger. Constructed before the
+/// `command` wait; dropping it (every return path, panics included)
+/// decrements `motion_pending` and stamps the quiesce anchor.
+pub(crate) struct MotionGuard<'a> {
+    session: &'a SerialSession,
+}
+
+impl Drop for MotionGuard<'_> {
+    fn drop(&mut self) {
+        let mut t = self.session.trust();
+        t.motion_pending = t.motion_pending.saturating_sub(1);
+        t.last_motion_end = Some(Instant::now());
+    }
+}
+
+/// What a write did to trust, kept by the send for its after-pump step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WriteNote {
+    /// `Some(h)`: a plain `$H` was written at epoch `h`.
+    pub(crate) home_at: Option<u64>,
+    /// The line counted as a motion write.
+    pub(crate) motion: bool,
+}
+
+/// Frame-affecting settings keys: a write to one invalidates position
+/// (direction, report units, limits/homing, steps/mm, max rate, accel,
+/// travel).
+pub(crate) fn frame_affecting_key(key: u32) -> bool {
+    matches!(key, 3 | 13 | 20..=27 | 100..=102 | 110..=112 | 120..=122 | 130..=132)
+}
+
+/// True when a `<…>` status frame's state field is `Alarm`.
+fn status_is_alarm(line: &str) -> bool {
+    line.strip_prefix('<')
+        .map(|rest| {
+            let state = rest.split(['|', '>']).next().unwrap_or("");
+            state == "Alarm" || state.starts_with("Alarm:")
+        })
+        .unwrap_or(false)
+}
+
+impl SerialSession {
+    /// The `trust` lock. Poison is recovered, so a panicked holder can never
+    /// block STOP. Never hold it across I/O.
+    pub(crate) fn trust(&self) -> TrustGuard<'_> {
+        #[cfg(test)]
+        let rank = lock_rank::hold(lock_rank::TRUST, "trust");
+        let g = self.trust.lock().unwrap_or_else(|e| e.into_inner());
+        TrustGuard {
+            g,
+            #[cfg(test)]
+            _rank: rank,
+        }
+    }
+
+    /// The `on_line` hook body: every line any native read path extracts.
+    /// A Banner, an ALARM line, or a `<Alarm…>` status frame advances the
+    /// trust epoch (revoking homed and any observation).
+    pub(crate) fn trust_note_line(&self, line: &str, class: LineClass) {
+        let invalidates = match class {
+            LineClass::Banner | LineClass::Alarm => true,
+            LineClass::Status => status_is_alarm(line),
+            _ => false,
+        };
+        if invalidates {
+            self.trust().bump();
+        } else if class == LineClass::Status {
+            self.trust_note_status_frame(line);
+        }
+    }
+
+    /// A status frame that contradicts the current observation ends it
+    /// (Razor b23 W2): a state other than literal Idle, a frame without a
+    /// finite MPos, or an MPos more than `OBSERVE_SAME_POS_MM` from the
+    /// observed one on any axis. The machine moved (or may be moving) by
+    /// something Kerf did not count: a second client, a pendant, a button.
+    /// The observation is cleared, so the barrier re-observes at the new
+    /// position; the epoch is NOT bumped, because Kerf's own jog is followed
+    /// by `<Jog…>` frames with no motion pending, and a bump would revoke the
+    /// home after every jog.
+    fn trust_note_status_frame(&self, line: &str) {
+        let frame = super::grbl_status::parse_status_frame(line, 0, 0);
+        let mut t = self.trust();
+        let Some(o) = t.observed else {
+            return;
+        };
+        let agrees = frame.is_some_and(|f| {
+            f.state == MachineState::Idle
+                && f.position_kind == Some(PositionKind::MPos)
+                && match (f.position, o.mpos) {
+                    (Some(p), Some(q)) => p
+                        .iter()
+                        .zip(q.iter())
+                        .all(|(a, b)| a.is_finite() && (a - b).abs() <= OBSERVE_SAME_POS_MM),
+                    _ => false,
+                }
+        });
+        if !agrees {
+            t.observed = None;
+        }
+    }
+
+    /// Advance the trust epoch (STOP's admission close, a raw reset/cancel).
+    pub(crate) fn trust_bump(&self) {
+        self.trust().bump();
+    }
+
+    /// Connect install (caller holds `command` + `realtime`): a new
+    /// connection id and a fresh, untrusted state.
+    pub(crate) fn trust_on_connect(&self) -> u64 {
+        let mut t = self.trust();
+        t.last_conn_id += 1;
+        let c = t.last_conn_id;
+        t.reset_for_connection(c);
+        c
+    }
+
+    /// Disconnect teardown (caller holds `command`).
+    pub(crate) fn trust_on_disconnect(&self) {
+        self.trust().reset_for_connection(0);
+    }
+
+    /// Count one motion send into the ledger. Call after classification and
+    /// BEFORE the `command` wait, so sends queued on `command` all count.
+    pub(crate) fn motion_enter(&self) -> MotionGuard<'_> {
+        self.trust().motion_pending += 1;
+        MotionGuard { session: self }
+    }
+
+    /// Record a line about to be written. `class` is `None` for a payload
+    /// the grammar calls malformed (B1 still writes it, so it is treated as
+    /// the worst case: motion, invalidating, units cleared). `job_line`
+    /// marks a job line, which is always motion.
+    pub(crate) fn trust_note_write(&self, class: Option<Outbound>, job_line: bool) -> WriteNote {
+        let mut t = self.trust();
+        let motion = job_line || class.is_none_or(|c| c.is_motion());
+        if motion {
+            t.motion_writes += 1;
+            t.observed = None;
+        }
+        let mut home_at = None;
+        match class {
+            Some(Outbound::Home) => {
+                t.bump();
+                home_at = Some(t.trust_epoch);
+            }
+            Some(Outbound::HomeAxis) => t.bump(),
+            Some(Outbound::SettingsWrite { key, startup }) => {
+                if !startup && frame_affecting_key(key) {
+                    t.bump();
+                }
+                t.units_mm = None;
+            }
+            Some(Outbound::Reset) | None => {
+                t.bump();
+                t.units_mm = None;
+            }
+            _ => {}
+        }
+        WriteNote { home_at, motion }
+    }
+
+    /// A plain `$H` written at epoch `h` returned: grant only on a terminal
+    /// `ok` with the epoch unchanged since the write.
+    pub(crate) fn trust_note_home(&self, h: u64, ok_terminal: bool) {
+        let mut t = self.trust();
+        if ok_terminal && t.trust_epoch == h {
+            t.homed_at = Some(h);
+        }
+    }
+
+    /// A `$$` returned. `lines` is `Some` only for a pump that returned `Ok`
+    /// with a terminal `ok`. Units become mm only for a `$13=0` reply line
+    /// with no `$13=` line of another value, on the current connection.
+    pub(crate) fn trust_note_settings_read(&self, lines: Option<&[String]>) {
+        let mm = lines.is_some_and(|ls| {
+            let mut zero = false;
+            for l in ls {
+                if let Some(v) = l.trim().strip_prefix("$13=") {
+                    if v.trim() == "0" {
+                        zero = true;
+                    } else {
+                        return false;
+                    }
+                }
+            }
+            zero
+        });
+        let mut t = self.trust();
+        t.units_mm = if mm && t.conn_id != 0 {
+            Some(t.conn_id)
+        } else {
+            None
+        };
+    }
+
+    /// A motion send's pump returned (caller still holds `command`): stamp
+    /// the barrier's quiesce anchor before `command` is released, so a
+    /// barrier that takes `command` next cannot see an older anchor.
+    pub(crate) fn trust_note_motion_end(&self) {
+        self.trust().last_motion_end = Some(Instant::now());
+    }
+
+    /// A motion send failed after its write (I/O, flush, missing terminal):
+    /// position unknown.
+    pub(crate) fn trust_note_motion_failure(&self) {
+        self.trust().bump();
+    }
+
+    /// A job was admitted (caller holds `submit`): any observation predates
+    /// it, and a barrier already under way (it holds `command`, which job
+    /// begin does not take) must not re-populate it: the admission count is
+    /// in the barrier's basis.
+    pub(crate) fn trust_note_job_admitted(&self) {
+        let mut t = self.trust();
+        t.job_admissions += 1;
+        t.observed = None;
+    }
+
+    /// True when the observation is not current (barrier needed).
+    pub(crate) fn observation_stale(&self) -> bool {
+        self.trust().current_observation().is_none()
+    }
+
+    /// Capture the barrier's basis, before its drain.
+    pub(crate) fn barrier_basis(&self) -> BarrierBasis {
+        let t = self.trust();
+        BarrierBasis {
+            conn_id: t.conn_id,
+            trust_epoch: t.trust_epoch,
+            motion_writes: t.motion_writes,
+            last_motion_end: t.last_motion_end,
+            job_admissions: t.job_admissions,
+        }
+    }
+
+    /// Store the barrier's observation of `frame` against the basis captured
+    /// at its start. Anything that moved during the barrier leaves it stale.
+    pub(crate) fn record_observation(&self, basis: BarrierBasis, frame: &GrblSnapshot) {
+        let idle_mpos = frame.state == MachineState::Idle
+            && frame.position_kind == Some(PositionKind::MPos)
+            && frame
+                .position
+                .is_some_and(|p| p.iter().all(|v| v.is_finite()));
+        let o = Observation {
+            conn_id: basis.conn_id,
+            trust_epoch: basis.trust_epoch,
+            after_writes: basis.motion_writes,
+            seq: frame.seq,
+            idle_mpos,
+            mpos: if idle_mpos { frame.position } else { None },
+        };
+        let mut t = self.trust();
+        // A job admitted during the barrier cleared `observed` without moving
+        // the epoch or the write count; recording now would undo that clear.
+        if t.job_admissions != basis.job_admissions {
+            return;
+        }
+        t.observed = Some(o);
+    }
+
+    /// The trust fields as a snapshot carries them.
+    pub(crate) fn trust_view(&self) -> TrustView {
+        let t = self.trust();
+        let cur = t.current_observation();
+        TrustView {
+            conn_id: t.conn_id,
+            trust_epoch: t.trust_epoch,
+            homed: t.homed(),
+            units_mm: t.units_mm.is_some() && t.units_mm == Some(t.conn_id),
+            motion_pending: t.motion_pending > 0,
+            observed_seq: cur.map(|o| o.seq),
+            observed_pos: cur.and_then(|o| o.mpos),
+        }
+    }
+}
+
+/// Jog and connection refusal codes (B2+B3). Each is written
+/// `refused: <code>: <plain reason>`; TS shows the reason verbatim.
+pub(crate) fn refusal(code: &str) -> String {
+    let why = match code {
+        "stale-connection" => {
+            "this command was made for an earlier connection, so nothing was sent. Kerf has reconnected since."
+        }
+        "job-active" => "a job is running. Jogging waits until it ends.",
+        "stopping" => "a stop is in progress.",
+        "not-homed" => {
+            "Home the machine ($H) before jogging. Kerf jogs only from a completed Home, and a reset, an alarm, a stop, a reconnect or a machine-settings change since then needs a new Home."
+        }
+        "units" => {
+            "Kerf has not read positions in mm ($13=0) from the machine on this connection since the last settings change. Send $$, or reconnect."
+        }
+        "motion-pending" => "another motion command is still in progress.",
+        "not-observed" => {
+            "Kerf is still waiting for the machine to report that it has stopped."
+        }
+        "stale-basis" => {
+            "the position this jog was measured from is out of date. Press the arrow again."
+        }
+        _ => "refused.",
+    };
+    format!("{REFUSED_PREFIX} {code}: {why}")
+}
+
+impl SerialSession {
+    /// The stale-connection check: `conn` must be the current connection.
+    /// A disconnected session (`conn_id == 0`) has no handle either, so any
+    /// caller reaching this without a handle already failed "Not connected".
+    pub(crate) fn check_conn(&self, conn: u64) -> Result<(), String> {
+        if self.trust().conn_id != conn {
+            return Err(refusal("stale-connection"));
+        }
+        Ok(())
+    }
+
+    /// Jog admission (the enforcing gate). Takes `submit`, then `trust`, and
+    /// checks every condition; on success counts the write (`motion_writes`,
+    /// `observed = None`), releases `trust`, and calls `write` (the jog
+    /// line's one `write_all`) while still holding `submit`. A STOP's
+    /// `close_admission` needs `submit`, so it either ran entirely before the
+    /// check (and the check refuses) or waits for this one write and then
+    /// sends its `0x18` after the jog's bytes. A refusal writes nothing.
+    pub(crate) fn admit_jog_and_write(
+        &self,
+        jog_basis: Option<u64>,
+        write: impl FnOnce() -> io::Result<()>,
+    ) -> Result<io::Result<()>, String> {
+        #[cfg(test)]
+        let _rk = lock_rank::hold(lock_rank::SUBMIT, "submit");
+        let _submit = self.submit.lock().unwrap_or_else(|e| e.into_inner());
+        {
+            let mut t = self.trust();
+            let job = {
+                #[cfg(test)]
+                let _rk = lock_rank::hold(lock_rank::ADMITTED_JOB, "admitted_job");
+                self.admitted_job
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .is_some()
+            };
+            let phase = self.phase.load(Ordering::SeqCst);
+            if job || phase == PHASE_ACTIVE {
+                return Err(refusal("job-active"));
+            }
+            if phase == PHASE_STOPPING {
+                return Err(refusal("stopping"));
+            }
+            if !t.homed() {
+                return Err(refusal("not-homed"));
+            }
+            if t.units_mm != Some(t.conn_id) {
+                return Err(refusal("units"));
+            }
+            if t.motion_pending != 1 {
+                return Err(refusal("motion-pending"));
+            }
+            let Some(o) = t.current_observation() else {
+                return Err(refusal("not-observed"));
+            };
+            if jog_basis != Some(o.seq) {
+                return Err(refusal("stale-basis"));
+            }
+            t.motion_writes += 1;
+            t.observed = None;
+        }
+        #[cfg(test)]
+        self.test_point("jog_before_write");
+        Ok(write())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The outbound command grammar (`classify_outbound`). B1 is classify-only:
+// the result drives trust bookkeeping; nothing is refused.
+// ---------------------------------------------------------------------------
+
+/// Classification of one outbound command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Outbound {
+    /// `$J=…`
+    Jog,
+    /// Exactly `$H`.
+    Home,
+    /// `$H…` other than `$H` (single-axis homing).
+    HomeAxis,
+    /// `$<n>=…` (`startup: false`) or `$N<n>=…` (`startup: true`, a stored
+    /// startup line run after every reset). `key` is `u32::MAX` if `n`
+    /// does not fit.
+    SettingsWrite {
+        key: u32,
+        startup: bool,
+    },
+    /// `$$`
+    SettingsRead,
+    /// `$RST=…`
+    Reset,
+    /// G-code with an axis word, or `G28`/`G30`/`G38`.
+    Motion,
+    Other,
+}
+
+impl Outbound {
+    pub(crate) fn is_motion(self) -> bool {
+        matches!(
+            self,
+            Outbound::Jog | Outbound::Home | Outbound::HomeAxis | Outbound::Motion
+        )
+    }
+}
+
+/// Normalise as GRBL 1.1's line reader does before executing a line (and as
+/// `normalizeGrblLine` does in `connection.ts`): drop `(…)` comments (an
+/// unclosed `(` runs to the end), cut at `;`, delete every byte `<= 0x20`
+/// and every `/`, upper-case.
+pub(crate) fn normalize_grbl_line(cmd: &str) -> String {
+    let mut no_parens = String::with_capacity(cmd.len());
+    let mut in_comment = false;
+    for ch in cmd.chars() {
+        if in_comment {
+            if ch == ')' {
+                in_comment = false;
+            }
+        } else if ch == '(' {
+            in_comment = true;
+        } else {
+            no_parens.push(ch);
+        }
+    }
+    let code = no_parens.split(';').next().unwrap_or("");
+    code.chars()
+        .filter(|&c| c as u32 > 0x20 && c != '/')
+        .collect::<String>()
+        .to_ascii_uppercase()
+}
+
+/// `$<digits>=` → the key; `None` if the shape does not match.
+fn settings_key(after_dollar: &str) -> Option<u32> {
+    let digits: String = after_dollar
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    if digits.is_empty() || !after_dollar[digits.len()..].starts_with('=') {
+        return None;
+    }
+    Some(digits.parse::<u32>().unwrap_or(u32::MAX))
+}
+
+/// Motion rule for normalised G-code (ported from S3c's `isMotionCommand`):
+/// an axis word (`[XYZABC][-+]?[.0-9]`), or `G` + zeros + `28`/`30`/`38`
+/// not followed by a digit (`G28`, `G30`, `G38.2`; not `G280`).
+fn is_motion_gcode(n: &str) -> bool {
+    let b = n.as_bytes();
+    for i in 0..b.len() {
+        match b[i] {
+            b'X' | b'Y' | b'Z' | b'A' | b'B' | b'C' => {
+                let mut j = i + 1;
+                if j < b.len() && (b[j] == b'-' || b[j] == b'+') {
+                    j += 1;
+                }
+                if j < b.len() && (b[j] == b'.' || b[j].is_ascii_digit()) {
+                    return true;
+                }
+            }
+            b'G' => {
+                let mut j = i + 1;
+                while j < b.len() && b[j] == b'0' {
+                    j += 1;
+                }
+                if j + 1 < b.len() {
+                    let two = &b[j..j + 2];
+                    if (two == b"28" || two == b"30" || two == b"38")
+                        && !(j + 2 < b.len() && b[j + 2].is_ascii_digit())
+                    {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// The one outbound command grammar. `Err` is a malformed payload: a line
+/// delimiter, a control byte, a non-ASCII byte, or a realtime character
+/// (`?`, `!`, `~`), any of which makes the line mean something different to
+/// GRBL than to a prefix check. From B2+B3, `serial_send` refuses an `Err`
+/// with nothing written. (The buffered job pump still classifies its lines
+/// with `.ok()` and records a malformed line as the worst case; its lines
+/// are Kerf-generated and pinned by the fixture-grammar golden.)
+pub(crate) fn classify_outbound(cmd: &str) -> Result<Outbound, String> {
+    for b in cmd.bytes() {
+        let why = match b {
+            b'\r' | b'\n' => Some("line delimiter"),
+            0x00..=0x1f => Some("control byte"),
+            0x7f..=0xff => Some("non-ASCII byte"),
+            b'?' | b'!' | b'~' => Some("realtime character"),
+            _ => None,
+        };
+        if let Some(why) = why {
+            return Err(format!(
+                "{REFUSED_PREFIX} malformed: {why} (0x{b:02x}). Nothing was sent. Kerf sends one command per line, with no tabs or other control characters and none of the realtime characters ? ! ~ inside it. Retype the command without them."
+            ));
+        }
+    }
+    let n = normalize_grbl_line(cmd);
+    let class = if n.starts_with("$J=") {
+        Outbound::Jog
+    } else if n == "$H" {
+        Outbound::Home
+    } else if n.starts_with("$H") {
+        Outbound::HomeAxis
+    } else if n.starts_with("$RST=") {
+        Outbound::Reset
+    } else if n == "$$" {
+        Outbound::SettingsRead
+    } else if let Some(rest) = n.strip_prefix("$N") {
+        let digits = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+        if rest[digits..].starts_with('=') {
+            Outbound::SettingsWrite {
+                key: rest[..digits].parse::<u32>().unwrap_or(u32::MAX),
+                startup: true,
+            }
+        } else {
+            Outbound::Other
+        }
+    } else if let Some(key) = n.strip_prefix('$').and_then(settings_key) {
+        Outbound::SettingsWrite {
+            key,
+            startup: false,
+        }
+    } else if n.starts_with('$') {
+        Outbound::Other
+    } else if is_motion_gcode(&n) {
+        Outbound::Motion
+    } else {
+        Outbound::Other
+    };
+    Ok(class)
+}
+
+// ---------------------------------------------------------------------------
+// Lock-rank tracker (tests only, N13): a thread-local stack of held ranks.
+// A blocking acquisition must rank strictly above everything this thread
+// holds; an inversion panics. `try_lock` holds are recorded, not checked.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+pub(crate) mod lock_rank {
+    use std::cell::RefCell;
+
+    pub(crate) const COMMAND: u8 = 1;
+    pub(crate) const SUBMIT: u8 = 2;
+    pub(crate) const REALTIME: u8 = 3;
+    pub(crate) const TRUST: u8 = 4;
+    pub(crate) const ADMITTED_JOB: u8 = 5;
+    pub(crate) const SNAPSHOT: u8 = 6;
+
+    thread_local! {
+        static HELD: RefCell<Vec<(u8, &'static str)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub(crate) struct Token {
+        rank: u8,
+    }
+
+    /// A blocking acquisition of `name` at `rank`.
+    pub(crate) fn hold(rank: u8, name: &'static str) -> Token {
+        HELD.with(|h| {
+            let h = &mut *h.borrow_mut();
+            if let Some(&(r, n)) = h.iter().find(|(r, _)| *r >= rank) {
+                panic!("lock-order inversion: taking {name} (rank {rank}) while holding {n} (rank {r}); held: {h:?}");
+            }
+            h.push((rank, name));
+        });
+        Token { rank }
+    }
+
+    /// A `try_lock` acquisition: recorded (so nested takes are checked
+    /// against it), never checked itself (it cannot wait).
+    pub(crate) fn hold_try(rank: u8, name: &'static str) -> Token {
+        HELD.with(|h| h.borrow_mut().push((rank, name)));
+        Token { rank }
+    }
+
+    /// Ranks this thread currently holds.
+    #[allow(dead_code)]
+    pub(crate) fn held() -> Vec<u8> {
+        HELD.with(|h| h.borrow().iter().map(|(r, _)| *r).collect())
+    }
+
+    impl Drop for Token {
+        fn drop(&mut self) {
+            HELD.with(|h| {
+                let h = &mut *h.borrow_mut();
+                if let Some(i) = h.iter().rposition(|(r, _)| *r == self.rank) {
+                    h.remove(i);
+                }
+            });
+        }
     }
 }
 
