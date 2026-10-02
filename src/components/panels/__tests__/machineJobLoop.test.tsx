@@ -1434,6 +1434,59 @@ describe("S3 — MachinePanel and StatusBar", () => {
     expect(note?.style.color).toBe("var(--text-secondary)");
   });
 
+  it("Stage 2.8 C1: a STOP during a held jog that then returns ok flashes nothing", async () => {
+    mockSerial(() => ({ responses: ["ok"], drained: [] }));
+    const base = mockInvoke.getMockImplementation() as (c: string, a?: unknown) => Promise<unknown>;
+    let release: (v: unknown) => void = () => {};
+    mockInvoke.mockImplementation(async (cmd: string, args?: unknown) =>
+      cmd === "serial_send" ? new Promise((r) => (release = r)) : base(cmd, args)
+    );
+    const { getByText, getByTitle, getByTestId } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      fireEvent.click(getByTitle("X+"));
+      act(() => void vi.advanceTimersByTime(5000));
+      await waitFor(() =>
+        expect(getByTestId("jog-blocked-note").textContent).toBe(JOG_HOLD_COMMAND)
+      );
+      await act(async () => machineConnection.emergencyStop());
+      expect(consoleTexts()).toContain("Emergency stop initiated");
+      await act(async () => release({ responses: ["ok"], drained: [], connId: 0 }));
+      await act(async () => void vi.advanceTimersByTime(50));
+      const note = getByTestId("jog-blocked-note");
+      expect(note.textContent).toBe(JOG_REASON_HOME);
+      expect(note.style.color).toBe("var(--text-secondary)");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("Stage 2.8 C1 positive: a controller error:N reply to the click still flashes", async () => {
+    mockSerial(() => ({ responses: ["error:15"], drained: [] }));
+    const { getByText, getByTitle, getByTestId } = render(<MachinePanel />);
+    fireEvent.click(getByText("Positioning (10mm)"));
+    fireEvent.click(getByTitle("X+"));
+    await waitFor(() => expect(getByTestId("jog-blocked-note").textContent).toBe("error:15"));
+    expect(getByTestId("jog-blocked-note").style.color).toBe("var(--accent-warm)");
+  });
+
+  it.each([
+    [
+      "disconnected",
+      { machineConnected: false, machineState: "disconnected" },
+      "Home disabled — machine not connected",
+    ],
+    ["a job running", { jobRunning: true }, "Home disabled — a job is running"],
+    ["$22=0", { grblHoming: false }, "Home disabled — machine has no limit switches ($22=0)"],
+    ["clear", {}, "Home ($H)"],
+  ] as const)("Stage 2.8 C2: the action-row HOME titles its state (%s)", (_l, patch, title) => {
+    useStore.setState(patch);
+    const { getAllByText } = render(<MachinePanel />);
+    const btn = getAllByText(/^Home$/i).find((e) => e.tagName === "BUTTON") as HTMLButtonElement;
+    expect(btn.title).toBe(title);
+  });
+
   it("T-P1 flash: a native refused: line reaches the slot in warm for 2 s", async () => {
     mockSerial(() => ({ responses: ["ok"], drained: [] }));
     const base = mockInvoke.getMockImplementation() as (c: string, a?: unknown) => Promise<unknown>;

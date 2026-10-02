@@ -193,25 +193,25 @@ export function MachinePanel() {
     else if (!trustObserved) holdNote = JOG_HOLD_STATE;
   }
   const jogNote = jogFlash ?? holdNote ?? jogBlocked;
+  // Both Home keys (pad and action row) share one guard and one reason (P70, Stage 2.8 C2).
+  const homeTitle = !machineConnected
+    ? "Home disabled — machine not connected"
+    : jobRunning
+      ? "Home disabled — a job is running"
+      : grblHoming
+        ? "Home ($H)"
+        : "Home disabled — machine has no limit switches ($22=0)";
 
-  // Jen B4 §5.6: every refusal a click produces is answered in the slot. The
-  // handler prints its own refusals as warnings and a native refusal as an
-  // error ("Not sent: <reason>"), so the first warning or error line the
-  // click added is flashed; nothing is filtered by a fixed set of texts.
+  // Jen B4 §5.6: every refusal a click produces is answered in the slot.
   async function jogAndReport(axis: "X" | "Y", distance: number) {
-    // Razor b4 W1: the console is capped (store keeps the last 501), so a
-    // length index goes empty at the cap. Find the click's lines by identity:
-    // lines are appended as new objects and kept by reference, so everything
-    // after the pre-click last line was added during the click.
-    const lines0 = useStore.getState().consoleLines;
-    const last = lines0.length > 0 ? lines0[lines0.length - 1] : null;
-    await machineConnection.jog(axis, distance);
-    const lines = useStore.getState().consoleLines;
-    const added = last === null ? lines : lines.slice(lines.lastIndexOf(last) + 1);
-    const refused = added.find((l) => l.type === "warning" || l.type === "error");
+    // Stage 2.8 C1: only this click's own outcome flashes (a handler refusal,
+    // a native refusal, a failed send, or a controller error reply). Lines
+    // other producers log meanwhile (STOP, a lost port) never do, and the
+    // console's cap cannot hide the answer (Razor b4 W1).
+    const refused = await machineConnection.jog(axis, distance);
     if (!refused) return;
     if (jogFlashTimer.current) clearTimeout(jogFlashTimer.current);
-    setJogFlash(refused.text);
+    setJogFlash(refused);
     jogFlashTimer.current = setTimeout(() => setJogFlash(null), JOG_FLASH_MS);
   }
 
@@ -1052,15 +1052,7 @@ export function MachinePanel() {
                 <JogButton
                   label="&#x2302;"
                   onClick={() => machineConnection.home()}
-                  title={
-                    !machineConnected
-                      ? "Home disabled — machine not connected"
-                      : jobRunning
-                        ? "Home disabled — a job is running"
-                        : grblHoming
-                          ? "Home ($H)"
-                          : "Home disabled — machine has no limit switches ($22=0)"
-                  }
+                  title={homeTitle}
                   accent={grblHoming}
                   disabled={!machineConnected || jobRunning || !grblHoming}
                 />
@@ -1123,9 +1115,7 @@ export function MachinePanel() {
               label="Home"
               color="var(--accent)"
               disabled={!machineConnected || jobRunning || !grblHoming}
-              title={
-                grblHoming ? "Home ($H)" : "Home disabled — machine has no limit switches ($22=0)"
-              }
+              title={homeTitle}
               onClick={() => machineConnection.home()}
             />
             <ActionButton

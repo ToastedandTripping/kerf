@@ -324,8 +324,18 @@ function markStatusUnknown(): void {
 // B2+B3: one jog in flight is native's rule now (motion ledger + barrier);
 // the gate's MOTION reason reflects it. `jogBasis` names the observation the
 // clip was computed from; native refuses the jog if anything moved since.
-async function sendJogLine(line: string, jogBasis: number): Promise<void> {
-  await machineConnection.send(line, { jogBasis });
+/** The text of the last "Send failed" line, so a jog can name its own failure. */
+let lastSendFailure = "";
+
+async function sendJogLine(line: string, jogBasis: number): Promise<string[]> {
+  return machineConnection.send(line, { jogBasis });
+}
+
+/** The operator line `send()` printed for a refused or failed send. */
+function refusedLine(msg: string): string {
+  return msg.startsWith(`${PERMIT_REFUSED_PREFIX} not-admitted:`)
+    ? `Not sent: ${msg}`
+    : `Not sent: ${refusalReason(msg)}`;
 }
 
 /**
@@ -706,14 +716,11 @@ export const machineConnection = {
         // RF-15: an admission refusal is not a dead port. Not-admitted lines
         // were never written; B2+B3 refusals (jog admission, malformed,
         // stale-connection) carry a plain reason, shown as is. No retry.
-        if (msg.startsWith(`${PERMIT_REFUSED_PREFIX} not-admitted:`)) {
-          store.addConsoleLine(`Not sent: ${msg}`, "error");
-        } else {
-          store.addConsoleLine(`Not sent: ${refusalReason(msg)}`, "error");
-        }
+        store.addConsoleLine(refusedLine(msg), "error");
         return [msg];
       }
-      store.addConsoleLine(`Send failed: ${msg}`, "error");
+      lastSendFailure = `Send failed: ${msg}`;
+      store.addConsoleLine(lastSendFailure, "error");
       return ["error:disconnected"];
     }
   },
@@ -802,17 +809,17 @@ export const machineConnection = {
     }
   },
 
-  async jog(axis: string, distance: number, feedRate: number = 1000): Promise<void> {
+  async jog(axis: string, distance: number, feedRate: number = 1000): Promise<string | null> {
     const store = useStore.getState();
     const blocked = jogBlockReason(store, "by");
     if (blocked) {
       store.addConsoleLine(blocked, "warning");
-      return;
+      return blocked;
     }
     const ax = axis.toUpperCase();
     if (ax !== "X" && ax !== "Y") {
       store.addConsoleLine(JOG_REASON_AXIS, "warning");
-      return;
+      return JOG_REASON_AXIS;
     }
     // B2+B3: the clip reads the native observation's position only (the
     // basis native will verify), never the latest frame's.
@@ -820,7 +827,7 @@ export const machineConnection = {
     const basisSeq = store.basisSeq;
     if (basis === null || basisSeq === null) {
       store.addConsoleLine(JOG_REASON_MOTION, "warning");
-      return;
+      return JOG_REASON_MOTION;
     }
     const clip = clipJog({
       axis: ax,
@@ -831,9 +838,18 @@ export const machineConnection = {
     });
     if (clip.kind === "refuse") {
       store.addConsoleLine(clip.reason, "warning");
-      return;
+      return clip.reason;
     }
-    await sendJogLine(`$J=G21 G91 ${ax}${clip.distance.toFixed(3)} F${feedRate}`, basisSeq);
+    // Stage 2.8 C1: the jog names its OWN outcome line, so a caller never
+    // mistakes another producer's line (a STOP, a lost port) for this jog's.
+    const r = await sendJogLine(
+      `$J=G21 G91 ${ax}${clip.distance.toFixed(3)} F${feedRate}`,
+      basisSeq
+    );
+    const first = r[0] ?? "";
+    if (first.startsWith(PERMIT_REFUSED_PREFIX)) return refusedLine(first);
+    if (first === "error:disconnected") return lastSendFailure;
+    return r.find((l) => l.startsWith("error:") || l.startsWith("ALARM")) ?? null;
   },
 
   async jogTo(x: number, y: number, feedRate: number = 3000): Promise<void> {
