@@ -1291,6 +1291,12 @@ describe("S3 — MachinePanel and StatusBar", () => {
     }
   );
 
+  it("Jen B4 copy: UNITS says what sending $$ achieves", () => {
+    expect(JOG_REASON_UNITS).toBe(
+      "Jogging is off until Kerf reads $13=0 (positions in mm) from the machine. Reconnect, or send $$ to re-read its settings"
+    );
+  });
+
   it("T-P1: NO_HOMING ($22=0) reaches the arrows and POSITION; the Home key keeps its own title", () => {
     useStore.setState({ grblHoming: false });
     const { getByText, getAllByTitle, getByTestId, container } = render(<MachinePanel />);
