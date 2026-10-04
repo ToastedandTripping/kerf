@@ -1,6 +1,6 @@
 # Kerf: the S-Curve and Posterize power-curve presets burn a raster as a negative; fix the presets and the blank editor (UI polish TB3)
 
-Revision 4, 2026-10-04. Revisions 1-3 FAILED astra rounds 1-3 (`-critic-r1.md` to `-critic-r3.md`); round 3 failed on X1 and X5 only. This revision folds all three rounds; the fold tables are at the end. This is a correctness bug. It is follow-on plan TB3 from `.claude/plans/kerf-ui-polish.md` (revision 3, critic PASS), and that entry's "Requirements" and "Acceptance evidence" are binding here.
+Revision 5, 2026-10-04. Revisions 1-4 FAILED astra rounds 1-4 (`-critic-r1.md` to `-critic-r4.md`, plans `-r1.md` to `-r4.md`). Round 4 failed on the publication guard only: it missed project replacement and the power-scale raiser, and it misread the material-test dialog. This revision rebuilds the guard around the generator's actual inputs (Design 5). Round 5 is the cap. The fold tables are at the end. This is a correctness bug. It is follow-on plan TB3 from `.claude/plans/kerf-ui-polish.md` (revision 3, critic PASS), and that entry's "Requirements" and "Acceptance evidence" are binding here.
 
 ## Intent (grilled)
 
@@ -11,6 +11,7 @@ Grill: skipped, with this reason. The defect is unambiguous and no choice in it 
 - **The fix.** Give both presets the direction Linear already has: shade 0 at 100%, falling to 0% at shade 255.
 - **The editor.** It draws its curve when it opens, instead of staying blank until first hovered.
 - **Saved projects.** Stored curves are never rewritten. A layer saved with the old points keeps generating exactly what it generated before; the release note tells the owner how to re-pick.
+- **The publication guard** (batch `tb3-guard`, landing first). Apply-then-Generate is TB3's own workflow, so the pre-existing race that could show an older G-code result as current is closed here. A result finishing after any of its inputs changed is published as out of date. A result from a replaced project, or superseded by a newer generation, is discarded.
 
 ## Diagnosis (verified on marvin/kerf-gap at 70cdfa1)
 
@@ -30,17 +31,19 @@ Grill: skipped, with this reason. The defect is unambiguous and no choice in it 
 - **The blank editor.**
   - The draw effect is `useEffect(() => { draw(); }, [draw])` (`:221-223`). `draw` changes only when `points`, `dragIndex` or `hoverIndex` change, and the canvas mounts only after `if (!open) return null` (`:324`). So opening the editor with the same points reference draws nothing.
   - `draw` returns early when there is no canvas (`:142`) or no 2D context (`:144`). It draws the grid lines and a dashed diagonal first, then the curve, then one `arc` per control point (`:197`). Only the control-point arcs are specific to the curve.
-- **The generation snapshot, and a pre-existing race that TB3 does not own.**
-  - `generateGcode()` reads the store once, at call time. A single generation never mixes curve state.
-  - `updateLayer` marks an EXISTING result stale (`store/index.ts:345-351`).
-  - **However, completion clears the flag unconditionally:** `setGcodeResult: (result) => set({ gcodeResult: result, gcodeStale: false })` (`store/index.ts:692`), called from the Generate handler (`MachinePanel.tsx:386`). So when an Apply (or any edit) lands while a generation is in flight, the older generation's result is published as current. When no result existed at the start, the edit does not set the flag at all.
-  - This is pre-existing and not specific to curves: any layer or design edit during a generation hits it. Because TB3's own workflow is Apply then Generate, **TB3 closes it with a narrow, enforced publication guard** (batch `tb3-guard`, Design 5). That guard is not a deferral. TB6 later builds its fuller revision identity and Preview handling on top of it.
-  - **The staleness writers, as they are today:**
-    - 12 sites in `store/index.ts` use `gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale`;
-    - `setWorkspaceSize` (`:401-409`) raises the flag only when the size changes;
-    - `applyObjects` (`storeHelpers.ts:44`) raises it on every objects write;
-    - new project resets it (`:524`).
-  - **The publication sites:** `MachinePanel.tsx:386` (`setGcodeResult` after `await generateGcode()`, the only async one), and `MaterialTestDialog.tsx:283`, which publishes the material-test program with `gcodeStale: false`.
+- **The generation snapshot, and a pre-existing publication race that `tb3-guard` closes.** (Re-verified on marvin/kerf-gap at d09fe12.)
+  - **What generation reads.** `generateGcode()` reads the store once, synchronously, before its first `await` (`gcodeGen.ts:906`); nothing it calls reads the store again (`textObjectToPaths` reads fonts, not the store). Across `:905-1196` it reads exactly twelve state fields: `objects`, `layers`, `workspaceWidth`, `workspaceHeight`, `originTop`, `startCorner`, `grblSValueMax`, `grblLaserMode`, `grblAccelX`, `grblAccelY`, `grblMaxFeedRateX`, `grblMaxFeedRateY`. It also calls `addConsoleLine`, a method rather than an input. A single generation never mixes state.
+  - **Completion clears the flag unconditionally:** `setGcodeResult: (result) => set({ gcodeResult: result, gcodeStale: false })` (`store/index.ts:692`), whose only production caller is the Generate handler (`MachinePanel.tsx:386`). So if any of those twelve fields changes while a generation is in flight, the older result is published as current. When no result existed at the start, the edit does not set the flag at all, because every raiser is conditional on `gcodeResult !== null`.
+  - **Project replacement is the same race, and worse.** `loadProject` (`store/index.ts:505-527`) is the single replacement path: Open, Open Recent, New (`fileOps/index.ts:249-258`, a fresh empty project) and autosave recovery (`App.tsx:470`) all reach it through `loadProjectWithMigrations` (`fileOps/index.ts:174`, `:244`). It replaces the design and sets `gcodeResult: null, gcodeStale: false`. A generation started in project A that resolves after B is loaded is therefore published as current in B. If A and B share bed size and origin, nothing marks it stale.
+  - **The staleness raisers as they are today** (post-publication only):
+    - 12 sites in `store/index.ts` use `gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale` (`:71, :137, :147, :194, :225, :239, :257, :301, :351, :388, :865, :874`);
+    - `setWorkspaceSize` (`:401-409`) when the size changes;
+    - `applyObjects` (`storeHelpers.ts:44`) on every objects write;
+    - `setGrblSValueMax` (`:614-626`) when the value changes.
+  - **Generation inputs with no raiser at all:** `setGrblLaserMode`, `setGrblAccel` and `setGrblMaxFeedRate` (`:628-630`). A result generated before connecting, with the default acceleration 500 (`:597`), stays current after the connect-time settings read replaces it, even though acceleration feeds the scan motion and overscan (`gcodeGen.ts:953-966`, overscan at `:716`). This is a post-publication gap, found while re-verifying for this revision; the guard closes it structurally (Design 5).
+  - **Concurrency of the handler.** The Generate and Preview buttons are disabled while the component-local `generating` flag is set (`MachinePanel.tsx:111`, `:1237`, `:1267`). Two generations therefore overlap only across a remount of the panel, whose fresh instance starts with `generating` false. A project replacement needs no overlap at all.
+  - **What is not a publication.** `MaterialTestDialog.tsx:273-294` builds a local `displayGate` argument for `canStartJob` with `gcodeResult: null, gcodeStale: false`. That is a display-only predicate input and no store write. The dialog's own generation (`handleGenerate`, `:192`) awaits `generateMaterialTestGcode` and streams its local program through its own admission. It never touches `gcodeResult`, so it is outside this guard and unchanged. Revision 4 called it a publisher; that was wrong.
+  - **Export.** `exportGcode` (`fileOps/index.ts:469-489`) writes `gcodeResult.gcode` to a file without consulting `gcodeStale`. It is pre-existing, it is a file rather than a laser path, and it is parked (Deferrals).
 
 ## Design
 
@@ -52,18 +55,49 @@ Grill: skipped, with this reason. The defect is unambiguous and no choice in it 
    - The early returns at `:142` and `:144` stay as they are: with no context, the editor shows no plot.
    - Apply, Cancel, Escape and the focus trap are unchanged. Nothing is applied or generated as a side effect of drawing or of a failed draw.
 3. **No migration.** Saved `layer.powerCurve` points are never rewritten. The file holds raw points, which cannot be told apart from a deliberate custom curve, so a migration would change a saved job's output without the owner's choice.
-4. **The release-note line.** The release session owes it, and the ROADMAP shipped entry carries the text: "Fixed: the S-Curve and Posterize power-curve presets were inverted, so they burned an image as its negative. Layers that already used them keep their old curve until you change it: open the layer's power curve, pick the preset, press Apply, then save the project. Also fixed: a G-code result that finished generating after you changed the design was shown as up to date; it is now marked out of date, so START asks you to generate again."
+4. **The release-note line.** The release session owes it, and the ROADMAP shipped entry carries the text: "Fixed: the S-Curve and Posterize power-curve presets were inverted, so they burned an image as its negative. Layers that already used them keep their old curve until you change it: open the layer's power curve, pick the preset, press Apply, then save the project. Also fixed: a G-code result that finished generating after you changed the design or the machine settings was shown as up to date; it is now marked out of date, so START asks you to generate again. A result that finishes after you open or start a different project is now thrown away instead of appearing in the new one."
 
-5. **The publication guard** (batch `tb3-guard`).
-   - **A design revision.** The store gains `designRevision: number`. It increments at every site that raises staleness today (the 12 sites, `setWorkspaceSize` when the size changes, and `applyObjects`), whether or not a result exists, so the no-prior-result case is covered too.
-   - **Capture at start.** `handleGenerateGcode` captures `designRevision` and a per-call sequence number (`generationSeq`, a module- or ref-held counter) before `await generateGcode()`.
-   - **Publish on completion,** under exactly one rule:
-     - if a newer generation has already published (its sequence is higher), drop this result and say nothing;
-     - otherwise publish it, with `gcodeStale` set to `designRevision !== captured`.
+5. **The publication guard** (batch `tb3-guard`). One protocol with three identities, all held in the store, plus one structural raiser. It replaces revision 4's hand-incremented `designRevision`, whose correctness depended on an inventory of edit sites that was incomplete twice over.
+   - **The input set is the compiler's inventory, not a list of edit sites.** A new module, `src/app/store/generationInputs.ts`, exports:
+     - `GENERATION_INPUT_KEYS`, the twelve fields in the Diagnosis, `as const`;
+     - `type GenerationInputs = Pick<AppState, (typeof GENERATION_INPUT_KEYS)[number]>`;
+     - `selectGenerationInputs(state)`, which copies those twelve references (no cloning);
+     - `inputsChanged(a, b)`, which is true when any key differs under `Object.is`.
 
-     An out-of-date result is shown as out of date, through the existing stale path, so START and FRAME stay blocked exactly as they are for any stale result today (`canStartJob.ts` reads `gcodeStale`). It is never shown as current.
-   - **The setter.** `setGcodeResult` takes an explicit `stale` argument, defaulting to `false` for existing callers. The material-test publication (`MaterialTestDialog.tsx:283`) is synchronous and builds from the dialog's own inputs, so it is unchanged and named in the source scan's allowlist.
-   - **What it does not change:** the generator, the stop path, the job gates (they keep reading `gcodeStale`), or any staleness raiser's condition. Each raiser only gains the increment.
+     `generateGcode` gains a parameter, `generateGcode(inputs: GenerationInputs = selectGenerationInputs(useStore.getState()))`, and its local `store` becomes that `inputs` object. Its six `store.addConsoleLine` calls go through `useStore.getState().addConsoleLine`. From then on, a new state read inside `generateGcode` that is not in the key set is a `tsc` error, so the set cannot silently fall behind the generator. The store's updates are immutable (the Zustand selector rule in CLAUDE.md relies on that already), so a changed array or a changed number is always a changed reference.
+   - **Identities, all in the store and never reset:**
+     - `projectEpoch: number`, starting at 0 and incremented by `loadProject`. That covers Open, Open Recent, New and autosave recovery, which all reach it. `loadProject` becomes the `set((state) => …)` form so it can read the old value.
+     - `generationSeq: number`, the sequence number of the most recently started generation. `loadProject` does not reset it, and neither does a remount, because it does not live in the component.
+     - The ticket, `{ seq, epoch, inputs }`, which `beginGeneration()` returns. That store action increments `generationSeq` and captures `projectEpoch` and `selectGenerationInputs(get())` in one synchronous step.
+
+     Neither counter is in `toProject` or `KerfProject`, so neither is ever saved or loaded, and the T5 round trip shows the file format is unchanged.
+   - **Publication, in one synchronous store action.** `publishGeneration(ticket, result)` reads the current state once and returns its outcome:
+     1. If `ticket.epoch !== projectEpoch`, the result is **discarded** (`"discarded-project"`) and the store is unchanged. A result from another project is never published, as current or as stale.
+     2. Otherwise, if `ticket.seq !== generationSeq`, the result is **discarded** (`"discarded-superseded"`): a newer generation was started, whichever finishes first. The store is unchanged.
+     3. Otherwise the result is **published**, with `gcodeStale: inputsChanged(ticket.inputs, selectGenerationInputs(state))`. The outcome is `"published"` or `"published-stale"`.
+
+     Because the check and the write happen in one synchronous call, no state change can fall between them.
+   - **`setGcodeResult` is removed** from `AppState`, and `publishGeneration` replaces it. With no unconditional publisher left, `tsc` rejects any future caller. Its one existing test (`gcodeStale.test.ts:211`) is rewritten to the same assertion through `publishGeneration`: a current publish clears staleness. Test seeding writes state through `useStore.setState`, as it does today.
+   - **Post-publication staleness, one structural raiser.** Directly after `create`, `store/index.ts` registers one `useStore.subscribe((state, prev) => …)`. It sets `gcodeStale: true` when all of these hold:
+     - a result exists;
+     - `state.gcodeResult === prev.gcodeResult`. A write that sets a result together with inputs states that pair itself, so the raiser leaves it alone. Test seeding does exactly that, in one `setState`, and so does any publication. `loadProject` leaves no result, so it never fires there;
+     - `!state.gcodeStale`;
+     - `inputsChanged(prev, state)`.
+
+     This covers every writer of every input, present and future, including the three machine setters that raise nothing today. The 15 existing raisers stay as they are, now redundant and harmless; removing them is churn and is left to TB6. The same pattern exists already (`connection.ts:531`, `keepAwake.ts:47`). Zustand 5 notifies subscribers synchronously inside `set`, so no reader can observe the gap between an input change and the flag.
+   - **The handler, every duty specified** (`MachinePanel.tsx` `handleGenerateGcode`):
+     - **Before:** `setSparseImageWarning(false)`, then `setGenerating(true)`, then `const ticket = beginGeneration()`, then `await generateGcode(ticket.inputs)`. The generator reads exactly the inputs the ticket holds.
+     - **On resolve:** `const outcome = publishGeneration(ticket, result)`. Then:
+       - `"published"`: today's info line, today's sparse-image check, return `true`. The check reads `ticket.inputs.objects`, not live state.
+       - `"published-stale"`: a warning line, "G-code generated, but the design or machine settings changed while it ran. Regenerate before START." No sparse-image check. Return `true`: a result exists, Preview may show it, and the Generate button already reads "Regenerate G-code".
+       - `"discarded-project"`: one info line, "Discarded a G-code generation started in a different project." Nothing else; return `false`.
+       - `"discarded-superseded"`: one info line, "Discarded an earlier G-code generation; a newer one is running." Nothing else; return `false`.
+
+       A discarded call writes no status message, raises no warning, and changes neither `gcodeResult` nor `gcodeStale`.
+     - **On reject:** unchanged. Today's error line and status message, the result left untouched, return `false`. A failure in a superseded or other-project call still reports, because it is a real failure and touches nothing.
+     - **Finally:** `setGenerating(false)` on this component instance, unchanged. `generating` is per instance and both buttons are disabled while it is set, so the only way to start a newer call is a fresh instance. An older call therefore never clears a newer call's busy state; G6 proves it across a remount.
+   - **What START and FRAME see.** They keep reading `gcodeResult` and `gcodeStale` through `canStartJob` (`canStartJob.ts:193-194`), unchanged. The guard's whole job is to make those two fields true to the current project and inputs. G1-G5 prove the refusal through `JobActionBar` with the real store state, not through the flag alone.
+   - **What it does not change:** the generator's output for unchanged inputs (every golden stays byte-identical), the stop path, `canStartJob`, the material-test path, any existing raiser, and the file format.
 
 ## Batches, tier and dependencies
 
@@ -71,13 +105,15 @@ Standard tier, two batches in one relay. `tb3-guard` lands first; `tb3` follows 
 
 | batch | files | depends on |
 |---|---|---|
-| `tb3-guard` | `src/app/store/index.ts`, `src/app/store/storeTypes.ts`, `src/app/store/storeHelpers.ts`, `src/components/panels/MachinePanel.tsx` (the Generate handler only), `src/app/store/__tests__/generationGuard.test.ts` (new) | none |
+| `tb3-guard` | `src/app/store/generationInputs.ts` (new), `src/app/store/index.ts`, `src/app/store/storeTypes.ts`, `src/lib/machine/gcodeGen.ts` (the signature and the `store`/log lines of `generateGcode` only), `src/components/panels/MachinePanel.tsx` (`handleGenerateGcode` only), `src/app/store/__tests__/gcodeStale.test.ts` (the one `setGcodeResult` test, rewritten), `src/components/panels/__tests__/generationGuard.test.tsx` (new) | none |
 | `tb3` | the table below | `tb3-guard` |
+
+**`tb3-guard` size and roots.** Seven files, all under `src`, so it is within the eight-file cap and the single-root rule as the rubric defines a root. It still crosses three directories (store, lib/machine, panels), and on purpose: the ticket is created in the store, threaded through the generator's signature, and consumed by the handler. Splitting any of the three out would leave a commit where the generator reads inputs the handler did not capture, or where publication has no guard. Nothing outside these seven files changes, and none of TB6 is pulled in (Deferrals lists what stays there).
 
 **File ownership against concurrent work.**
 - `MachinePanel.tsx` belongs to UI polish A12, which has not started; `tb3-guard` must merge before A12 is briefed.
-- The store files are in no current polish batch.
-- ROADMAP.md is edited at Stage 3.5 by both this relay and polish A1, which is running now. Both edits are additive (shipped entries, Parking Lot lines). The orchestrator merges the relays one at a time into marvin/kerf-gap and resolves any ROADMAP conflict by keeping both sides, as it did for R3 and motion-trust. The two relays are independent in code, not in that one document.
+- `gcodeGen.ts` and the store files are in no current polish batch.
+- ROADMAP.md is edited at Stage 3.5 by both this relay and polish A1, which is in review now. Both edits are additive (shipped entries, Parking Lot lines). The orchestrator merges the relays one at a time into marvin/kerf-gap and resolves any ROADMAP conflict by keeping both sides, as it did for R3 and motion-trust. The two relays are independent in code, not in that one document.
 
 ### Batch `tb3`
 
@@ -99,13 +135,28 @@ Standard tier, two batches in one relay. `tb3-guard` lands first; `tb3` follows 
 
 ## Tests
 
-### The guard (`generationGuard.test.ts`, with `generateGcode` and `invoke` mocked as deferred promises)
+### The guard (`generationGuard.test.tsx`)
 
-- **G1, an edit during a pending generation, no prior result.** Press Generate. Before it resolves, Apply a curve (`updateLayer`). Resolve it. The result is published with `gcodeStale` true, and `canStartJob` refuses START with its existing stale reason. This is red today: the result is published as current.
-- **G2, the same with an existing result.** The new result is stale, and the earlier result is replaced but not shown as current.
-- **G3, overlapping completions out of order.** Start A, edit, start B. Resolve B, then A. B is published (current, since no edit followed B). A is dropped: it does not overwrite B. This is red today: A overwrites B.
-- **G4, no edit.** Generate, resolve: published current. This is the positive control.
-- **G5, source scan.** Count the staleness raisers in `store/index.ts` and `storeHelpers.ts`: the 12-form pattern, `setWorkspaceSize`'s and `applyObjects`'s. Every one must sit beside a `designRevision` increment in the same `set`; the count is exact, so a new raiser without the increment turns it red. Every `gcodeResult:` publication outside the store goes through `setGcodeResult`, except the named `MaterialTestDialog.tsx:283` allowlist entry.
+Harness: the production `MachinePanel` and `JobActionBar`, rendered as `gcodeFailureLoud.test.tsx` does, with `invoke` mocked and `generate_image_gcode` / `generate_vector_gcode` returning deferred promises that the test resolves explicitly. One image object and one rectangle are seeded, so both invoke paths are pending. The machine state is seeded as eligible: connected, Idle, workspace verified, laser mode on, status fresh. That way, the stale or missing result is the ONLY reason START and FRAME can refuse, and each test asserts that reason verbatim. Every test reads real store state, never a mock of it.
+
+- **G1, an edit in flight, no prior result.** Press Generate. Before it resolves, `updateLayer` (a curve Apply). Resolve. `gcodeResult` is set, `gcodeStale` is true, the console has the stale warning line, and START and FRAME both refuse with "Design changed -- regenerate G-code". Red today: the result is published current.
+- **G2, the same with an existing result.** It is seeded current. The edit stales it immediately (the existing raiser). After resolve, the new result is published stale, and START and FRAME refuse.
+- **G3, project replaced in flight.** Four cases: Open (`loadProjectWithMigrations` with project B, which has the same bed size and origin as A, so no other field differs) and New (`fileOperations.newProject()`), each with A's result slot empty and with it holding a current result. Press Generate in A, replace the project, then resolve. In every case the outcome is `"discarded-project"`: `gcodeResult` is null, as `loadProject` left it, and `gcodeStale` is false. START refuses with "Generate G-code first". The console has the discard line. `projectEpoch` went up by exactly 1 per replacement. Red today: A's result is published current in B.
+- **G4, power scale changed in flight.** No prior result. Press Generate, call `setGrblSValueMax(255)` (from 1000), then resolve: the result is published stale and START refuses. Repeat with an existing result. Red today.
+- **G5, every input, both phases, table-driven.** There is one row per key in `GENERATION_INPUT_KEYS`, each a real store action that changes that key: `applyObjects`/`updateObject` for objects, `updateLayer` for layers, `setWorkspaceSize`, `setOriginTop`, `setStartCorner`, `setGrblSValueMax`, `setGrblLaserMode`, `setGrblAccel`, and `setGrblMaxFeedRate`. Where one action sets two keys, the row lists both.
+  - **The meta-assertion:** the union of the rows' keys equals `GENERATION_INPUT_KEYS` exactly. A key added without a row fails, and so does a row for a key that is not an input.
+  - **In flight, per row:** Generate, apply the action, resolve: `"published-stale"`.
+  - **After publication, per row:** publish current, apply the action: `gcodeStale` is true, and START refuses. The accel, feed-rate and laser-mode rows are red today.
+  - **A no-op per row, where the action takes a value:** setting the same value leaves a current result current. This proves the subscription compares values and does not fire on every write.
+- **G6, supersession and remount.** Press Generate (A). Unmount and remount `MachinePanel`. The fresh instance's button is enabled, and that is the real overlap path. Press Generate (B). Then two orders:
+  - resolve A first: `"discarded-superseded"`, nothing published, and the new instance still shows "Generating...", because A's `finally` ran on the unmounted instance. Then resolve B: published current.
+  - resolve B first: published current, then A is discarded and does not overwrite B.
+
+  In both orders `generationSeq` is the value B's ticket holds. Red today: in the second order A overwrites B.
+- **G7, identities are not reused.** Take a ticket, then `loadProject` twice and start a new generation. The new ticket's `seq` is the old one plus 1, never reset by the loads, and its `epoch` is the old one plus 2. Publishing the old ticket after that is `"discarded-project"`. With two generations in one epoch, the older ticket is `"discarded-superseded"` even when no edit happened.
+- **G8, positive controls.** With no edit, resolve: published current, and START is admitted (not refused for staleness). One `setState` that writes a current result together with new objects leaves it current (the subscription's same-result clause). With a failure (the generator rejects): today's error line and status message, the result untouched, `false` returned, and the Preview not opened. `gcodeFailureLoud.test.tsx` stays green unchanged.
+- **G9, a discarded call does nothing else.** For both discard kinds: no status message, `setSparseImageWarning` never set true (with a sparse image and a fake long result that would otherwise trigger it), Preview not opened, and exactly one console line.
+- **G10, the input set is enforced by the compiler.** This is a gate, not a vitest case. Inside `generateGcode`, a read of a state field outside the key set (for example `store.camera`) fails `npx tsc --noEmit`. It is proven by battery mutant m14.
 
 ### TS (`powerCurveEditor.test.tsx`)
 
@@ -126,7 +177,7 @@ Standard tier, two batches in one relay. `tb3-guard` lands first; `tb3` follows 
   - Pick S-Curve, press Apply, and assert `onApply` is called exactly once with the new S-Curve points.
   - Cancel after picking a preset: `onApply` is not called.
   - With `getContext` returning null, Apply still works and no plot is drawn. No crash, and nothing applied implicitly.
-  - **Failed regeneration after Apply** (in the MachinePanel generate path, with `invoke` mocked). Start with an existing result, then Apply a new curve (the result goes stale), then make `generate_image_gcode` reject. The old result stays flagged stale, the existing failure message shows, and no job is dispatched. This pins today's behaviour; it does not cover the in-flight race, which is TB6's.
+  - **Failed regeneration after Apply** (in the MachinePanel generate path, with `invoke` mocked). Start with an existing result, then Apply a new curve (the result goes stale), then make `generate_image_gcode` reject. The old result stays flagged stale, the existing failure message shows, and no job is dispatched. This pins today's failure behaviour; the in-flight cases are G1-G9.
 - **T5, the saved-project round trip, both legacy arrays.**
   - Put one image object on a raster layer whose `powerCurve` is the OLD S-Curve, and a second layer with the OLD Posterize.
   - Serialise with `toProject()` and `JSON.stringify`, as `saveToPath` does (`fileOps/index.ts:507-508`).
@@ -173,9 +224,14 @@ Every `find` must have `grep -cF` equal to 1, the journal is at the standard pat
 - **m4:** the `arc` loop removed from `draw`. Kills T3.
 - **m7:** only the curve-rendering block removed from `draw`, with the grid, the diagonal and the arcs kept. Kills T3 and proves it checks the curve stroke, not just the handles.
 - **m8, the decoder's own teeth:** in the N2 test's expected-G-code path, displace one powered segment's X by 0.5 mm, and separately corrupt its S token. N2 itself must fail on each, independently of T1, T2 and N1. This proves the spatial oracle checks placement and power. Applied as a test-input mutant: a fixture-transform hook in the test, toggled by the battery.
-- **m9:** drop one `designRevision` increment from a staleness raiser. Kills G5, and G1 if it is the `updateLayer` raiser.
-- **m10:** publish with `stale` hard-coded false. Kills G1 and G2.
-- **m11:** remove the sequence check. Kills G3.
+- **m9:** `loadProject` no longer increments `projectEpoch`. Kills G3 and G7.
+- **m10:** `publishGeneration` skips the epoch comparison. Kills G3 and G7.
+- **m11:** `publishGeneration` skips the sequence comparison. Kills G6 and G7.
+- **m12:** publish with `gcodeStale: false` hard-coded. Kills G1, G2, G4 and G5's in-flight rows.
+- **m13:** the post-publication subscription removed. Kills G5's post-publication rows for accel, feed rate and laser mode, the fields with no other raiser.
+- **m15:** `grblSValueMax` removed from `GENERATION_INPUT_KEYS`. Kills G5's meta-assertion. With that key gone, the generator's read of it would be a `tsc` error, and m14 shows the compiler catches it.
+- **m16:** the subscription's `state.gcodeResult === prev.gcodeResult` clause removed. Kills G8's seeding control: one `setState` that writes a current result together with new objects must leave it current.
+- **m14, in a second battery spec whose `test_command` is `npx tsc --noEmit`:** add `void store.camera;` inside `generateGcode`. tsc must fail, which proves G10. The control, the unmutated tree, passes tsc.
 - **m5:** a `loadProjectWithMigrations` mutant that rewrites `powerCurve`, for example replacing the old S-Curve with the new one. Kills T5.
 - **m6:** `TB3_S_CURVE`'s first literal flipped in Rust. Kills T2.
 
@@ -190,7 +246,8 @@ The control: Linear stays byte-identical under N3, and the controls must stay gr
   - `npm run -s format:check`;
   - `cargo test --manifest-path src-tauri/Cargo.toml --features sim` with `CARGO_TARGET_DIR=$HOME/.cache/kerf-engine-arm-target` and `env -u KERF_UPDATE_GOLDEN`;
   - clippy `--all-targets --features sim -- -D warnings`;
-  - `cargo fmt --check`.
+  - `cargo fmt --check`;
+  - the battery twice: the vitest spec (m1-m13, m15, m16) and the tsc spec (m14).
 
   Every existing golden is unchanged; the only new goldens are N3's.
 - **Browser** (dev server, puppeteer; the Chrome DevTools MCP is disconnected):
@@ -225,7 +282,7 @@ The control: Linear stays byte-identical under N3, and the controls must stay gr
 
     The single permitted adjustment: if step 1 leaves no visible mark at all, raise Max power to 20%, regenerate, frame, and repeat once. Never above 20%, never slower than 3000 mm/min, and nothing else changes. If 20% still leaves no mark, record INCONCLUSIVE and stop. The material test is not part of this card.
   - **Frame first:** press FRAME and watch the head trace the bounding box.
-  - **Before every burn:** press Generate after the last Apply, and make no edit while it generates. That is the prerequisite in the Diagnosis: until TB6 lands, an edit during generation can publish an older result as current. Then press FRAME and watch the head trace the bounding box.
+  - **Before every burn:** press Generate after the last Apply, and make no edit while it generates. The guard marks such a result stale, but the card does not lean on it. Confirm that the button reads "Generate G-code", not "Regenerate G-code", before going on. Then press FRAME and watch the head trace the bounding box.
   - **Worst cases this card guards against:** a flame on the material; marking outside the framed box; marking that continues after the job ends; Kerf not responding to STOP.
   - **Before the card:**
     - identify, by tracing the wiring, the switch or plug that removes power from the laser module itself (expected: the machine's main power inlet, which feeds the controller and the module). If it cannot be identified with confidence, do not run the card;
@@ -241,13 +298,23 @@ The control: Linear stays byte-identical under N3, and the controls must stay gr
 ## Risks and rollback
 
 - **Someone may rely on the inverted look.** They can draw it as a custom curve, and saved layers keep it anyway.
-- **Rollback.** Reverting the commit restores the old preset definitions. Projects whose owner re-picked a corrected preset and saved still hold the corrected raw points (stored data is never rewritten in either direction). After a revert those layers simply match no preset, so the highlight is absent. Revert is one commit and touches no stored data.
+- **The structural raiser marks a result stale where nothing marked it before.** That happens only when an acceleration, feed-rate or laser-mode value actually changes after publication; usually it is the first connect after generating while disconnected. That result really was built from other values, so asking for a regeneration is correct, and the cost is one extra press. The G5 no-op rows prove that re-setting the same value on every connect does not stale anything.
+- **Commit structure.** Each batch is its own commits on the relay branch: `tb3-guard` first, then `tb3` on top. They reach marvin/kerf-gap in one merge commit.
+- **Rollback, three cases:**
+  - **The preset fix only.** Revert `tb3`'s commits. That touches only `PowerCurveEditor.tsx`, its test, the Rust tests and goldens, the owner-card fixture and ROADMAP. It restores the old preset definitions and leaves the guard in place. Projects whose owner re-picked a corrected preset and saved keep the corrected raw points, because stored data is never rewritten in either direction. Those layers simply match no preset, so no highlight shows.
+  - **Both batches.** `git revert -m 1 <merge>`.
+  - **The guard alone.** First revert `tb3` (it depends on the guard), then `tb3-guard`. Reverting the guard restores `setGcodeResult` and the old handler, and removes `generationInputs.ts`, the two counters, the subscription and `generateGcode`'s parameter. The counters are runtime state and never saved, so no project file is affected either way. The race returns with it, so the Parking Lot line would be reopened.
+- **No stored data in any direction.** `toProject`, `KerfProject` and the migrations are untouched. T5 and the N3 goldens pin that.
 
 ## Deferrals
 
-The Parking Lot index line below was added with revision 3. With revision 4, `tb3-guard` closes the race, so at Stage 3.5 that line becomes "(shipped …, kerf-power-curve-presets)". TB6 keeps the fuller Preview and revision-identity work. The line as indexed:
+The Parking Lot index line below was added with revision 3. At Stage 3.5 it becomes "(shipped …, kerf-power-curve-presets)", but only if G1-G9 pass and the battery kills m9-m16. Here is exactly what `tb3-guard` closes: a generation in flight while any of its twelve inputs changes, or while the project is replaced or a newer generation starts, can no longer publish as current; and a change to any input after publication marks the result stale. The line as indexed:
 
 - **A generation that finishes after an edit publishes an outdated result as current** — `setGcodeResult` clears `gcodeStale` unconditionally (`store/index.ts:692`; called from `MachinePanel.tsx:386`), so an edit made during an in-flight generation leaves the older G-code looking current, and with no prior result the edit does not mark staleness at all. Pre-existing, not curve-specific; owned by UI polish TB6 (revision identity, stale-result handling, edit-during-generation). Found by astra on the TB3 plan, 2026-10-04. See `.claude/plans/kerf-power-curve-presets.md` → Diagnosis.
+
+**TB6 keeps** the Preview regeneration and job-outcome work, plus removing the 15 now-redundant raisers. Stage 3.5 adds one new Parking Lot line, under TB6:
+
+- **Export G-code writes a stale result without warning** — `exportGcode` (`fileOps/index.ts:469-489`) checks only that a result exists, so a file exported after an edit carries the older program. Pre-existing; a file, not a laser path in Kerf. Found re-verifying the TB3 plan, 2026-10-04. Owner: UI polish TB6.
 
 UI polish A4 later restyles this editor (presentation only).
 
@@ -282,7 +349,7 @@ None for Lee. Everything here is technical, and the release-note wording is plai
 | 6: the failed-regeneration path was untested | CONCERN | T4: an existing result, then Apply, then a rejected generate; it stays stale, shows the failure and dispatches nothing. |
 | 9: arcs prove the handles, not the curve | CONCERN | T3 asserts the curve path and stroke and clears between opens; m7 removes only the curve block. |
 
-## Fold table: critic round 3 (astra, FAIL on X1 and X5)
+## Fold table: critic round 3 (astra, FAIL on X1 and X5) — historical; revision 5 replaced the `designRevision` design below
 
 | finding | verdict | where addressed |
 |---|---|---|
@@ -293,3 +360,21 @@ None for Lee. Everything here is technical, and the release-note wording is plai
 | 9: the N2 oracle had no falsification check | CONCERN | m8 displaces or re-powers one segment, and N2 must fail on each |
 | X4: the known issue was missing from the release notes | CONCERN | The race is now fixed, and the release-note line says so |
 | X6: no evidence record | CONCERN | Verification, "The evidence record", and the scope of "qualified" |
+
+## Fold table: critic round 4 (astra, FAIL on 2, 3, 8, 9, X1, X3, X5)
+
+| finding | verdict | where addressed |
+|---|---|---|
+| 2: `setGrblSValueMax` missing from the raiser inventory | FAIL | The guard no longer depends on an inventory of edit sites. At publication it compares the twelve fields the generator actually reads (Design 5), and the compiler enforces that set (G10, m14). Power scale is G4 and a G5 row. |
+| 3: `loadProject` replacement not invalidated | FAIL | `projectEpoch`, incremented by `loadProject` (the single path for Open, Open Recent, New and recovery); cross-project results are discarded (G3, m9, m10) |
+| 4: `tb3-guard` roots without a waiver | CONCERN | "`tb3-guard` size and roots": 7 files, one `src` root, with the cross-directory atomicity stated; no TB6 work pulled in |
+| 6: handler duties beyond publication unspecified | CONCERN | Design 5, "The handler, every duty specified": return value, console, sparse check, status, finally, per outcome; G6, G8, G9 |
+| 7: "one commit" rollback not true for two batches | CONCERN | Risks and rollback: commit structure and the three revert cases, in dependency order |
+| 8: an old project's result attached to the new one | FAIL | Discard on epoch mismatch: never published, current or stale (G3) |
+| 9: the regex-count exhaustiveness claim | FAIL | G5 dropped. Replaced by deferred-promise behavioural tests per input key, in both phases, with a meta-assertion over `GENERATION_INPUT_KEYS`; the project replacement cases; remount and both completion orders; START and FRAME refusal through `JobActionBar`; mutants m9-m16 |
+| 10: TB3 vs TB6 wording contradictory | CONCERN | T4 and the owner card no longer defer to TB6; Deferrals says exactly what closes and what TB6 keeps |
+| X1: START/FRAME admit a cross-project or power-scale-stale result | FAIL | G1-G5 assert the refusal reason through `JobActionBar` with an otherwise eligible machine; G3 asserts "Generate G-code first" after replacement |
+| X3: MaterialTestDialog misread as a publisher | FAIL | Diagnosis, "What is not a publication": a display-only predicate input; its generation is a local program with its own admission; no allowlist exists any more |
+| X4: release note overclaims | CONCERN | Design 4's note now names design, machine settings and project replacement, and is written to the ROADMAP only after the guard tests pass |
+| X5: counter lifetime and identity unspecified | FAIL | Both counters live in the store and are never reset or saved; one synchronous publication action; G6 and G7 cover remount, both orders and non-reuse |
+| X6: closing the Parking Lot item against an incomplete guard | CONCERN | Deferrals: closed only when G1-G9 pass and m9-m16 are killed; discard and stale outcomes each get a console line (G9); export parked as a new TB6 line |
