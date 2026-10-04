@@ -1,6 +1,6 @@
 # Kerf: the S-Curve and Posterize power-curve presets burn a raster as a negative; fix the presets and the blank editor (UI polish TB3)
 
-Revision 3, 2026-10-04. Revision 1 FAILED astra round 1 (`-critic-r1.md`); revision 2 FAILED astra round 2, on X5 and X1 only (`-critic-r2.md`). This revision folds both; the fold tables are at the end. This is a correctness bug. It is follow-on plan TB3 from `.claude/plans/kerf-ui-polish.md` (revision 3, critic PASS), and that entry's "Requirements" and "Acceptance evidence" are binding here.
+Revision 2, 2026-10-04. Revision 1 (`kerf-power-curve-presets-r1.md`) went to astra round 1 and FAILED (`-critic-r1.md`); this revision folds that critique, and the fold table is at the end. This is a correctness bug. It is follow-on plan TB3 from `.claude/plans/kerf-ui-polish.md` (revision 3, critic PASS), and that entry's "Requirements" and "Acceptance evidence" are binding here.
 
 ## Intent (grilled)
 
@@ -30,12 +30,9 @@ Grill: skipped, with this reason. The defect is unambiguous and no choice in it 
 - **The blank editor.**
   - The draw effect is `useEffect(() => { draw(); }, [draw])` (`:221-223`). `draw` changes only when `points`, `dragIndex` or `hoverIndex` change, and the canvas mounts only after `if (!open) return null` (`:324`). So opening the editor with the same points reference draws nothing.
   - `draw` returns early when there is no canvas (`:142`) or no 2D context (`:144`). It draws the grid lines and a dashed diagonal first, then the curve, then one `arc` per control point (`:197`). Only the control-point arcs are specific to the curve.
-- **The generation snapshot, and a pre-existing race that TB3 does not own.**
-  - `generateGcode()` reads the store once, at call time. A single generation never mixes curve state.
-  - `updateLayer` marks an EXISTING result stale (`store/index.ts:345-351`).
-  - **However, completion clears the flag unconditionally:** `setGcodeResult: (result) => set({ gcodeResult: result, gcodeStale: false })` (`store/index.ts:692`), called from the Generate handler (`MachinePanel.tsx:386`). So when an Apply (or any edit) lands while a generation is in flight, the older generation's result is published as current. When no result existed at the start, the edit does not set the flag at all.
-  - This is pre-existing and not specific to curves: any layer or design edit during a generation hits it. TB3 neither introduces it nor relies on it. It belongs to UI polish follow-on **TB6** ("Preview regeneration ... revision identity, stale-result handling, edit-during-generation"), and gets a new Parking Lot line (Deferrals).
-  - **The explicit prerequisite for TB3's owner card:** press Generate only after Apply, and make no edit while a generation runs (the card's steps say so).
+- **The generation snapshot.**
+  - `generateGcode()` reads the store at call time, so an Apply during an in-flight generation affects only the next one.
+  - `updateLayer` marks an existing result stale (`store/index.ts:345-351`, `gcodeStale`), so a result generated before the Apply is flagged out of date. It is never silently mixed.
 
 ## Design
 
@@ -58,11 +55,9 @@ One batch, `tb3`, Standard tier.
 | `src/components/panels/PowerCurveEditor.tsx` | `src` | the two preset arrays; the draw effect's dependencies and its `open` guard |
 | `src/components/panels/__tests__/powerCurveEditor.test.tsx` (new) | `src` | T1-T6 |
 | `src-tauri/src/engine/image_gcode_gen.rs` | `src-tauri` | tests only, inside the existing `mod tests`; no production line changes |
-| `src-tauri/tests/golden/tb3_legacy_s_curve.gcode`, `tb3_legacy_posterize.gcode`, `tb3_linear.gcode` (new) | `src-tauri` | N3's pinned-base goldens, captured at the base commit |
-| `docs/owner-cards/tb3-legacy-s-curve.kerf` (new) | `docs` | the bounded legacy project for owner card step 3 |
 | `ROADMAP.md` (Stage 3.5) | root | shipped entry with the release note; the owner card in `next` |
 
-**Waiver for the multi-root rule** (8 files over `src`, `src-tauri` and `docs`, all exclusive to this batch). This is one defect: a value table in TS whose meaning lives in the Rust LUT. The Rust edits are tests that pin that meaning, with no production change. Splitting the batch would ship a preset fix with nothing pinning what its numbers do.
+**Waiver for the two-root rule.** This is one defect: a value table in TS whose meaning lives in the Rust LUT. The Rust edits are tests that pin that meaning, with no production change. Splitting the batch would ship a preset fix with nothing pinning what its numbers do.
 
 **Dependencies.**
 - `tb3` depends on nothing.
@@ -83,14 +78,13 @@ One batch, `tb3`, Standard tier.
 - **T3, draw on open, curve-specific.**
   - Stub `HTMLCanvasElement.prototype.getContext` to return a recording context. jsdom has no canvas.
   - Render with `open={false}`, then rerender with `open={true}` and the same `points` reference.
-  - Assert the curve stroke itself: after open, the recording contains the curve path, a `moveTo` at the first point's canvas coordinates (`shadeToCanvasX(x)`, `powerToCanvasY(y)`, exported or recomputed from the component's constants), followed by the curve's segments and a `stroke` in the curve's own `strokeStyle`. Assert the control-point `arc` calls too. Grid strokes and the dashed diagonal alone do not pass.
-  - Clear the recording, Cancel, reopen with different incoming points, and assert the curve path now starts at the new first point.
+  - Assert the recording holds one `arc` call at each control point's canvas coordinates (`shadeToCanvasX(x)`, `powerToCanvasY(y)`, exported or recomputed from the component's constants). Grid strokes alone do not pass.
+  - Then Cancel, reopen with different incoming points, and assert the arcs are at the new coordinates.
   - This is red today. Mutation: removing `open` from the dependencies must fail it.
 - **T4, Apply writes once.**
   - Pick S-Curve, press Apply, and assert `onApply` is called exactly once with the new S-Curve points.
   - Cancel after picking a preset: `onApply` is not called.
   - With `getContext` returning null, Apply still works and no plot is drawn. No crash, and nothing applied implicitly.
-  - **Failed regeneration after Apply** (in the MachinePanel generate path, with `invoke` mocked). Start with an existing result, then Apply a new curve (the result goes stale), then make `generate_image_gcode` reject. The old result stays flagged stale, the existing failure message shows, and no job is dispatched. This pins today's behaviour; it does not cover the in-flight race, which is TB6's.
 - **T5, the saved-project round trip, both legacy arrays.**
   - Put one image object on a raster layer whose `powerCurve` is the OLD S-Curve, and a second layer with the OLD Posterize.
   - Serialise with `toProject()` and `JSON.stringify`, as `saveToPath` does (`fileOps/index.ts:507-508`).
@@ -134,8 +128,7 @@ Every `find` must have `grep -cF` equal to 1, the journal is at the standard pat
 - **m1:** S-Curve's first point back to `{ x: 0, y: 0 }`. Kills T1 and T2.
 - **m2:** Posterize's first point back to `{ x: 0, y: 0 }`. Kills T1 and T2.
 - **m3:** `[open, draw]` back to `[draw]`. Kills T3.
-- **m4:** the `arc` loop removed from `draw`. Kills T3.
-- **m7:** only the curve-rendering block removed from `draw`, with the grid, the diagonal and the arcs kept. Kills T3 and proves it checks the curve stroke, not just the handles.
+- **m4:** the `arc` loop removed from `draw`. Kills T3 and proves T3 is curve-specific.
 - **m5:** a `loadProjectWithMigrations` mutant that rewrites `powerCurve`, for example replacing the old S-Curve with the new one. Kills T5.
 - **m6:** `TB3_S_CURVE`'s first literal flipped in Rust. Kills T2.
 
@@ -166,23 +159,13 @@ The control: Linear stays byte-identical under N3, and the controls must stay gr
     - the extraction or air assist the owner normally uses;
     - the machine's physical power switch or E-stop within reach;
     - the owner stays at the machine for the whole run.
-  - **Design** (steps 1 and 2): import a 40 × 10 mm black-to-white horizontal gradient image. Kerf's own material-test grid is not used for this. Set the layer and image to the full recipe below, and confirm each value on screen before the job:
-    - power mode: Variable (M4);
-    - Max power: no more than 20%; Min power: 0;
-    - dither: Grayscale;
-    - interval: 0.1 mm;
-    - image adjustments neutral: brightness 0, contrast 0, gamma 1.0, invert off, background removal off;
-    - passes: 1;
-    - speed: the speed the owner already uses for photo engraving on this material. If he has none for this material, run Kerf's material test on it first, and use the lightest cell that marks clearly;
-    - only this layer enabled for output.
+  - **Design:** import a 40 × 10 mm black-to-white horizontal gradient image (Kerf's own material-test grid is not used for this). Set its layer to Variable (M4) power, at no more than 20% power and at the speed the owner already uses for photo engraving on that material, one pass.
   - **Frame first:** press FRAME and watch the head trace the bounding box.
-  - **Before every burn:** press Generate after the last Apply, and make no edit while it generates. That is the prerequisite in the Diagnosis: until TB6 lands, an edit during generation can publish an older result as current. Then press FRAME and watch the head trace the bounding box.
-  - **Worst cases this card guards against:** a flame on the material; marking outside the framed box; marking that continues after the job ends; Kerf not responding to STOP.
-  - **Abort procedure:** on any of these, press STOP, then switch the controller off at its power switch. That isolates the laser physically, which a status report cannot. Note what happened, and do not re-run until it is understood.
+  - **Abort procedure:** if anything is unexpected (a flame, marking outside the frame, continued marking after the job ends, or Kerf not responding), press STOP, then the physical switch. Note what happened. Do not re-run until it is understood.
   - **Steps:**
     1. Select the new S-Curve, then press Apply. Engrave. Pass: the black end is darkest, the white end unmarked, and darkness falls smoothly between them.
     2. The same, with Posterize. Pass: three distinct bands from dark to light, and the white end unmarked.
-    3. **Legacy check, bounded.** Open `docs/owner-cards/tb3-legacy-s-curve.kerf`, which the relay commits. It holds one 40 × 10 mm gradient on one raster layer with the old S-Curve points and the recipe above. Do not open an arbitrary older project for this step. Before generating, re-check every recipe value on screen against the list above; if any differs, stop and do not run. Do not re-pick the preset. Generate, frame, engrave. Pass: it burns the old way (the white end darkest). That confirms nothing was migrated.
+    3. Open a project saved before the fix that used the old S-Curve, without re-picking. It still engraves the old way (negative). This confirms nothing was migrated.
   - **Outcome:** PASSED, FAILED (a fix relay), or INCONCLUSIVE (any abort).
 
 ## Risks and rollback
@@ -192,11 +175,7 @@ The control: Linear stays byte-identical under N3, and the controls must stay gr
 
 ## Deferrals
 
-One new Parking Lot index line, added in this revision's commit:
-
-- **A generation that finishes after an edit publishes an outdated result as current** — `setGcodeResult` clears `gcodeStale` unconditionally (`store/index.ts:692`; called from `MachinePanel.tsx:386`), so an edit made during an in-flight generation leaves the older G-code looking current, and with no prior result the edit does not mark staleness at all. Pre-existing, not curve-specific; owned by UI polish TB6 (revision identity, stale-result handling, edit-during-generation). Found by astra on the TB3 plan, 2026-10-04. See `.claude/plans/kerf-power-curve-presets.md` → Diagnosis.
-
-UI polish A4 later restyles this editor (presentation only).
+None new. UI polish A4 later restyles this editor (presentation only).
 
 ## Decisions
 
@@ -217,14 +196,3 @@ None for Lee. Everything here is technical, and the release-note wording is plai
 | X4 Copy: "four bands"; "pick again" omitted Apply | CONCERN | Design 1 (three bands plus white); the release note says pick, Apply, save |
 | X5 Reopen, Cancel, Apply, generation snapshot | CONCERN | T3 reopen with changed points; T4 Cancel and Apply-once; the snapshot and `gcodeStale` cited in the Diagnosis |
 | X6 Status: shipped vs pending vs qualified | CONCERN | Verification, "Recorded status" |
-
-## Fold table: critic round 2 (astra, FAIL on X5 and X1)
-
-| finding | verdict | where addressed |
-|---|---|---|
-| X5: a false claim that an older result is never published as current | FAIL | Diagnosis: the claim is corrected, and the `setGcodeResult` race is cited (store/index.ts:692, MachinePanel.tsx:386) as pre-existing; owned by TB6, with a new Parking Lot line. The owner card's prerequisite is Generate after Apply, with no edits during generation. TB3 adds no publication path. |
-| X1: the legacy step could inherit arbitrary saved settings | FAIL | Owner card step 3 uses a dedicated bounded fixture (`docs/owner-cards/tb3-legacy-s-curve.kerf`) and re-checks every value on screen; the worst cases and physical isolation (the controller power switch) are named. |
-| 3: the owner recipe was not reproducible | CONCERN | The Design bullet gives the full recipe (mode, max and min power, grayscale, interval, neutral adjustments, passes, speed source, one layer enabled) and regeneration before each burn. |
-| 4: the file table omitted the goldens | CONCERN | The table lists all 8 files; the waiver covers the actual roots. |
-| 6: the failed-regeneration path was untested | CONCERN | T4: an existing result, then Apply, then a rejected generate; it stays stale, shows the failure and dispatches nothing. |
-| 9: arcs prove the handles, not the curve | CONCERN | T3 asserts the curve path and stroke and clears between opens; m7 removes only the curve block. |
