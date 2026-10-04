@@ -1,6 +1,6 @@
 # Kerf: the S-Curve and Posterize power-curve presets burn a raster as a negative; fix the presets and the blank editor (UI polish TB3)
 
-Revision 4, 2026-10-04. Revisions 1-3 FAILED astra rounds 1-3 (`-critic-r1.md` to `-critic-r3.md`); round 3 failed on X1 and X5 only. This revision folds all three rounds; the fold tables are at the end. This is a correctness bug. It is follow-on plan TB3 from `.claude/plans/kerf-ui-polish.md` (revision 3, critic PASS), and that entry's "Requirements" and "Acceptance evidence" are binding here.
+Revision 3, 2026-10-04. Revision 1 FAILED astra round 1 (`-critic-r1.md`); revision 2 FAILED astra round 2, on X5 and X1 only (`-critic-r2.md`). This revision folds both; the fold tables are at the end. This is a correctness bug. It is follow-on plan TB3 from `.claude/plans/kerf-ui-polish.md` (revision 3, critic PASS), and that entry's "Requirements" and "Acceptance evidence" are binding here.
 
 ## Intent (grilled)
 
@@ -34,13 +34,8 @@ Grill: skipped, with this reason. The defect is unambiguous and no choice in it 
   - `generateGcode()` reads the store once, at call time. A single generation never mixes curve state.
   - `updateLayer` marks an EXISTING result stale (`store/index.ts:345-351`).
   - **However, completion clears the flag unconditionally:** `setGcodeResult: (result) => set({ gcodeResult: result, gcodeStale: false })` (`store/index.ts:692`), called from the Generate handler (`MachinePanel.tsx:386`). So when an Apply (or any edit) lands while a generation is in flight, the older generation's result is published as current. When no result existed at the start, the edit does not set the flag at all.
-  - This is pre-existing and not specific to curves: any layer or design edit during a generation hits it. Because TB3's own workflow is Apply then Generate, **TB3 closes it with a narrow, enforced publication guard** (batch `tb3-guard`, Design 5). That guard is not a deferral. TB6 later builds its fuller revision identity and Preview handling on top of it.
-  - **The staleness writers, as they are today:**
-    - 12 sites in `store/index.ts` use `gcodeStale: state.gcodeResult !== null ? true : state.gcodeStale`;
-    - `setWorkspaceSize` (`:401-409`) raises the flag only when the size changes;
-    - `applyObjects` (`storeHelpers.ts:44`) raises it on every objects write;
-    - new project resets it (`:524`).
-  - **The publication sites:** `MachinePanel.tsx:386` (`setGcodeResult` after `await generateGcode()`, the only async one), and `MaterialTestDialog.tsx:283`, which publishes the material-test program with `gcodeStale: false`.
+  - This is pre-existing and not specific to curves: any layer or design edit during a generation hits it. TB3 neither introduces it nor relies on it. It belongs to UI polish follow-on **TB6** ("Preview regeneration ... revision identity, stale-result handling, edit-during-generation"), and gets a new Parking Lot line (Deferrals).
+  - **The explicit prerequisite for TB3's owner card:** press Generate only after Apply, and make no edit while a generation runs (the card's steps say so).
 
 ## Design
 
@@ -52,34 +47,11 @@ Grill: skipped, with this reason. The defect is unambiguous and no choice in it 
    - The early returns at `:142` and `:144` stay as they are: with no context, the editor shows no plot.
    - Apply, Cancel, Escape and the focus trap are unchanged. Nothing is applied or generated as a side effect of drawing or of a failed draw.
 3. **No migration.** Saved `layer.powerCurve` points are never rewritten. The file holds raw points, which cannot be told apart from a deliberate custom curve, so a migration would change a saved job's output without the owner's choice.
-4. **The release-note line.** The release session owes it, and the ROADMAP shipped entry carries the text: "Fixed: the S-Curve and Posterize power-curve presets were inverted, so they burned an image as its negative. Layers that already used them keep their old curve until you change it: open the layer's power curve, pick the preset, press Apply, then save the project. Also fixed: a G-code result that finished generating after you changed the design was shown as up to date; it is now marked out of date, so START asks you to generate again."
+4. **The release-note line.** The release session owes it, and the ROADMAP shipped entry carries the text: "Fixed: the S-Curve and Posterize power-curve presets were inverted, so they burned an image as its negative. Layers that already used them keep their old curve until you change it: open the layer's power curve, pick the preset, press Apply, then save the project."
 
-5. **The publication guard** (batch `tb3-guard`).
-   - **A design revision.** The store gains `designRevision: number`. It increments at every site that raises staleness today (the 12 sites, `setWorkspaceSize` when the size changes, and `applyObjects`), whether or not a result exists, so the no-prior-result case is covered too.
-   - **Capture at start.** `handleGenerateGcode` captures `designRevision` and a per-call sequence number (`generationSeq`, a module- or ref-held counter) before `await generateGcode()`.
-   - **Publish on completion,** under exactly one rule:
-     - if a newer generation has already published (its sequence is higher), drop this result and say nothing;
-     - otherwise publish it, with `gcodeStale` set to `designRevision !== captured`.
+## Batch, tier and dependencies
 
-     An out-of-date result is shown as out of date, through the existing stale path, so START and FRAME stay blocked exactly as they are for any stale result today (`canStartJob.ts` reads `gcodeStale`). It is never shown as current.
-   - **The setter.** `setGcodeResult` takes an explicit `stale` argument, defaulting to `false` for existing callers. The material-test publication (`MaterialTestDialog.tsx:283`) is synchronous and builds from the dialog's own inputs, so it is unchanged and named in the source scan's allowlist.
-   - **What it does not change:** the generator, the stop path, the job gates (they keep reading `gcodeStale`), or any staleness raiser's condition. Each raiser only gains the increment.
-
-## Batches, tier and dependencies
-
-Standard tier, two batches in one relay. `tb3-guard` lands first; `tb3` follows on top.
-
-| batch | files | depends on |
-|---|---|---|
-| `tb3-guard` | `src/app/store/index.ts`, `src/app/store/storeTypes.ts`, `src/app/store/storeHelpers.ts`, `src/components/panels/MachinePanel.tsx` (the Generate handler only), `src/app/store/__tests__/generationGuard.test.ts` (new) | none |
-| `tb3` | the table below | `tb3-guard` |
-
-**File ownership against concurrent work.**
-- `MachinePanel.tsx` belongs to UI polish A12, which has not started; `tb3-guard` must merge before A12 is briefed.
-- The store files are in no current polish batch.
-- ROADMAP.md is edited at Stage 3.5 by both this relay and polish A1, which is running now. Both edits are additive (shipped entries, Parking Lot lines). The orchestrator merges the relays one at a time into marvin/kerf-gap and resolves any ROADMAP conflict by keeping both sides, as it did for R3 and motion-trust. The two relays are independent in code, not in that one document.
-
-### Batch `tb3`
+One batch, `tb3`, Standard tier.
 
 | file | root | change |
 |---|---|---|
@@ -93,19 +65,11 @@ Standard tier, two batches in one relay. `tb3-guard` lands first; `tb3` follows 
 **Waiver for the multi-root rule** (8 files over `src`, `src-tauri` and `docs`, all exclusive to this batch). This is one defect: a value table in TS whose meaning lives in the Rust LUT. The Rust edits are tests that pin that meaning, with no production change. Splitting the batch would ship a preset fix with nothing pinning what its numbers do.
 
 **Dependencies.**
-- `tb3` depends on `tb3-guard`, for the Apply-then-Generate workflow.
+- `tb3` depends on nothing.
 - `tb3` must merge before UI polish batch A4, which restyles `PowerCurveEditor.tsx` (the polish plan's collision table: "TB3 first").
-- In code, `tb3` and `tb3-guard` share no file with polish A1 (`src/index.css`, its contrast test, its walker); ROADMAP integration is serialised as above.
+- `tb3` does not touch `src/index.css`, so it can run beside polish A1, which is in flight.
 
 ## Tests
-
-### The guard (`generationGuard.test.ts`, with `generateGcode` and `invoke` mocked as deferred promises)
-
-- **G1, an edit during a pending generation, no prior result.** Press Generate. Before it resolves, Apply a curve (`updateLayer`). Resolve it. The result is published with `gcodeStale` true, and `canStartJob` refuses START with its existing stale reason. This is red today: the result is published as current.
-- **G2, the same with an existing result.** The new result is stale, and the earlier result is replaced but not shown as current.
-- **G3, overlapping completions out of order.** Start A, edit, start B. Resolve B, then A. B is published (current, since no edit followed B). A is dropped: it does not overwrite B. This is red today: A overwrites B.
-- **G4, no edit.** Generate, resolve: published current. This is the positive control.
-- **G5, source scan.** Count the staleness raisers in `store/index.ts` and `storeHelpers.ts`: the 12-form pattern, `setWorkspaceSize`'s and `applyObjects`'s. Every one must sit beside a `designRevision` increment in the same `set`; the count is exact, so a new raiser without the increment turns it red. Every `gcodeResult:` publication outside the store goes through `setGcodeResult`, except the named `MaterialTestDialog.tsx:283` allowlist entry.
 
 ### TS (`powerCurveEditor.test.tsx`)
 
@@ -172,10 +136,6 @@ Every `find` must have `grep -cF` equal to 1, the journal is at the standard pat
 - **m3:** `[open, draw]` back to `[draw]`. Kills T3.
 - **m4:** the `arc` loop removed from `draw`. Kills T3.
 - **m7:** only the curve-rendering block removed from `draw`, with the grid, the diagonal and the arcs kept. Kills T3 and proves it checks the curve stroke, not just the handles.
-- **m8, the decoder's own teeth:** in the N2 test's expected-G-code path, displace one powered segment's X by 0.5 mm, and separately corrupt its S token. N2 itself must fail on each, independently of T1, T2 and N1. This proves the spatial oracle checks placement and power. Applied as a test-input mutant: a fixture-transform hook in the test, toggled by the battery.
-- **m9:** drop one `designRevision` increment from a staleness raiser. Kills G5, and G1 if it is the `updateLayer` raiser.
-- **m10:** publish with `stale` hard-coded false. Kills G1 and G2.
-- **m11:** remove the sequence check. Kills G3.
 - **m5:** a `loadProjectWithMigrations` mutant that rewrites `powerCurve`, for example replacing the old S-Curve with the new one. Kills T5.
 - **m6:** `TB3_S_CURVE`'s first literal flipped in Rust. Kills T2.
 
@@ -199,43 +159,30 @@ The control: Linear stays byte-identical under N3, and the controls must stay gr
   - Cancel, reopen: still drawn.
 
   Screenshots go in the relay log.
-- **Recorded status.** The ROADMAP shipped entry says "implementation merged to the session branch; owner card pending; not physically qualified". It is not a release gate: the release rulings in DECISIONS (2026-09-27) are unchanged.
-  - **The evidence record** (written into the hand-off log when the card is run):
-    - the build version and commit;
-    - the controller as shown in Kerf;
-    - the material;
-    - the exact Max power and speed used;
-    - a photo of each burn;
-    - PASSED, FAILED or INCONCLUSIVE per step.
-  - **What "qualified" means:** only that the corrected presets produce the expected tonal direction on this machine and material. It is no general claim about laser safety.
+- **Recorded status.** The ROADMAP shipped entry says "implementation merged to the session branch; owner card pending; not physically qualified". It flips to qualified only when the owner card passes. It is not a release gate: the release rulings in DECISIONS (2026-09-27) are unchanged.
 - **Owner card** (`next`; Lee runs it, owner only, in the release build). Evidence is the visible mark on the material, and nothing about the beam beyond it (status-only ruling, DECISIONS 2026-09-10 as amended):
   - **Setup:**
     - scrap card or a 3 mm plywood offcut, on the bed with nothing under it that can burn;
     - the extraction or air assist the owner normally uses;
     - the machine's physical power switch or E-stop within reach;
     - the owner stays at the machine for the whole run.
-  - **The recipe** (fixed; confirm every value on screen before each job):
-    - material: scrap card;
-    - image: a 40 × 10 mm black-to-white horizontal gradient;
-    - power mode: Variable (M4); Max power 15%; Min power 0;
-    - speed 3000 mm/min;
-    - dither: Grayscale; interval 0.1 mm;
+  - **Design** (steps 1 and 2): import a 40 × 10 mm black-to-white horizontal gradient image. Kerf's own material-test grid is not used for this. Set the layer and image to the full recipe below, and confirm each value on screen before the job:
+    - power mode: Variable (M4);
+    - Max power: no more than 20%; Min power: 0;
+    - dither: Grayscale;
+    - interval: 0.1 mm;
     - image adjustments neutral: brightness 0, contrast 0, gamma 1.0, invert off, background removal off;
-    - passes: 1; only this layer enabled for output.
-
-    The single permitted adjustment: if step 1 leaves no visible mark at all, raise Max power to 20%, regenerate, frame, and repeat once. Never above 20%, never slower than 3000 mm/min, and nothing else changes. If 20% still leaves no mark, record INCONCLUSIVE and stop. The material test is not part of this card.
+    - passes: 1;
+    - speed: the speed the owner already uses for photo engraving on this material. If he has none for this material, run Kerf's material test on it first, and use the lightest cell that marks clearly;
+    - only this layer enabled for output.
   - **Frame first:** press FRAME and watch the head trace the bounding box.
   - **Before every burn:** press Generate after the last Apply, and make no edit while it generates. That is the prerequisite in the Diagnosis: until TB6 lands, an edit during generation can publish an older result as current. Then press FRAME and watch the head trace the bounding box.
   - **Worst cases this card guards against:** a flame on the material; marking outside the framed box; marking that continues after the job ends; Kerf not responding to STOP.
-  - **Before the card:**
-    - identify, by tracing the wiring, the switch or plug that removes power from the laser module itself (expected: the machine's main power inlet, which feeds the controller and the module). If it cannot be identified with confidence, do not run the card;
-    - have a fire extinguisher or fire blanket within reach;
-    - the owner stays at the machine for every burn.
-  - **Abort procedure:** on any worst case, press STOP, then cut the laser-module supply identified above. Kerf cannot confirm the beam is off; only that physical disconnect does. Note what happened, and do not re-run until it is understood.
+  - **Abort procedure:** on any of these, press STOP, then switch the controller off at its power switch. That isolates the laser physically, which a status report cannot. Note what happened, and do not re-run until it is understood.
   - **Steps:**
     1. Select the new S-Curve, then press Apply. Engrave. Pass: the black end is darkest, the white end unmarked, and darkness falls smoothly between them.
     2. The same, with Posterize. Pass: three distinct bands from dark to light, and the white end unmarked.
-    3. **Legacy check, bounded.** Open `docs/owner-cards/tb3-legacy-s-curve.kerf`, which the relay commits with exactly the fixed recipe (15% Max power, 3000 mm/min, the other values above, and the old S-Curve points) on one 40 × 10 mm gradient, on one raster layer. If step 1 needed 20%, use 20% here too; that is the only allowed change. Do not open an arbitrary older project for this step. Before generating, re-check every recipe value on screen against the list above; if any differs, stop and do not run. Do not re-pick the preset. Generate, frame, engrave. Pass: it burns the old way (the white end darkest). That confirms nothing was migrated.
+    3. **Legacy check, bounded.** Open `docs/owner-cards/tb3-legacy-s-curve.kerf`, which the relay commits. It holds one 40 × 10 mm gradient on one raster layer with the old S-Curve points and the recipe above. Do not open an arbitrary older project for this step. Before generating, re-check every recipe value on screen against the list above; if any differs, stop and do not run. Do not re-pick the preset. Generate, frame, engrave. Pass: it burns the old way (the white end darkest). That confirms nothing was migrated.
   - **Outcome:** PASSED, FAILED (a fix relay), or INCONCLUSIVE (any abort).
 
 ## Risks and rollback
@@ -245,7 +192,7 @@ The control: Linear stays byte-identical under N3, and the controls must stay gr
 
 ## Deferrals
 
-The Parking Lot index line below was added with revision 3. With revision 4, `tb3-guard` closes the race, so at Stage 3.5 that line becomes "(shipped …, kerf-power-curve-presets)". TB6 keeps the fuller Preview and revision-identity work. The line as indexed:
+One new Parking Lot index line, added in this revision's commit:
 
 - **A generation that finishes after an edit publishes an outdated result as current** — `setGcodeResult` clears `gcodeStale` unconditionally (`store/index.ts:692`; called from `MachinePanel.tsx:386`), so an edit made during an in-flight generation leaves the older G-code looking current, and with no prior result the edit does not mark staleness at all. Pre-existing, not curve-specific; owned by UI polish TB6 (revision identity, stale-result handling, edit-during-generation). Found by astra on the TB3 plan, 2026-10-04. See `.claude/plans/kerf-power-curve-presets.md` → Diagnosis.
 
@@ -281,15 +228,3 @@ None for Lee. Everything here is technical, and the release-note wording is plai
 | 4: the file table omitted the goldens | CONCERN | The table lists all 8 files; the waiver covers the actual roots. |
 | 6: the failed-regeneration path was untested | CONCERN | T4: an existing result, then Apply, then a rejected generate; it stays stale, shows the failure and dispatches nothing. |
 | 9: arcs prove the handles, not the curve | CONCERN | T3 asserts the curve path and stroke and clears between opens; m7 removes only the curve block. |
-
-## Fold table: critic round 3 (astra, FAIL on X1 and X5)
-
-| finding | verdict | where addressed |
-|---|---|---|
-| X5: a deferral instead of an enforced guard | FAIL | Design 5 and batch `tb3-guard`: a store `designRevision` raised at every existing staleness site, capture plus sequence at Generate, publication stale on mismatch and dropped when superseded; G1 to G5 cover no prior result, an existing result, out-of-order overlap and the source scan; m9 to m11 |
-| X1: the material-test fallback escaped the cap; controller-switch isolation was asserted | FAIL | The owner card has a fixed recipe (15%, 3000 mm/min, scrap card) with one bounded adjustment to 20% and no material test. The laser-module supply disconnect is identified by wiring before the card. The card needs fire-suppression readiness. "Kerf cannot confirm the beam is off" |
-| 3: the fixture recipe was owner-dependent | CONCERN | The committed fixture carries the exact fixed recipe, and the one allowed change is named |
-| 4: shared ROADMAP integration | CONCERN | "File ownership against concurrent work": serialised merges, additive resolution |
-| 9: the N2 oracle had no falsification check | CONCERN | m8 displaces or re-powers one segment, and N2 must fail on each |
-| X4: the known issue was missing from the release notes | CONCERN | The race is now fixed, and the release-note line says so |
-| X6: no evidence record | CONCERN | Verification, "The evidence record", and the scope of "qualified" |
