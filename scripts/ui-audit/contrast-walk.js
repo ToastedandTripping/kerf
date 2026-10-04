@@ -1,13 +1,13 @@
-/* global document, getComputedStyle, innerHeight, innerWidth, NodeFilter */
+/* global window, document, getComputedStyle, innerHeight, innerWidth, NodeFilter */
 /*
  * contrast-walk.js --in-page WCAG 2.x contrast walker (UI polish A1).
  *
  * Dependency-free. Evaluate it in the page with any driver (CDP
- * Runtime.evaluate, puppeteer page.evaluate, the DevTools MCP). The file is a
- * single function expression, so `(<file text>)(options)` returns the result:
+ * Runtime.evaluate, puppeteer page.evaluate, the DevTools MCP). Evaluating the
+ * file defines window.kerfContrastWalk; call it in the same evaluation:
  *
  *   const src = fs.readFileSync("scripts/ui-audit/contrast-walk.js", "utf8");
- *   const result = await page.evaluate(`(${src})({ failingOnly: true })`);
+ *   const result = await page.evaluate(`${src}\nkerfContrastWalk({ failingOnly: true })`);
  *
  * Options: { root: CSS selector (default body), failingOnly: boolean (default true) }
  * Returns { checked, failing, nodes: [{ text, selector, ratio, need, size, weight,
@@ -21,9 +21,7 @@
  * control, which WCAG 1.4.3 exempts; the walker reports it and lets the reader
  * decide. Ported from the access critic's audit.mjs.
  */
-// The file is evaluated as an expression by the driver, so a bare function expression is the API.
-// eslint-disable-next-line @typescript-eslint/no-unused-expressions
-(function contrastWalk(options) {
+window.kerfContrastWalk = function contrastWalk(options) {
   var opts = options || {};
   var failingOnly = opts.failingOnly !== false;
   var parse = function (s) {
@@ -156,4 +154,4 @@
     });
   }
   return { checked: checked, failing: failing, nodes: nodes };
-});
+};
