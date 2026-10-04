@@ -81,6 +81,17 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 ## Log (newest first)
 
+### 2026-10-04 TB1 plan written (no critic yet)
+`.claude/plans/kerf-stop-reachability.md` revision 1 (Opus xhigh author). The design raises STOP in place: one `STOP_LAYER_Z` above every overlay, no dialog file edited, and a z-index source scan plus a runtime walk. One `operatorStop()` serves the button, a new Stop key (Ctrl+. / Cmd+.) listening in the capture phase from main.tsx so it survives a React crash, and a STOP on the crash screen. The outcome is written only after invoke(serial_stop) and carries connection identity. Batches: B1 (stop outcome core) and B2 (one stop function, the key, the crash screen) run in parallel; B3 (the raised STOP) needs A1 and A7. Facts the author found, all safety-relevant:
+- A second STOP can report an earlier stop's 'confirmed' as its own (serial.rs:1403-1413, a stored result never cleared). TB1 handles it in TS; the native fix is parked.
+- STOP cannot be clicked at all over onboarding or the recovery prompt.
+- A React crash leaves no STOP on screen while the job keeps streaming.
+- A late stop failure from an old connection sets alarm on the new one (connection.ts:983-988).
+- After an unconfirmed stop, START is refused only in the closed console.
+- confirm() and native file dialogs freeze STOP (parked).
+- The canvas context-menu backdrop also covers STOP.
+One Lee decision: the Stop key (Ctrl+. recommended; it ships with B2 if he says nothing). NEXT: critic (astra; the week was about 80% at the last run).
+
 ### 2026-10-04 TB3 critic round 4: FAIL (the guard is incomplete; round 5 is the cap)
 astra round 4 (`.claude/plans/kerf-power-curve-presets-critic-r4.md`) passed the preset and draw changes but FAILED the tb3-guard design. It missed the `setGrblSValueMax` staleness raiser (store/index.ts:614-626). It missed `loadProject` (Open and New, :505-527), so an in-flight result from the old project can attach to the new one as current. It misread `MaterialTestDialog.tsx:283`, which builds a local displayGate and publishes no result. The sequence counter needs a defined store lifetime and a project epoch. The handler's other duties (boolean return, console line, finally) are unspecified. And the plan's text still says both 'TB3 closes it' and 'TB6's' in places. FOR THE NEXT CONTEXT, choose ONE before round 5 (the cap): (a) complete the guard: a project epoch bumped in loadProject, every raiser including setGrblSValueMax found by a semantic scan rather than a pattern count, the sequence and epoch held in the store, and a stale-or-dropped result never published as current, including across project replacement; or (b) split it: ship the preset fix alone in its own small plan, and move the guard to a TB6a plan with its own critic. Option (b) contradicts round 3's X5 FAIL on deferral, so (a) is the likely path. If round 5 fails, escalate to Lee in the structured-decision shape.
 
