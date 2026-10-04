@@ -1,99 +1,138 @@
 # Kerf: the S-Curve and Posterize power-curve presets burn a raster as a negative; fix the presets and the blank editor (UI polish TB3)
 
-Revision 1, 2026-10-04. Correctness bug. Follow-on plan TB3 from `.claude/plans/kerf-ui-polish.md`, revision 3, critic PASS. Its "Requirements" and "Acceptance evidence" lines are binding here and are quoted where they apply.
+Revision 2, 2026-10-04. Revision 1 (`kerf-power-curve-presets-r1.md`) went to astra round 1 and FAILED (`-critic-r1.md`); this revision folds that critique, and the fold table is at the end. This is a correctness bug. It is follow-on plan TB3 from `.claude/plans/kerf-ui-polish.md` (revision 3, critic PASS), and that entry's "Requirements" and "Acceptance evidence" are binding here.
 
 ## Intent (grilled)
 
-Grill: skipped, with this reason. The defect is unambiguous, and no choice in it depends on Lee's preference. Lee ruled the order on 2026-10-02 ("All recs", then "Kick off the relay"). The coordinator relayed his go on 2026-10-04 ("get him working on the active projects"). Everything below is technical, decided under Lee's 2026-09-29 delegation ("I defer to your judgement and research").
+Grill: skipped, with this reason. The defect is unambiguous and no choice in it depends on Lee's preference. Lee ruled the order on 2026-10-02 ("All recs", then "Kick off the relay"), and the coordinator relayed his go on 2026-10-04 ("get him working on the active projects"). Everything below is technical, decided under Lee's 2026-09-29 delegation ("I defer to your judgement and research").
 
 **Summary / key decisions.**
-- **The bug.** Two of the three presets in the Power Curve editor, S-Curve and Posterize, map black (shade 0) to 0% power and white to 100%. A photo engraved with either burns as its negative, and nothing warns.
-- **The fix.** Give both presets the same direction as Linear: shade 0 at 100% power, falling to 0% at shade 255.
-- **The blank editor.** The editor draws nothing when it first opens. Make it draw on open.
-- **Saved projects are left untouched.** A layer that already stores the old points keeps them, so its output does not change behind the owner's back. The release note tells him how to repair it.
+- **The bug.** Two of the three presets in the Power Curve editor (S-Curve, Posterize) map black (shade 0) to 0% power and white to 100%. A photo engraved with either burns as its negative, and nothing warns.
+- **The fix.** Give both presets the direction Linear already has: shade 0 at 100%, falling to 0% at shade 255.
+- **The editor.** It draws its curve when it opens, instead of staying blank until first hovered.
+- **Saved projects.** Stored curves are never rewritten. A layer saved with the old points keeps generating exactly what it generated before; the release note tells the owner how to re-pick.
 
-## Diagnosis (verified on marvin/kerf-gap at 8e7dfcc)
+## Diagnosis (verified on marvin/kerf-gap at 70cdfa1)
 
-- **The point convention.** `CurvePoint` is `x` = input shade 0-255, `y` = output power 0-100% (`src/components/panels/PowerCurveEditor.tsx:4-7`). The engine builds a LUT from these points with monotone cubic interpolation, then maps power back to shade: power 100% = shade 0 (full burn), power 0% = shade 255 (no burn) (`src-tauri/src/engine/image_gcode_gen.rs:225-230` doc, `build_power_curve_lut` from :230). It applies the LUT to every pixel before dithering (`:141-149`).
-- **What the engine treats as identity.** The test `power_curve_linear_is_identity` (`image_gcode_gen.rs:534-552`) confirms that Linear, `[{0,100},{255,0}]`, is the identity.
-- **The inverted presets.** `PowerCurveEditor.tsx:9-31` defines:
-  - S-Curve: `[{0,0},{64,10},{128,50},{192,90},{255,100}]`;
+- **The point convention.** `CurvePoint` is `x` = input shade 0-255, `y` = output power 0-100% (`src/components/panels/PowerCurveEditor.tsx:4-7`). The engine builds a 256-entry LUT from the points with monotone cubic (Fritsch-Carlson) interpolation, then maps power back to shade: power 100% = shade 0 (full burn), power 0% = shade 255 (no burn) (`src-tauri/src/engine/image_gcode_gen.rs:225-230`, `build_power_curve_lut` at :230). The LUT is applied to every pixel before dithering (`:141-149`). `power_curve_linear_is_identity` (`:534-552`) confirms that Linear `[{0,100},{255,0}]` is the identity.
+- **The inverted presets** (`PowerCurveEditor.tsx:9-31`). Both rise with shade, so black gets 0%:
+  - S-Curve: `[{0,0},{64,10},{128,50},{192,90},{255,100}]`.
   - Posterize: `[{0,0},{84,0},{85,33},{169,33},{170,66},{254,66},{255,100}]`.
-
-  Both rise with shade, so black gets 0% and burns nothing. That is a negative.
-- **How a preset reaches a layer.** A preset button copies its points into the editor (`:481`, `setPoints([...pts])`). Apply writes them to the layer as `layer.powerCurve` (`LayerPanel.tsx:831-839`, `onManualUpdate({ powerCurve: pts })`). The points then travel unchanged to Rust (`gcodeGen.ts:108`, `:145`, `:729`, `:1244`, mapped to `[x, y]` pairs). A project file stores raw points, not a preset name.
-- **The selected-preset highlight.** It is computed by matching the current points against `PRESETS` (`:310`). After the fix, a layer saved with the old S-Curve points will match no preset, and the editor will show no highlight. That is accurate: those points are no longer a preset.
-- **Why the editor opens blank.** The draw effect is `useEffect(() => { draw(); }, [draw])` (`:221-223`). `draw` changes only when `points`, `dragIndex` or `hoverIndex` change. The canvas mounts only after `if (!open) return null` (`:324`). Opening with the same `initialPoints` reference triggers no `draw` change after the canvas exists, so it stays blank until the first hover or drag.
+- **How a preset reaches the laser.**
+  - A preset button copies its points into the editor (`:481`, `setPoints([...pts])`).
+  - Apply writes them to the layer (`LayerPanel.tsx:831-839`, `onManualUpdate({ powerCurve: pts })`).
+  - Saving serialises the store with `useStore.getState().toProject()` and `JSON.stringify` (`src/lib/fileOps/index.ts:507-508`).
+  - Opening parses with `parseAndValidateProject` (`:26`) and loads with `loadProjectWithMigrations` (`:174`).
+  - At Generate, `generateGcode()` (`src/lib/machine/gcodeGen.ts:905`, exported) reads the store once and builds each image request. The raster request carries `powerCurve: layer.powerCurve?.map(p => [p.x, p.y])` into `invoke("generate_image_gcode", …)` (`:697-729`).
+  - The command wraps `image_gcode_gen::generate(&ImageEngraveRequest)` (`src-tauri/src/commands/gcode.rs:220-224`, engine `:166`).
+  - A project stores raw points, never a preset name.
+- **The highlight.** The selected-preset highlight matches the current points against `PRESETS` (`:310`). After the fix, a layer holding the old S-Curve points matches no preset, which is accurate.
+- **The blank editor.**
+  - The draw effect is `useEffect(() => { draw(); }, [draw])` (`:221-223`). `draw` changes only when `points`, `dragIndex` or `hoverIndex` change, and the canvas mounts only after `if (!open) return null` (`:324`). So opening the editor with the same points reference draws nothing.
+  - `draw` returns early when there is no canvas (`:142`) or no 2D context (`:144`). It draws the grid lines and a dashed diagonal first, then the curve, then one `arc` per control point (`:197`). Only the control-point arcs are specific to the curve.
+- **The generation snapshot.**
+  - `generateGcode()` reads the store at call time, so an Apply during an in-flight generation affects only the next one.
+  - `updateLayer` marks an existing result stale (`store/index.ts:345-351`, `gcodeStale`), so a result generated before the Apply is flagged out of date. It is never silently mixed.
 
 ## Design
 
-1. **New preset points** (from the UI polish plan's P21; each is monotone non-increasing and maps shade 0 to its maximum power):
-   - S-Curve: `[{0,100},{64,90},{128,50},{192,10},{255,0}]`. This is the old curve mirrored about 50% power, so its shape (gentle at both ends, steep in the mid-tones) is kept and only the direction is fixed.
-   - Posterize: `[{0,100},{84,100},{85,67},{169,67},{170,34},{254,34},{255,0}]`. These are the old four bands with their order reversed, so the darkest band gets the most power.
+1. **New preset points.** Each is monotone non-increasing and maps shade 0 to its maximum:
+   - S-Curve `[{0,100},{64,90},{128,50},{192,10},{255,0}]`. This is the old curve mirrored about 50% power: the same gentle ends and steep mid-tones, in the right direction.
+   - Posterize `[{0,100},{84,100},{85,67},{169,67},{170,34},{254,34},{255,0}]`. That is three power bands of 100%, 67% and 34%, over shades 0-84, 85-169 and 170-254, plus pure white (shade 255) at 0%. Monotone cubic interpolation keeps each band flat, because both tangents inside a flat segment are 0.
    - Linear is unchanged.
-2. **The editor draws when it opens.** The draw effect becomes `useEffect(() => { if (open) draw(); }, [open, draw])`. Nothing else in the editor changes: not its handlers, `onApply` or `onClose`, the focus trap, nor the Escape listener.
-3. **No migration.** Saved `layer.powerCurve` points are never rewritten. A project that used the old S-Curve or Posterize keeps exactly the output it had. This is deliberate. Silently changing what a saved job burns is the failure class this program exists to prevent, even when the change is a repair.
-4. **Release-note line** (owed by the release session, recorded in the ROADMAP shipped entry): "Fixed: the S-Curve and Posterize power-curve presets were inverted, so they burned an image as its negative. Layers that already used them keep their old curve. Open the layer's power curve and pick the preset again."
+2. **Draw on open.** The draw effect becomes `useEffect(() => { if (open) draw(); }, [open, draw])`.
+   - The early returns at `:142` and `:144` stay as they are: with no context, the editor shows no plot.
+   - Apply, Cancel, Escape and the focus trap are unchanged. Nothing is applied or generated as a side effect of drawing or of a failed draw.
+3. **No migration.** Saved `layer.powerCurve` points are never rewritten. The file holds raw points, which cannot be told apart from a deliberate custom curve, so a migration would change a saved job's output without the owner's choice.
+4. **The release-note line.** The release session owes it, and the ROADMAP shipped entry carries the text: "Fixed: the S-Curve and Posterize power-curve presets were inverted, so they burned an image as its negative. Layers that already used them keep their old curve until you change it: open the layer's power curve, pick the preset, press Apply, then save the project."
 
-## Files
+## Batch, tier and dependencies
 
-| file | change |
-|---|---|
-| `src/components/panels/PowerCurveEditor.tsx` | the S-Curve and Posterize points; the draw effect's dependencies and its `open` guard |
-| `src/components/panels/__tests__/powerCurveEditor.test.tsx` (new) | preset direction, the source-sync pin, draw on open, saved points pass through |
-| `src-tauri/src/engine/image_gcode_gen.rs` | new tests in the existing `mod tests` only; no production change |
-| `ROADMAP.md` (Stage 3.5) | shipped entry with the release-note line; the owner hardware step in `next` |
+One batch, `tb3`, Standard tier.
 
-Three code files, with no store change, no IPC change, no native production change and no generator change.
+| file | root | change |
+|---|---|---|
+| `src/components/panels/PowerCurveEditor.tsx` | `src` | the two preset arrays; the draw effect's dependencies and its `open` guard |
+| `src/components/panels/__tests__/powerCurveEditor.test.tsx` (new) | `src` | T1-T6 |
+| `src-tauri/src/engine/image_gcode_gen.rs` | `src-tauri` | tests only, inside the existing `mod tests`; no production line changes |
+| `ROADMAP.md` (Stage 3.5) | root | shipped entry with the release note; the owner card in `next` |
+
+**Waiver for the two-root rule.** This is one defect: a value table in TS whose meaning lives in the Rust LUT. The Rust edits are tests that pin that meaning, with no production change. Splitting the batch would ship a preset fix with nothing pinning what its numbers do.
+
+**Dependencies.**
+- `tb3` depends on nothing.
+- `tb3` must merge before UI polish batch A4, which restyles `PowerCurveEditor.tsx` (the polish plan's collision table: "TB3 first").
+- `tb3` does not touch `src/index.css`, so it can run beside polish A1, which is in flight.
 
 ## Tests
 
 ### TS (`powerCurveEditor.test.tsx`)
 
-- **T1, direction.** For every preset in `PRESETS` (export it for the test, or read it from a test-only accessor):
-  - the point with `x` 0 has `y` equal to the preset's maximum `y`;
+- **T1, direction.** `PRESETS` is exported for the test (a named export; the component's behaviour is unchanged). For every preset:
+  - the point at `x` 0 has the preset's maximum `y`;
   - `y` never rises as `x` increases;
-  - the point with `x` 255 has `y` 0.
+  - the point at `x` 255 has `y` 0.
 
-  Red today on S-Curve and Posterize.
-- **T2, source sync with the Rust fixture.** Read `src-tauri/src/engine/image_gcode_gen.rs` as text. Extract the two literal arrays `TB3_S_CURVE` and `TB3_POSTERIZE` (below), and assert that each equals the TS preset point for point. A preset changed in one place without the other turns this red. This is the source-scan pin pattern from E1b T12.
-- **T3, draw on open.** Stub `HTMLCanvasElement.prototype.getContext` to return a recording context (jsdom has no canvas). Render the editor with `open={false}`, then rerender with `open={true}` and the same `points` reference. Assert that the recording context drew the curve path (at least one `stroke` call after open).
-
-  Red today. Mutation: removing `open` from the dependencies must fail it.
-- **T4, saved points pass through.** A layer whose `powerCurve` is the OLD S-Curve array is fed through the project load path (`parseAndValidateProject`, or the function the save/open round trip uses). Assert that `layer.powerCurve` comes out deep-equal to the input.
-
-  Also call the generation request builder that reads `layer.powerCurve` (`buildCutLayer`, `gcodeGen.ts:80`, which maps it at `:108`). Assert the outgoing `powerCurve` is the same pairs, in the same order.
-
-  This pins "saved projects unchanged" and the no-migration decision.
-- **T5, the highlight.** Opening the editor with the old S-Curve points highlights no preset. Opening it with the new S-Curve points highlights S-Curve.
+  This is red today for S-Curve and Posterize.
+- **T2, source sync with the Rust fixtures.** Read `src-tauri/src/engine/image_gcode_gen.rs` as text and extract the literal arrays `TB3_S_CURVE` and `TB3_POSTERIZE`. The extraction must fail the test if either is missing or appears more than once. Assert each equals its TS preset, point for point.
+- **T3, draw on open, curve-specific.**
+  - Stub `HTMLCanvasElement.prototype.getContext` to return a recording context. jsdom has no canvas.
+  - Render with `open={false}`, then rerender with `open={true}` and the same `points` reference.
+  - Assert the recording holds one `arc` call at each control point's canvas coordinates (`shadeToCanvasX(x)`, `powerToCanvasY(y)`, exported or recomputed from the component's constants). Grid strokes alone do not pass.
+  - Then Cancel, reopen with different incoming points, and assert the arcs are at the new coordinates.
+  - This is red today. Mutation: removing `open` from the dependencies must fail it.
+- **T4, Apply writes once.**
+  - Pick S-Curve, press Apply, and assert `onApply` is called exactly once with the new S-Curve points.
+  - Cancel after picking a preset: `onApply` is not called.
+  - With `getContext` returning null, Apply still works and no plot is drawn. No crash, and nothing applied implicitly.
+- **T5, the saved-project round trip, both legacy arrays.**
+  - Put one image object on a raster layer whose `powerCurve` is the OLD S-Curve, and a second layer with the OLD Posterize.
+  - Serialise with `toProject()` and `JSON.stringify`, as `saveToPath` does (`fileOps/index.ts:507-508`).
+  - Parse with `parseAndValidateProject`, load with `loadProjectWithMigrations`, then call `generateGcode()` with `invoke` mocked.
+  - Assert the captured `generate_image_gcode` payloads carry `powerCurve` deep-equal to the legacy pairs, in order. Both new presets get the same through Apply, then save/reopen, then generate.
+  - This pins no-migration on the real save, open and raster-request path.
+- **T6, the highlight.** Opening with the old S-Curve points highlights no preset; opening with the new ones highlights S-Curve.
 
 ### Native (`image_gcode_gen.rs`, `mod tests` only)
 
-Add `const TB3_S_CURVE: [(f64, f64); 5]` and `const TB3_POSTERIZE: [(f64, f64); 7]`. They are literal copies of the new presets, with a comment naming `PowerCurveEditor.tsx` and T2. Add `const TB3_OLD_S_CURVE` as well, for the delta.
+Constants:
+- `TB3_S_CURVE` and `TB3_POSTERIZE`: literal copies of the new presets, with a comment naming `PowerCurveEditor.tsx` and T2;
+- `TB3_OLD_S_CURVE` and `TB3_OLD_POSTERIZE`: the legacy arrays, for the delta and the legacy golden.
 
-- **N1, LUT direction.** For each new preset LUT:
-  - `lut[0] == 0`: black stays full burn;
-  - `lut[255] == 255`: white stays no burn;
-  - `lut` is non-decreasing in its input: a darker input never gets a lighter, lower-power output.
+The ramp request, used by N2 and N3:
+- `image_data`: a 256x1 8-bit grayscale PNG with pixel i = shade i, built in the test;
+- `width` 25.6 and `height` 0.1, with `interval` 0.1, so one pixel is 0.1 mm;
+- `power` 100, `power_min` 0, `s_value_max` 1000, `power_mode` "variable", `dither` "grayscale";
+- `bidirectional` false, `overscan` 0, `scanning_offset` 0;
+- `brightness` 0, `contrast` 0, `gamma` 1.0, `invert` false, `rotation` 0, `scale_x` and `scale_y` 1.0, `origin_top` true, `remove_background` false;
+- `x` and `y` 0, `speed` 1000, `passes` 1.
 
-  For `TB3_OLD_S_CURVE`, `lut[0] == 255`, which documents the defect.
-- **N2, the before/after generation fixture.** Build a 256x1 grayscale ramp (pixel i = shade i). Run it through `image_gcode_gen::generate(&ImageEngraveRequest)`, the engine function the `generate_image_gcode` command wraps (`commands/gcode.rs:220-224`): dither `grayscale`, bidirectional off, and a fixed power range (s_min 0, s_max 1000). Extract the S word per burned pixel in X order.
-  - With `TB3_S_CURVE`, the shade-0 end is at the maximum S, the shade-255 end is at S0 or not burned, and S never rises with shade.
-  - With `TB3_OLD_S_CURVE`, the shade-0 end gets S0 and the shade-255 end the maximum. That is the delta the fix intends.
-  - With Linear or no curve, the program is byte-identical before and after this change. This test runs the same call at the base and at HEAD; no production line in Rust changes, so the existing goldens also stand.
+The tests:
+- **N1, LUT direction.**
+  - For each new preset: `lut[0] == 0` (black stays full burn), `lut[255] == 255` (white stays no burn), and `lut` non-decreasing in its input.
+  - For each OLD preset: `lut[0] == 255`, which documents the defect.
+  - Posterize's three bands come out as exact levels: `lut` over shades 0-84 equals `255 - round(255 × 1.00)`; over 85-169, `255 - round(255 × 0.67)`; over 170-254, `255 - round(255 × 0.34)`; and shade 255 maps to 255. Compute these with the LUT's own rounding rule, read from `build_power_curve_lut`.
+- **N2, the spatial before/after.**
+  - Decode the G-code from `generate(&req)` into a power map over the 256 pixel columns. Walk the moves in order, tracking X and the modal S. Each `G1` with a positive S from X0 to X1 assigns that S to every column whose centre lies in [X0, X1). A column no burning move covers (a `G0` travel, an `S0` span, or no move at all) gets S0. This handles the scanner merging equal S values into one move (`mask_fill.rs:684-718`) and white pixels emitting nothing.
+  - The independent oracle is the LUT, not the G-code: the expected S per column is `round(s_value_max × (255 - lut[i]) / 255)` under the grayscale scanner's mapping. Read the exact mapping from the scanner and cite it in the test; allow ±1 count only for its rounding.
+  - With `TB3_S_CURVE`: column 0 at the maximum S, column 255 at S0, never rising. With `TB3_OLD_S_CURVE`: the reverse. Posterize: three flat plateaus and S0 at column 255.
+- **N3, the pinned-base legacy golden.**
+  - Before any production edit, the implementer runs the ramp through `generate` with `TB3_OLD_S_CURVE`, `TB3_OLD_POSTERIZE` and Linear on the base commit. They write the three full G-code strings under `src-tauri/tests/golden/` (for example `tb3_legacy_s_curve.gcode`, `tb3_legacy_posterize.gcode`, `tb3_linear.gcode`), following the existing golden convention and the `env -u KERF_UPDATE_GOLDEN` discipline.
+  - N3 asserts byte equality at HEAD. Since no Rust production line changes, this pins that legacy and Linear output is untouched now, and that a later engine change cannot alter it silently.
+  - The report quotes the base commit sha and the command used to capture.
+- **The existing tests stand unchanged:** `power_curve_linear_is_identity`, `power_curve_step_produces_binary` and `power_curve_lut_serialization_roundtrip`.
 
-  - **The existing tests stand unchanged:** `power_curve_linear_is_identity`, `power_curve_step_produces_binary` and `power_curve_lut_serialization_roundtrip`.
+### Mutation battery (`~/marvin/scripts/mutation-battery.mjs`)
 
-### Mutation battery (`scripts/mutation-battery.mjs`)
+Every `find` must have `grep -cF` equal to 1, the journal is at the standard path, and the battery restores by construction (a disposable copy).
+- **m1:** S-Curve's first point back to `{ x: 0, y: 0 }`. Kills T1 and T2.
+- **m2:** Posterize's first point back to `{ x: 0, y: 0 }`. Kills T1 and T2.
+- **m3:** `[open, draw]` back to `[draw]`. Kills T3.
+- **m4:** the `arc` loop removed from `draw`. Kills T3 and proves T3 is curve-specific.
+- **m5:** a `loadProjectWithMigrations` mutant that rewrites `powerCurve`, for example replacing the old S-Curve with the new one. Kills T5.
+- **m6:** `TB3_S_CURVE`'s first literal flipped in Rust. Kills T2.
 
-Every `find` must have `grep -cF` equal to 1. The mutants:
-- revert S-Curve's first point to `{ x: 0, y: 0 }` (kills T1, T2);
-- revert Posterize's first point (kills T1, T2);
-- drop `open` from the draw effect's dependencies (kills T3);
-- a load-path mutant that rewrites `powerCurve` (for example, maps old S-Curve points to new ones) (kills T4);
-- in Rust, flip one `TB3_S_CURVE` literal (kills T2, which reads the source; N1 still documents the direction).
-
-Control: Linear stays the identity under N2. The controls must stay green.
+The control: Linear stays byte-identical under N3, and the controls must stay green.
 
 ## Verification
 
@@ -106,19 +145,54 @@ Control: Linear stays the identity under N2. The controls must stay green.
   - clippy `--all-targets --features sim -- -D warnings`;
   - `cargo fmt --check`.
 
-  The goldens must not change (no generator production code changes).
-- **Browser (dev server, puppeteer; no Chrome DevTools MCP).** Open a layer's power curve editor and confirm the curve is drawn on first open, with no hover needed. Pick S-Curve and Posterize, and confirm each curve falls from the top left to the bottom right, as Linear does. Screenshots go in the relay log.
-- **Owner hardware (fire precautions; status-only evidence).** In the release build, import a black-to-white gradient image, set its layer's curve to the new S-Curve, and engrave it on scrap. The black end burns darkest and the white end lightest. Repeat once with Posterize: four bands, darkest band darkest. A layer saved before the fix with the old S-Curve still burns as before (negative) until the preset is picked again. This goes to the ROADMAP `next` owner steps.
+  Every existing golden is unchanged; the only new goldens are N3's.
+- **Browser** (dev server, puppeteer; the Chrome DevTools MCP is disconnected):
+  - open a raster layer's power curve editor; the curve and its points are drawn on first open, with no hover;
+  - pick each preset; S-Curve and Posterize fall from top left to bottom right, as Linear does;
+  - Cancel, reopen: still drawn.
+
+  Screenshots go in the relay log.
+- **Recorded status.** The ROADMAP shipped entry says "implementation merged to the session branch; owner card pending; not physically qualified". It flips to qualified only when the owner card passes. It is not a release gate: the release rulings in DECISIONS (2026-09-27) are unchanged.
+- **Owner card** (`next`; Lee runs it, owner only, in the release build). Evidence is the visible mark on the material, and nothing about the beam beyond it (status-only ruling, DECISIONS 2026-09-10 as amended):
+  - **Setup:**
+    - scrap card or a 3 mm plywood offcut, on the bed with nothing under it that can burn;
+    - the extraction or air assist the owner normally uses;
+    - the machine's physical power switch or E-stop within reach;
+    - the owner stays at the machine for the whole run.
+  - **Design:** import a 40 × 10 mm black-to-white horizontal gradient image (Kerf's own material-test grid is not used for this). Set its layer to Variable (M4) power, at no more than 20% power and at the speed the owner already uses for photo engraving on that material, one pass.
+  - **Frame first:** press FRAME and watch the head trace the bounding box.
+  - **Abort procedure:** if anything is unexpected (a flame, marking outside the frame, continued marking after the job ends, or Kerf not responding), press STOP, then the physical switch. Note what happened. Do not re-run until it is understood.
+  - **Steps:**
+    1. Select the new S-Curve, then press Apply. Engrave. Pass: the black end is darkest, the white end unmarked, and darkness falls smoothly between them.
+    2. The same, with Posterize. Pass: three distinct bands from dark to light, and the white end unmarked.
+    3. Open a project saved before the fix that used the old S-Curve, without re-picking. It still engraves the old way (negative). This confirms nothing was migrated.
+  - **Outcome:** PASSED, FAILED (a fix relay), or INCONCLUSIVE (any abort).
 
 ## Risks and rollback
 
-- **The risk:** someone has come to rely on the inverted look. If so, they can draw it as a custom curve. Saved layers keep it anyway (no migration).
-- **Rollback:** revert one commit. Projects are unaffected either way, because no stored data changes.
+- **Someone may rely on the inverted look.** They can draw it as a custom curve, and saved layers keep it anyway.
+- **Rollback.** Reverting the commit restores the old preset definitions. Projects whose owner re-picked a corrected preset and saved still hold the corrected raw points (stored data is never rewritten in either direction). After a revert those layers simply match no preset, so the highlight is absent. Revert is one commit and touches no stored data.
 
 ## Deferrals
 
-None new. The polish plan's A4 later restyles this same editor (presentation only, ModalShell). Its plot background token comes from A1. TB3 runs first, because the dependency table puts TB3 before A4 on `PowerCurveEditor.tsx`.
+None new. UI polish A4 later restyles this editor (presentation only).
 
 ## Decisions
 
-None for Lee: everything here is technical. The release-note wording is plain and true, and Lee sees it in the release notes.
+None for Lee. Everything here is technical, and the release-note wording is plain and true.
+
+## Fold table: critic round 1 (astra, FAIL)
+
+| finding | verdict | where addressed |
+|---|---|---|
+| 3 Completeness: Posterize and the Apply-to-raster path untested | FAIL | T4 Apply; T5 both legacy arrays plus both new presets through save/reopen/generate; N1/N2 Posterize levels |
+| 4 Right-sizing: tier, graph and waiver | CONCERN | "Batch, tier and dependencies" (Standard, one batch, a written waiver, TB3 before A4, beside A1) |
+| 6 Failure modes: null context, failed generation | CONCERN | Design 2 and T4 (null context: no plot, nothing applied); the generation snapshot is cited in the Diagnosis |
+| 7 Change safety: rollback wording | CONCERN | Risks and rollback, rewritten |
+| 8 Data integrity: parse-only check, private helper | FAIL | T5 on the real seams (`toProject` + JSON, `parseAndValidateProject`, `loadProjectWithMigrations`, exported `generateGcode`, the mocked invoke payload); N3 pinned-base goldens |
+| 9 Verifiability: a grid-only stroke passes; the S-per-pixel oracle ignores compression | FAIL | T3 asserts arcs at the control points (m4 proves it); N2 spatial decoding with the LUT as an independent oracle; N3 captured at base and committed |
+| 10 Maintainability: a non-exported helper, unspecified mutation targets | CONCERN | exported seams only; T2 fails on a missing or duplicate array; m1-m6 specified |
+| X1 Physical safety: an unbounded owner burn | FAIL | the owner card: setup, ≤20% power, frame first, abort procedure, evidence limits, PASSED/FAILED/INCONCLUSIVE |
+| X4 Copy: "four bands"; "pick again" omitted Apply | CONCERN | Design 1 (three bands plus white); the release note says pick, Apply, save |
+| X5 Reopen, Cancel, Apply, generation snapshot | CONCERN | T3 reopen with changed points; T4 Cancel and Apply-once; the snapshot and `gcodeStale` cited in the Diagnosis |
+| X6 Status: shipped vs pending vs qualified | CONCERN | Verification, "Recorded status" |
