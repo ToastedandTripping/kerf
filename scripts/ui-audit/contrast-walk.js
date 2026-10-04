@@ -21,6 +21,8 @@
  * control, which WCAG 1.4.3 exempts; the walker reports it and lets the reader
  * decide. Ported from the access critic's audit.mjs.
  */
+// The file is evaluated as an expression by the driver, so a bare function expression is the API.
+// eslint-disable-next-line @typescript-eslint/no-unused-expressions
 (function contrastWalk(options) {
   var opts = options || {};
   var failingOnly = opts.failingOnly !== false;
