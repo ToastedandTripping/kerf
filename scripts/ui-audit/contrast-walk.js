@@ -1,6 +1,6 @@
 /* global window, document, getComputedStyle, innerHeight, innerWidth, NodeFilter */
 /*
- * contrast-walk.js --in-page WCAG 2.x contrast walker (UI polish A1).
+ * contrast-walk.js: in-page WCAG 2.x contrast walker (UI polish A1).
  *
  * Dependency-free. Evaluate it in the page with any driver (CDP
  * Runtime.evaluate, puppeteer page.evaluate, the DevTools MCP). Evaluating the
