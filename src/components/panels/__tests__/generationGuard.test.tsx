@@ -132,11 +132,11 @@ function makeImage(id: string): DesignObject {
     visible: true,
     locked: false,
     fill: null,
-    stroke: null,
+    stroke: "#000000",
     strokeWidth: 0,
     opacity: 1,
     imageData: IMG_DATA,
-  } as DesignObject;
+  };
 }
 
 function makeRect(id: string): DesignObject {
