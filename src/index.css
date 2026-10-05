@@ -1,37 +1,77 @@
 @import "tailwindcss";
 
+/* Bundled mono for Linux/Windows; macOS resolves "SF Mono" first. */
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/IBMPlexMono-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
+  color-scheme: dark;
+
   /* Backgrounds */
   --bg-app: #1a1a1a;
   --bg-panel: #222222;
   --bg-input: #2a2a2a;
   --bg-hover: #333333;
-  --bg-active: #3a3a3a;
+  --bg-active: #3a3a3a; /* never a text surface: --text-muted would be 4.35:1 */
+  --bg-elevated: #2e2e2e;
+  --bg-selected: rgba(74, 144, 226, 0.18);
+  --bg-plot: #111111;
+  /* Artwork wells (import and trace previews): D2 (a), Lee 2026-10-02 */
+  --bg-preview: #f4f1ea;
+  --preview-border: rgba(0, 0, 0, 0.12);
 
   /* Text */
   --text-primary: #e8e8e8;
-  --text-secondary: #999999;
-  --text-muted: #666666;
+  --text-secondary: #bdbdbd;
+  --text-muted: #a0a0a0; /* floor: tokenContrast.test.ts refuses anything darker */
+  --text-disabled: #5c5c5c; /* disabled controls only */
 
-  /* Accent */
-  --accent: #4a90e2;
-  --accent-warm: #c4a57b;
-  --danger: #e24a4a;
-  --success: #4ae28a;
+  /* Accent: one blue (D1 (a), Lee 2026-10-02) */
+  --accent: #4a90e2; /* fills, borders, icons, slider and checkbox accent; never text */
+  --accent-text: #82b4f0; /* every blue text */
+  --accent-strong: #2b6cb0; /* filled primary buttons under white text */
+  --accent-bg: rgba(74, 144, 226, 0.15);
+  --accent-border: rgba(74, 144, 226, 0.5);
+  --accent-warm: #c4a57b; /* the KERF wordmark and Engrave in Preview only */
+
+  /* State colours: one meaning each */
+  --danger: #e24a4a; /* dots, borders, non-text marks */
+  --danger-text: #f26b6b; /* red text; never on --bg-hover */
+  --danger-strong: #c62828; /* STOP fill under white text */
+  --danger-bg: rgba(226, 74, 74, 0.1);
+  --danger-border: rgba(226, 74, 74, 0.35);
+  --warning: #e2a74a; /* needs attention, not an alarm */
+  --warning-bg: rgba(226, 167, 74, 0.12);
+  --warning-border: rgba(226, 167, 74, 0.35);
+  --success: #4ae28a; /* machine ready or job done, nothing else */
+  --success-bg: rgba(74, 226, 138, 0.08);
+  --success-border: rgba(74, 226, 138, 0.25);
+
+  /* Layer-mode badges: opaque fills, so a badge reads the same on a selected row */
+  --badge-fill-bg: #482a2a;
+  --badge-fill-text: #e28a8a;
+  --badge-line-bg: #2a3848;
+  --badge-line-text: #8ab4e2;
+  --badge-offset-bg: #2a4837;
+  --badge-offset-text: #8ae2b4;
+  --badge-fill-line-bg: #483c2a;
+  --badge-fill-line-text: #e2c08a;
 
   /* Borders */
-  --border: rgba(255, 255, 255, 0.08);
-  --border-focus: rgba(74, 144, 226, 0.5);
+  --border: rgba(255, 255, 255, 0.08); /* dividers */
+  --border-control: rgba(255, 255, 255, 0.38); /* inputs, selects, toggle buttons */
+  --focus-ring: #a8d0ff;
 
-  /* Layer colors */
-  --layer-0: #000000;
-  --layer-1: #4a90e2;
-  --layer-2: #e24a4a;
-  --layer-3: #4ae28a;
-  --layer-4: #ff8000;
-  --layer-5: #e2e24a;
-  --layer-6: #4ae2e2;
-  --layer-7: #e24ae2;
+  /* Drawn checkbox and radio. --check-mark is mirrored as %23ffffff in the SVGs below
+     (a data URI cannot read a variable); tokenContrast.test.ts holds them equal. */
+  --check-border: rgba(255, 255, 255, 0.38);
+  --check-fill: #4a90e2;
+  --check-mark: #ffffff;
 
   /* Sizing */
   --panel-width: 300px;
@@ -42,11 +82,18 @@
   /* Typography */
   --font-sans:
     -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", system-ui, sans-serif;
-  --font-mono: "SF Mono", "Fira Code", "JetBrains Mono", monospace;
+  --font-mono: ui-monospace, "SF Mono", "IBM Plex Mono", monospace;
+
+  /* Type scale. 10px is only for caps section labels, badge/chip text and ruler numbers. */
+  --text-2xs: 10px;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-lg: 14px;
+  --text-xl: 18px;
 
   /* Shadows */
   --shadow-panel: 0 2px 8px rgba(0, 0, 0, 0.3);
-  --shadow-tooltip: 0 4px 12px rgba(0, 0, 0, 0.4);
   --shadow-modal: 0 8px 32px rgba(0, 0, 0, 0.5);
 
   /* Radius */
@@ -93,10 +140,93 @@ input[type="number"]::-webkit-inner-spin-button {
   margin: 0;
 }
 
+/* Range takes the one blue. Checkbox and radio are drawn (16x16) so the unchecked
+   face is dark on WebKitGTK too; the <input> and its handlers stay native. */
+input[type="range"] {
+  accent-color: var(--accent);
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  background-color: var(--bg-input);
+  border: 1px solid var(--check-border);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 10px 10px;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+input[type="checkbox"] {
+  border-radius: 3px;
+}
+
+input[type="radio"] {
+  border-radius: 50%;
+}
+
+input[type="checkbox"]:checked {
+  border-color: var(--check-fill);
+  background-color: var(--check-fill);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M1.5 5.2l2.3 2.3 4.7-4.9' fill='none' stroke='%23ffffff' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+input[type="checkbox"]:indeterminate {
+  border-color: var(--check-fill);
+  background-color: var(--check-fill);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M2 5h6' fill='none' stroke='%23ffffff' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E");
+}
+
+input[type="radio"]:checked {
+  border-color: var(--check-fill);
+  background-color: var(--check-mark);
+  box-shadow: inset 0 0 0 4px var(--check-fill);
+}
+
+input[type="checkbox"]:disabled,
+input[type="radio"]:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Opt-in select style. A class, not a global select rule: an inline background
+   on a select would erase a global chevron and leave it with no arrow. */
+.k-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: var(--bg-input);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath d='M1 2.5l3 3 3-3' fill='none' stroke='%23bdbdbd' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 8px 8px;
+  padding: 4px 24px 4px 8px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+}
+
 /* Accessibility: show focus outline for keyboard navigation, hide for mouse clicks */
 *:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline-offset: -1px;
+}
+
+/* A drawn checkbox or radio is a 16px mark, not a field: its ring sits outside it. */
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+  outline-offset: 2px;
 }
 
 *:focus:not(:focus-visible) {
@@ -113,6 +243,10 @@ input[type="number"]::-webkit-inner-spin-button {
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 ::-webkit-scrollbar-track {
