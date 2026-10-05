@@ -107,12 +107,13 @@ async function runGeneration(
 // ---------------------------------------------------------------- fake Image
 
 /** getImageContentRatio's Image: onerror resolves the ratio to 0 (sparse). */
-let imageMode: "auto" | "deferred";
+let imageMode: "auto" | "deferred" | "throw";
 let pendingImages: FakeImage[];
 class FakeImage {
   onload: (() => void) | null = null;
   onerror: (() => void) | null = null;
   set src(_v: string) {
+    if (imageMode === "throw") throw new Error("decoder exploded");
     if (imageMode === "auto") queueMicrotask(() => this.onerror?.());
     else pendingImages.push(this);
   }
@@ -227,8 +228,8 @@ function expectRefused(getByText: (t: string) => HTMLElement, reason: string) {
   expect(start.title).toBe(reason);
   expect(frame.disabled).toBe(true);
   expect(frame.title).toBe(reason);
-  fireEvent.click(start);
-  fireEvent.click(frame);
+  // A disabled button never receives a click, so the proof is the disabled
+  // state, the admission reason, and that nothing was dispatched.
   const cmds = mockInvoke.mock.calls.map((c) => c[0]);
   expect(cmds).not.toContain("serial_job_begin");
   expect(cmds).not.toContain("serial_stream_job");
@@ -351,8 +352,7 @@ describe("G3: project replaced in flight", () => {
       )
     ).toBe(true);
     expect(useStore.getState().projectEpoch).toBe(epoch0 + 1);
-    expect((getByText("START") as HTMLButtonElement).title).toBe(NONE);
-    expect((getByText("START") as HTMLButtonElement).disabled).toBe(true);
+    expectRefused(getByText, NONE);
   });
 });
 
@@ -846,5 +846,56 @@ describe("G10: the input and write boundaries", () => {
       `${idx}: gcodeResult: null,`,
       `${idx}: set({ gcodeResult: result, gcodeStale: stale });`,
     ]);
+  });
+});
+
+// ---------------------------------------------------------------- fix pass
+
+describe("Fix pass: handler duties", () => {
+  const B1 = /GRBL laser mode \(\$32\) is disabled/;
+
+  it("published-stale flushes the generator's lines and skips the sparse check", async () => {
+    useStore.setState({ grblLaserMode: false });
+    const { getByText, queryByText } = renderPanel();
+    fireEvent.click(getByText("Generate G-code"));
+    const before = lines().length;
+    await runGeneration("raster-wait", () => useStore.getState().updateLayer(1, { power: 7 }), {
+      long: true,
+    });
+    await waitIdle(queryByText);
+    const added = lines().slice(before);
+    expect(added.length).toBe(2);
+    expect(B1.test(added[0])).toBe(true);
+    expect(added[1]).toBe(STALE_LINE);
+    expect(added.some((t) => t.startsWith("G-code generated: "))).toBe(false);
+    await act(async () => {});
+    expect(queryByText(SPARSE_TEXT)).toBeNull();
+  });
+
+  it("an obsolete failure still flushes the generator's lines", async () => {
+    useStore.setState({ grblLaserMode: false });
+    const { getByText, queryByText } = renderPanel();
+    fireEvent.click(getByText("Generate G-code"));
+    const img = await nextCall("generate_image_gcode");
+    act(() => replaceWithOpen());
+    await act(async () => img.reject(new Error("engine exploded")));
+    await waitIdle(queryByText);
+    expect(lines().some((t) => B1.test(t))).toBe(true);
+    expect(lines().some((t) => t.startsWith("G-code generation failed (an earlier"))).toBe(true);
+  });
+
+  it("a throw after publication is caught: error line, status, result kept, Preview not opened", async () => {
+    imageMode = "throw";
+    const { getByText, queryByText } = renderPanel();
+    fireEvent.click(getByText("Preview"));
+    await runGeneration("raster-wait", () => {}, { long: true });
+    await waitIdle(queryByText);
+    expect(lines().some((t) => t.startsWith("G-code post-generation step failed: "))).toBe(true);
+    expect(useStore.getState().statusMessage).toBe(
+      "G-code post-generation step failed — see console"
+    );
+    expect(useStore.getState().gcodeResult).not.toBeNull();
+    expect(useStore.getState().gcodeStale).toBe(false);
+    expect(useStore.getState().previewVisible).toBe(false);
   });
 });

@@ -403,11 +403,12 @@ export function MachinePanel() {
       try {
         result = await generateGcode(ticket.inputs, log);
       } catch (e) {
-        flush();
         if (isTicketCurrent(ticket)) {
+          flush();
           addConsoleLine(`G-code generation failed: ${e}`, "error");
           setStatusMessage("G-code generation failed — see console");
         } else {
+          flush();
           // A dead generation never puts a failure banner over the current one.
           addConsoleLine(
             `G-code generation failed (an earlier generation, superseded or from a different project): ${e}`,
@@ -417,6 +418,24 @@ export function MachinePanel() {
         return false;
       }
       const outcome = publishGeneration(ticket, result);
+      try {
+        return await afterPublish(outcome, result);
+      } catch (e) {
+        // A post-publication duty threw. The published result stands (the
+        // guard owns it); the error is surfaced, with no banner for a dead ticket.
+        addConsoleLine(`G-code post-generation step failed: ${e}`, "error");
+        if (isTicketCurrent(ticket))
+          setStatusMessage("G-code post-generation step failed — see console");
+        return false;
+      }
+    } finally {
+      setGenerating(false);
+    }
+
+    async function afterPublish(
+      outcome: ReturnType<typeof publishGeneration>,
+      result: Awaited<ReturnType<typeof generateGcode>>
+    ): Promise<boolean> {
       if (outcome === "discarded-project") {
         addConsoleLine(
           `Discarded a G-code generation started in a different project (${buffered.length} generator messages dropped with it)`,
@@ -431,14 +450,15 @@ export function MachinePanel() {
         );
         return false;
       }
-      flush();
       if (outcome === "published-stale") {
+        flush();
         addConsoleLine(
           "G-code generated, but the design or machine settings changed while it ran. Regenerate before START.",
           "warning"
         );
         return true;
       }
+      flush();
       addConsoleLine(
         `G-code generated: ${result.lineCount} lines, ${result.cutDistance.toFixed(1)}mm cut, ~${Math.ceil(result.estimatedTimeSecs)}s`,
         "info"
@@ -467,8 +487,6 @@ export function MachinePanel() {
         }
       }
       return true;
-    } finally {
-      setGenerating(false);
     }
   }
 
