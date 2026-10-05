@@ -29,6 +29,17 @@ function isValidPreset(obj: unknown): obj is MaterialPreset {
   );
 }
 
+// Library toolbar: 11px text buttons, a 24px hit area (P48).
+const textButtonStyle: React.CSSProperties = {
+  background: "none",
+  border: "none",
+  color: "var(--accent-text)",
+  padding: "4px 2px",
+  minHeight: "24px",
+  fontSize: "var(--text-xs)",
+  cursor: "pointer",
+};
+
 // Inline preset form field style
 const fieldStyle: React.CSSProperties = {
   background: "var(--bg-input)",
@@ -47,7 +58,6 @@ export function MaterialLibrary() {
   const activeLayerIndex = useStore((s) => s.activeLayerIndex);
   const updateLayer = useStore((s) => s.updateLayer);
   const [filter, setFilter] = useState("");
-  const [expanded, setExpanded] = useState(false);
 
   // P3-B: Inline form state replaces window.prompt (no-op in Tauri webviews).
   const [showSaveForm, setShowSaveForm] = useState(false);
@@ -176,233 +186,172 @@ export function MaterialLibrary() {
 
   return (
     <div style={{ borderBottom: "1px solid var(--border)" }}>
-      <div
-        onClick={() => setExpanded(!expanded)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            setExpanded(!expanded);
-          }
-        }}
-        role="button"
-        tabIndex={0}
-        aria-expanded={expanded}
-        aria-label="Material library"
-        style={{
-          padding: "8px 12px",
-          fontSize: "11px",
-          fontWeight: 600,
-          color: "var(--text-secondary)",
-          textTransform: "uppercase",
-          letterSpacing: "0.5px",
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          gap: "6px",
-        }}
-      >
-        <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>{expanded ? "▼" : "▶"}</span>
-        Material Library
-      </div>
-
-      {expanded && (
-        <div style={{ padding: "0 8px 8px" }}>
-          {/* Search */}
-          <div style={{ display: "flex", gap: "4px", marginBottom: "6px" }}>
-            <input
-              placeholder="Search materials..."
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              style={{
-                flex: 1,
-                background: "var(--bg-input)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius-sm)",
-                color: "var(--text-primary)",
-                padding: "4px 8px",
-                fontSize: "11px",
-              }}
-            />
-            <button
-              onClick={() => setShowSaveForm(true)}
-              title="Save current layer settings as preset"
-              style={{
-                background: "var(--bg-input)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius-sm)",
-                color: "var(--text-secondary)",
-                padding: "4px 8px",
-                fontSize: "11px",
-                cursor: "pointer",
-              }}
-            >
-              + Save
-            </button>
-            <button
-              onClick={exportMaterials}
-              title="Export materials to JSON"
-              style={{
-                background: "var(--bg-input)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius-sm)",
-                color: "var(--text-secondary)",
-                padding: "4px 6px",
-                fontSize: "10px",
-                cursor: "pointer",
-              }}
-            >
-              Export
-            </button>
-            <button
-              onClick={importMaterials}
-              title="Import materials from JSON"
-              style={{
-                background: "var(--bg-input)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius-sm)",
-                color: "var(--text-secondary)",
-                padding: "4px 6px",
-                fontSize: "10px",
-                cursor: "pointer",
-              }}
-            >
-              Import
-            </button>
-          </div>
-
-          {/* P3-B: Inline save preset form (replaces window.prompt) */}
-          {showSaveForm && (
-            <div
-              style={{
-                padding: "8px",
-                marginBottom: "6px",
-                background: "var(--bg-elevated)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius-sm)",
-                display: "flex",
-                flexDirection: "column",
-                gap: "4px",
-              }}
-            >
-              <input
-                placeholder="Preset name (e.g. Birch Plywood 3mm Cut)"
-                value={presetName}
-                onChange={(e) => setPresetName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleSavePreset();
-                  if (e.key === "Escape") cancelSavePreset();
-                }}
-                autoFocus
-                style={fieldStyle}
-              />
-              <input
-                placeholder="Material (e.g. Plywood)"
-                value={presetMaterial}
-                onChange={(e) => setPresetMaterial(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleSavePreset();
-                  if (e.key === "Escape") cancelSavePreset();
-                }}
-                style={fieldStyle}
-              />
-              <input
-                placeholder="Thickness (e.g. 3mm)"
-                value={presetThickness}
-                onChange={(e) => setPresetThickness(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleSavePreset();
-                  if (e.key === "Escape") cancelSavePreset();
-                }}
-                style={fieldStyle}
-              />
-              <div style={{ display: "flex", gap: "4px", justifyContent: "flex-end" }}>
-                <button
-                  onClick={cancelSavePreset}
-                  style={{
-                    background: "none",
-                    border: "1px solid var(--border)",
-                    borderRadius: "var(--radius-sm)",
-                    color: "var(--text-secondary)",
-                    padding: "3px 10px",
-                    fontSize: "10px",
-                    cursor: "pointer",
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSavePreset}
-                  disabled={!presetName.trim()}
-                  style={{
-                    background: presetName.trim() ? "var(--accent)" : "var(--bg-input)",
-                    border: "1px solid var(--border)",
-                    borderRadius: "var(--radius-sm)",
-                    color: presetName.trim() ? "#fff" : "var(--text-muted)",
-                    padding: "3px 10px",
-                    fontSize: "10px",
-                    cursor: presetName.trim() ? "pointer" : "default",
-                  }}
-                >
-                  Save
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Material groups */}
-          <div style={{ maxHeight: "200px", overflow: "auto" }}>
-            {filteredGroups.map(([group, presets]) => (
-              <div key={group} style={{ marginBottom: "4px" }}>
-                <div
-                  style={{
-                    fontSize: "10px",
-                    color: "var(--text-muted)",
-                    padding: "3px 4px",
-                    fontWeight: 600,
-                    textTransform: "uppercase",
-                    letterSpacing: "0.3px",
-                  }}
-                >
-                  {group}
-                </div>
-                {presets.map((preset) => (
-                  <button
-                    key={preset.id}
-                    onClick={() => applyPreset(preset)}
-                    style={{
-                      display: "flex",
-                      width: "100%",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      background: "none",
-                      border: "none",
-                      color: "var(--text-primary)",
-                      padding: "3px 8px",
-                      fontSize: "11px",
-                      cursor: "pointer",
-                      borderRadius: "var(--radius-sm)",
-                      textAlign: "left",
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
-                  >
-                    <span>{preset.mode === "fill" ? "Engrave" : "Cut"}</span>
-                    <span
-                      style={{
-                        fontSize: "9px",
-                        color: "var(--text-muted)",
-                        fontFamily: "var(--font-mono)",
-                      }}
-                    >
-                      {preset.power}% {preset.speed}mm/min x{preset.passes}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            ))}
-          </div>
+      {/* Embedded in App's "Materials" section: that header is the only disclosure (P48). */}
+      <div style={{ padding: "8px 12px" }}>
+        {/* Search: a full-width row, then the library's text buttons */}
+        <input
+          placeholder="Search materials..."
+          aria-label="Search materials"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          style={{ ...fieldStyle, border: "1px solid var(--border-control)", marginBottom: "4px" }}
+        />
+        <div style={{ display: "flex", gap: "12px", marginBottom: "6px" }}>
+          <button
+            onClick={() => setShowSaveForm(true)}
+            title="Save current layer settings as preset"
+            style={textButtonStyle}
+          >
+            Save
+          </button>
+          <button
+            onClick={exportMaterials}
+            title="Export materials to JSON"
+            style={textButtonStyle}
+          >
+            Export
+          </button>
+          <button
+            onClick={importMaterials}
+            title="Import materials from JSON"
+            style={textButtonStyle}
+          >
+            Import
+          </button>
         </div>
-      )}
+
+        {/* P3-B: Inline save preset form (replaces window.prompt) */}
+        {showSaveForm && (
+          <div
+            style={{
+              padding: "8px",
+              marginBottom: "6px",
+              background: "var(--bg-elevated)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-sm)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "4px",
+            }}
+          >
+            <input
+              placeholder="Preset name (e.g. Birch Plywood 3mm Cut)"
+              value={presetName}
+              onChange={(e) => setPresetName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSavePreset();
+                if (e.key === "Escape") cancelSavePreset();
+              }}
+              autoFocus
+              style={fieldStyle}
+            />
+            <input
+              placeholder="Material (e.g. Plywood)"
+              value={presetMaterial}
+              onChange={(e) => setPresetMaterial(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSavePreset();
+                if (e.key === "Escape") cancelSavePreset();
+              }}
+              style={fieldStyle}
+            />
+            <input
+              placeholder="Thickness (e.g. 3mm)"
+              value={presetThickness}
+              onChange={(e) => setPresetThickness(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSavePreset();
+                if (e.key === "Escape") cancelSavePreset();
+              }}
+              style={fieldStyle}
+            />
+            <div style={{ display: "flex", gap: "4px", justifyContent: "flex-end" }}>
+              <button
+                onClick={cancelSavePreset}
+                style={{
+                  background: "none",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  color: "var(--text-secondary)",
+                  padding: "3px 10px",
+                  fontSize: "var(--text-xs)",
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSavePreset}
+                disabled={!presetName.trim()}
+                style={{
+                  background: presetName.trim() ? "var(--accent-strong)" : "var(--bg-input)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  color: presetName.trim() ? "#fff" : "var(--text-muted)",
+                  padding: "3px 10px",
+                  fontSize: "var(--text-xs)",
+                  cursor: presetName.trim() ? "pointer" : "default",
+                }}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Material groups */}
+        <div style={{ maxHeight: "200px", overflow: "auto" }}>
+          {filteredGroups.map(([group, presets]) => (
+            <div key={group} style={{ marginBottom: "4px" }}>
+              <div
+                style={{
+                  fontSize: "var(--text-2xs)",
+                  color: "var(--text-muted)",
+                  padding: "3px 4px",
+                  fontWeight: 600,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.3px",
+                }}
+              >
+                {group}
+              </div>
+              {presets.map((preset) => (
+                <button
+                  key={preset.id}
+                  onClick={() => applyPreset(preset)}
+                  style={{
+                    display: "flex",
+                    width: "100%",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    background: "none",
+                    border: "none",
+                    color: "var(--text-primary)",
+                    padding: "3px 8px",
+                    fontSize: "11px",
+                    cursor: "pointer",
+                    borderRadius: "var(--radius-sm)",
+                    textAlign: "left",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+                >
+                  <span>{preset.mode === "fill" ? "Engrave" : "Cut"}</span>
+                  <span
+                    style={{
+                      fontSize: "var(--text-xs)",
+                      color: "var(--text-muted)",
+                      fontVariantNumeric: "tabular-nums",
+                    }}
+                  >
+                    {preset.power}% {preset.speed}mm/min x{preset.passes}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

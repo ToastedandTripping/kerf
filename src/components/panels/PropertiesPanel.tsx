@@ -5,6 +5,7 @@ import { openDitherPreview } from "../../app/App";
 import { movePartial, scalePartial } from "../../lib/geometry";
 import { MM_PER_INCH } from "../../lib/constants";
 import { BUNDLED_FONTS } from "../../app/store/geometryActions";
+import { Chevron } from "./Chevron";
 const UNITS_KEY = "kerf-display-units";
 
 // N1: @font-face declarations derived from BUNDLED_FONTS (single source of truth).
@@ -55,37 +56,21 @@ export function PropertiesPanel() {
   const fromDisplay = (v: number) => (displayUnit === "in" ? v * MM_PER_INCH : v);
   const unitLabel = displayUnit;
 
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
+
   const selected = objects.filter((o) => selectedIds.includes(o.id));
 
   if (selected.length === 0) {
     return (
-      <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
-        <div
-          style={{
-            padding: "8px 12px",
-            fontSize: "11px",
-            fontWeight: 600,
-            color: "var(--text-secondary)",
-            textTransform: "uppercase",
-            letterSpacing: "0.5px",
-          }}
-        >
-          Properties
-        </div>
-        <div
-          style={{
-            flex: 1,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "var(--text-muted)",
-            fontSize: "12px",
-            padding: "20px",
-            textAlign: "center",
-          }}
-        >
-          No selection
-        </div>
+      <div
+        style={{
+          color: "var(--text-muted)",
+          fontSize: "var(--text-sm)",
+          padding: "20px",
+          textAlign: "center",
+        }}
+      >
+        No selection
       </div>
     );
   }
@@ -93,76 +78,19 @@ export function PropertiesPanel() {
   const obj = selected[0];
   const multi = selected.length > 1;
 
+  // Layer indicator + selector (works for single and multi-select)
+  const layerIndices = new Set(selected.map((o) => o.layerIndex));
+  const isMixed = layerIndices.size > 1;
+  const currentIndex = isMixed ? -1 : [...layerIndices][0];
+  const currentLayer = isMixed ? null : layers[currentIndex];
+
+  // The section header in App carries the "(N)" count; this panel draws no header (P48).
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto" }}>
-      <div
-        style={{
-          padding: "8px 12px",
-          fontSize: "11px",
-          fontWeight: 600,
-          color: "var(--text-secondary)",
-          textTransform: "uppercase",
-          letterSpacing: "0.5px",
-        }}
-      >
-        Properties {multi ? `(${selected.length})` : ""}
-      </div>
-
-      {/* Layer indicator + selector (works for single and multi-select) */}
-      {(() => {
-        const layerIndices = new Set(selected.map((o) => o.layerIndex));
-        const isMixed = layerIndices.size > 1;
-        const currentIndex = isMixed ? -1 : [...layerIndices][0];
-        const currentLayer = isMixed ? null : layers[currentIndex];
-        return (
-          <div style={{ padding: "0 12px 8px", display: "flex", alignItems: "center", gap: "8px" }}>
-            <div
-              style={{
-                width: "10px",
-                height: "10px",
-                borderRadius: "2px",
-                flexShrink: 0,
-                background: currentLayer?.color || "transparent",
-                border: isMixed ? "1px dashed var(--text-muted)" : "none",
-              }}
-            />
-            <select
-              value={currentIndex}
-              onChange={(e) => moveObjectsToLayer(selectedIds, Number(e.target.value))}
-              style={{
-                flex: 1,
-                background: "var(--bg-input)",
-                border: "1px solid var(--border)",
-                color: "var(--text-primary)",
-                padding: "3px 6px",
-                borderRadius: "var(--radius-sm)",
-                fontSize: "11px",
-                cursor: "pointer",
-                appearance: "none",
-                WebkitAppearance: "none",
-                backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath d='M0 2l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.5'/%3E%3C/svg%3E")`,
-                backgroundRepeat: "no-repeat",
-                backgroundPosition: "right 6px center",
-                paddingRight: "20px",
-              }}
-            >
-              {isMixed && (
-                <option value={-1} disabled>
-                  Mixed
-                </option>
-              )}
-              {layers.map((l) => (
-                <option key={l.index} value={l.index}>
-                  {l.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        );
-      })()}
-
+    <div
+      style={{ padding: "8px 12px 12px", display: "flex", flexDirection: "column", minWidth: 0 }}
+    >
       {!multi && (
-        <div style={{ padding: "0 12px 12px" }}>
+        <>
           {/* Name */}
           <PropertyRow label="Name">
             <input
@@ -175,169 +103,133 @@ export function PropertiesPanel() {
           </PropertyRow>
 
           {/* Position — W1b: movePartial/scalePartial keep path points synced */}
-          <PropertyGroup label="Position">
-            <NumberField
-              label="X"
-              value={toDisplay(obj.transform.x)}
-              onChange={(v) =>
-                updateObject(obj.id, movePartial(obj, fromDisplay(v), obj.transform.y))
-              }
-              unit={unitLabel}
-              step={displayUnit === "in" ? 0.01 : 1}
-              onFocus={beginEdit}
-              onBlur={commitEdit}
-            />
-            <NumberField
-              label="Y"
-              value={toDisplay(obj.transform.y)}
-              onChange={(v) =>
-                updateObject(obj.id, movePartial(obj, obj.transform.x, fromDisplay(v)))
-              }
-              unit={unitLabel}
-              step={displayUnit === "in" ? 0.01 : 1}
-              onFocus={beginEdit}
-              onBlur={commitEdit}
-            />
-          </PropertyGroup>
-
-          {/* Size */}
           <PropertyGroup
-            label="Size"
+            label="Position"
             trailing={
-              <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                <button
-                  onClick={() => setAspectLocked(!aspectLocked)}
-                  title={aspectLocked ? "Unlock aspect ratio" : "Lock aspect ratio"}
-                  style={{
-                    background: aspectLocked ? "var(--accent, #4a90e2)" : "none",
-                    border: "1px solid var(--border)",
-                    borderRadius: "var(--radius-sm)",
-                    cursor: "pointer",
-                    padding: "1px 4px",
-                    color: aspectLocked ? "#fff" : "var(--text-muted)",
-                    fontSize: "9px",
-                    lineHeight: 1,
-                  }}
-                >
-                  {aspectLocked ? "1:1" : "W/H"}
-                </button>
-                <button
-                  onClick={toggleUnit}
-                  title={`Switch to ${displayUnit === "mm" ? "inches" : "millimeters"}`}
-                  style={{
-                    background: "none",
-                    border: "1px solid var(--border)",
-                    borderRadius: "var(--radius-sm)",
-                    cursor: "pointer",
-                    padding: "1px 4px",
-                    color: "var(--text-muted)",
-                    fontSize: "9px",
-                    lineHeight: 1,
-                  }}
-                >
-                  {displayUnit}
-                </button>
-              </div>
+              <button
+                onClick={toggleUnit}
+                title={`Switch to ${displayUnit === "mm" ? "inches" : "millimeters"}`}
+                style={chipStyle}
+              >
+                {displayUnit}
+              </button>
             }
           >
-            <NumberField
-              label="W"
-              value={toDisplay(obj.transform.width)}
-              onChange={(v) => {
-                const newW = Math.max(0, fromDisplay(v));
-                const newH =
-                  aspectLocked && obj.transform.width > 0
-                    ? obj.transform.height * (newW / obj.transform.width)
-                    : obj.transform.height;
-                updateObject(
-                  obj.id,
-                  scalePartial(obj, {
-                    x: obj.transform.x,
-                    y: obj.transform.y,
-                    width: newW,
-                    height: newH,
-                  })
-                );
-              }}
-              unit={unitLabel}
-              step={displayUnit === "in" ? 0.01 : 1}
-              onFocus={beginEdit}
-              onBlur={commitEdit}
-            />
-            <NumberField
-              label="H"
-              value={toDisplay(obj.transform.height)}
-              onChange={(v) => {
-                const newH = Math.max(0, fromDisplay(v));
-                const newW =
-                  aspectLocked && obj.transform.height > 0
-                    ? obj.transform.width * (newH / obj.transform.height)
-                    : obj.transform.width;
-                updateObject(
-                  obj.id,
-                  scalePartial(obj, {
-                    x: obj.transform.x,
-                    y: obj.transform.y,
-                    width: newW,
-                    height: newH,
-                  })
-                );
-              }}
-              unit={unitLabel}
-              step={displayUnit === "in" ? 0.01 : 1}
-              onFocus={beginEdit}
-              onBlur={commitEdit}
-            />
+            <div style={pairStyle}>
+              <NumberField
+                label="X"
+                labelWidth={12}
+                value={toDisplay(obj.transform.x)}
+                onChange={(v) =>
+                  updateObject(obj.id, movePartial(obj, fromDisplay(v), obj.transform.y))
+                }
+                unit={unitLabel}
+                step={displayUnit === "in" ? 0.01 : 1}
+                onFocus={beginEdit}
+                onBlur={commitEdit}
+              />
+              <NumberField
+                label="Y"
+                labelWidth={12}
+                value={toDisplay(obj.transform.y)}
+                onChange={(v) =>
+                  updateObject(obj.id, movePartial(obj, obj.transform.x, fromDisplay(v)))
+                }
+                unit={unitLabel}
+                step={displayUnit === "in" ? 0.01 : 1}
+                onFocus={beginEdit}
+                onBlur={commitEdit}
+              />
+            </div>
+          </PropertyGroup>
+
+          {/* Size: W and H side by side, the aspect lock between them */}
+          <PropertyGroup label="Size">
+            <div style={{ ...pairStyle, gridTemplateColumns: "1fr auto 1fr" }}>
+              <NumberField
+                label="W"
+                labelWidth={12}
+                value={toDisplay(obj.transform.width)}
+                onChange={(v) => {
+                  const newW = Math.max(0, fromDisplay(v));
+                  const newH =
+                    aspectLocked && obj.transform.width > 0
+                      ? obj.transform.height * (newW / obj.transform.width)
+                      : obj.transform.height;
+                  updateObject(
+                    obj.id,
+                    scalePartial(obj, {
+                      x: obj.transform.x,
+                      y: obj.transform.y,
+                      width: newW,
+                      height: newH,
+                    })
+                  );
+                }}
+                unit={unitLabel}
+                step={displayUnit === "in" ? 0.01 : 1}
+                onFocus={beginEdit}
+                onBlur={commitEdit}
+              />
+              <button
+                onClick={() => setAspectLocked(!aspectLocked)}
+                title={aspectLocked ? "Unlock aspect ratio" : "Lock aspect ratio"}
+                aria-pressed={aspectLocked}
+                style={{
+                  ...chipStyle,
+                  background: aspectLocked ? "var(--accent-bg)" : "none",
+                  border: aspectLocked
+                    ? "1px solid var(--accent-border)"
+                    : "1px solid var(--border-control)",
+                  boxShadow: aspectLocked ? "inset 0 0 0 1px var(--accent)" : "none",
+                  color: aspectLocked ? "var(--accent-text)" : "var(--text-secondary)",
+                  fontWeight: aspectLocked ? 600 : 400,
+                }}
+              >
+                {aspectLocked ? "1:1" : "W/H"}
+              </button>
+              <NumberField
+                label="H"
+                labelWidth={12}
+                value={toDisplay(obj.transform.height)}
+                onChange={(v) => {
+                  const newH = Math.max(0, fromDisplay(v));
+                  const newW =
+                    aspectLocked && obj.transform.height > 0
+                      ? obj.transform.width * (newH / obj.transform.height)
+                      : obj.transform.width;
+                  updateObject(
+                    obj.id,
+                    scalePartial(obj, {
+                      x: obj.transform.x,
+                      y: obj.transform.y,
+                      width: newW,
+                      height: newH,
+                    })
+                  );
+                }}
+                unit={unitLabel}
+                step={displayUnit === "in" ? 0.01 : 1}
+                onFocus={beginEdit}
+                onBlur={commitEdit}
+              />
+            </div>
           </PropertyGroup>
 
           {/* Rotation */}
-          <PropertyGroup label="Rotation">
-            <NumberField
-              label="Deg"
-              value={obj.transform.rotation}
-              onChange={(v) =>
-                updateObject(obj.id, {
-                  transform: { ...obj.transform, rotation: v },
-                })
-              }
-              unit="deg"
-              onFocus={beginEdit}
-              onBlur={commitEdit}
-            />
-          </PropertyGroup>
+          <NumberField
+            label="Angle"
+            value={obj.transform.rotation}
+            onChange={(v) =>
+              updateObject(obj.id, {
+                transform: { ...obj.transform, rotation: v },
+              })
+            }
+            unit="°"
+            onFocus={beginEdit}
+            onBlur={commitEdit}
+          />
 
-          {/* Stroke */}
-          <PropertyGroup label="Stroke">
-            <PropertyRow label="Color">
-              <input
-                type="color"
-                value={obj.stroke}
-                onChange={(e) => updateObject(obj.id, { stroke: e.target.value })}
-                onFocus={beginEdit}
-                onBlur={commitEdit}
-                style={{
-                  width: "28px",
-                  height: "22px",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius-sm)",
-                  background: "none",
-                  cursor: "pointer",
-                  padding: 0,
-                }}
-              />
-            </PropertyRow>
-            <NumberField
-              label="Width"
-              value={obj.strokeWidth}
-              onChange={(v) => updateObject(obj.id, { strokeWidth: Math.max(0, v) })}
-              unit="px"
-              step={0.5}
-              onFocus={beginEdit}
-              onBlur={commitEdit}
-            />
-          </PropertyGroup>
-
-          {/* Corner radius for rectangles */}
           {obj.type === "rectangle" && (
             <PropertyGroup label="Corners">
               <NumberField
@@ -353,20 +245,44 @@ export function PropertiesPanel() {
               />
             </PropertyGroup>
           )}
+        </>
+      )}
 
-          {/* Opacity & Power Scale */}
-          <PropertyGroup label="Appearance">
-            <NumberField
-              label="Opacity"
-              value={Math.round(obj.opacity * 100)}
-              onChange={(v) =>
-                updateObject(obj.id, { opacity: Math.max(0, Math.min(100, v)) / 100 })
-              }
-              unit="%"
-              step={1}
-              onFocus={beginEdit}
-              onBlur={commitEdit}
+      {/* Laser: the fields that reach the G-code */}
+      <PropertyGroup label="Laser">
+        <PropertyRow label="Layer">
+          <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: "6px" }}>
+            <div
+              style={{
+                width: "10px",
+                height: "10px",
+                borderRadius: "2px",
+                flexShrink: 0,
+                background: currentLayer?.color || "transparent",
+                border: isMixed ? "1px dashed var(--text-muted)" : "none",
+              }}
             />
+            <select
+              value={currentIndex}
+              onChange={(e) => moveObjectsToLayer(selectedIds, Number(e.target.value))}
+              className="k-select"
+              style={{ flex: 1, minWidth: 0, cursor: "pointer" }}
+            >
+              {isMixed && (
+                <option value={-1} disabled>
+                  Mixed
+                </option>
+              )}
+              {layers.map((l) => (
+                <option key={l.index} value={l.index}>
+                  {l.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </PropertyRow>
+        {!multi && (
+          <>
             <NumberField
               label="Power Scale"
               value={Math.round((obj.powerScale ?? 1) * 100)}
@@ -378,12 +294,8 @@ export function PropertiesPanel() {
               onFocus={beginEdit}
               onBlur={commitEdit}
             />
-          </PropertyGroup>
-
-          {/* Cut Order */}
-          <PropertyGroup label="Cut Order">
             <NumberField
-              label="Priority"
+              label="Cut order"
               value={obj.priority ?? 0}
               onChange={(v) =>
                 updateObject(obj.id, { priority: Math.max(0, Math.min(99, Math.round(v))) })
@@ -395,17 +307,20 @@ export function PropertiesPanel() {
             />
             <div
               style={{
-                fontSize: "10px",
+                fontSize: "var(--text-xs)",
                 color: "var(--text-muted)",
-                marginTop: "4px",
+                margin: "2px 0 0 72px",
                 lineHeight: 1.4,
               }}
             >
               Higher cuts first. 0 = default order.
             </div>
-          </PropertyGroup>
+          </>
+        )}
+      </PropertyGroup>
 
-          {/* Text properties */}
+      {!multi && (
+        <>
           {obj.type === "text" && (
             <PropertyGroup label="Text">
               <PropertyRow label="Content">
@@ -447,15 +362,23 @@ export function PropertiesPanel() {
                         ...inputStyle,
                         flex: 1,
                         cursor: "pointer",
-                        fontWeight: (obj.textAlign ?? "left") === a ? 700 : 400,
+                        fontWeight: (obj.textAlign ?? "left") === a ? 600 : 400,
                         background:
                           (obj.textAlign ?? "left") === a
-                            ? "rgba(74, 144, 226, 0.2)"
+                            ? "var(--accent-bg)"
                             : inputStyle.background,
                         border:
                           (obj.textAlign ?? "left") === a
-                            ? "1px solid rgba(74, 144, 226, 0.5)"
-                            : "1px solid transparent",
+                            ? "1px solid var(--accent-border)"
+                            : "1px solid var(--border-control)",
+                        boxShadow:
+                          (obj.textAlign ?? "left") === a
+                            ? "inset 0 0 0 1px var(--accent)"
+                            : "none",
+                        color:
+                          (obj.textAlign ?? "left") === a
+                            ? "var(--accent-text)"
+                            : "var(--text-primary)",
                         textAlign: "center",
                         padding: "2px 4px",
                         fontSize: "11px",
@@ -474,16 +397,8 @@ export function PropertiesPanel() {
                   onChange={(e) => updateObject(obj.id, { fontFamily: e.target.value })}
                   onFocus={beginEdit}
                   onBlur={commitEdit}
-                  style={{
-                    ...inputStyle,
-                    appearance: "none",
-                    WebkitAppearance: "none",
-                    backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath d='M0 2l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.5'/%3E%3C/svg%3E")`,
-                    backgroundRepeat: "no-repeat",
-                    backgroundPosition: "right 6px center",
-                    paddingRight: "20px",
-                    cursor: "pointer",
-                  }}
+                  className="k-select"
+                  style={{ flex: 1, minWidth: 0, cursor: "pointer" }}
                 >
                   {BUNDLED_FONTS.map((f) => (
                     <option key={f.key} value={f.key}>
@@ -495,7 +410,6 @@ export function PropertiesPanel() {
             </PropertyGroup>
           )}
 
-          {/* Image adjustments */}
           {obj.type === "image" && (
             <PropertyGroup label="Image">
               <NumberField
@@ -625,9 +539,9 @@ export function PropertiesPanel() {
                   padding: "5px 8px",
                   fontSize: 11,
                   background: "var(--bg-input)",
-                  border: "1px solid var(--border)",
+                  border: "1px solid var(--border-control)",
                   borderRadius: "var(--radius-sm)",
-                  color: "var(--text-secondary)",
+                  color: "var(--text-primary)",
                   cursor: "pointer",
                 }}
               >
@@ -635,11 +549,123 @@ export function PropertiesPanel() {
               </button>
             </PropertyGroup>
           )}
-        </div>
+
+          {/* Appearance: stroke and opacity reach no generation request (P48) */}
+          <div style={{ marginBottom: "8px" }}>
+            <button
+              onClick={() => setAppearanceOpen((v) => !v)}
+              aria-expanded={appearanceOpen}
+              style={{
+                ...groupLabelStyle,
+                width: "100%",
+                background: "none",
+                border: "none",
+                padding: "4px 0",
+                minHeight: "24px",
+                cursor: "pointer",
+                justifyContent: "flex-start",
+                gap: "6px",
+                textAlign: "left",
+              }}
+            >
+              <Chevron open={appearanceOpen} />
+              <span>Appearance</span>
+              <span style={metaStyle}>(not in the G-code)</span>
+            </button>
+            {appearanceOpen && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                <PropertyRow label="Stroke">
+                  <input
+                    type="color"
+                    value={obj.stroke}
+                    onChange={(e) => updateObject(obj.id, { stroke: e.target.value })}
+                    onFocus={beginEdit}
+                    onBlur={commitEdit}
+                    style={{
+                      width: "28px",
+                      height: "22px",
+                      border: "1px solid var(--border-control)",
+                      borderRadius: "var(--radius-sm)",
+                      background: "none",
+                      cursor: "pointer",
+                      padding: 0,
+                    }}
+                  />
+                </PropertyRow>
+                <NumberField
+                  label="Stroke width"
+                  value={obj.strokeWidth}
+                  onChange={(v) => updateObject(obj.id, { strokeWidth: Math.max(0, v) })}
+                  unit="px"
+                  step={0.5}
+                  onFocus={beginEdit}
+                  onBlur={commitEdit}
+                />
+                <NumberField
+                  label="Opacity"
+                  value={Math.round(obj.opacity * 100)}
+                  onChange={(v) =>
+                    updateObject(obj.id, { opacity: Math.max(0, Math.min(100, v)) / 100 })
+                  }
+                  unit="%"
+                  step={1}
+                  onFocus={beginEdit}
+                  onBlur={commitEdit}
+                />
+              </div>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
 }
+
+/** Trailing "(N)" for the Properties section header when several objects are
+ *  selected. Same derivation as the panel: selected ids that name a live object.
+ *  Selectors return stable store references; the count is derived outside. */
+export function PropertiesSelectionCount() {
+  const selectedIds = useStore((s) => s.selectedIds);
+  const objects = useStore((s) => s.objects);
+  const count = objects.filter((o) => selectedIds.includes(o.id)).length;
+  return count > 1 ? <>({count})</> : null;
+}
+
+const groupLabelStyle: React.CSSProperties = {
+  fontSize: "var(--text-2xs)",
+  fontWeight: 600,
+  color: "var(--text-muted)",
+  textTransform: "uppercase",
+  letterSpacing: "0.4px",
+  display: "flex",
+  alignItems: "center",
+};
+
+const metaStyle: React.CSSProperties = {
+  textTransform: "none",
+  fontWeight: 400,
+  letterSpacing: 0,
+  fontSize: "var(--text-xs)",
+};
+
+const pairStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: "8px",
+  alignItems: "center",
+};
+
+const chipStyle: React.CSSProperties = {
+  background: "none",
+  border: "1px solid var(--border-control)",
+  borderRadius: "var(--radius-sm)",
+  cursor: "pointer",
+  padding: "2px 6px",
+  minHeight: "20px",
+  color: "var(--text-secondary)",
+  fontSize: "var(--text-xs)",
+  lineHeight: 1,
+};
 
 function PropertyGroup({
   label,
@@ -654,24 +680,21 @@ function PropertyGroup({
     <div style={{ marginBottom: "8px" }}>
       <div
         style={{
-          fontSize: "10px",
-          color: "var(--text-muted)",
-          marginBottom: "4px",
-          textTransform: "uppercase",
-          letterSpacing: "0.3px",
-          display: "flex",
+          ...groupLabelStyle,
           justifyContent: "space-between",
-          alignItems: "center",
+          minHeight: "24px",
+          marginBottom: "2px",
         }}
       >
         {label}
         {trailing}
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>{children}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>{children}</div>
     </div>
   );
 }
 
+/** One 64px label column, 11px secondary (P48). */
 function PropertyRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div
@@ -679,21 +702,22 @@ function PropertyRow({ label, children }: { label: string; children: React.React
         display: "flex",
         alignItems: "center",
         gap: "8px",
+        minHeight: "24px",
         marginBottom: "4px",
       }}
     >
-      <span
-        style={{
-          fontSize: "11px",
-          color: "var(--text-secondary)",
-          minWidth: "40px",
-        }}
-      >
-        {label}
-      </span>
+      <span style={labelStyle(64)}>{label}</span>
       {children}
     </div>
   );
+}
+
+function labelStyle(width: number): React.CSSProperties {
+  return {
+    flex: `0 0 ${width}px`,
+    fontSize: "var(--text-xs)",
+    color: "var(--text-secondary)",
+  };
 }
 
 function NumberField({
@@ -704,6 +728,7 @@ function NumberField({
   step = 1,
   onFocus,
   onBlur,
+  labelWidth = 64,
 }: {
   label: string;
   value: number;
@@ -712,24 +737,18 @@ function NumberField({
   step?: number;
   onFocus?: () => void;
   onBlur?: () => void;
+  labelWidth?: number;
 }) {
   return (
     <div
       style={{
         display: "flex",
         alignItems: "center",
-        gap: "4px",
+        gap: labelWidth === 64 ? "8px" : "4px",
+        minWidth: 0,
       }}
     >
-      <span
-        style={{
-          fontSize: "11px",
-          color: "var(--text-muted)",
-          minWidth: "16px",
-        }}
-      >
-        {label}
-      </span>
+      <span style={labelStyle(labelWidth)}>{label}</span>
       <input
         type="number"
         value={Math.round(value * 100) / 100}
@@ -740,19 +759,21 @@ function NumberField({
         }}
         onFocus={onFocus}
         onBlur={onBlur}
-        style={inputStyle}
+        style={{ ...inputStyle, minWidth: 0, fontVariantNumeric: "tabular-nums" }}
       />
-      <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>{unit}</span>
+      <span style={{ flex: "0 0 24px", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+        {unit}
+      </span>
     </div>
   );
 }
 
 const inputStyle: React.CSSProperties = {
   background: "var(--bg-input)",
-  border: "1px solid var(--border)",
+  border: "1px solid var(--border-control)",
   borderRadius: "var(--radius-sm)",
   color: "var(--text-primary)",
   padding: "4px 6px",
-  fontSize: "12px",
+  fontSize: "var(--text-sm)",
   width: "100%",
 };

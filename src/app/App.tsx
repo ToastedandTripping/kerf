@@ -7,7 +7,7 @@ import { Toolbar } from "../components/toolbar/Toolbar";
 import { Viewport } from "../components/viewport/Viewport";
 import { LayerPanel } from "../components/panels/LayerPanel";
 import { MaterialLibrary } from "../components/panels/MaterialLibrary";
-import { PropertiesPanel } from "../components/panels/PropertiesPanel";
+import { PropertiesPanel, PropertiesSelectionCount } from "../components/panels/PropertiesPanel";
 import { MachinePanel } from "../components/panels/MachinePanel";
 import { ActiveLayerStrip } from "../components/panels/ActiveLayerStrip";
 import { JobActionBar } from "../components/panels/JobActionBar";
@@ -65,7 +65,7 @@ class ViewportErrorBoundary extends Component<{ children: ReactNode }, { error: 
           <div
             style={{
               fontSize: "11px",
-              color: "var(--text-tertiary)",
+              color: "var(--text-muted)",
               maxWidth: "300px",
               textAlign: "center",
             }}
@@ -295,7 +295,7 @@ export default function App() {
           <ActiveLayerStrip />
 
           {/* Region 2 — Scrollable middle: panels in workflow order */}
-          <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
+          <div style={{ flex: 1, overflow: "auto", overflowX: "hidden", minHeight: 0 }}>
             <LayerPanel />
             <MachinePanel />
             <CollapsibleSection
@@ -307,6 +307,7 @@ export default function App() {
             </CollapsibleSection>
             <CollapsibleSection
               title="Properties"
+              meta={<PropertiesSelectionCount />}
               open={propertiesPanelOpen}
               onToggle={() => setPropertiesPanelOpen((v) => !v)}
             >
