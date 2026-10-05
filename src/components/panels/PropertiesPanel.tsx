@@ -621,16 +621,6 @@ export function PropertiesPanel() {
   );
 }
 
-/** Trailing "(N)" for the Properties section header when several objects are
- *  selected. Same derivation as the panel: selected ids that name a live object.
- *  Selectors return stable store references; the count is derived outside. */
-export function PropertiesSelectionCount() {
-  const selectedIds = useStore((s) => s.selectedIds);
-  const objects = useStore((s) => s.objects);
-  const count = objects.filter((o) => selectedIds.includes(o.id)).length;
-  return count > 1 ? <>({count})</> : null;
-}
-
 const groupLabelStyle: React.CSSProperties = {
   fontSize: "var(--text-2xs)",
   fontWeight: 600,

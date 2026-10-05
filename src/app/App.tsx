@@ -7,7 +7,7 @@ import { Toolbar } from "../components/toolbar/Toolbar";
 import { Viewport } from "../components/viewport/Viewport";
 import { LayerPanel } from "../components/panels/LayerPanel";
 import { MaterialLibrary } from "../components/panels/MaterialLibrary";
-import { PropertiesPanel, PropertiesSelectionCount } from "../components/panels/PropertiesPanel";
+import { PropertiesPanel } from "../components/panels/PropertiesPanel";
 import { MachinePanel } from "../components/panels/MachinePanel";
 import { ActiveLayerStrip } from "../components/panels/ActiveLayerStrip";
 import { JobActionBar } from "../components/panels/JobActionBar";
@@ -156,6 +156,16 @@ export function importPdfVectors(objects: DesignObject[]) {
   s.closeDialog("pdfImport");
   s.setDialogData({ pendingPdf: null });
   s.withUndo("pdf-import", () => objects.forEach((obj) => s.addObject(obj)));
+}
+
+/** Trailing "(N)" for the Properties section header when several objects are
+ *  selected. Same derivation as the panel: selected ids that name a live object.
+ *  Selectors return stable store references; the count is derived outside. */
+function PropertiesSelectionCount() {
+  const selectedIds = useStore((s) => s.selectedIds);
+  const objects = useStore((s) => s.objects);
+  const count = objects.filter((o) => selectedIds.includes(o.id)).length;
+  return count > 1 ? <>({count})</> : null;
 }
 
 export default function App() {

@@ -43,8 +43,14 @@ export function Banner({
         padding: "8px 10px",
         borderRadius: "var(--radius-sm)",
         background: t.bg,
-        border: `1px solid ${t.border}`,
-        borderLeft: leftRule ? `3px solid ${t.mark}` : `1px solid ${t.border}`,
+        borderStyle: "solid",
+        borderWidth: leftRule ? "1px 1px 1px 3px" : "1px",
+        // Per-side longhands: a var() inside a shorthand is not expanded by every
+        // style engine (jsdom drops it), and the test reads each side.
+        borderTopColor: t.border,
+        borderRightColor: t.border,
+        borderBottomColor: t.border,
+        borderLeftColor: leftRule ? t.mark : t.border,
         color: "var(--text-primary)",
         fontSize: "var(--text-xs)",
         lineHeight: 1.4,
