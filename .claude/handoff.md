@@ -81,6 +81,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 ## Log (newest first)
 
+### 2026-10-05 TB1 plan gate open (bounded check PASS)
+Lee chose a bounded check of the round-7 fixes over a full round 8 (via the coordinator). Fable ran it scoped to the two native choosers, the lint and scan, the three non-P0 wordings (F2, F3, the URL-prefix P3) and no-regression: PASS, five P3s, all folded as revision 8.1 (67d38fe; revision 8 kept as -r8.md, the critic as -critic-r8.md). A2 relay open (Ted implementing, base 792187f). TB1 implementation follows its own batch order: B1a and B2 first, inside the two-lane cap.
+
 ### 2026-10-05 context-floor hand-off after the A7 merge
 Consolidated the four stacked state blocks into one RESUME HERE. It carries: the merged list (A1, TB3, A7), the owner checks owed, where every A7, A1 and TB3 parked item went, TB1 waiting only on Lee's bounded-versus-round-8 pick, A2 as the next batch with its file overlaps, and the disk notes.
 
