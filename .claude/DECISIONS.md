@@ -115,6 +115,16 @@ The state used to be an 11 px word and a 6 px dot in the bottom-left corner, unr
 
 The layer decides power, speed and passes, and the file colour has no effect on the job, so the canvas shows the layer, as LightBurn does. Each shape keeps its file colour in the project and in SVG export, and the G-code does not change. Fills keep a light tint, text follows its layer, and images are untouched. The plan is .claude/plans/kerf-ui-polish.md, batch A9 (one switch in layerDisplayColor.ts).
 
+### The Stop key is Ctrl+. and Shift+Esc (Cmd+. on macOS); both stop the machine wherever the keystroke reaches Kerf.
+*2026-10-05, per Lee, relayed by the coordinator*
+
+Lee chose option (a) of the STOP-reachability plan's decision D1. Ctrl+. alone collides with input-method emoji pickers on some Linux and Windows setups, so Shift+Esc ships as a second chord with no default binding on Linux GTK, macOS or Windows (sources in .claude/plans/kerf-stop-reachability.md). Shift+Esc therefore no longer acts as plain Escape anywhere in Kerf. The claim is bounded: the key stops the machine whenever the keystroke reaches Kerf, and delivery under a live input method stays an owner check.
+
+### While the laser may be commanded on, Kerf refuses file dialogs and the Welcome Guide, and Disconnect sends the stop reset first.
+*2026-10-05, per Lee, relayed by the coordinator*
+
+Lee chose option (a) of the STOP-reachability plan's decision D2. A native file dialog or the Welcome Guide's page reload can cover or freeze STOP, so neither opens while Kerf's own record says the laser may still be on. Unknown counts as on. The cost Lee accepted is that after a STOP or Pause during a burning job, file dialogs stay refused until the output is cleanly cleared; a job that runs to its end and a successful Fire change nothing. 'Off' means what Kerf last commanded, never observed beam state (the status-only evidence ruling, 2026-09-10).
+
 ---
 
 ## Engineering pins
