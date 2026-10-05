@@ -210,6 +210,25 @@ describe("T3: the editor draws its curve when it opens", () => {
   });
 });
 
+describe("T3b: the dashed Linear reference falls from top left", () => {
+  it("draws the dashed segment from (0, 0) to (CANVAS_W, CANVAS_H)", () => {
+    render(editor(true, PRESETS.Linear));
+    const i = recording.findIndex(
+      (r) => "op" in r && r.op === "setLineDash" && (r.args[0] as number[]).length > 0
+    );
+    expect(i).toBeGreaterThanOrEqual(0);
+    const ops = recording
+      .slice(i + 1)
+      .filter((x): x is { op: string; args: unknown[] } => "op" in x);
+    expect((recording[i] as { args: unknown[] }).args[0]).toEqual([4, 4]);
+    expect(ops[0].op).toBe("beginPath");
+    expect(ops[1]).toEqual({ op: "moveTo", args: [0, 0] });
+    expect(ops[2]).toEqual({ op: "lineTo", args: [CANVAS_W, CANVAS_H] });
+    expect(ops[3].op).toBe("stroke");
+    expect(ops[4]).toEqual({ op: "setLineDash", args: [[]] });
+  });
+});
+
 // ---------------------------------------------------------------- T4
 
 describe("T4: Apply writes once", () => {
@@ -443,11 +462,11 @@ describe("T5: saved curves are never rewritten", () => {
 // ---------------------------------------------------------------- T6
 
 describe("T6: the preset highlight", () => {
-  // jsdom normalises #c4a57b to rgb(196, 165, 123); the inactive border is var(--border).
-  const isHighlighted = (el: HTMLElement) => el.style.border === "1px solid rgb(196, 165, 123)";
+  // Selection is exposed as aria-pressed, not by colour alone.
+  const isHighlighted = (el: HTMLElement) => el.getAttribute("aria-pressed") === "true";
   it("the highlight check can see both states", () => {
     const { getByText } = render(editor(true, PRESETS.Linear));
-    expect(getByText("S-Curve").style.border).toBe("1px solid var(--border)");
+    expect(getByText("S-Curve").getAttribute("aria-pressed")).toBe("false");
     expect(isHighlighted(getByText("Linear"))).toBe(true);
   });
   it("old S-Curve points highlight no preset", () => {

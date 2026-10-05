@@ -165,13 +165,13 @@ export function PowerCurveEditor({
       ctx.stroke();
     }
 
-    // Identity diagonal (dashed)
+    // Linear reference (dashed)
     ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 4]);
     ctx.beginPath();
-    ctx.moveTo(0, CANVAS_H);
-    ctx.lineTo(CANVAS_W, 0);
+    ctx.moveTo(0, 0);
+    ctx.lineTo(CANVAS_W, CANVAS_H);
     ctx.stroke();
     ctx.setLineDash([]);
 
@@ -483,6 +483,7 @@ export function PowerCurveEditor({
             return (
               <button
                 key={name}
+                aria-pressed={isActive}
                 onClick={() => setPoints([...pts])}
                 style={{
                   padding: "4px 10px",
