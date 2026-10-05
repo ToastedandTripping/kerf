@@ -156,7 +156,12 @@ Standard tier, two batches in one relay. `tb3-guard` lands first; `tb3` follows 
 ### The guard (`generationGuard.test.tsx`)
 
 Harness: the production `MachinePanel` and `JobActionBar`, rendered as `gcodeFailureLoud.test.tsx` does.
-- **The invoke mock dispatches by command name.** It answers the two commands `generateGcode` actually calls, `generate_image_gcode` (`gcodeGen.ts:697`) and `generate_gcode` (`:1182`). Each call is a deferred promise the test resolves explicitly. Any other command name throws "unexpected invoke: <name>", so a test cannot pass by falling through to a permissive default.
+- **The invoke mock dispatches by command name.**
+  - It answers the panel's mount plumbing: `list_serial_ports` (from `refreshPorts()` in the mount effect, `MachinePanel.tsx:334`), with an empty port list.
+  - It answers the two commands `generateGcode` actually calls, `generate_image_gcode` (`gcodeGen.ts:697`) and `generate_gcode` (`:1182`). Each of those is a deferred promise the test resolves explicitly.
+  - Any other command name is pushed onto an **unknown-command ledger** and then throws "unexpected invoke: <name>".
+
+  Production code catches some invoke errors (the port listing does), so a throw alone can be swallowed. The guarantee therefore rests on the ledger: every test asserts it is empty in `afterEach`. A test cannot pass because some other dependency failed first.
 - **The real sequence is serial.** One image object and one rectangle are seeded, and the generator awaits the raster step (`:1100`) before it reaches the vector call (`:1182`). So the two calls are never pending together. Each in-flight case runs in one of two variants:
   - **raster-wait:** wait for the `generate_image_gcode` call, mutate, release it, wait for the `generate_gcode` call, release that;
   - **vector-wait:** release raster, wait for the `generate_gcode` call, mutate, release it.
@@ -200,7 +205,10 @@ Harness: the production `MachinePanel` and `JobActionBar`, rendered as `gcodeFai
 - **G13, an obsolete call fails.** For both discard contexts (project replaced, superseded), make the obsolete generation reject. The error line carries its context and the result is untouched. No status message is written, and a current generation's display is unchanged. Control: a current generation's failure shows today's error line and status message (G8).
 - **G10, the input boundary.** Three checks, each with its limit stated in Design 5:
   - **(a) `tsc`.** Inside `generateGcode`, a read through `inputs` of a field outside the key set (for example `store.camera`) fails `npx tsc --noEmit`. This is a gate, not a vitest case, and battery mutant m14 proves it.
-  - **(b) The module tripwire (vitest).** `useStore` occurs exactly four times in `gcodeGen.ts`, at the four named sites. Mutant m17 adds `useStore.getState().camera` inside `generateGcode`, which `tsc` allows, and the tripwire must fail on it.
+  - **(b) The module tripwire (vitest).** Every line of `gcodeGen.ts` that contains `useStore` must equal, after trimming, one of four allowlisted lines: the import, the two default-parameter expressions of `generateGcode`, and `previewImageDither`'s `const store = useStore.getState();`. There must be exactly four such lines.
+    - Mutant m17 adds a new line `useStore.getState().camera;` inside `generateGcode` (`tsc` allows it). The count rises and the tripwire must fail.
+    - Mutant m22 keeps the count: it rewrites `previewImageDither`'s allowed line to `const store = useStore.getState(); void store.camera;`. The line no longer matches the allowlist, and the tripwire must fail.
+    - **The limit, stated:** an alias imported under another name (for example a second import of the store module as `s`) contains no `useStore` token and is not caught. Razor's brief names it as a review obligation, alongside store reads in other modules' helpers.
   - **(c) The write-boundary tripwire (vitest).** No production file calls `useStore.setState`. Inside `src/app/store/`, `gcodeResult` is assigned only at the three named sites. Mutant m18 adds `useStore.setState({ gcodeResult: r })` to `MachinePanel.tsx`, and the tripwire must fail on it.
 
 ### TS (`powerCurveEditor.test.tsx`)
@@ -280,6 +288,7 @@ Every `find` must have `grep -cF` equal to 1, the journal is at the standard pat
 - **m15:** `grblSValueMax` removed from `GENERATION_INPUT_KEYS`. Kills G5's meta-assertion.
 - **m16:** the subscription's `state.gcodeResult === prev.gcodeResult` clause removed. Kills G8's seeding control (one `setState` that writes a current result together with new objects must leave it current).
 - **m17:** `useStore.getState().camera;` added inside `generateGcode`. `tsc` accepts this, and G10b must fail.
+- **m22:** `previewImageDither`'s `const store = useStore.getState();` becomes `const store = useStore.getState(); void store.camera;`, so the count is unchanged. G10b's line allowlist must fail.
 - **m18:** `useStore.setState({ gcodeResult: null });` added to `handleGenerateGcode`. G10c must fail.
 - **m19:** the post-await `isTicketCurrent` check in the sparse branch removed. Kills G11.
 - **m20:** the handler passes the console logger straight through instead of the buffer. Kills G9: the B1 warning appears on a discarded run.
@@ -306,7 +315,7 @@ The control: Linear stays byte-identical under N3, and every spec's baseline sta
   - `cargo test --manifest-path src-tauri/Cargo.toml --features sim` with `CARGO_TARGET_DIR=$HOME/.cache/kerf-engine-arm-target` and `env -u KERF_UPDATE_GOLDEN`;
   - clippy `--all-targets --features sim -- -D warnings`;
   - `cargo fmt --check`;
-  - the battery three times: spec 1 vitest (m1-m7, m9-m13, m15-m21), spec 2 cargo (m8a, m8b, with N2's assertion messages quoted from the journal), and spec 3 tsc (m14).
+  - the battery three times: spec 1 vitest (m1-m7, m9-m13, m15-m22), spec 2 cargo (m8a, m8b, with N2's assertion messages quoted from the journal), and spec 3 tsc (m14).
 
   Every existing golden is unchanged; the only new goldens are N3's.
 - **Browser** (dev server, puppeteer; the Chrome DevTools MCP is disconnected):
@@ -326,7 +335,7 @@ The control: Linear stays byte-identical under N3, and every spec's baseline sta
   - **What "qualified" means:** only that the corrected presets produce the expected tonal direction on this machine and material. It is no general claim about laser safety.
 - **Owner card** (`next`; Lee runs it, owner only, in the release build). Evidence is the visible mark on the material, and nothing about the beam beyond it (status-only ruling, DECISIONS 2026-09-10 as amended):
   - **Setup:**
-    - scrap card or a 3 mm plywood offcut, on the bed with nothing under it that can burn;
+    - scrap card (the recipe's material, and no other), on the bed with nothing under it that can burn;
     - the extraction or air assist the owner normally uses;
     - the machine's physical power switch or E-stop within reach;
     - the owner stays at the machine for the whole run.
@@ -367,7 +376,7 @@ The control: Linear stays byte-identical under N3, and every spec's baseline sta
 
 ## Deferrals
 
-The Parking Lot index line below was added with revision 3. At Stage 3.5 it becomes "(shipped …, kerf-power-curve-presets)", but only if G1-G13 pass and the battery kills m9-m21 (m14 under tsc). Here is exactly what `tb3-guard` closes: a generation in flight while any of its twelve inputs changes, or while the project is replaced or a newer generation starts, can no longer publish as current; and a change to any input after publication marks the result stale. The line as indexed:
+The Parking Lot index line below was added with revision 3. At Stage 3.5 it becomes "(shipped …, kerf-power-curve-presets)", but only if G1-G13 pass and the battery kills m9-m22 (m14 under tsc). Here is exactly what `tb3-guard` closes: a generation in flight while any of its twelve inputs changes, or while the project is replaced or a newer generation starts, can no longer publish as current; and a change to any input after publication marks the result stale. The line as indexed:
 
 - **A generation that finishes after an edit publishes an outdated result as current** — `setGcodeResult` clears `gcodeStale` unconditionally (`store/index.ts:692`; called from `MachinePanel.tsx:386`), so an edit made during an in-flight generation leaves the older G-code looking current, and with no prior result the edit does not mark staleness at all. Pre-existing, not curve-specific; owned by UI polish TB6 (revision identity, stale-result handling, edit-during-generation). Found by astra on the TB3 plan, 2026-10-04. See `.claude/plans/kerf-power-curve-presets.md` → Diagnosis.
 
@@ -454,3 +463,13 @@ None for Lee. Everything here is technical, and the release-note wording is plai
 | X4: discard wording false when B finishes first | CONCERN | The line now reads "a newer one was started", which is true in both orders |
 | X5: subscription ordering and post-publication awaits | CONCERN | Design 5, "Ordering, stated exactly" (two writes; the raiser is registered first; nested re-notify) with G12; the post-await recheck with G11 |
 | X6: "exactly one console line" vs generator diagnostics | CONCERN | The generator logs through a handler-local buffer: flushed on publish or failure, dropped on discard with a count in the discard line; G9 seeds a B1 warning; m20 |
+
+## Fold table: critic round 6 (astra, gate PASS: no blocking FAIL; overall CONCERN)
+
+Folded after the gate passed, as the critic asked ("Fold these into the plan before implementation"). No further critic round.
+
+| finding | verdict | where addressed |
+|---|---|---|
+| 9: the strict mock omits the mount-time `list_serial_ports`, and production catches the throw | CONCERN | Harness: it answers `list_serial_ports`; unknown commands go to a ledger that every test asserts empty in `afterEach` |
+| 2 / 9: the four-token tripwire does not prove which sites are allowed | CONCERN | G10b: a per-line allowlist of the four exact lines; m22 is a count-preserving mutant; an aliased import is named as Razor's review obligation |
+| X1 / X4: the card setup offers plywood, but the recipe fixes scrap card | CONCERN | Setup now reads "scrap card (the recipe's material, and no other)" |
