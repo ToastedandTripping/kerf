@@ -121,9 +121,16 @@ The layer decides power, speed and passes, and the file colour has no effect on 
 Lee chose option (a) of the STOP-reachability plan's decision D1. Ctrl+. alone collides with input-method emoji pickers on some Linux and Windows setups, so Shift+Esc ships as a second chord with no default binding on Linux GTK, macOS or Windows (sources in .claude/plans/kerf-stop-reachability.md). Shift+Esc therefore no longer acts as plain Escape anywhere in Kerf. The claim is bounded: the key stops the machine whenever the keystroke reaches Kerf, and delivery under a live input method stays an owner check.
 
 ### While the laser may be commanded on, Kerf refuses file dialogs and the Welcome Guide, and Disconnect sends the stop reset first.
-*2026-10-05, per Lee, relayed by the coordinator*
+*2026-10-05, per Lee, relayed by the coordinator, amended 2026-10-05*
 
 Lee chose option (a) of the STOP-reachability plan's decision D2. A native file dialog or the Welcome Guide's page reload can cover or freeze STOP, so neither opens while Kerf's own record says the laser may still be on. Unknown counts as on. The cost Lee accepted is that after a STOP or Pause during a burning job, file dialogs stay refused until the output is cleanly cleared; a job that runs to its end and a successful Fire change nothing. 'Off' means what Kerf last commanded, never observed beam state (the status-only evidence ruling, 2026-09-10).
+
+**Amended, per Lee, relayed by the coordinator, 2026-10-05:** The real cost, now accepted: the controller's stored startup lines can turn the output on after a reset, a connect or homing, so Kerf treats output as possibly on after each of them. While connected, file dialogs and the Welcome Guide are refused after every connect (including the automatic connect at launch), every STOP or Pause, and every Home, until an M5 is acknowledged with nothing else in flight. This is wider than the cost first recorded.
+
+### The laser-on refusal message offers a 'Laser off (M5)' button.
+*2026-10-05, per Lee, relayed by the coordinator*
+
+Lee chose this (TB1 decision D3) to take the friction out of the wider laser-on guard: when a file dialog or the Welcome Guide is refused because output may be on, the message offers one click that sends M5, so the owner does not have to type it in the console. The button sends only M5, under the normal machine-write rules; the guard then clears only if that M5 is acknowledged with nothing else in flight. It is reviewed like any other control on the laser path.
 
 ---
 
