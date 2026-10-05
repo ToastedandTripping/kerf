@@ -85,6 +85,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 ## Log (newest first)
 
+### 2026-10-05 TB1 rounds 7 and 8 prep
+Round 7 (Fable fallback, Codex 5h at 94%) FAILED, but confirmed every round-6 finding closed; its one P0 was two native choosers outside the guard. Lee has a card: a bounded check of the fixes (recommended) or a full round 8. Revision 8 folds round 7 (the colour input becomes a hex field, the CSV input routes through the dialog door, a JSX native-input scan and lint rule are added, and a new batch B5 waits on B4 and A2). Its critic is NOT dispatched until Lee answers.
+
 ### 2026-10-05 TB3 merged; TB1 round 7 ruled by Lee
 TB3 is merged into kerf-gap at 1635367 (vitest 1356, tsc and cargo 476 on the merged tree; ledger merged). TB1 failed round 6 (c07f41b). Lee was offered the disconnected-only dialog rule (recommended) and a split, and chose ROUND 7 on the same design (relayed by the coordinator). Revision 7 is being written by the author agent.
 
