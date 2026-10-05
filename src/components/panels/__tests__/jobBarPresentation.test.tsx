@@ -270,7 +270,8 @@ describe("JobActionBar (production component, state injected)", () => {
     expect(getByTestId("job-exclusion").textContent).toBe(
       "Not in the G-code: Score (output off), Custom 4 (hidden)"
     );
-    seed({ jobRunning: true, machineState: "run" });
+    // Same layers and objects, now running: the caption goes.
+    useStore.setState({ jobRunning: true, machineState: "run" });
     rerender(<JobActionBar />);
     expect(queryByTestId("job-exclusion")).toBeNull();
   });
