@@ -19,6 +19,16 @@ import { canStartJob, frameTargets } from "../../lib/machine/canStartJob";
 import { streamJob, pauseJob, resumeJob } from "../../lib/machine/jobStream";
 import { beginJobSession, stopActiveSession } from "../../lib/machine/jobSession";
 import { formatTime } from "../../lib/constants";
+import { excludedLayers } from "../../lib/layerContents";
+import {
+  DOOR_LINE,
+  STOP_TITLE,
+  exclusionCaption,
+  progressFill,
+  progressText,
+  refusalLine,
+  stopPresentation,
+} from "./jobBarPresentation";
 
 export function JobActionBar() {
   // --- Scalar / stable-ref selectors only (Error-185 safe) ---
@@ -38,6 +48,8 @@ export function JobActionBar() {
   const workspaceVerified = useStore((s) => s.workspaceVerified);
   const grblLaserMode = useStore((s) => s.grblLaserMode);
   const statusStale = useStore((s) => s.statusStale);
+  const layers = useStore((s) => s.layers); // whole-array ref (stable unless replaced)
+  const objects = useStore((s) => s.objects); // whole-array ref (stable unless replaced)
 
   // Elapsed-time timer (moved verbatim from MachinePanel)
   const jobStartTimeRef = useRef<number>(0);
@@ -169,6 +181,17 @@ export function JobActionBar() {
   // C7: one admission, one first step — FRAME shows the gate's own reason.
   const frameHint = startGate.reason;
 
+  // --- Presentation only (A7): derived from the state above, owns nothing ---
+  const stop = stopPresentation({ machineConnected, jobRunning, machineState, statusStale });
+  const refusal = refusalLine(startGate, jobRunning);
+  const exclusion = jobRunning ? null : exclusionCaption(excludedLayers(layers, objects));
+  const progress = progressText(elapsedSecs, jobProgress);
+  // While STOP is solid, START and FRAME size to their own labels (never
+  // clipped) and STOP takes what the row has left, floor 104px. They stay
+  // rendered and disabled by their own expressions.
+  const startFrameFlex = stop.variant === "solid" ? "0 0 auto" : "1";
+  const startFramePadding = stop.variant === "solid" ? "6px 2px" : "6px";
+
   return (
     <div style={{ flexShrink: 0, borderTop: "1px solid var(--border)" }}>
       {/* Job progress bar — shown when job is running */}
@@ -178,54 +201,103 @@ export function JobActionBar() {
             style={{
               display: "flex",
               justifyContent: "space-between",
-              fontSize: "10px",
-              color: "var(--text-muted)",
-              marginBottom: "2px",
+              fontSize: "var(--text-md)",
+              fontWeight: 600,
+              color: "var(--text-primary)",
+              fontVariantNumeric: "tabular-nums",
+              marginBottom: "4px",
             }}
           >
-            <span style={{ fontFamily: "var(--font-mono)" }}>
-              {formatTimeMSS(elapsedSecs)}
-              {jobProgress > 0.01 && (
-                <span>
-                  {" "}
-                  / ~{formatTimeMSS(
-                    Math.round((elapsedSecs / jobProgress) * (1 - jobProgress))
-                  )}{" "}
-                  est.
-                </span>
+            <span data-testid="job-progress-time">
+              <span style={{ fontFamily: "var(--font-mono)" }}>{progress.elapsed}</span>
+              {progress.remaining !== null && (
+                <>
+                  {" · about "}
+                  <span style={{ fontFamily: "var(--font-mono)" }}>{progress.remaining}</span>
+                  {" left"}
+                </>
               )}
             </span>
-            <span>{Math.round(jobProgress * 100)}%</span>
+            <span data-testid="job-progress-percent">{progress.percent}</span>
           </div>
           <div
             style={{
               background: "var(--bg-input)",
               borderRadius: "var(--radius-sm)",
-              height: "4px",
+              height: "6px",
               overflow: "hidden",
             }}
           >
             <div
+              data-testid="job-progress-fill"
               style={{
                 height: "100%",
                 width: `${jobProgress * 100}%`,
-                background: machineState === "hold" ? "var(--accent-warm)" : "var(--accent)",
+                background: progressFill(machineState, statusStale),
                 transition: "width 0.3s",
               }}
             />
           </div>
+          {machineState === "door" && (
+            <div
+              role="status"
+              style={{ fontSize: "var(--text-xs)", color: "var(--warning)", marginTop: "4px" }}
+            >
+              {DOOR_LINE}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Why START and FRAME cannot act, where the eye already is */}
+      {(exclusion !== null || refusal !== null) && (
+        <div
+          style={{
+            padding: "6px 8px 0",
+            fontSize: "var(--text-xs)",
+            color: "var(--text-secondary)",
+          }}
+        >
+          {exclusion !== null && <div data-testid="job-exclusion">{exclusion}</div>}
+          {refusal !== null && (
+            <div
+              role="status"
+              data-testid="job-refusal"
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                lineHeight: "16px",
+                gap: "6px",
+                marginTop: exclusion ? "2px" : 0,
+              }}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  width: "6px",
+                  height: "6px",
+                  borderRadius: "50%",
+                  background: "var(--warning)",
+                  flexShrink: 0,
+                  marginTop: "5px",
+                }}
+              />
+              {refusal}
+            </div>
+          )}
         </div>
       )}
 
       {/* START / FRAME / PAUSE / STOP button row */}
-      <div style={{ display: "flex", gap: "4px", padding: "6px 8px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "4px", padding: "6px 8px" }}>
         <button
           onClick={handleStartJob}
           disabled={!startGate.ok}
           title={startGate.reason}
           style={{
-            flex: 1,
-            padding: "6px",
+            flex: startFrameFlex,
+            height: "32px",
+            padding: startFramePadding,
             borderRadius: "var(--radius-sm)",
             border: "1px solid rgba(74,226,138,0.5)",
             fontSize: "11px",
@@ -243,15 +315,16 @@ export function JobActionBar() {
           disabled={frameDisabled}
           title={frameHint}
           style={{
-            flex: 1,
-            padding: "6px",
+            flex: startFrameFlex,
+            height: "32px",
+            padding: startFramePadding,
             borderRadius: "var(--radius-sm)",
             border: "1px solid var(--accent)",
             fontSize: "11px",
             fontWeight: 700,
             cursor: frameDisabled ? "not-allowed" : "pointer",
             background: "rgba(74,144,226,0.15)",
-            color: "var(--accent)",
+            color: "var(--accent-text)",
             opacity: frameDisabled ? 0.4 : 1,
           }}
         >
@@ -277,16 +350,12 @@ export function JobActionBar() {
         <button
           onClick={handleStop}
           disabled={!machineConnected}
+          title={STOP_TITLE}
+          data-stop-variant={stop.variant}
           style={{
-            padding: "6px 10px",
+            padding: "0 10px",
             borderRadius: "var(--radius-sm)",
-            border: "none",
-            fontSize: "11px",
-            fontWeight: 700,
-            cursor: machineConnected && jobRunning ? "pointer" : "not-allowed",
-            background: "rgba(226,74,74,0.2)",
-            color: "var(--danger)",
-            opacity: !machineConnected ? 0.4 : !jobRunning ? 0.4 : 1,
+            ...stop.style,
           }}
         >
           STOP
@@ -294,11 +363,4 @@ export function JobActionBar() {
       </div>
     </div>
   );
-}
-
-/** Format seconds as M:SS for compact job timer display */
-function formatTimeMSS(totalSecs: number): string {
-  const m = Math.floor(totalSecs / 60);
-  const s = totalSecs % 60;
-  return `${m}:${s.toString().padStart(2, "0")}`;
 }
