@@ -1,6 +1,6 @@
 # Kerf: the S-Curve and Posterize power-curve presets burn a raster as a negative; fix the presets and the blank editor (UI polish TB3)
 
-Revision 6, 2026-10-04. Revisions 1-5 FAILED astra rounds 1-5 (`-critic-r1.md` to `-critic-r5.md`, plans `-r1.md` to `-r5.md`). Round 5 found no design flaw ("no broad redesign of the preset fix or change to the owner's release rulings is required"). It failed the executable test specification and two overstated claims. The coordinator authorised round 6 under its own authority, 2026-10-04: it is the last round, and if it fails, the decision goes to Lee. This revision folds round 5. The fold tables are at the end.
+Revision 5, 2026-10-04. Revisions 1-4 FAILED astra rounds 1-4 (`-critic-r1.md` to `-critic-r4.md`, plans `-r1.md` to `-r4.md`). Round 4 failed on the publication guard only: it missed project replacement and the power-scale raiser, and it misread the material-test dialog. This revision rebuilds the guard around the generator's actual inputs (Design 5). Round 5 is the cap. The fold tables are at the end. This is a correctness bug. It is follow-on plan TB3 from `.claude/plans/kerf-ui-polish.md` (revision 3, critic PASS), and that entry's "Requirements" and "Acceptance evidence" are binding here.
 
 ## Intent (grilled)
 
@@ -58,20 +58,13 @@ Grill: skipped, with this reason. The defect is unambiguous and no choice in it 
 4. **The release-note line.** The release session owes it, and the ROADMAP shipped entry carries the text: "Fixed: the S-Curve and Posterize power-curve presets were inverted, so they burned an image as its negative. Layers that already used them keep their old curve until you change it: open the layer's power curve, pick the preset, press Apply, then save the project. Also fixed: a G-code result that finished generating after you changed the design or the machine settings was shown as up to date; it is now marked out of date, so START asks you to generate again. A result that finishes after you open or start a different project is now thrown away instead of appearing in the new one."
 
 5. **The publication guard** (batch `tb3-guard`). One protocol with three identities, all held in the store, plus one structural raiser. It replaces revision 4's hand-incremented `designRevision`, whose correctness depended on an inventory of edit sites that was incomplete twice over.
-   - **The input set is the generator's own inventory, not a list of edit sites.** A new module, `src/app/store/generationInputs.ts`, exports:
+   - **The input set is the compiler's inventory, not a list of edit sites.** A new module, `src/app/store/generationInputs.ts`, exports:
      - `GENERATION_INPUT_KEYS`, the twelve fields in the Diagnosis, `as const`;
      - `type GenerationInputs = Pick<AppState, (typeof GENERATION_INPUT_KEYS)[number]>`;
      - `selectGenerationInputs(state)`, which copies those twelve references (no cloning);
      - `inputsChanged(a, b)`, which is true when any key differs under `Object.is`.
 
-     `generateGcode` gains two parameters: `generateGcode(inputs: GenerationInputs = selectGenerationInputs(useStore.getState()), log: GenerationLog = (msg, level) => useStore.getState().addConsoleLine(msg, level))`. Its local `store` becomes `inputs`, and its six `store.addConsoleLine` calls become `log(...)`.
-
-     **What enforces the set, stated exactly.** There are two controls, and neither is claimed to do more than this:
-     - **`tsc`:** a read through `inputs` (the local `store`) of a field outside the key set fails to compile. That covers the generator's existing read style. It does NOT stop a direct `useStore.getState().x` read, or a helper gaining its own store dependency.
-     - **A source tripwire,** in `generationGuard.test.tsx`, closes that gap for this module. It reads `src/lib/machine/gcodeGen.ts` as text and asserts that `useStore` appears exactly four times: the import, the two default-parameter expressions of `generateGcode`, and `previewImageDither`'s own read (`gcodeGen.ts:1200`, which is not generation). The helpers `generateGcode` calls today take their state as arguments (`generateImageGcodeByLayer(store.layers, store.objects, …)` at `:1100`). A new store access anywhere in the module fails the tripwire. The tripwire's message says to add the field to `GENERATION_INPUT_KEYS` or pass it in.
-     - **What neither covers:** a helper in another module that starts reading the store. Today `gcodeGen.ts` imports only `geometry`, `overscan`, `types` and `geometryActions.textObjectToPaths`, and none of those reads the store (checked at 18b4ef3). This is a review obligation for Razor, named in the batch brief, not an automatic guarantee.
-
-     Store updates are immutable (the Zustand selector rule in CLAUDE.md relies on that already), so a changed field is a changed reference. A newly allocated array with equal contents is also a changed reference. That makes the comparison conservative: it can call a result stale when nothing material changed, and it never calls one current when its inputs changed.
+     `generateGcode` gains a parameter, `generateGcode(inputs: GenerationInputs = selectGenerationInputs(useStore.getState()))`, and its local `store` becomes that `inputs` object. Its six `store.addConsoleLine` calls go through `useStore.getState().addConsoleLine`. From then on, a new state read inside `generateGcode` that is not in the key set is a `tsc` error, so the set cannot silently fall behind the generator. The store's updates are immutable (the Zustand selector rule in CLAUDE.md relies on that already), so a changed array or a changed number is always a changed reference.
    - **Identities, all in the store and never reset:**
      - `projectEpoch: number`, starting at 0 and incremented by `loadProject`. That covers Open, Open Recent, New and autosave recovery, which all reach it. `loadProject` becomes the `set((state) => …)` form so it can read the old value.
      - `generationSeq: number`, the sequence number of the most recently started generation. `loadProject` does not reset it, and neither does a remount, because it does not live in the component.
@@ -84,35 +77,24 @@ Grill: skipped, with this reason. The defect is unambiguous and no choice in it 
      3. Otherwise the result is **published**, with `gcodeStale: inputsChanged(ticket.inputs, selectGenerationInputs(state))`. The outcome is `"published"` or `"published-stale"`.
 
      Because the check and the write happen in one synchronous call, no state change can fall between them.
-   - **`setGcodeResult` is removed** from `AppState`, and `publishGeneration` replaces it. Its one existing test (`gcodeStale.test.ts:211`) is rewritten to the same assertion through `publishGeneration`: a current publish clears staleness. Removing the setter does not by itself make `useStore.setState({ gcodeResult })` illegal, so a second tripwire states and checks the production write boundary:
-     - no production file under `src` calls `useStore.setState`. Checked at 18b4ef3: none does today;
-     - inside `src/app/store/`, `gcodeResult` is written in exactly three places: the initial state, `loadProject` (to `null`), and `publishGeneration`.
-
-     Tests may seed a result and its inputs together with `useStore.setState`, and only tests may. That is the one exception the subscription below honours.
+   - **`setGcodeResult` is removed** from `AppState`, and `publishGeneration` replaces it. With no unconditional publisher left, `tsc` rejects any future caller. Its one existing test (`gcodeStale.test.ts:211`) is rewritten to the same assertion through `publishGeneration`: a current publish clears staleness. Test seeding writes state through `useStore.setState`, as it does today.
    - **Post-publication staleness, one structural raiser.** Directly after `create`, `store/index.ts` registers one `useStore.subscribe((state, prev) => …)`. It sets `gcodeStale: true` when all of these hold:
      - a result exists;
-     - `state.gcodeResult === prev.gcodeResult`. A write that sets a result and inputs together is left alone. In production that write is only `publishGeneration`, which changes no input, and the write-boundary tripwire above enforces that. In tests it is seeding. `loadProject` leaves no result, so the raiser never fires there;
+     - `state.gcodeResult === prev.gcodeResult`. A write that sets a result together with inputs states that pair itself, so the raiser leaves it alone. Test seeding does exactly that, in one `setState`, and so does any publication. `loadProject` leaves no result, so it never fires there;
      - `!state.gcodeStale`;
      - `inputsChanged(prev, state)`.
 
-     This covers every writer of every input, present and future, including the three machine setters that raise nothing today. The 15 existing raisers stay as they are. They are now redundant, and some of them (`setStartCorner`, `setOriginTop`, `updateLayer`) raise even when the value is unchanged. That conservative behaviour is kept, and removing them is left to TB6. The same subscribe pattern exists already (`connection.ts:531`, `keepAwake.ts:47`).
-
-     **Ordering, stated exactly.** These are two writes, not one. Installed `zustand/vanilla.js` assigns the new state and then calls each listener in insertion order. The raiser's own `set` is nested inside that loop. The raiser is registered at module load, directly after `create` and before any component or module subscribes, so it is the first listener. Its nested write therefore completes, and re-notifies every listener, before any later listener sees the outer notification. A synchronous `getState()` after the triggering `set` returns sees the raised flag. G12 tests exactly this; nothing broader is claimed.
+     This covers every writer of every input, present and future, including the three machine setters that raise nothing today. The 15 existing raisers stay as they are, now redundant and harmless; removing them is churn and is left to TB6. The same pattern exists already (`connection.ts:531`, `keepAwake.ts:47`). Zustand 5 notifies subscribers synchronously inside `set`, so no reader can observe the gap between an input change and the flag.
    - **The handler, every duty specified** (`MachinePanel.tsx` `handleGenerateGcode`):
-     - **Before:** `setSparseImageWarning(false)`, then `setGenerating(true)`, then `const ticket = beginGeneration()`, then `await generateGcode(ticket.inputs, buffered.log)`. The generator reads exactly the inputs the ticket holds. `buffered` is a small handler-local buffer that collects the generator's own console lines (its warnings, `gcodeGen.ts` B1 and others) instead of writing them at once. Generation takes seconds, so the lines are shown at completion rather than during it.
-     - **`isTicketCurrent(ticket)`**, a store selector, is true when `ticket.epoch === projectEpoch && ticket.seq === generationSeq`.
+     - **Before:** `setSparseImageWarning(false)`, then `setGenerating(true)`, then `const ticket = beginGeneration()`, then `await generateGcode(ticket.inputs)`. The generator reads exactly the inputs the ticket holds.
      - **On resolve:** `const outcome = publishGeneration(ticket, result)`. Then:
-       - `"published"`: flush the buffered generator lines, then today's info line, then today's sparse-image check, which reads `ticket.inputs.objects`, not live state. **The check awaits** (`Promise.all(getImageContentRatio(…))`, `MachinePanel.tsx:392-404`). So after that await, `isTicketCurrent(ticket)` is checked again:
-         - if the ticket is still current, set the warning if sparse and return `true`;
-         - if it is not (the project was replaced, or a newer generation started during the analysis), set no warning, write one info line ("Skipped the sparse-image check: the project changed or a newer generation started"), and return `false`, so the Preview continuation (`:1261-1265`) does not open Preview over another project's state. The published result itself is left to the guard: `loadProject` cleared it, or the newer generation will replace it.
-       - `"published-stale"`: flush the buffered lines, then a warning line, "G-code generated, but the design or machine settings changed while it ran. Regenerate before START." No sparse-image check. Return `true`: a result exists, Preview may show it, and the Generate button already reads "Regenerate G-code".
-       - `"discarded-project"`: the buffered generator lines are dropped, and one info line is written: "Discarded a G-code generation started in a different project (N generator messages dropped with it)". Return `false`.
-       - `"discarded-superseded"`: the same, with the line "Discarded an earlier G-code generation: a newer one was started (N generator messages dropped with it)". This wording is true in both completion orders. Return `false`.
+       - `"published"`: today's info line, today's sparse-image check, return `true`. The check reads `ticket.inputs.objects`, not live state.
+       - `"published-stale"`: a warning line, "G-code generated, but the design or machine settings changed while it ran. Regenerate before START." No sparse-image check. Return `true`: a result exists, Preview may show it, and the Generate button already reads "Regenerate G-code".
+       - `"discarded-project"`: one info line, "Discarded a G-code generation started in a different project." Nothing else; return `false`.
+       - `"discarded-superseded"`: one info line, "Discarded an earlier G-code generation; a newer one is running." Nothing else; return `false`.
 
-       A discarded call writes no status message, sets no sparse warning, and changes neither `gcodeResult` nor `gcodeStale`. Its console output is exactly one line, because its own generator lines were buffered and dropped.
-     - **On reject:** the result is left untouched and `false` is returned. The buffered lines are flushed, then:
-       - **if `isTicketCurrent(ticket)`:** today's error line and today's status message, unchanged;
-       - **if not:** the error line carries its context, "G-code generation failed (an earlier generation, superseded or from a different project): …", and no status message is written, so a dead generation never puts a failure banner over the current one.
+       A discarded call writes no status message, raises no warning, and changes neither `gcodeResult` nor `gcodeStale`.
+     - **On reject:** unchanged. Today's error line and status message, the result left untouched, return `false`. A failure in a superseded or other-project call still reports, because it is a real failure and touches nothing.
      - **Finally:** `setGenerating(false)` on this component instance, unchanged. `generating` is per instance and both buttons are disabled while it is set, so the only way to start a newer call is a fresh instance. An older call therefore never clears a newer call's busy state; G6 proves it across a remount.
    - **What START and FRAME see.** They keep reading `gcodeResult` and `gcodeStale` through `canStartJob` (`canStartJob.ts:193-194`), unchanged. The guard's whole job is to make those two fields true to the current project and inputs. G1-G5 prove the refusal through `JobActionBar` with the real store state, not through the flag alone.
    - **What it does not change:** the generator's output for unchanged inputs (every golden stays byte-identical), the stop path, `canStartJob`, the material-test path, any existing raiser, and the file format.
@@ -155,28 +137,17 @@ Standard tier, two batches in one relay. `tb3-guard` lands first; `tb3` follows 
 
 ### The guard (`generationGuard.test.tsx`)
 
-Harness: the production `MachinePanel` and `JobActionBar`, rendered as `gcodeFailureLoud.test.tsx` does.
-- **The invoke mock dispatches by command name.** It answers the two commands `generateGcode` actually calls, `generate_image_gcode` (`gcodeGen.ts:697`) and `generate_gcode` (`:1182`). Each call is a deferred promise the test resolves explicitly. Any other command name throws "unexpected invoke: <name>", so a test cannot pass by falling through to a permissive default.
-- **The real sequence is serial.** One image object and one rectangle are seeded, and the generator awaits the raster step (`:1100`) before it reaches the vector call (`:1182`). So the two calls are never pending together. Each in-flight case runs in one of two variants:
-  - **raster-wait:** wait for the `generate_image_gcode` call, mutate, release it, wait for the `generate_gcode` call, release that;
-  - **vector-wait:** release raster, wait for the `generate_gcode` call, mutate, release it.
+Harness: the production `MachinePanel` and `JobActionBar`, rendered as `gcodeFailureLoud.test.tsx` does, with `invoke` mocked and `generate_image_gcode` / `generate_vector_gcode` returning deferred promises that the test resolves explicitly. One image object and one rectangle are seeded, so both invoke paths are pending. The machine state is seeded as eligible: connected, Idle, workspace verified, laser mode on, status fresh. That way, the stale or missing result is the ONLY reason START and FRAME can refuse, and each test asserts that reason verbatim. Every test reads real store state, never a mock of it.
 
-  A helper waits for each named call with a bounded timeout and fails the test, rather than hanging, if the call never arrives. Every case resolves every promise it opened, including in remount cases, before it ends.
-- **Machine state is seeded as eligible:** connected, Idle, workspace verified, laser mode on, status fresh. The stale or missing result is then the only reason START and FRAME can refuse, and each test asserts that reason verbatim.
-- **"Refuses" means both of these:** the `JobActionBar` button's admission returns the named reason, and pressing it dispatches nothing. START and FRAME both reach the machine through `streamJob` (`JobActionBar.tsx:79`, `:148`), so the assertion is that the mock records no `serial_job_begin` and no `serial_stream_job` call. Those two are deliberately absent from the mock's answer list, so a dispatch would also throw. Every test reads real store state, never a mock of it.
-
-- **G1, an edit in flight, no prior result.** Both variants. Press Generate. Before it resolves, `updateLayer` (a curve Apply). Resolve. `gcodeResult` is set, `gcodeStale` is true, the console has the stale warning line, and START and FRAME both refuse with "Design changed -- regenerate G-code". Red today: the result is published current.
+- **G1, an edit in flight, no prior result.** Press Generate. Before it resolves, `updateLayer` (a curve Apply). Resolve. `gcodeResult` is set, `gcodeStale` is true, the console has the stale warning line, and START and FRAME both refuse with "Design changed -- regenerate G-code". Red today: the result is published current.
 - **G2, the same with an existing result.** It is seeded current. The edit stales it immediately (the existing raiser). After resolve, the new result is published stale, and START and FRAME refuse.
 - **G3, project replaced in flight.** Four cases: Open (`loadProjectWithMigrations` with project B, which has the same bed size and origin as A, so no other field differs) and New (`fileOperations.newProject()`), each with A's result slot empty and with it holding a current result. Press Generate in A, replace the project, then resolve. In every case the outcome is `"discarded-project"`: `gcodeResult` is null, as `loadProject` left it, and `gcodeStale` is false. START refuses with "Generate G-code first". The console has the discard line. `projectEpoch` went up by exactly 1 per replacement. Red today: A's result is published current in B.
-- **G4, power scale changed in flight.** Both variants. No prior result. Press Generate, call `setGrblSValueMax(255)` (from 1000), then resolve: the result is published stale and START refuses. Repeat with an existing result. Red today.
+- **G4, power scale changed in flight.** No prior result. Press Generate, call `setGrblSValueMax(255)` (from 1000), then resolve: the result is published stale and START refuses. Repeat with an existing result. Red today.
 - **G5, every input, both phases, table-driven.** There is one row per key in `GENERATION_INPUT_KEYS`, each a real store action that changes that key: `applyObjects`/`updateObject` for objects, `updateLayer` for layers, `setWorkspaceSize`, `setOriginTop`, `setStartCorner`, `setGrblSValueMax`, `setGrblLaserMode`, `setGrblAccel`, and `setGrblMaxFeedRate`. Where one action sets two keys, the row lists both.
   - **The meta-assertion:** the union of the rows' keys equals `GENERATION_INPUT_KEYS` exactly. A key added without a row fails, and so does a row for a key that is not an input.
-  - **In flight, per row** (the raster-wait variant): Generate, apply the action, resolve: `"published-stale"`.
-  - **After publication, per row:** publish current, apply the action: `gcodeStale` is true, and START refuses.
-    - The accel, feed-rate and laser-mode rows are red today.
-    - **The laser-mode row** turns laser mode off, which `canStartJob` refuses first (`canStartJob.ts:171-176`), ahead of staleness. So that row asserts `gcodeStale === true` directly, and asserts that `canStartJob` on the real state with only `grblLaserMode` set back to true returns the stale reason. A laser-mode refusal can never stand in for the stale assertion.
-  - **No-op controls, limited to the scalar setters that compare values today:** `setGrblSValueMax`, `setWorkspaceSize`, `setGrblLaserMode`, `setGrblAccel` and `setGrblMaxFeedRate`. Setting the same value leaves a current result current, which proves the subscription compares values rather than firing on every write.
-  - **Rows with no no-op control:** `setOriginTop`, `setStartCorner`, `updateLayer` and the object actions keep their existing raisers, which stale on any call (`store/index.ts:861-875`, `:345-351`, `storeHelpers.ts:44`). The comparison also treats a newly allocated array as changed. So those rows assert only that a change stales the result. Making them value-aware is TB6's, and the implementer must not weaken these rows to get green.
+  - **In flight, per row:** Generate, apply the action, resolve: `"published-stale"`.
+  - **After publication, per row:** publish current, apply the action: `gcodeStale` is true, and START refuses. The accel, feed-rate and laser-mode rows are red today.
+  - **A no-op per row, where the action takes a value:** setting the same value leaves a current result current. This proves the subscription compares values and does not fire on every write.
 - **G6, supersession and remount.** Press Generate (A). Unmount and remount `MachinePanel`. The fresh instance's button is enabled, and that is the real overlap path. Press Generate (B). Then two orders:
   - resolve A first: `"discarded-superseded"`, nothing published, and the new instance still shows "Generating...", because A's `finally` ran on the unmounted instance. Then resolve B: published current.
   - resolve B first: published current, then A is discarded and does not overwrite B.
@@ -184,24 +155,8 @@ Harness: the production `MachinePanel` and `JobActionBar`, rendered as `gcodeFai
   In both orders `generationSeq` is the value B's ticket holds. Red today: in the second order A overwrites B.
 - **G7, identities are not reused.** Take a ticket, then `loadProject` twice and start a new generation. The new ticket's `seq` is the old one plus 1, never reset by the loads, and its `epoch` is the old one plus 2. Publishing the old ticket after that is `"discarded-project"`. With two generations in one epoch, the older ticket is `"discarded-superseded"` even when no edit happened.
 - **G8, positive controls.** With no edit, resolve: published current, and START is admitted (not refused for staleness). One `setState` that writes a current result together with new objects leaves it current (the subscription's same-result clause). With a failure (the generator rejects): today's error line and status message, the result untouched, `false` returned, and the Preview not opened. `gcodeFailureLoud.test.tsx` stays green unchanged.
-- **G9, a discarded call does nothing else.** For both discard kinds, with the generator emitting one warning of its own (a fill layer with laser mode off triggers the B1 line at `gcodeGen.ts:1015`):
-  - no status message;
-  - the sparse warning is never set (with a sparse image and a fake long result that would otherwise trigger it);
-  - Preview is not opened;
-  - the console gains exactly one line, the discard line, which reports "1 generator messages dropped". The B1 warning does not appear.
-
-  Control: the same run, published, shows the B1 warning and then the info line.
-- **G11, invalidation during the sparse-image analysis.** Mock `getImageContentRatio` as a deferred promise, then publish current with a sparse image and a fake long result. While the analysis is pending:
-  - **(a) replace the project:** after the analysis resolves, no sparse warning is shown, the skip line is written, and the handler returns `false`, so the Preview button's continuation does not open Preview;
-  - **(b) remount and start a newer generation:** the same outcome, and the newer generation is unaffected.
-
-  Control: with no invalidation, the warning appears and `true` is returned. Red today: (a) sets the warning and opens Preview over project B.
-- **G12, subscription ordering.** After store creation, the test subscribes a listener. It applies `setGrblAccel` with new values while a current result exists, and records every notification. In no notification does the listener see a state where a result exists, the inputs differ from the result's ticket, and `gcodeStale` is false. A `getState()` straight after the `set` returns shows `gcodeStale` true. This pins the registration-first ordering in Design 5, and nothing more.
-- **G13, an obsolete call fails.** For both discard contexts (project replaced, superseded), make the obsolete generation reject. The error line carries its context and the result is untouched. No status message is written, and a current generation's display is unchanged. Control: a current generation's failure shows today's error line and status message (G8).
-- **G10, the input boundary.** Three checks, each with its limit stated in Design 5:
-  - **(a) `tsc`.** Inside `generateGcode`, a read through `inputs` of a field outside the key set (for example `store.camera`) fails `npx tsc --noEmit`. This is a gate, not a vitest case, and battery mutant m14 proves it.
-  - **(b) The module tripwire (vitest).** `useStore` occurs exactly four times in `gcodeGen.ts`, at the four named sites. Mutant m17 adds `useStore.getState().camera` inside `generateGcode`, which `tsc` allows, and the tripwire must fail on it.
-  - **(c) The write-boundary tripwire (vitest).** No production file calls `useStore.setState`. Inside `src/app/store/`, `gcodeResult` is assigned only at the three named sites. Mutant m18 adds `useStore.setState({ gcodeResult: r })` to `MachinePanel.tsx`, and the tripwire must fail on it.
+- **G9, a discarded call does nothing else.** For both discard kinds: no status message, `setSparseImageWarning` never set true (with a sparse image and a fake long result that would otherwise trigger it), Preview not opened, and exactly one console line.
+- **G10, the input set is enforced by the compiler.** This is a gate, not a vitest case. Inside `generateGcode`, a read of a state field outside the key set (for example `store.camera`) fails `npx tsc --noEmit`. It is proven by battery mutant m14.
 
 ### TS (`powerCurveEditor.test.tsx`)
 
@@ -222,7 +177,7 @@ Harness: the production `MachinePanel` and `JobActionBar`, rendered as `gcodeFai
   - Pick S-Curve, press Apply, and assert `onApply` is called exactly once with the new S-Curve points.
   - Cancel after picking a preset: `onApply` is not called.
   - With `getContext` returning null, Apply still works and no plot is drawn. No crash, and nothing applied implicitly.
-  - **Failed regeneration after Apply** (in the MachinePanel generate path, with `invoke` mocked). Start with an existing result, then Apply a new curve (the result goes stale), then make `generate_image_gcode` reject. The old result stays flagged stale, the existing failure message shows, and no job is dispatched. This pins today's failure behaviour; the in-flight cases are G1-G13.
+  - **Failed regeneration after Apply** (in the MachinePanel generate path, with `invoke` mocked). Start with an existing result, then Apply a new curve (the result goes stale), then make `generate_image_gcode` reject. The old result stays flagged stale, the existing failure message shows, and no job is dispatched. This pins today's failure behaviour; the in-flight cases are G1-G9.
 - **T5, the saved-project round trip, both legacy arrays.**
   - Put one image object on a raster layer whose `powerCurve` is the OLD S-Curve, and a second layer with the OLD Posterize.
   - Serialise with `toProject()` and `JSON.stringify`, as `saveToPath` does (`fileOps/index.ts:507-508`).
@@ -250,7 +205,7 @@ The tests:
   - For each new preset: `lut[0] == 0` (black stays full burn), `lut[255] == 255` (white stays no burn), and `lut` non-decreasing in its input.
   - For each OLD preset: `lut[0] == 255`, which documents the defect.
   - Posterize's three bands come out as exact levels: `lut` over shades 0-84 equals `255 - round(255 × 1.00)`; over 85-169, `255 - round(255 × 0.67)`; over 170-254, `255 - round(255 × 0.34)`; and shade 255 maps to 255. Compute these with the LUT's own rounding rule, read from `build_power_curve_lut`.
-- **N2, the spatial before/after** (native test `tb3_n2_spatial`; its two assertions carry the messages "N2 placement mismatch" and "N2 power mismatch", which battery spec 2 reads).
+- **N2, the spatial before/after.**
   - Decode the G-code from `generate(&req)` into a power map over the 256 pixel columns. Walk the moves in order, tracking X and the modal S. Each `G1` with a positive S from X0 to X1 assigns that S to every column whose centre lies in [X0, X1). A column no burning move covers (a `G0` travel, an `S0` span, or no move at all) gets S0. This handles the scanner merging equal S values into one move (`mask_fill.rs:684-718`) and white pixels emitting nothing.
   - The independent oracle is the LUT, not the G-code: the expected S per column is `round(s_value_max × (255 - lut[i]) / 255)` under the grayscale scanner's mapping. Read the exact mapping from the scanner and cite it in the test; allow ±1 count only for its rounding.
   - With `TB3_S_CURVE`: column 0 at the maximum S, column 255 at S0, never rising. With `TB3_OLD_S_CURVE`: the reverse. Posterize: three flat plateaus and S0 at column 255.
@@ -262,39 +217,25 @@ The tests:
 
 ### Mutation battery (`~/marvin/scripts/mutation-battery.mjs`)
 
-Every `find` must have `grep -cF` equal to 1, the journal is at the standard path, and the battery restores by construction (a disposable copy). There are **three specs**, because the tests run under three commands. Each spec has its own unmutated baseline, which must pass.
-
-**Spec 1, vitest** (`test_command`: `npx vitest run --cache=false` over the TB3 test files):
+Every `find` must have `grep -cF` equal to 1, the journal is at the standard path, and the battery restores by construction (a disposable copy).
 - **m1:** S-Curve's first point back to `{ x: 0, y: 0 }`. Kills T1 and T2.
 - **m2:** Posterize's first point back to `{ x: 0, y: 0 }`. Kills T1 and T2.
 - **m3:** `[open, draw]` back to `[draw]`. Kills T3.
 - **m4:** the `arc` loop removed from `draw`. Kills T3.
-- **m5:** a `loadProjectWithMigrations` mutant that rewrites `powerCurve`, for example replacing the old S-Curve with the new one. Kills T5.
-- **m6:** `TB3_S_CURVE`'s first literal flipped in the Rust source. Kills T2, which reads the Rust file as text, so it belongs in this spec.
 - **m7:** only the curve-rendering block removed from `draw`, with the grid, the diagonal and the arcs kept. Kills T3 and proves it checks the curve stroke, not just the handles.
+- **m8, the decoder's own teeth:** in the N2 test's expected-G-code path, displace one powered segment's X by 0.5 mm, and separately corrupt its S token. N2 itself must fail on each, independently of T1, T2 and N1. This proves the spatial oracle checks placement and power. Applied as a test-input mutant: a fixture-transform hook in the test, toggled by the battery.
 - **m9:** `loadProject` no longer increments `projectEpoch`. Kills G3 and G7.
 - **m10:** `publishGeneration` skips the epoch comparison. Kills G3 and G7.
 - **m11:** `publishGeneration` skips the sequence comparison. Kills G6 and G7.
 - **m12:** publish with `gcodeStale: false` hard-coded. Kills G1, G2, G4 and G5's in-flight rows.
-- **m13:** the post-publication subscription removed. Kills G5's post-publication rows for accel, feed rate and laser mode (the fields with no other raiser), and G12.
-- **m15:** `grblSValueMax` removed from `GENERATION_INPUT_KEYS`. Kills G5's meta-assertion.
-- **m16:** the subscription's `state.gcodeResult === prev.gcodeResult` clause removed. Kills G8's seeding control (one `setState` that writes a current result together with new objects must leave it current).
-- **m17:** `useStore.getState().camera;` added inside `generateGcode`. `tsc` accepts this, and G10b must fail.
-- **m18:** `useStore.setState({ gcodeResult: null });` added to `handleGenerateGcode`. G10c must fail.
-- **m19:** the post-await `isTicketCurrent` check in the sparse branch removed. Kills G11.
-- **m20:** the handler passes the console logger straight through instead of the buffer. Kills G9: the B1 warning appears on a discarded run.
-- **m21:** the obsolete-failure branch writes today's status message. Kills G13.
+- **m13:** the post-publication subscription removed. Kills G5's post-publication rows for accel, feed rate and laser mode, the fields with no other raiser.
+- **m15:** `grblSValueMax` removed from `GENERATION_INPUT_KEYS`. Kills G5's meta-assertion. With that key gone, the generator's read of it would be a `tsc` error, and m14 shows the compiler catches it.
+- **m16:** the subscription's `state.gcodeResult === prev.gcodeResult` clause removed. Kills G8's seeding control: one `setState` that writes a current result together with new objects must leave it current.
+- **m14, in a second battery spec whose `test_command` is `npx tsc --noEmit`:** add `void store.camera;` inside `generateGcode`. tsc must fail, which proves G10. The control, the unmutated tree, passes tsc.
+- **m5:** a `loadProjectWithMigrations` mutant that rewrites `powerCurve`, for example replacing the old S-Curve with the new one. Kills T5.
+- **m6:** `TB3_S_CURVE`'s first literal flipped in Rust. Kills T2.
 
-**Spec 2, cargo** (`test_command`: `env -u KERF_UPDATE_GOLDEN CARGO_TARGET_DIR=$HOME/.cache/kerf-engine-arm-target cargo test --manifest-path src-tauri/Cargo.toml --features sim tb3_n2_`; N2 is the native test `tb3_n2_spatial`). The N2 test module carries a fixture-transform constant, `const TB3_M8_MODE: u8 = 0;`, applied to the decoded program before the oracle comparison: 1 shifts one powered segment's X by 0.5 mm, and 2 replaces its S token. Two mutants:
-- **m8a:** `TB3_M8_MODE: u8 = 0;` becomes `= 1;`.
-- **m8b:** `TB3_M8_MODE: u8 = 0;` becomes `= 2;`.
-
-Each must fail N2 itself, and on its assertion, not by a build error. The reviewer reads the journal's captured output for N2's named assertion message ("N2 placement mismatch" and "N2 power mismatch") and records it. A mutant that fails to compile counts as not killed. Disk floor first: 28 GB free before this spec runs.
-
-**Spec 3, tsc** (`test_command`: `npx tsc --noEmit`):
-- **m14:** `void store.camera;` added inside `generateGcode`. tsc must fail, which proves G10a.
-
-The control: Linear stays byte-identical under N3, and every spec's baseline stays green.
+The control: Linear stays byte-identical under N3, and the controls must stay green.
 
 ## Verification
 
@@ -306,7 +247,7 @@ The control: Linear stays byte-identical under N3, and every spec's baseline sta
   - `cargo test --manifest-path src-tauri/Cargo.toml --features sim` with `CARGO_TARGET_DIR=$HOME/.cache/kerf-engine-arm-target` and `env -u KERF_UPDATE_GOLDEN`;
   - clippy `--all-targets --features sim -- -D warnings`;
   - `cargo fmt --check`;
-  - the battery three times: spec 1 vitest (m1-m7, m9-m13, m15-m21), spec 2 cargo (m8a, m8b, with N2's assertion messages quoted from the journal), and spec 3 tsc (m14).
+  - the battery twice: the vitest spec (m1-m13, m15, m16) and the tsc spec (m14).
 
   Every existing golden is unchanged; the only new goldens are N3's.
 - **Browser** (dev server, puppeteer; the Chrome DevTools MCP is disconnected):
@@ -367,7 +308,7 @@ The control: Linear stays byte-identical under N3, and every spec's baseline sta
 
 ## Deferrals
 
-The Parking Lot index line below was added with revision 3. At Stage 3.5 it becomes "(shipped …, kerf-power-curve-presets)", but only if G1-G13 pass and the battery kills m9-m21 (m14 under tsc). Here is exactly what `tb3-guard` closes: a generation in flight while any of its twelve inputs changes, or while the project is replaced or a newer generation starts, can no longer publish as current; and a change to any input after publication marks the result stale. The line as indexed:
+The Parking Lot index line below was added with revision 3. At Stage 3.5 it becomes "(shipped …, kerf-power-curve-presets)", but only if G1-G9 pass and the battery kills m9-m16. Here is exactly what `tb3-guard` closes: a generation in flight while any of its twelve inputs changes, or while the project is replaced or a newer generation starts, can no longer publish as current; and a change to any input after publication marks the result stale. The line as indexed:
 
 - **A generation that finishes after an edit publishes an outdated result as current** — `setGcodeResult` clears `gcodeStale` unconditionally (`store/index.ts:692`; called from `MachinePanel.tsx:386`), so an edit made during an in-flight generation leaves the older G-code looking current, and with no prior result the edit does not mark staleness at all. Pre-existing, not curve-specific; owned by UI polish TB6 (revision identity, stale-result handling, edit-during-generation). Found by astra on the TB3 plan, 2026-10-04. See `.claude/plans/kerf-power-curve-presets.md` → Diagnosis.
 
@@ -437,20 +378,3 @@ None for Lee. Everything here is technical, and the release-note wording is plai
 | X4: release note overclaims | CONCERN | Design 4's note now names design, machine settings and project replacement, and is written to the ROADMAP only after the guard tests pass |
 | X5: counter lifetime and identity unspecified | FAIL | Both counters live in the store and are never reset or saved; one synchronous publication action; G6 and G7 cover remount, both orders and non-reuse |
 | X6: closing the Parking Lot item against an incomplete guard | CONCERN | Deferrals: closed only when G1-G9 pass and m9-m16 are killed; discard and stale outcomes each get a console line (G9); export parked as a new TB6 line |
-
-## Fold table: critic round 5 (astra, FAIL on 9 and X3)
-
-| finding | verdict | where addressed |
-|---|---|---|
-| 2: the `tsc` claim overstates what `Pick` enforces | CONCERN | Design 5, "What enforces the set, stated exactly": `tsc` covers reads through `inputs`; a module tripwire covers direct store access in `gcodeGen.ts` (G10b, m17); a store read in another module's helper is named as a Razor review obligation, not claimed |
-| 3: invalidation during the awaited sparse-image analysis | CONCERN | Design 5, the `"published"` branch rechecks `isTicketCurrent` after the await; G11 (replacement and supersession), m19 |
-| 6: an obsolete failure writes a status banner | CONCERN | Design 5, "On reject": the context-labelled error line, no status message when obsolete; G13, m21 |
-| 9 / A: a nonexistent vector command and "both pending" | FAIL | Harness: the real `generate_gcode` name; a mock that throws on unknown names; a serial raster-wait / vector-wait sequence with bounded waits; every promise resolved; dispatch asserted absent (`serial_job_begin`, `serial_stream_job`) |
-| 9 / B: m8 under a vitest-only battery | FAIL | Battery spec 2 (cargo, `tb3_n2_`), m8a and m8b via `TB3_M8_MODE`, the assertion messages read from the journal, and a compile failure not counted as a kill |
-| 9 / C: G5 no-op rows contradict the retained raisers | FAIL | No-op controls limited to the five value-comparing scalar setters; the other rows assert change only, and the implementer must not weaken them; the laser-mode row asserts the flag directly |
-| 10 / D: the production write boundary is unenforced | CONCERN | The write-boundary tripwire (G10c, m18): no production `useStore.setState`, and `gcodeResult` written only at three named store sites; the subscription's same-result exception is justified by that boundary |
-| X1: START/FRAME evidence rests on the broken harness | CONCERN | The repaired harness; "refuses" means the named reason AND no dispatch, through `JobActionBar` with an otherwise eligible machine |
-| X3: wrong command name, "both pending", and the compiler claim | FAIL | Diagnosis and Harness corrected from source (`gcodeGen.ts:697`, `:1100`, `:1182`); the claims are narrowed as for dimension 2 |
-| X4: discard wording false when B finishes first | CONCERN | The line now reads "a newer one was started", which is true in both orders |
-| X5: subscription ordering and post-publication awaits | CONCERN | Design 5, "Ordering, stated exactly" (two writes; the raiser is registered first; nested re-notify) with G12; the post-await recheck with G11 |
-| X6: "exactly one console line" vs generator diagnostics | CONCERN | The generator logs through a handler-local buffer: flushed on publish or failure, dropped on discard with a count in the discard line; G9 seeds a B1 warning; m20 |
