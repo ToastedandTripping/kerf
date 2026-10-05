@@ -186,12 +186,11 @@ export function JobActionBar() {
   const refusal = refusalLine(startGate, jobRunning);
   const exclusion = jobRunning ? null : exclusionCaption(excludedLayers(layers, objects));
   const progress = progressText(elapsedSecs, jobProgress);
-  // While a job runs START and FRAME shrink; they stay rendered and disabled
-  // by their own expressions.
-  // The row must fit the 300px sidebar in every state, so while a job runs
-  // they may shrink below 56px (min-width 0) and STOP keeps its 120px floor.
-  const startFrameFlex = jobRunning ? "0 1 56px" : "1";
-  const startFramePadding = stop.variant === "solid" ? "6px 2px" : "6px"; // narrow beside the 120px STOP
+  // While STOP is solid, START and FRAME size to their own labels (never
+  // clipped) and STOP takes what the row has left, floor 104px. They stay
+  // rendered and disabled by their own expressions.
+  const startFrameFlex = stop.variant === "solid" ? "0 0 auto" : "1";
+  const startFramePadding = stop.variant === "solid" ? "6px 2px" : "6px";
 
   return (
     <div style={{ flexShrink: 0, borderTop: "1px solid var(--border)" }}>
@@ -234,7 +233,7 @@ export function JobActionBar() {
               style={{
                 height: "100%",
                 width: `${jobProgress * 100}%`,
-                background: progressFill(machineState),
+                background: progressFill(machineState, statusStale),
                 transition: "width 0.3s",
               }}
             />
@@ -266,7 +265,8 @@ export function JobActionBar() {
               data-testid="job-refusal"
               style={{
                 display: "flex",
-                alignItems: "center",
+                alignItems: "flex-start",
+                lineHeight: "16px",
                 gap: "6px",
                 marginTop: exclusion ? "2px" : 0,
               }}
@@ -279,6 +279,7 @@ export function JobActionBar() {
                   borderRadius: "50%",
                   background: "var(--warning)",
                   flexShrink: 0,
+                  marginTop: "5px",
                 }}
               />
               {refusal}
@@ -295,8 +296,7 @@ export function JobActionBar() {
           title={startGate.reason}
           style={{
             flex: startFrameFlex,
-            minWidth: 0,
-            overflow: "hidden",
+            height: "32px",
             padding: startFramePadding,
             borderRadius: "var(--radius-sm)",
             border: "1px solid rgba(74,226,138,0.5)",
@@ -316,8 +316,7 @@ export function JobActionBar() {
           title={frameHint}
           style={{
             flex: startFrameFlex,
-            minWidth: 0,
-            overflow: "hidden",
+            height: "32px",
             padding: startFramePadding,
             borderRadius: "var(--radius-sm)",
             border: "1px solid var(--accent)",

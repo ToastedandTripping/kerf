@@ -75,8 +75,8 @@ export function stopPresentation(s: {
       background: "var(--danger-strong)",
       border: "1px solid var(--danger-strong)",
       color: "#fff",
-      flex: "2",
-      minWidth: "120px",
+      flex: "1 1 0%",
+      minWidth: "104px",
       height: "40px",
     },
   };
@@ -113,9 +113,13 @@ export function progressText(
   return { elapsed, remaining, percent: `${Math.round(jobProgress * 100)}%` };
 }
 
-/** Bar fill: amber for hold and door (needs attention), blue otherwise. */
-export function progressFill(machineState: StoredMachineState): string {
-  return machineState === "hold" || machineState === "door" ? "var(--warning)" : "var(--accent)";
+/** Bar fill. Stale first (the state word is not current): grey. Then alarm
+ *  red, hold and door amber (needs attention), otherwise blue. */
+export function progressFill(machineState: StoredMachineState, statusStale: boolean): string {
+  if (statusStale) return "var(--text-secondary)";
+  if (machineState === "alarm") return "var(--danger)";
+  if (machineState === "hold" || machineState === "door") return "var(--warning)";
+  return "var(--accent)";
 }
 
 /** "Not in the G-code: Score (output off), Custom 4 (hidden)", or null. */

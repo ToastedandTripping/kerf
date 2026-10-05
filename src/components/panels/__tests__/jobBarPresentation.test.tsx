@@ -130,8 +130,8 @@ describe("stopPresentation over connected x job x state x stale", () => {
       background: "var(--danger-strong)",
       color: "#fff",
       fontWeight: 700,
-      flex: "2",
-      minWidth: "120px",
+      flex: "1 1 0%",
+      minWidth: "104px",
       height: "40px",
     });
   });
@@ -152,11 +152,27 @@ describe("refusalLine / progressText / progressFill / exclusionCaption", () => {
     expect(progressText(75, 0.5)).toEqual({ elapsed: "1:15", remaining: "1:15", percent: "50%" });
   });
 
-  it("fill is amber for hold and door, blue otherwise", () => {
-    for (const st of STATES)
-      expect(progressFill(st)).toBe(
-        st === "hold" || st === "door" ? "var(--warning)" : "var(--accent)"
+  it("fill: stale grey first, then alarm red, hold and door amber, else blue", () => {
+    for (const st of STATES) {
+      expect(progressFill(st, true)).toBe("var(--text-secondary)");
+      expect(progressFill(st, false)).toBe(
+        st === "alarm"
+          ? "var(--danger)"
+          : st === "hold" || st === "door"
+            ? "var(--warning)"
+            : "var(--accent)"
       );
+    }
+  });
+
+  it("the bar renders the stale and alarm fills", () => {
+    seed({ jobRunning: true, machineState: "alarm", jobProgress: 0.3 });
+    const { getByTestId, rerender } = render(<JobActionBar />);
+    expect(getByTestId("job-progress-fill").style.background).toBe("var(--danger)");
+    seed({ jobRunning: true, machineState: "run", statusStale: true, jobProgress: 0.3 });
+    rerender(<JobActionBar />);
+    expect(getByTestId("job-progress-fill").style.background).toBe("var(--text-secondary)");
+    cleanup();
   });
 
   it("caption lists each excluded layer with its reason", () => {
@@ -189,6 +205,25 @@ describe("JobActionBar (production component, state injected)", () => {
             expect(b.disabled).toBe(!machineConnected);
             expect(Number(getComputedStyle(b).opacity) < 1).toBe(b.disabled);
           }
+  });
+
+  it("idle START and FRAME are 32px tall like the STOP outline, and flex 1", () => {
+    const { getByText } = render(<JobActionBar />);
+    for (const label of ["START", "FRAME"]) {
+      const el = getByText(label) as HTMLButtonElement;
+      expect(el.style.height).toBe("32px");
+      expect(el.style.flexGrow).toBe("1");
+      expect(el.style.overflow).toBe("");
+    }
+  });
+
+  it("a wrapped refusal keeps its dot on the first line", () => {
+    seed({ gcodeResult: null });
+    const { getByTestId } = render(<JobActionBar />);
+    const line = getByTestId("job-refusal");
+    expect(line.style.alignItems).toBe("flex-start");
+    expect(line.style.lineHeight).toBe("16px");
+    expect((line.firstElementChild as HTMLElement).style.marginTop).toBe("5px");
   });
 
   it("STOP carries its exact title", () => {
@@ -281,7 +316,8 @@ describe("JobActionBar (production component, state injected)", () => {
     const { getByText } = render(<JobActionBar />);
     for (const label of ["START", "FRAME"]) {
       const b = getByText(label) as HTMLButtonElement;
-      expect(b.style.flex).toBe("0 1 56px");
+      expect(b.style.flex).toBe("0 0 auto");
+      expect(b.style.height).toBe("32px");
       expect(b.disabled).toBe(true);
     }
   });
