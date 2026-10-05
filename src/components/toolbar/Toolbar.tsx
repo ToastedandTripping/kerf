@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import { useStore } from "../../app/store";
 import type { ToolType } from "../../app/types";
 import { handleToolChange } from "../../lib/tools/toolHandler";
@@ -34,16 +35,29 @@ export function Toolbar() {
       }}
     >
       {tools.map((tool) => (
-        <ToolButton
-          key={tool.type}
-          tool={tool}
-          active={activeTool === tool.type}
-          onClick={() => {
-            const previousTool = activeTool;
-            setActiveTool(tool.type);
-            handleToolChange(tool.type, previousTool);
-          }}
-        />
+        <Fragment key={tool.type}>
+          {tool.type === "node" && (
+            <div
+              aria-hidden="true"
+              style={{
+                width: "20px",
+                height: "1px",
+                background: "var(--border)",
+                margin: "6px 0", // 6px + the 2px gap = 8px each side
+                flexShrink: 0,
+              }}
+            />
+          )}
+          <ToolButton
+            tool={tool}
+            active={activeTool === tool.type}
+            onClick={() => {
+              const previousTool = activeTool;
+              setActiveTool(tool.type);
+              handleToolChange(tool.type, previousTool);
+            }}
+          />
+        </Fragment>
       ))}
     </div>
   );
@@ -62,6 +76,8 @@ function ToolButton({
     <button
       onClick={onClick}
       title={`${tool.label} (${tool.shortcut})`}
+      aria-label={tool.label}
+      aria-pressed={active}
       style={{
         width: "36px",
         height: "36px",
@@ -70,8 +86,8 @@ function ToolButton({
         justifyContent: "center",
         border: "none",
         borderRadius: "var(--radius-md)",
-        background: active ? "var(--accent)" : "transparent",
-        color: active ? "#fff" : "var(--text-secondary)",
+        background: active ? "var(--bg-selected)" : "transparent",
+        color: active ? "var(--accent)" : "var(--text-secondary)",
         cursor: "pointer",
         transition: "background 0.1s, color 0.1s",
       }}
@@ -89,7 +105,13 @@ function ToolButton({
 
 function ToolIcon({ type }: { type: ToolType }) {
   const size = 18;
-  const s = { width: size, height: size };
+  // One family: 1.5 stroke, round caps and joins on every glyph (P51).
+  const s = {
+    width: size,
+    height: size,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+  };
 
   switch (type) {
     case "select":
@@ -132,10 +154,8 @@ function ToolIcon({ type }: { type: ToolType }) {
       );
     case "text":
       return (
-        <svg {...s} viewBox="0 0 18 18" fill="currentColor">
-          <text x="3" y="14" fontSize="14" fontWeight="bold" fontFamily="serif">
-            T
-          </text>
+        <svg {...s} viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <path d="M4 4.5h10M9 4.5V15" />
         </svg>
       );
     case "node":
@@ -170,14 +190,7 @@ function ToolIcon({ type }: { type: ToolType }) {
     case "pan":
       // Hand icon: an open hand (5 fingers)
       return (
-        <svg
-          {...s}
-          viewBox="0 0 18 18"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-        >
+        <svg {...s} viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5">
           <path d="M9 14V7" />
           <path d="M6.5 13.5V6" />
           <path d="M11.5 13.5V6" />
