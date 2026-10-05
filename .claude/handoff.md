@@ -85,6 +85,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 ## Log (newest first)
 
+### 2026-10-05 TB3 merged; TB1 round 7 ruled by Lee
+TB3 is merged into kerf-gap at 1635367 (vitest 1356, tsc and cargo 476 on the merged tree; ledger merged). TB1 failed round 6 (c07f41b). Lee was offered the disconnected-only dialog rule (recommended) and a split, and chose ROUND 7 on the same design (relayed by the coordinator). Revision 7 is being written by the author agent.
+
 ### 2026-10-05 Lee's TB1 revision-6 answers recorded
 D2 is amended to its wider real cost, and D3 (the Laser off (M5) button) is added as a Product ruling, both through the decisions writer. Folding them into revision 6 is owed on resume, before round 6.
 
