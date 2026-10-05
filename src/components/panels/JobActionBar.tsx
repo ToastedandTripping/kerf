@@ -191,7 +191,7 @@ export function JobActionBar() {
   // The row must fit the 300px sidebar in every state, so while a job runs
   // they may shrink below 56px (min-width 0) and STOP keeps its 120px floor.
   const startFrameFlex = jobRunning ? "0 1 56px" : "1";
-  const startFramePadding = jobRunning ? "6px 2px" : "6px";
+  const startFramePadding = stop.variant === "solid" ? "6px 2px" : "6px"; // narrow beside the 120px STOP
 
   return (
     <div style={{ flexShrink: 0, borderTop: "1px solid var(--border)" }}>
