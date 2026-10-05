@@ -62,6 +62,8 @@ in this project has already been ruled on, usually for a reason that is not obvi
 
 - LEE ANSWERED THE TB1 REVISION-6 ITEMS (2026-10-05, relayed by the coordinator). (i) D2 is AMENDED to its real cost: refusals after every connect (including launch), every STOP or Pause and every Home, until an M5 is acknowledged. The DECISIONS amendment is written. (ii) D3 is YES: the refusal message gets a 'Laser off (M5)' button. It is written as a new Product ruling. ON RESUME, before the round-6 critic: fold both into revision 6, or resume the author (agent a6151ad8fef9643eb) for it. Mark D2 as amended and D3 as ruled. Add the button to the B4 batch scope with tests: it sends only M5 under the machine-write rules, and the guard clears only on that M5's acknowledgement with nothing in flight. Then run the astra round-6 critic.
 
+- STATE 2026-10-05 ~12:40 PDT: A7 (the job bar) is MERGED into kerf-gap at 31c21e4. Razor's WARNING W1 (STOP clipped mid-job) is fixed, and two re-checks passed. Jen's C1, C5, C7 and C8 are fixed in A7; C2-C4 and C6 are parked under '### Deferred from kerf-ui-polish-a7'. Merged tree: vitest 1441/1441, tsc clean. The ledger shows it merged. The OWNER DESKTOP CHECK is in the ROADMAP shipped entry. TB1 can now be implemented once Lee picks the bounded check or round 8 (revision 8 at d45a338; its critic is not dispatched). Jen C6 is recorded: PAUSE stays tan under the 2026-09-25 Pause ruling until the Pause plan. NEXT movable polish batch, after Lee answers or in parallel: A2 or A3 per the polish plan's graph. A3 is the modal stacking seam TB1 benefits from, but B5 is serialised against A3. Check the collision table first.
+
 ## Open questions awaiting Lee
 
 | Question                                                                                            | Why it matters                                                                        | Raised     |
@@ -84,6 +86,9 @@ in this project has already been ruled on, usually for a reason that is not obvi
 ---
 
 ## Log (newest first)
+
+### 2026-10-05 A7 merged
+A7 (job bar presentation) went through Ted, Razor WARNING W1 (STOP clipped at the sidebar edge mid-job), a fix pass, a re-check PASS, behavioural CONCERNS, Jen CONCERNS (8; no regressions), a design fix pass for C1, C5, C7 and C8, and a re-check 2 PASS (192 live fit cases). Then 3.5, 4.5 and the merge at 31c21e4. Disk was at 25 GB before the run, so I cleaned a stale 5.6 GB Rust target from my own E1a scratch copy.
 
 ### 2026-10-05 TB1 rounds 7 and 8 prep
 Round 7 (Fable fallback, Codex 5h at 94%) FAILED, but confirmed every round-6 finding closed; its one P0 was two native choosers outside the guard. Lee has a card: a bounded check of the fixes (recommended) or a full round 8. Revision 8 folds round 7 (the colour input becomes a hex field, the CSV input routes through the dialog door, a JSX native-input scan and lint rule are added, and a new batch B5 waits on B4 and A2). Its critic is NOT dispatched until Lee answers.
