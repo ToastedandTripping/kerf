@@ -19,6 +19,7 @@ export const JOG_HOLD_STALE =
   "Kerf hasn't had a status report from the machine for a few seconds, so the status reads Stale. If it doesn't recover on its own, reconnect.";
 export const JOG_HOLD_STATE = "The machine isn't reporting Idle. Kerf jogs only from Idle.";
 import { generateGcode } from "../../lib/machine/gcodeGen";
+import type { GenerationLog } from "../../lib/machine/gcodeGen";
 import {
   MACHINE_STATE_COLORS,
   GRBL_ALARM_DESCRIPTIONS,
@@ -68,7 +69,9 @@ export function MachinePanel() {
   const machineState = useStore((s) => s.machineState);
   const machinePosition = useStore((s) => s.machinePosition);
   const addConsoleLine = useStore((s) => s.addConsoleLine);
-  const setGcodeResult = useStore((s) => s.setGcodeResult);
+  const beginGeneration = useStore((s) => s.beginGeneration);
+  const publishGeneration = useStore((s) => s.publishGeneration);
+  const isTicketCurrent = useStore((s) => s.isTicketCurrent);
   const setPreviewVisible = useStore((s) => s.setPreviewVisible);
   const gcodeResult = useStore((s) => s.gcodeResult);
   const jobRunning = useStore((s) => s.jobRunning);
@@ -377,27 +380,86 @@ export function MachinePanel() {
    *  The single loud-failure site for generateGcode: console line is the
    *  durable record; the status line is the 3s transient pointer to it.
    *  gcodeResult is left untouched on failure — the null/stale gates keep
-   *  START and FRAME blocked on every failure path. */
+   *  START and FRAME blocked on every failure path.
+   *
+   *  TB3 publication guard: the generation runs on the inputs its ticket
+   *  captured, and publishGeneration decides in one synchronous step whether
+   *  the result is published current, published stale, or discarded (another
+   *  project, or superseded by a newer generation). The generator's own console
+   *  lines are buffered so a discarded run's lines are dropped with it. */
   async function handleGenerateGcode(): Promise<boolean> {
     setSparseImageWarning(false);
     setGenerating(true);
+    const buffered: Array<[string, Parameters<GenerationLog>[1]]> = [];
+    const log: GenerationLog = (msg, level) => {
+      buffered.push([msg, level]);
+    };
+    const flush = () => {
+      for (const [msg, level] of buffered) addConsoleLine(msg, level);
+    };
+    const ticket = beginGeneration();
     try {
-      const result = await generateGcode();
-      setGcodeResult(result);
+      let result;
+      try {
+        result = await generateGcode(ticket.inputs, log);
+      } catch (e) {
+        flush();
+        if (isTicketCurrent(ticket)) {
+          addConsoleLine(`G-code generation failed: ${e}`, "error");
+          setStatusMessage("G-code generation failed — see console");
+        } else {
+          // A dead generation never puts a failure banner over the current one.
+          addConsoleLine(
+            `G-code generation failed (an earlier generation, superseded or from a different project): ${e}`,
+            "error"
+          );
+        }
+        return false;
+      }
+      const outcome = publishGeneration(ticket, result);
+      if (outcome === "discarded-project") {
+        addConsoleLine(
+          `Discarded a G-code generation started in a different project (${buffered.length} generator messages dropped with it)`,
+          "info"
+        );
+        return false;
+      }
+      if (outcome === "discarded-superseded") {
+        addConsoleLine(
+          `Discarded an earlier G-code generation: a newer one was started (${buffered.length} generator messages dropped with it)`,
+          "info"
+        );
+        return false;
+      }
+      flush();
+      if (outcome === "published-stale") {
+        addConsoleLine(
+          "G-code generated, but the design or machine settings changed while it ran. Regenerate before START.",
+          "warning"
+        );
+        return true;
+      }
       addConsoleLine(
         `G-code generated: ${result.lineCount} lines, ${result.cutDistance.toFixed(1)}mm cut, ~${Math.ceil(result.estimatedTimeSecs)}s`,
         "info"
       );
-      // Fix 6: warn if job is long and image objects appear sparse
+      // Fix 6: warn if job is long and image objects appear sparse.
+      // Reads the ticket's inputs, not live state.
       if (result.estimatedTimeSecs > 30 * 60) {
-        const store = useStore.getState();
-        const imageObjs = store.objects.filter(
+        const imageObjs = ticket.inputs.objects.filter(
           (o) => o.type === "image" && o.visible && o.imageData
         );
         if (imageObjs.length > 0) {
           const ratios = await Promise.all(
             imageObjs.map((o) => getImageContentRatio(o.imageData!))
           );
+          if (!isTicketCurrent(ticket)) {
+            addConsoleLine(
+              "Skipped the sparse-image check: the project changed or a newer generation started",
+              "info"
+            );
+            return false;
+          }
           const avgContent = ratios.reduce((s, r) => s + r, 0) / ratios.length;
           if (avgContent < 0.2) {
             setSparseImageWarning(true);
@@ -405,10 +467,6 @@ export function MachinePanel() {
         }
       }
       return true;
-    } catch (e) {
-      addConsoleLine(`G-code generation failed: ${e}`, "error");
-      setStatusMessage("G-code generation failed — see console");
-      return false;
     } finally {
       setGenerating(false);
     }

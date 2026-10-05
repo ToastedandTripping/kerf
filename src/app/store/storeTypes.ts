@@ -1,4 +1,5 @@
 import type { StoreApi } from "zustand";
+import type { GenerationTicket, PublishOutcome } from "./generationInputs";
 import type {
   ToolType,
   DesignObject,
@@ -189,7 +190,24 @@ export interface AppState {
     lineCount: number;
   } | null;
   gcodeStale: boolean;
-  setGcodeResult: (result: AppState["gcodeResult"]) => void;
+  /** TB3 guard: incremented by loadProject (Open, Open Recent, New, autosave
+   *  recovery). Runtime only; never saved. */
+  projectEpoch: number;
+  /** TB3 guard: sequence number of the most recently started generation.
+   *  Never reset (not by loadProject, not by a panel remount). */
+  generationSeq: number;
+  /** Starts a generation: increments generationSeq and captures the project
+   *  epoch and the generation inputs in one synchronous step. */
+  beginGeneration: () => GenerationTicket;
+  /** True while the ticket is still the newest generation in this project. */
+  isTicketCurrent: (ticket: GenerationTicket) => boolean;
+  /** The only production writer of a generated gcodeResult. Discards a result
+   *  from another project or a superseded generation; publishes stale when any
+   *  input changed since the ticket was taken. One synchronous action. */
+  publishGeneration: (
+    ticket: GenerationTicket,
+    result: NonNullable<AppState["gcodeResult"]>
+  ) => PublishOutcome;
   previewVisible: boolean;
   setPreviewVisible: (v: boolean) => void;
   jobRunning: boolean;

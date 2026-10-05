@@ -5,6 +5,15 @@ import { LINE_OVERLAY_DEFAULTS } from "../../app/types";
 import { offsetRingByDistance, composeGroupChild, sampleBezierPath } from "../geometry";
 import { computeOverscan } from "./overscan";
 import { textObjectToPaths } from "../../app/store/geometryActions";
+import { selectGenerationInputs } from "../../app/store/generationInputs";
+import type { GenerationInputs } from "../../app/store/generationInputs";
+
+/** Where generateGcode writes its own console lines. The Generate handler
+ *  passes a buffer so a discarded generation's lines can be dropped. */
+export type GenerationLog = (
+  msg: string,
+  level: "sent" | "received" | "info" | "error" | "warning"
+) => void;
 
 export interface GcodeMove {
   x: number;
@@ -902,9 +911,10 @@ export { stripFraming as stripFramingForTest, assembleGcode as assembleGcodeForT
  *  This path buckets both images and vectors by layer position and emits
  *  them in strict ascending order. Within a tie (image + vector on the same
  *  layer), images emit before the vector fragment. */
-export async function generateGcode(): Promise<GcodeResult> {
-  const store = useStore.getState();
-
+export async function generateGcode(
+  inputs: GenerationInputs = selectGenerationInputs(useStore.getState()),
+  log: GenerationLog = (msg, level) => useStore.getState().addConsoleLine(msg, level)
+): Promise<GcodeResult> {
   // Phase 2A: auto-convert text objects to paths before cut-object generation.
   // Walks the full object tree (including group children) so nested text is
   // found and converted — W1 fix: the original loop only walked top-level
@@ -946,20 +956,20 @@ export async function generateGcode(): Promise<GcodeResult> {
     }
     return result;
   }
-  const preprocessed = await convertTextInTree(store.objects);
+  const preprocessed = await convertTextInTree(inputs.objects);
 
   // Compute machine acceleration and rapid rate before building CutObjects, so scanMotion
   // can flow through toCutObjects → buildCutLayer → CutLayer.scanMotion on the IPC wire.
   const scanAccel = Math.min(
-    Number.isFinite(store.grblAccelX) && store.grblAccelX > 0 ? store.grblAccelX : Infinity,
-    Number.isFinite(store.grblAccelY) && store.grblAccelY > 0 ? store.grblAccelY : Infinity
+    Number.isFinite(inputs.grblAccelX) && inputs.grblAccelX > 0 ? inputs.grblAccelX : Infinity,
+    Number.isFinite(inputs.grblAccelY) && inputs.grblAccelY > 0 ? inputs.grblAccelY : Infinity
   );
   const scanRapid = Math.min(
-    Number.isFinite(store.grblMaxFeedRateX) && store.grblMaxFeedRateX > 0
-      ? store.grblMaxFeedRateX
+    Number.isFinite(inputs.grblMaxFeedRateX) && inputs.grblMaxFeedRateX > 0
+      ? inputs.grblMaxFeedRateX
       : Infinity,
-    Number.isFinite(store.grblMaxFeedRateY) && store.grblMaxFeedRateY > 0
-      ? store.grblMaxFeedRateY
+    Number.isFinite(inputs.grblMaxFeedRateY) && inputs.grblMaxFeedRateY > 0
+      ? inputs.grblMaxFeedRateY
       : Infinity
   );
   const scanMotion =
@@ -967,9 +977,9 @@ export async function generateGcode(): Promise<GcodeResult> {
       ? { accelerationMmS2: scanAccel, rapidMmMin: scanRapid }
       : null;
 
-  const { objects: cutObjects, warnings } = toCutObjects(preprocessed, store.layers, scanMotion);
+  const { objects: cutObjects, warnings } = toCutObjects(preprocessed, inputs.layers, scanMotion);
   warnings.push(...textConvertWarnings);
-  const layerOrder = new Map(store.layers.map((l, pos) => [l.index, pos]));
+  const layerOrder = new Map(inputs.layers.map((l, pos) => [l.index, pos]));
 
   for (const obj of cutObjects) {
     const m = obj.layer.mode;
@@ -982,13 +992,13 @@ export async function generateGcode(): Promise<GcodeResult> {
 
   // Surface warnings for skipped objects in the console panel
   for (const w of warnings) {
-    store.addConsoleLine(w, "info");
+    log(w, "info");
   }
 
   // M3 constant-power advisory
   for (const obj of cutObjects) {
     if (obj.layer.powerMode !== "variable") {
-      store.addConsoleLine(
+      log(
         `Layer uses constant power (M3). Laser will not reduce power during speed changes. Use variable power (M4) unless doing constant-speed through-cuts.`,
         "warning"
       );
@@ -1012,24 +1022,24 @@ export async function generateGcode(): Promise<GcodeResult> {
   // A job of only constant-power line layers still warns about NOTHING here,
   // and that is correct: M3 at $32=0 behaves as the operator asked, and the
   // separate constant-power advisory above already speaks to that case.
-  if (!store.grblLaserMode) {
+  if (!inputs.grblLaserMode) {
     const hasFillLayer = cutObjects.some((obj) => {
       const m = obj.layer.mode;
       return m === "fill" || m === "fillLine" || m === "maskFill" || m === "offsetFill";
     });
-    const hasImageLayer = store.objects.some(
+    const hasImageLayer = inputs.objects.some(
       (obj) => obj.type === "image" && obj.visible && obj.imageData
     );
     const hasVariableLayer = cutObjects.some((obj) => obj.layer.powerMode === "variable");
     if (hasFillLayer || hasImageLayer) {
-      store.addConsoleLine(
+      log(
         "GRBL laser mode ($32) is disabled — M4 is a no-op, dynamic power scaling is off, " +
           "and the laser may fire during G0 travel on fill/raster jobs. " +
           "Use the 'Enable Laser Mode' button in the Machine panel, or run $32=1 in the console.",
         "warning"
       );
     } else if (hasVariableLayer) {
-      store.addConsoleLine(
+      log(
         "GRBL laser mode ($32) is disabled — M4 is a no-op, so dynamic power scaling is off " +
           "and this job's variable-power layers will cut at constant power, over-exposing corners. " +
           "Use the 'Enable Laser Mode' button in the Machine panel, or run $32=1 in the console.",
@@ -1048,21 +1058,22 @@ export async function generateGcode(): Promise<GcodeResult> {
     const lineModePositions: number[] = [];
     const engraveModePositions: number[] = [];
 
-    for (const layer of store.layers) {
+    for (const layer of inputs.layers) {
       if (!layer.visible || layer.output === false) continue;
       const pos = layerOrder.get(layer.index);
       if (pos === undefined) continue;
 
       // Does this layer have any objects?
       const hasVectorObjs = cutObjects.some((obj) => obj.layerIndex === layer.index);
-      const hasImageObjs = store.objects.some(
+      const hasImageObjs = inputs.objects.some(
         (obj) =>
           obj.type === "image" &&
           obj.visible &&
           obj.imageData &&
-          (store.layers.find((l) => l.index === obj.layerIndex) || store.layers[0]).index ===
+          (inputs.layers.find((l) => l.index === obj.layerIndex) || inputs.layers[0]).index ===
             layer.index &&
-          (store.layers.find((l) => l.index === obj.layerIndex) || store.layers[0]).output !== false
+          (inputs.layers.find((l) => l.index === obj.layerIndex) || inputs.layers[0]).output !==
+            false
       );
 
       if (!hasVectorObjs && !hasImageObjs) continue;
@@ -1085,7 +1096,7 @@ export async function generateGcode(): Promise<GcodeResult> {
     );
 
     if (riskyOrder) {
-      store.addConsoleLine(
+      log(
         "Warning: a Cut/Line layer fires before an Engrave/Fill layer. " +
           "The part may be freed before engraving completes. " +
           "Drag the Engrave layer above the Cut layer to prevent this.",
@@ -1094,14 +1105,14 @@ export async function generateGcode(): Promise<GcodeResult> {
     }
   }
 
-  const sValueMax = store.grblSValueMax;
+  const sValueMax = inputs.grblSValueMax;
 
   // Step 1: Generate image fragments keyed by layer position
   const { byLayer: imageByLayer, lockedCount: lockedImageCount } = await generateImageGcodeByLayer(
-    store.layers,
-    store.objects,
-    store.workspaceHeight,
-    store.originTop,
+    inputs.layers,
+    inputs.objects,
+    inputs.workspaceHeight,
+    inputs.originTop,
     sValueMax,
     scanAccel,
     scanMotion
@@ -1117,11 +1128,11 @@ export async function generateGcode(): Promise<GcodeResult> {
   // speeds that are typically much slower or faster than ideal for engraving).
   // Collect one warning per affected layer; do not auto-route or change settings.
   {
-    const flat = flattenObjects(store.objects);
+    const flat = flattenObjects(inputs.objects);
     const imageObjects = flat.filter((obj) => obj.type === "image" && obj.visible && obj.imageData);
     const warnedLayers = new Set<number>();
     for (const obj of imageObjects) {
-      const layer = store.layers.find((l) => l.index === obj.layerIndex) || store.layers[0];
+      const layer = inputs.layers.find((l) => l.index === obj.layerIndex) || inputs.layers[0];
       if (!layer.visible || layer.output === false) continue;
       // All fill-family modes (fill, fillLine, maskFill, offsetFill) use engrave-appropriate
       // speeds — only line mode (Cut/Score) warrants a warning.
@@ -1130,11 +1141,11 @@ export async function generateGcode(): Promise<GcodeResult> {
       warnedLayers.add(layer.index);
 
       const imageCount = imageObjects.filter((im) => {
-        const imLayer = store.layers.find((l) => l.index === im.layerIndex) || store.layers[0];
+        const imLayer = inputs.layers.find((l) => l.index === im.layerIndex) || inputs.layers[0];
         return imLayer.index === layer.index && imLayer.visible && imLayer.output !== false;
       }).length;
 
-      store.addConsoleLine(
+      log(
         `${imageCount} image(s) on layer "${layer.name}" (${layer.mode}) will engrave at ` +
           `${layer.speed} mm/min, ${layer.passes} pass(es). ` +
           `Consider using an Engrave/Fill layer or reviewing material settings for image work.`,
@@ -1150,7 +1161,7 @@ export async function generateGcode(): Promise<GcodeResult> {
   for (const obj of cutObjects) {
     const idx = obj.layerIndex;
     const pos =
-      idx !== undefined && layerOrder.has(idx) ? layerOrder.get(idx)! : store.layers.length;
+      idx !== undefined && layerOrder.has(idx) ? layerOrder.get(idx)! : inputs.layers.length;
     const existing = vectorByLayer.get(pos);
     if (existing) {
       existing.push(obj);
@@ -1181,11 +1192,11 @@ export async function generateGcode(): Promise<GcodeResult> {
     if (vectorObjs && vectorObjs.length > 0) {
       const vectorResult = await invoke<GcodeResult>("generate_gcode", {
         objects: vectorObjs,
-        workspaceHeight: store.workspaceHeight,
+        workspaceHeight: inputs.workspaceHeight,
         sValueMax,
-        startCorner: store.startCorner || "bottomLeft",
-        workspaceWidth: store.workspaceWidth,
-        originTop: store.originTop,
+        startCorner: inputs.startCorner || "bottomLeft",
+        workspaceWidth: inputs.workspaceWidth,
+        originTop: inputs.originTop,
       });
       fragments.push(vectorResult);
     }

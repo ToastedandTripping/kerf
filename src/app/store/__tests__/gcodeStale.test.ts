@@ -208,11 +208,12 @@ describe("F15 gcodeStale writers", () => {
 
   // --- regenerate clears the gate ---
 
-  it("setGcodeResult clears staleness", () => {
+  it("a current publishGeneration clears staleness", () => {
     markFresh();
     useStore.getState().addObject(makeRect("a"));
     expect(stale()).toBe(true);
-    useStore.getState().setGcodeResult(fakeGcode());
+    const ticket = useStore.getState().beginGeneration();
+    expect(useStore.getState().publishGeneration(ticket, fakeGcode())).toBe("published");
     expect(stale()).toBe(false);
   });
 });
