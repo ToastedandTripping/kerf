@@ -17,6 +17,7 @@ import type { AppState, TrustScalars } from "./storeTypes";
 import { deepCloneObject } from "./storeTypes";
 import { buildObjectsById, selectionPatch } from "./storeHelpers";
 import { PX_PER_MM } from "../../lib/constants";
+import { inputsChanged, selectGenerationInputs } from "./generationInputs";
 
 export type { AppState } from "./storeTypes";
 export { generateId } from "./storeTypes";
@@ -503,7 +504,9 @@ export const useStore = create<AppState>((set, get) => ({
   setProjectPath: (path) => set({ projectPath: path }),
   setDirty: (dirty) => set({ isDirty: dirty }),
   loadProject: (project) =>
-    set({
+    set((state) => ({
+      // TB3 guard: a generation started in the replaced project is discarded.
+      projectEpoch: state.projectEpoch + 1,
       objects: project.objects,
       objectsById: buildObjectsById(project.objects),
       layers: project.layers.map((l) => ({ ...l, output: l.output ?? true })),
@@ -524,7 +527,7 @@ export const useStore = create<AppState>((set, get) => ({
       gcodeStale: false,
       projectPath: null,
       nodeEditState: { pathId: null, selectedNodeIndex: null },
-    }),
+    })),
   toProject: () => {
     const state = get();
     return {
@@ -689,7 +692,30 @@ export const useStore = create<AppState>((set, get) => ({
   // G-code / Preview
   gcodeResult: null,
   gcodeStale: false,
-  setGcodeResult: (result) => set({ gcodeResult: result, gcodeStale: false }),
+  projectEpoch: 0,
+  generationSeq: 0,
+  beginGeneration: () => {
+    const state = get();
+    const ticket = {
+      seq: state.generationSeq + 1,
+      epoch: state.projectEpoch,
+      inputs: selectGenerationInputs(state),
+    };
+    set({ generationSeq: ticket.seq });
+    return ticket;
+  },
+  isTicketCurrent: (ticket) => {
+    const state = get();
+    return ticket.epoch === state.projectEpoch && ticket.seq === state.generationSeq;
+  },
+  publishGeneration: (ticket, result) => {
+    const state = get();
+    if (ticket.epoch !== state.projectEpoch) return "discarded-project";
+    if (ticket.seq !== state.generationSeq) return "discarded-superseded";
+    const stale = inputsChanged(ticket.inputs, selectGenerationInputs(state));
+    set({ gcodeResult: result, gcodeStale: stale });
+    return stale ? "published-stale" : "published";
+  },
   previewVisible: false,
   setPreviewVisible: (v) => set({ previewVisible: v }),
   jobRunning: false,
@@ -927,3 +953,20 @@ export const useStore = create<AppState>((set, get) => ({
       dialogData: { ...state.dialogData, ...data },
     })),
 }));
+
+// TB3 guard: the one structural post-publication staleness raiser. Registered
+// at module load, directly after create, so it is the first listener: its
+// nested write completes (and re-notifies) before any later listener sees the
+// triggering notification. Covers every writer of every generation input.
+// A write that changes gcodeResult itself (publishGeneration, loadProject, or
+// test seeding) is left alone.
+useStore.subscribe((state, prev) => {
+  if (
+    state.gcodeResult !== null &&
+    state.gcodeResult === prev.gcodeResult &&
+    !state.gcodeStale &&
+    inputsChanged(prev, state)
+  ) {
+    useStore.setState({ gcodeStale: true });
+  }
+});

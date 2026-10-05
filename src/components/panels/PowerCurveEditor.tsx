@@ -6,26 +6,30 @@ export interface CurvePoint {
   y: number; // 0-100 (output power %)
 }
 
-const PRESETS: Record<string, CurvePoint[]> = {
+// Every preset maps shade 0 (black) to its maximum power and falls to 0% at
+// shade 255 (white). The S-Curve and Posterize arrays are mirrored in
+// src-tauri/src/engine/image_gcode_gen.rs (TB3_S_CURVE, TB3_POSTERIZE) and
+// pinned against each other by powerCurveEditor.test.tsx (T2).
+export const PRESETS: Record<string, CurvePoint[]> = {
   Linear: [
     { x: 0, y: 100 },
     { x: 255, y: 0 },
   ],
   "S-Curve": [
-    { x: 0, y: 0 },
-    { x: 64, y: 10 },
+    { x: 0, y: 100 },
+    { x: 64, y: 90 },
     { x: 128, y: 50 },
-    { x: 192, y: 90 },
-    { x: 255, y: 100 },
+    { x: 192, y: 10 },
+    { x: 255, y: 0 },
   ],
   Posterize: [
-    { x: 0, y: 0 },
-    { x: 84, y: 0 },
-    { x: 85, y: 33 },
-    { x: 169, y: 33 },
-    { x: 170, y: 66 },
-    { x: 254, y: 66 },
-    { x: 255, y: 100 },
+    { x: 0, y: 100 },
+    { x: 84, y: 100 },
+    { x: 85, y: 67 },
+    { x: 169, y: 67 },
+    { x: 170, y: 34 },
+    { x: 254, y: 34 },
+    { x: 255, y: 0 },
   ],
 };
 
@@ -161,13 +165,13 @@ export function PowerCurveEditor({
       ctx.stroke();
     }
 
-    // Identity diagonal (dashed)
+    // Linear reference (dashed)
     ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 4]);
     ctx.beginPath();
-    ctx.moveTo(0, CANVAS_H);
-    ctx.lineTo(CANVAS_W, 0);
+    ctx.moveTo(0, 0);
+    ctx.lineTo(CANVAS_W, CANVAS_H);
     ctx.stroke();
     ctx.setLineDash([]);
 
@@ -218,9 +222,10 @@ export function PowerCurveEditor({
     }
   }, [points, dragIndex, hoverIndex]);
 
+  // The canvas mounts only while open, so draw on open as well as on change.
   useEffect(() => {
-    draw();
-  }, [draw]);
+    if (open) draw();
+  }, [open, draw]);
 
   const findPointAt = useCallback(
     (cx: number, cy: number): number | null => {
@@ -478,6 +483,7 @@ export function PowerCurveEditor({
             return (
               <button
                 key={name}
+                aria-pressed={isActive}
                 onClick={() => setPoints([...pts])}
                 style={{
                   padding: "4px 10px",
