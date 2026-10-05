@@ -1207,4 +1207,336 @@ mod tests {
             err
         );
     }
+
+    // ─── TB3: power-curve preset direction (kerf-power-curve-presets) ───────
+    //
+    // Control points are (shade 0-255, power 0-100%). These two arrays are
+    // literal copies of the S-Curve and Posterize presets in
+    // `src/components/panels/PowerCurveEditor.tsx`; test T2 in
+    // `src/components/panels/__tests__/powerCurveEditor.test.tsx` reads this
+    // file as text and fails if they drift apart.
+    const TB3_S_CURVE: &[(f64, f64)] = &[
+        (0.0, 100.0),
+        (64.0, 90.0),
+        (128.0, 50.0),
+        (192.0, 10.0),
+        (255.0, 0.0),
+    ];
+    const TB3_POSTERIZE: &[(f64, f64)] = &[
+        (0.0, 100.0),
+        (84.0, 100.0),
+        (85.0, 67.0),
+        (169.0, 67.0),
+        (170.0, 34.0),
+        (254.0, 34.0),
+        (255.0, 0.0),
+    ];
+    // The pre-TB3 (inverted) presets. Saved projects may still carry them and
+    // must keep generating exactly what they did; N3 pins that output.
+    const TB3_OLD_S_CURVE: &[(f64, f64)] = &[
+        (0.0, 0.0),
+        (64.0, 10.0),
+        (128.0, 50.0),
+        (192.0, 90.0),
+        (255.0, 100.0),
+    ];
+    const TB3_OLD_POSTERIZE: &[(f64, f64)] = &[
+        (0.0, 0.0),
+        (84.0, 0.0),
+        (85.0, 33.0),
+        (169.0, 33.0),
+        (170.0, 66.0),
+        (254.0, 66.0),
+        (255.0, 100.0),
+    ];
+    const TB3_LINEAR: &[(f64, f64)] = &[(0.0, 100.0), (255.0, 0.0)];
+
+    /// Fixture transform for mutation mutants m8a/m8b (battery spec 2). 0 = no
+    /// transform. 1 shifts the first powered segment's X by 0.5 mm; 2 replaces
+    /// its S token. Either must fail N2 on its named assertion.
+    const TB3_M8_MODE: u8 = 0;
+
+    /// The LUT's own rounding rule (`build_power_curve_lut`): shade_out =
+    /// round(255 - power% / 100 * 255), clamped to 0..=255.
+    fn tb3_lut_level(power_pct: f64) -> u8 {
+        (255.0 - (power_pct.clamp(0.0, 100.0) / 100.0 * 255.0))
+            .round()
+            .clamp(0.0, 255.0) as u8
+    }
+
+    /// 256x1 8-bit grayscale PNG, pixel i = shade i, as a data URI.
+    fn tb3_ramp_png() -> String {
+        use image::{ImageBuffer, ImageEncoder, Luma};
+        let img: ImageBuffer<Luma<u8>, Vec<u8>> =
+            ImageBuffer::from_fn(256, 1, |x, _| Luma([x as u8]));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::codecs::png::PngEncoder::new(&mut buf)
+            .write_image(img.as_raw(), 256, 1, image::ExtendedColorType::L8)
+            .unwrap();
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(buf.into_inner())
+        )
+    }
+
+    fn tb3_ramp_req(curve: &[(f64, f64)]) -> ImageEngraveRequest {
+        ImageEngraveRequest {
+            image_data: tb3_ramp_png(),
+            x: 0.0,
+            y: 0.0,
+            width: 25.6,
+            height: 0.1,
+            rotation: 0.0,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            power: 100.0,
+            power_min: 0.0,
+            speed: 1000.0,
+            passes: 1,
+            power_mode: "variable".to_string(),
+            interval: 0.1,
+            dither: "grayscale".to_string(),
+            overscan: 0.0,
+            bidirectional: false,
+            scanning_offset: 0.0,
+            brightness: 0.0,
+            contrast: 0.0,
+            gamma: 1.0,
+            invert: false,
+            workspace_height: 100.0,
+            origin_top: true,
+            s_value_max: 1000.0,
+            power_curve: Some(curve.to_vec()),
+            newsprint_cell_size: None,
+            newsprint_angle: None,
+            remove_background: false,
+            bg_tolerance: 20.0,
+            scan_motion: None,
+        }
+    }
+
+    fn tb3_word(line: &str, letter: char) -> Option<f64> {
+        line.split_whitespace()
+            .find(|t| t.starts_with(letter))
+            .and_then(|t| t[1..].parse::<f64>().ok())
+    }
+
+    /// Apply the m8 fixture transform to the first powered G1 line.
+    fn tb3_m8_transform(gcode: &str) -> String {
+        let mut done = false;
+        gcode
+            .lines()
+            .map(|l| {
+                let powered = l.starts_with("G1 ") && tb3_word(l, 'S').is_some_and(|s| s > 0.0);
+                if done || !powered {
+                    return l.to_string();
+                }
+                done = true;
+                match TB3_M8_MODE {
+                    1 => {
+                        let x = tb3_word(l, 'X').expect("powered G1 carries X");
+                        l.split_whitespace()
+                            .map(|t| {
+                                if t.starts_with('X') {
+                                    format!("X{:.3}", x + 0.5)
+                                } else {
+                                    t.to_string()
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    }
+                    2 => {
+                        let s = tb3_word(l, 'S').expect("powered G1 carries S");
+                        l.split_whitespace()
+                            .map(|t| {
+                                if t.starts_with('S') {
+                                    format!("S{}", s as i64 + 50)
+                                } else {
+                                    t.to_string()
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    }
+                    _ => l.to_string(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Decode a single-row raster program into per-column S over 256 columns of
+    /// 0.1 mm. Walks moves in order tracking X and modal S; a G1 with positive S
+    /// from X0 to X1 assigns S to every column whose centre lies in [X0, X1).
+    /// Returns (S per column, placement errors). A placement error is a powered
+    /// move that does not run forward, or a column assigned more than once.
+    fn tb3_decode(gcode: &str) -> ([i64; 256], Vec<String>) {
+        let mut map = [0i64; 256];
+        let mut hits = [0u32; 256];
+        let mut errors = Vec::new();
+        let mut cur_x = 0.0_f64;
+        let mut modal_s = 0.0_f64;
+        for line in gcode.lines() {
+            let is_g0 = line.starts_with("G0 ") || line == "G0";
+            let is_g1 = line.starts_with("G1 ");
+            if !is_g0 && !is_g1 {
+                continue;
+            }
+            if let Some(s) = tb3_word(line, 'S') {
+                modal_s = s;
+            }
+            let Some(x1) = tb3_word(line, 'X') else {
+                continue;
+            };
+            if is_g1 && modal_s > 0.0 {
+                if x1 <= cur_x {
+                    errors.push(format!(
+                        "powered move not forward: {cur_x} -> {x1} ({line})"
+                    ));
+                }
+                for (i, (m, h)) in map.iter_mut().zip(hits.iter_mut()).enumerate() {
+                    let centre = (i as f64 + 0.5) * 0.1;
+                    if centre >= cur_x && centre < x1 {
+                        *m = modal_s.round() as i64;
+                        *h += 1;
+                    }
+                }
+            }
+            cur_x = x1;
+        }
+        for (i, &h) in hits.iter().enumerate() {
+            if h > 1 {
+                errors.push(format!("column {i} burned {h} times"));
+            }
+        }
+        (map, errors)
+    }
+
+    /// The oracle: `compute_s_token` in `mask_fill.rs` maps a pixel p to
+    /// round(s_min + (255 - p) / 255 * (s_max - s_min)), with p == 255 -> 0.
+    /// Here s_min = 0 and s_max = round(power / 100 * s_value_max) = 1000.
+    fn tb3_expected_s(lut: &[u8; 256]) -> [i64; 256] {
+        let mut out = [0i64; 256];
+        for (o, &p) in out.iter_mut().zip(lut.iter()) {
+            *o = if p == 255 {
+                0
+            } else {
+                (1000.0 * (255 - p) as f64 / 255.0).round() as i64
+            };
+        }
+        out
+    }
+
+    /// Run the ramp through `generate`, decode, and compare against the LUT oracle.
+    fn tb3_n2_check(curve: &[(f64, f64)]) -> [i64; 256] {
+        let gcode = generate(&tb3_ramp_req(curve))
+            .expect("ramp generates")
+            .gcode;
+        let gcode = tb3_m8_transform(&gcode);
+        let (map, errors) = tb3_decode(&gcode);
+        let expected = tb3_expected_s(&build_power_curve_lut(curve));
+        let placement_ok = errors.is_empty()
+            && map
+                .iter()
+                .zip(expected.iter())
+                .all(|(&m, &e)| (m > 0) == (e > 0));
+        assert!(
+            placement_ok,
+            "N2 placement mismatch: errors {errors:?}\nmap {map:?}\nexpected {expected:?}"
+        );
+        let power_ok = map
+            .iter()
+            .zip(expected.iter())
+            .all(|(&m, &e)| (m - e).abs() <= 1);
+        assert!(
+            power_ok,
+            "N2 power mismatch:\nmap {map:?}\nexpected {expected:?}"
+        );
+        map
+    }
+
+    #[test]
+    fn tb3_n1_lut_direction() {
+        for (name, curve) in [("S-Curve", TB3_S_CURVE), ("Posterize", TB3_POSTERIZE)] {
+            let lut = build_power_curve_lut(curve);
+            assert_eq!(lut[0], 0, "{name}: black must stay full burn");
+            assert_eq!(lut[255], 255, "{name}: white must stay no burn");
+            for i in 1..256 {
+                assert!(lut[i] >= lut[i - 1], "{name}: LUT falls at shade {i}");
+            }
+        }
+        // The defect, documented: the old presets turned black into no burn.
+        assert_eq!(build_power_curve_lut(TB3_OLD_S_CURVE)[0], 255);
+        assert_eq!(build_power_curve_lut(TB3_OLD_POSTERIZE)[0], 255);
+
+        let lut = build_power_curve_lut(TB3_POSTERIZE);
+        for (shade, &v) in lut.iter().enumerate() {
+            let want = match shade {
+                0..=84 => tb3_lut_level(100.0),
+                85..=169 => tb3_lut_level(67.0),
+                170..=254 => tb3_lut_level(34.0),
+                _ => 255,
+            };
+            assert_eq!(v, want, "Posterize band level at shade {shade}");
+        }
+    }
+
+    #[test]
+    fn tb3_n2_spatial() {
+        let s = tb3_n2_check(TB3_S_CURVE);
+        assert_eq!(s[0], 1000, "new S-Curve: column 0 at max S");
+        assert_eq!(s[255], 0, "new S-Curve: column 255 at S0");
+        assert!(s.windows(2).all(|w| w[1] <= w[0]), "new S-Curve rises");
+
+        let old = tb3_n2_check(TB3_OLD_S_CURVE);
+        assert_eq!(old[0], 0, "old S-Curve: column 0 unburned");
+        assert_eq!(old[255], 1000, "old S-Curve: column 255 at max S");
+        assert!(old.windows(2).all(|w| w[1] >= w[0]), "old S-Curve falls");
+
+        let p = tb3_n2_check(TB3_POSTERIZE);
+        let band = |lo: usize, hi: usize| {
+            let v = p[lo];
+            assert!(v > 0, "Posterize band {lo}-{hi} unburned");
+            assert!(
+                p[lo..=hi].iter().all(|&x| x == v),
+                "Posterize band {lo}-{hi} not flat"
+            );
+            v
+        };
+        let (b1, b2, b3) = (band(0, 84), band(85, 169), band(170, 254));
+        assert!(
+            b1 > b2 && b2 > b3,
+            "Posterize bands not falling: {b1} {b2} {b3}"
+        );
+        assert_eq!(p[255], 0, "Posterize: column 255 at S0");
+    }
+
+    /// N3: byte-for-byte goldens of the ramp under the legacy presets and
+    /// Linear, captured at the pre-TB3 base commit. Same convention as
+    /// `commands::gcode::golden_tests` (`KERF_UPDATE_GOLDEN=1` rewrites).
+    #[test]
+    fn tb3_n3_legacy_goldens() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("golden");
+        for (name, curve) in [
+            ("tb3_legacy_s_curve", TB3_OLD_S_CURVE),
+            ("tb3_legacy_posterize", TB3_OLD_POSTERIZE),
+            ("tb3_linear", TB3_LINEAR),
+        ] {
+            let actual = generate(&tb3_ramp_req(curve))
+                .expect("ramp generates")
+                .gcode;
+            let path = dir.join(format!("{name}.gcode"));
+            if crate::commands::gcode::golden_update_env() {
+                std::fs::write(&path, format!("{actual}\n")).expect("write golden");
+            } else {
+                let raw = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("read golden {}: {e}", path.display()));
+                let expected = raw.strip_suffix('\n').unwrap_or(&raw);
+                assert_eq!(actual, expected, "N3 golden mismatch for '{name}'");
+            }
+        }
+    }
 }
