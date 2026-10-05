@@ -217,6 +217,7 @@ describe("token contrast (principle 1)", () => {
     expect(rule('input[type="checkbox"]:indeterminate')).toContain("M2 5h6");
     expect(rule('input[type="radio"]:checked')).toMatch(/background-color:\s*var\(--check-mark\);/);
     expect(rule('input[type="radio"]:disabled')).toMatch(/opacity:\s*0\.4;/);
+    expect(rule('input[type="radio"]:focus-visible')).toMatch(/outline-offset:\s*2px;/);
   });
 
   it("deletes the dead tokens", () => {

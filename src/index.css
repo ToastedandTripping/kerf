@@ -223,6 +223,12 @@ textarea:focus-visible {
   outline-offset: -1px;
 }
 
+/* A drawn checkbox or radio is a 16px mark, not a field: its ring sits outside it. */
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+  outline-offset: 2px;
+}
+
 *:focus:not(:focus-visible) {
   outline: none;
 }
