@@ -23,6 +23,8 @@ next: "REMEDIATION Phase 1 (batches 1.1-1.5, the stop spine: 0x18 immediately, p
 testing: null
 pinned: true
 shipped:
+  - date: 2026-10-05
+    item: "UI polish TB3, CORRECTNESS: power-curve presets and the G-code publication guard (relay kerf-power-curve-presets, Standard, 2 batches; implementation merged to the session branch marvin/kerf-gap; owner card pending; not physically qualified). tb3-guard: generation takes a ticket of the twelve inputs it reads plus a store-held project epoch and sequence; publishGeneration discards cross-project and superseded results and publishes the rest stale when an input changed; one store subscription stales a published result on any later input change (accel, feed rate and laser mode raised nothing before). tb3: S-Curve and Posterize mirrored to Linear's direction, the editor draws on open, the Linear reference line falls, presets expose aria-pressed; native tests pin the LUT (N1), a spatial power map against an independent oracle (N2) and legacy goldens captured at base (N3); saved curves are never rewritten. Razor PASS on both batches and both fix re-checks; behavioural PASS; Jen CONCERNS (no regressions; two folded, two to A4). Release note (owed by the release session): \"Fixed: the S-Curve and Posterize power-curve presets were inverted, so they burned an image as its negative. Layers that already used them keep their old curve until you change it: open the layer's power curve, pick the preset, press Apply, then save the project. Also fixed: a G-code result that finished generating after you changed the design or the machine settings was shown as up to date; it is now marked out of date, so START asks you to generate again. A result that finishes after you open or start a different project is now thrown away instead of appearing in the new one.\" Owner card: see ### Owner card: kerf-power-curve-presets (2026-10-05). OWNER DESKTOP TEST also owed: in the Tauri app, press Generate, change a layer setting before it finishes, and confirm the result shows Regenerate and START refuses."
   - date: 2026-10-02
     item: "Safety: motion trust owned natively (relay kerf-safety-motion-trust, Architectural, 3 batches; the combined S3c+S3d job Lee chose on 2026-09-29, 'Hold for full fix'). A jog is admitted and written by the Rust serial layer, inside the same submit critical section the stop uses to close admission. It is admitted only when all of these hold: the machine was homed in the current trust epoch (an exact $H with a terminal ok); there is a current post-motion observation (quiesce 150 ms, drain, complete any partial line, probe ?, take the first frame: literal Idle with a finite MPos); units are mm ($13=0 read back on this connection); no other motion is pending; and the call carries the current native connection id. Every banner, alarm, <Alarm> frame, reset byte, STOP, reconnect, frame-affecting settings write, $RST or motion I/O error revokes trust, and a status frame that contradicts the observation ends it. serial_connect returns {banner, connId}; every serial call carries conn, and a result or rejection from an old connection is discarded before TS processes it. Malformed outbound commands (an embedded newline, CR, control byte, ? or non-ASCII) are refused with zero bytes written, and the buffered pump refuses a malformed job before its first write. TS reads trust only from native snapshots (trustHomed, trustUnitsMm, motionPending, trustObserved, basisSeq, basisPosition): the clip uses the observation position, reply lines no longer write position, machineHomed is a read-only alias, and settingsGeneration bumps on disconnect. The Machine panel shows one plain reason per blocked jog (Home first after connect or STOP), a hold note after 5 s naming the cause (command, stale status, position, state), and a 2 s flash of the click's own refusal. Both Home keys are off when disconnected or during a job and stay live in Alarm. Review: Razor per batch (B1 WARNING tests-only, fixed; B2+B3 W2 contradicting frames fixed, W1 decided as the $1=255 operating constraint; B4 WARNING console-cap flash, fixed and then superseded by outcome-based reporting); the behavioural evaluation used a mocked controller (CONCERNS, two fixed, two to Jen); Jen Stage 3 fidelity complete with 5 CONCERNs, all applied. 473 Rust, 1253 vitest, batteries all killed. OWNER HARDWARE CARD in next, with the barrier qualified at step 4. Frame correctness stays S3e (DECISIONS 2026-09-29: no refusal before then)."
   - date: 2026-09-29
@@ -690,6 +692,8 @@ verbatim and are not to be edited into summaries — this index points at them.
 - **UI polish TB8: status and console feedback lifetimes (follow-on plan owed)** — every status clears after 3 s whatever its level, and the closed console gives no sign that a warning or error arrived (P13, P14). See `.claude/plans/kerf-ui-polish.md` → `## Follow-on plans (Track B)`, TB8.
 - **UI polish TB9: keyboard reach, commands and the modal contract (follow-on plan owed)** — Tab never leaves the body outside dialogs, Alt+T is advertised and unbound, the menubar cannot be walked, cut order needs a mouse, File > Open on an SVG asks to save, and GRBL Settings and onboarding ignore Escape (P3, P16, P39, P42-P46, P55, P56). See `.claude/plans/kerf-ui-polish.md` → `## Follow-on plans (Track B)`, TB9.
 - **UI polish TB10: canvas behaviour (follow-on plan owed)** — Fit on an empty project does not fit the bed, an object past the bed looks normal until START refuses, right-click on an unselected object does nothing, and the Position tool gives no cue and stays armed (P30-P33, O20). See `.claude/plans/kerf-ui-polish.md` → `## Follow-on plans (Track B)`, TB10.
+- **UI polish TB6: Export G-code writes a stale result without warning** — `exportGcode` (`fileOps/index.ts:469-489`) checks only that a result exists, so a file exported after an edit carries the older program. Pre-existing; a file, not a laser path in Kerf. See `### Deferred from kerf-power-curve-presets (2026-10-05)`.
+- **UI polish A4 carried from TB3 (Jen C3, C4)** — the power-curve editor's axis gutter, tick placement, inset and devicePixelRatio, and its tan curve and chips against the one-blue ruling; A4 must add `powerCurveEditor.test.tsx` to its files because `CURVE_STROKE` is tan and drives T3. See `### Deferred from kerf-power-curve-presets (2026-10-05)`.
 - **Lead: START and FRAME bounds take no work offset** — `canStartJob`'s gate state has no offset field (`canStartJob.ts:123-140`), so with a G92 origin set a design inside the bed in work coordinates may run shifted by the offset (operator critic finding 9). Verify, then route to the safety program beside the WCO-aware jog envelopes (astra 2.5). See `.claude/plans/kerf-ui-polish.md` → TB7.
 - **Lead: PDF import may fail in the Tauri webviews (UI polish P72)** — the modern `pdfjs-dist` 5.7 build calls `Map.prototype.getOrInsertComputed` and failed in Chrome 143; the legacy build polyfills it. Owner check is step 2 of the editing-shortcuts desktop check; a fix joins the pdf.js 6.2 upgrade line above. See `.claude/plans/kerf-ui-polish.md` → `## Routed out`.
 - **Canvas head-position marker (UI polish O19)** — a new feature whose mapping rests on the unverified origin-top Y flip (S3 card step 6) and on S3e; drawing a guessed head is worse than none. See `.claude/plans/kerf-ui-polish.md` → `## Deferrals`.
@@ -702,7 +706,6 @@ verbatim and are not to be edited into summaries — this index points at them.
 - **UI polish, declined with reasons** — no key or palette row starts motion or a burn (A4: Start, Frame and Home stay deliberate clicks; Stop gets a key in TB1); START and FRAME stay visible while running, shrunk to 56 px (O4); "Stale" keeps its name, the reviewed S3/Jen C3 wording (O12); the separate Generate button stays (W7). See `.claude/plans/kerf-ui-polish.md` → `## Deferrals`.
 - **UI polish "also seen", not elevated** — hiding the grid also hides both rulers (`Rulers.tsx:183-206`); the measure readout is the Custom 5 layer yellow with no background; label case differs across menu, palette and ? sheet; there is no tooltip component (the dead `--shadow-tooltip` is deleted in A1). See `.claude/plans/kerf-ui-polish.md` → `## Deferrals`.
 - **Motion-trust review and evaluation leftovers (2026-10-02):** unpinned edge tests, a WPos-only controller showing a misleading MOTION reason, a poll that can briefly undo provisional MOTION, the battery journal not naming failing tests, and other notes. See `### Deferred from kerf-safety-motion-trust review (2026-10-02)` below.
-- **A generation that finishes after an edit publishes an outdated result as current** — `setGcodeResult` clears `gcodeStale` unconditionally (`store/index.ts:692`; called from `MachinePanel.tsx:386`), so an edit made during an in-flight generation leaves the older G-code looking current, and with no prior result the edit does not mark staleness at all. Pre-existing, not curve-specific; owned by UI polish TB6 (revision identity, stale-result handling, edit-during-generation). Found by astra on the TB3 plan, 2026-10-04. See `.claude/plans/kerf-power-curve-presets.md` → Diagnosis.
 ### Deferred from the 2026-09-05 pause/stop investigation
 
 Verbatim record of what the 2026-09-05 session established. Two defects, both owner-confirmed on
@@ -1131,6 +1134,52 @@ These steps go on the owner hardware card in ROADMAP `next` at Stage 3.5. The re
    - Re-check 2: the module-level `lastSendFailure` can show another send's "Send failed" text if two sends fail within the same few microtask ticks on a dead port. Cosmetic; both lines stay in the console.
 4. **Layout (Jen Stage 3):** at 1280x800 the Machine panel is clipped in every state. `scrollIntoView` after Confirm bed size was parked, not required.
 5. **Behavioural side finding:** the app reconnects by itself on load when it remembers a port. This is pre-existing and noted for the connection-lifetime work.
+
+### Deferred from kerf-power-curve-presets (2026-10-05)
+
+Closed by this relay, with the race shipped as tb3-guard: **A generation that finishes after an edit publishes an outdated result as current** (indexed 2026-10-04, owner TB6). It is closed, together with project replacement, supersession and post-publication input changes. (shipped 2026-10-05, kerf-power-curve-presets)
+
+Carried forward:
+- **Export G-code writes a stale result without warning (TB6).** `exportGcode` (`fileOps/index.ts:469-489`) checks only that a result exists. Found while re-verifying the TB3 plan.
+- **TB6 also keeps** the Preview regeneration and job-outcome work, and the removal of the 15 now-redundant staleness raisers.
+- **Jen C3 (A4).** The axis labels and plot are misplaced: the y title sits inside the plot, "128" is off its data position, the canvas overflows its frame by 4px, the corner handles clip, the ticks are 9px mono, and nothing is scaled for 2x. Fix: a label gutter, ticks at their data coordinates (11px sans, tabular figures), an 8px inset through the mapping functions, and a canvas scaled by devicePixelRatio.
+- **Jen C4 (A4).** The editor breaks the one-blue ruling. The curve and handles go to `--accent`, the thumbnail to `--text-secondary`, the chips to Segmented, and Apply to `--accent-strong`; the file must grep clean of tan. A4 must add `powerCurveEditor.test.tsx`, because `CURVE_STROKE` is tan and drives T3.
+- **Battery (Ted, deferred idea).** The mutation battery keeps no test output for killed mutants. A `capture_on_kill` option would let a kill be checked against a named assertion without a wrapper command. That is marvin tooling, out of scope here.
+- **Razor N (reopen).** A reopen draws twice, once with the previous points; the final frame is correct.
+
+### Owner card: kerf-power-curve-presets (2026-10-05)
+
+Owner only, in the release build. Status-only evidence (DECISIONS 2026-09-10, as amended). The card file `docs/owner-cards/tb3-legacy-s-curve.kerf` has one output layer, Engrave (layer 1 in the UI). It inherits Kerf's defaults of 0.5 mm overscan and bidirectional scanning (Razor N). From the plan, verbatim:
+
+- **Owner card** (`next`; Lee runs it, owner only, in the release build). Evidence is the visible mark on the material, and nothing about the beam beyond it (status-only ruling, DECISIONS 2026-09-10 as amended):
+  - **Setup:**
+    - scrap card (the recipe's material, and no other), on the bed with nothing under it that can burn;
+    - the extraction or air assist the owner normally uses;
+    - the machine's physical power switch or E-stop within reach;
+    - the owner stays at the machine for the whole run.
+  - **The recipe** (fixed; confirm every value on screen before each job):
+    - material: scrap card;
+    - image: a 40 × 10 mm black-to-white horizontal gradient;
+    - power mode: Variable (M4); Max power 15%; Min power 0;
+    - speed 3000 mm/min;
+    - dither: Grayscale; interval 0.1 mm;
+    - image adjustments neutral: brightness 0, contrast 0, gamma 1.0, invert off, background removal off;
+    - passes: 1; only this layer enabled for output.
+
+    The single permitted adjustment: if step 1 leaves no visible mark at all, raise Max power to 20%, regenerate, frame, and repeat once. Never above 20%, never slower than 3000 mm/min, and nothing else changes. If 20% still leaves no mark, record INCONCLUSIVE and stop. The material test is not part of this card.
+  - **Frame first:** press FRAME and watch the head trace the bounding box.
+  - **Before every burn:** press Generate after the last Apply, and make no edit while it generates. The guard marks such a result stale, but the card does not lean on it. Confirm that the button reads "Generate G-code", not "Regenerate G-code", before going on. Then press FRAME and watch the head trace the bounding box.
+  - **Worst cases this card guards against:** a flame on the material; marking outside the framed box; marking that continues after the job ends; Kerf not responding to STOP.
+  - **Before the card:**
+    - identify, by tracing the wiring, the switch or plug that removes power from the laser module itself (expected: the machine's main power inlet, which feeds the controller and the module). If it cannot be identified with confidence, do not run the card;
+    - have a fire extinguisher or fire blanket within reach;
+    - the owner stays at the machine for every burn.
+  - **Abort procedure:** on any worst case, press STOP, then cut the laser-module supply identified above. Kerf cannot confirm the beam is off; only that physical disconnect does. Note what happened, and do not re-run until it is understood.
+  - **Steps:**
+    1. Select the new S-Curve, then press Apply. Engrave. Pass: the black end is darkest, the white end unmarked, and darkness falls smoothly between them.
+    2. The same, with Posterize. Pass: three distinct bands from dark to light, and the white end unmarked.
+    3. **Legacy check, bounded.** Open `docs/owner-cards/tb3-legacy-s-curve.kerf`, which the relay commits with exactly the fixed recipe (15% Max power, 3000 mm/min, the other values above, and the old S-Curve points) on one 40 × 10 mm gradient, on one raster layer. If step 1 needed 20%, use 20% here too; that is the only allowed change. Do not open an arbitrary older project for this step. Before generating, re-check every recipe value on screen against the list above; if any differs, stop and do not run. Do not re-pick the preset. Generate, frame, engrave. Pass: it burns the old way (the white end darkest). That confirms nothing was migrated.
+  - **Outcome:** PASSED, FAILED (a fix relay), or INCONCLUSIVE (any abort).
 
 ### Owner card: kerf-safety-motion-trust (2026-10-02)
 
