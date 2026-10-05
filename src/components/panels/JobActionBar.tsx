@@ -188,7 +188,10 @@ export function JobActionBar() {
   const progress = progressText(elapsedSecs, jobProgress);
   // While a job runs START and FRAME shrink; they stay rendered and disabled
   // by their own expressions.
-  const startFrameFlex = jobRunning ? "0 0 56px" : "1";
+  // The row must fit the 300px sidebar in every state, so while a job runs
+  // they may shrink below 56px (min-width 0) and STOP keeps its 120px floor.
+  const startFrameFlex = jobRunning ? "0 1 56px" : "1";
+  const startFramePadding = jobRunning ? "6px 2px" : "6px";
 
   return (
     <div style={{ flexShrink: 0, borderTop: "1px solid var(--border)" }}>
@@ -292,7 +295,9 @@ export function JobActionBar() {
           title={startGate.reason}
           style={{
             flex: startFrameFlex,
-            padding: "6px",
+            minWidth: 0,
+            overflow: "hidden",
+            padding: startFramePadding,
             borderRadius: "var(--radius-sm)",
             border: "1px solid rgba(74,226,138,0.5)",
             fontSize: "11px",
@@ -311,7 +316,9 @@ export function JobActionBar() {
           title={frameHint}
           style={{
             flex: startFrameFlex,
-            padding: "6px",
+            minWidth: 0,
+            overflow: "hidden",
+            padding: startFramePadding,
             borderRadius: "var(--radius-sm)",
             border: "1px solid var(--accent)",
             fontSize: "11px",

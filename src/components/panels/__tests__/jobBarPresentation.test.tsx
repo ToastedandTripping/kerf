@@ -281,7 +281,7 @@ describe("JobActionBar (production component, state injected)", () => {
     const { getByText } = render(<JobActionBar />);
     for (const label of ["START", "FRAME"]) {
       const b = getByText(label) as HTMLButtonElement;
-      expect(b.style.flex).toBe("0 0 56px");
+      expect(b.style.flex).toBe("0 1 56px");
       expect(b.disabled).toBe(true);
     }
   });
