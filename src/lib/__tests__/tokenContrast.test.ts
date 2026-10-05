@@ -174,6 +174,51 @@ describe("token contrast (principle 1)", () => {
     }
   });
 
+  it("declares color-scheme: dark at :root, and the scrollbar corner is transparent", () => {
+    expect(rootBlock).toMatch(/^\s*color-scheme:\s*dark;/);
+    expect(css).toMatch(/::-webkit-scrollbar-corner\s*\{\s*background:\s*transparent;/);
+  });
+
+  it("the drawn checkbox: unchecked edge, checked fill and mark all clear 3:1", () => {
+    const edge = tok("--check-border");
+    const fill = tok("--check-fill");
+    const checks: [string, number][] = [
+      ["--check-border vs panel", ratio(over(edge, input()), panel())],
+      ["--check-border vs input fill", ratio(over(edge, input()), input())],
+      ["--check-fill vs panel", ratio(fill, panel())],
+      ["--check-fill vs unchecked face", ratio(fill, input())],
+      ["--check-mark on --check-fill", ratio(tok("--check-mark"), fill)],
+    ];
+    for (const [name, r] of checks) {
+      expect(r, `${name} = ${r.toFixed(2)}`).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it("the drawn checkbox is wired to its tokens in every state", () => {
+    const rule = (sel: string) => {
+      const esc = sel.replace(/[[\]"():]/g, (c) => "\\" + c);
+      const m = css.match(new RegExp(esc + "\\s*\\{([^}]*)\\}"));
+      expect(m, `rule ${sel}`).not.toBeNull();
+      return m![1];
+    };
+    const base = rule('input[type="radio"]');
+    expect(base).toMatch(/appearance:\s*none;/);
+    expect(base).toMatch(/width:\s*16px;/);
+    expect(base).toMatch(/height:\s*16px;/);
+    expect(base).toMatch(/border:\s*1px solid var\(--check-border\);/);
+    expect(base).toMatch(/background-color:\s*var\(--bg-input\);/);
+    const mark = tokens["--check-mark"].replace("#", "%23").toLowerCase();
+    for (const st of [":checked", ":indeterminate"]) {
+      const body = rule('input[type="checkbox"]' + st);
+      expect(body).toMatch(/background-color:\s*var\(--check-fill\);/);
+      expect(body).toContain(`stroke='${mark}'`);
+    }
+    expect(rule('input[type="checkbox"]:checked')).toContain("M1.5 5.2l2.3 2.3 4.7-4.9");
+    expect(rule('input[type="checkbox"]:indeterminate')).toContain("M2 5h6");
+    expect(rule('input[type="radio"]:checked')).toMatch(/background-color:\s*var\(--check-mark\);/);
+    expect(rule('input[type="radio"]:disabled')).toMatch(/opacity:\s*0\.4;/);
+  });
+
   it("deletes the dead tokens", () => {
     const names = Object.keys(tokens);
     expect(names).toContain("--border");
@@ -195,7 +240,7 @@ describe("token contrast (principle 1)", () => {
   });
 
   it("mono stack names the bundled IBM Plex Mono, which has an @font-face", () => {
-    expect(tokens["--font-mono"]).toBe('"SF Mono", "IBM Plex Mono", ui-monospace, monospace');
+    expect(tokens["--font-mono"]).toBe('ui-monospace, "SF Mono", "IBM Plex Mono", monospace');
     expect(css).toMatch(
       /@font-face\s*\{[^}]*font-family:\s*"IBM Plex Mono";[^}]*url\("\/fonts\/IBMPlexMono-Regular\.ttf"\)/
     );
