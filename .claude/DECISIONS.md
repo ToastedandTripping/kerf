@@ -132,6 +132,11 @@ Lee chose option (a) of the STOP-reachability plan's decision D2. A native file 
 
 Lee chose this (TB1 decision D3) to take the friction out of the wider laser-on guard: when a file dialog or the Welcome Guide is refused because output may be on, the message offers one click that sends M5, so the owner does not have to type it in the console. The button sends only M5, under the normal machine-write rules; the guard then clears only if that M5 is acknowledged with nothing else in flight. It is reviewed like any other control on the laser path.
 
+### Kerf ships on Lee's word: a release goes out when the session reports green, and Lee tests at the laser when he gets to it.
+*2026-10-05, Lee (marvin portfolio grill, round 2)*
+
+Four rules disagreed on when Kerf may release: the 2026-06-20 "ship unverified on his say-so", MARVIN's 2026-09-01 Tier 3 rule, this hand-off's "no master, no tag, no release without Lee", and the heading of the status-only evidence entry (amended 2026-09-27 to unblock powered release). Offered a pre-approved three-step release train, Lee chose to ship on his word. The hand-off's "no tag without Lee" is superseded. Unchanged: the evidence limits in the status-only entry (no release note may claim the beam goes dark on stop or pause without a witness-card test), and owner cards still ride each release for Lee to run when he can. Capture: marvin .claude/grills/2026-10-05-portfolio-review-remaining-decisions.md.
+
 ---
 
 ## Engineering pins
