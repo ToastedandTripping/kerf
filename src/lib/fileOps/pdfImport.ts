@@ -260,7 +260,7 @@ export async function extractVectorPaths(
         break;
 
       case OPS.setStrokeRGBColor:
-        // pdfjs v5 emits a single hex string "#rrggbb"; v4 emitted 3 floats.
+        // pdfjs v5 and v6 emit a single hex string "#rrggbb"; v4 emitted 3 floats.
         if (typeof arg[0] === "string" && arg[0].startsWith("#")) {
           strokeColor = arg[0];
         } else {
@@ -272,7 +272,7 @@ export async function extractVectorPaths(
         strokeColor = `#${toHex(arg[0])}${toHex(arg[0])}${toHex(arg[0])}`;
         break;
 
-      // pdfjs v5 packs all path ops into a single OPS.constructPath call.
+      // pdfjs v5 and v6 pack all path ops into a single OPS.constructPath call.
       // Args: [finishingOp, [Float32Array pathData], minMax].
       // pathData is a flat buffer of DrawOPS opcodes interleaved with coords:
       //   moveTo(0)=2 coords, lineTo(1)=2, curveTo(2)=6, quadraticCurveTo(3)=4, closePath(4)=0.
