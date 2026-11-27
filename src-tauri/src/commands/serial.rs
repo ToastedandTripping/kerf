@@ -1826,7 +1826,7 @@ mod tests {
         // And `submit`: these bytes must not depend on it either.
         let _submit_guard = inner.session.submit.lock().unwrap();
 
-        for byte in [b'?', b'!', b'~'] {
+        for byte in *b"?!~" {
             let (tx, rx) = mpsc::channel();
             let inner2 = inner.clone();
             thread::spawn(move || {
