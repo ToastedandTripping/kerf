@@ -87,7 +87,9 @@ src/
       dxfImport.ts           — DXF LINE/CIRCLE/ARC/LWPOLYLINE parser (importDxfDirect)
       imageImport.ts         — Image byte→base64→canvas import, PNG pHYs DPI
       svgExport.ts           — Design objects→SVG XML export
-      pdfImport.ts           — PDF vector extraction via pdf.js (paths, lines, rectangles)
+      pdfImport.ts           — PDF vector extraction via pdf.js (paths, lines, rectangles);
+                               pdfjs-dist 6 since v0.8.32, same operator-list encoding as 5;
+                               unit tests mock pdfjs, so nothing in CI exercises the real library
       __tests__/             — dxfImport, svgImport, svgExport, imageImport, migration,
                                savefix, fileSafety
     machine/
